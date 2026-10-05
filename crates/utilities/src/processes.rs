@@ -16,7 +16,7 @@
 //! environments. Stopping re-reads the process first and refuses when its start time no longer
 //! matches what was listed (the pid was reused).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -483,6 +483,15 @@ pub struct ProcessSampler {
     system: System,
     samples: u32,
     last: Option<Instant>,
+    /// Processes (pid, OS start time) whose CPU time an earlier sample read. Only they have a
+    /// usage figure; a process seen for the first time reports none rather than a made-up 0%.
+    cpu_baseline: HashSet<(u32, u64)>,
+    /// KalCode's own owner never changes while it runs.
+    self_user: Option<(u32, Option<String>)>,
+    /// Exact start identities by (pid, sysinfo start time): a process's identity never changes,
+    /// so it is read once instead of opening every process on every sample. A wrong entry after
+    /// a same-second pid reuse could only fail closed: stopping re-verifies through a handle.
+    identities: HashMap<(u32, u64), u64>,
 }
 
 impl Default for ProcessSampler {
@@ -497,25 +506,30 @@ impl ProcessSampler {
             system: System::new(),
             samples: 0,
             last: None,
+            cpu_baseline: HashSet::new(),
+            self_user: None,
+            identities: HashMap::new(),
         }
+    }
+
+    /// Owner, working folder and executable are read once per process.
+    fn identity_kind() -> ProcessRefreshKind {
+        ProcessRefreshKind::nothing()
+            .with_user(UpdateKind::OnlyIfNotSet)
+            .with_cwd(UpdateKind::OnlyIfNotSet)
+            .with_exe(UpdateKind::OnlyIfNotSet)
     }
 
     fn refresh(&mut self, which: ProcessesToUpdate<'_>) {
         self.system.refresh_processes_specifics(
             which,
             true,
-            ProcessRefreshKind::nothing()
-                .with_cpu()
-                .with_memory()
-                .with_user(UpdateKind::OnlyIfNotSet)
-                .with_cwd(UpdateKind::OnlyIfNotSet)
-                .with_exe(UpdateKind::OnlyIfNotSet),
+            Self::identity_kind().with_cpu().with_memory(),
         );
     }
 
-    /// The current rows. CPU use is measurable from the second call on.
-    pub fn rows(&mut self) -> (Vec<ProcRow>, bool) {
-        // Two refreshes closer than sysinfo's minimum interval give meaningless CPU values.
+    /// Two refreshes closer than sysinfo's minimum interval give meaningless CPU values.
+    fn wait_for_cpu_interval(&self) {
         if let Some(last) = self.last {
             // One clock read: a second read can pass the interval and underflow (a panic).
             let wait = sysinfo::MINIMUM_CPU_UPDATE_INTERVAL.saturating_sub(last.elapsed());
@@ -523,46 +537,143 @@ impl ProcessSampler {
                 std::thread::sleep(wait);
             }
         }
-        self.refresh(ProcessesToUpdate::All);
-        self.samples = self.samples.saturating_add(1);
-        self.last = Some(Instant::now());
+    }
+
+    /// The process table: parents, names, exact start identities, owners and folders. CPU and
+    /// memory are left empty for [`Self::measure`].
+    fn table_rows(&mut self) -> Vec<ProcRow> {
+        let mut identities = HashMap::with_capacity(self.identities.len());
+        let rows = self
+            .system
+            .processes()
+            .iter()
+            .map(|(pid, p)| {
+                let pid = pid.as_u32();
+                // sysinfo reports 0 when it could not read the start time; never cache those.
+                let key = (pid, p.start_time());
+                let start_time = match self.identities.get(&key) {
+                    Some(identity) if key.1 != 0 => *identity,
+                    _ => process_creation_identity(pid, p.start_time()),
+                };
+                if key.1 != 0 && start_time != 0 {
+                    identities.insert(key, start_time);
+                }
+                ProcRow {
+                    pid,
+                    parent: p.parent().map(Pid::as_u32),
+                    name: p.name().to_string_lossy().into_owned(),
+                    start_time,
+                    cpu_percent: None,
+                    rss_bytes: 0,
+                    user: p.user_id().map(|u| u.to_string()),
+                    cwd: p.cwd().map(Path::to_path_buf),
+                    exe: p.exe().map(Path::to_path_buf),
+                }
+            })
+            .collect();
+        // Exited processes leave the cache with the process table.
+        self.identities = identities;
+        rows
+    }
+
+    /// Fills in CPU and memory for the `measured` processes (`None` = every process), CPU only
+    /// where an earlier sample read the same process, and records this sample.
+    fn measure(&mut self, rows: &mut [ProcRow], measured: Option<&HashSet<u32>>) {
         let cores = self.system.cpus().len().max(
             std::thread::available_parallelism()
                 .map(usize::from)
                 .unwrap_or(1),
         ) as f32;
-        let rows = self
-            .system
-            .processes()
+        let mut baseline = HashSet::with_capacity(self.cpu_baseline.len());
+        for row in rows.iter_mut() {
+            let Some(process) = self.system.process(Pid::from_u32(row.pid)) else {
+                continue;
+            };
+            let key = (row.pid, process.start_time());
+            let known = self.cpu_baseline.contains(&key);
+            if measured.is_some_and(|set| !set.contains(&row.pid)) {
+                if known {
+                    baseline.insert(key);
+                }
+                continue;
+            }
+            baseline.insert(key);
+            row.cpu_percent = known.then(|| (process.cpu_usage() / cores).clamp(0.0, 100.0));
+            row.rss_bytes = process.memory();
+        }
+        // Exited processes leave the baseline with the process table.
+        self.cpu_baseline = baseline;
+        self.samples = self.samples.saturating_add(1);
+        self.last = Some(Instant::now());
+    }
+
+    /// The current rows. CPU use is measurable from the second call on.
+    pub fn rows(&mut self) -> (Vec<ProcRow>, bool) {
+        self.wait_for_cpu_interval();
+        self.refresh(ProcessesToUpdate::All);
+        let mut rows = self.table_rows();
+        self.measure(&mut rows, None);
+        (rows, self.samples > 1)
+    }
+
+    /// The "related" scope reads CPU and memory only for the processes it will show. Reading
+    /// them for every process on the machine opens and queries each one, which is most of a
+    /// full sample's cost; the process table itself (parents, names, owners, folders) is still
+    /// read in full, because that is what decides which processes are related.
+    fn related_rows(&mut self, ctx: &ProcessContext, me: Option<&str>) -> (Vec<ProcRow>, bool) {
+        self.wait_for_cpu_interval();
+        self.system.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            Self::identity_kind(),
+        );
+        let mut rows = self.table_rows();
+        // Which processes are related depends on neither CPU nor memory.
+        let related: Vec<Pid> = classify(&rows, ctx, me, ProcessScope::Related, false)
+            .processes
             .iter()
-            .map(|(pid, p)| ProcRow {
-                pid: pid.as_u32(),
-                parent: p.parent().map(Pid::as_u32),
-                name: p.name().to_string_lossy().into_owned(),
-                start_time: process_creation_identity(pid.as_u32(), p.start_time()),
-                cpu_percent: Some((p.cpu_usage() / cores).clamp(0.0, 100.0)),
-                rss_bytes: p.memory(),
-                user: p.user_id().map(|u| u.to_string()),
-                cwd: p.cwd().map(Path::to_path_buf),
-                exe: p.exe().map(Path::to_path_buf),
-            })
+            .map(|p| Pid::from_u32(p.pid))
             .collect();
+        self.system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&related),
+            false,
+            ProcessRefreshKind::nothing().with_cpu().with_memory(),
+        );
+        let measured: HashSet<u32> = related.iter().map(|pid| pid.as_u32()).collect();
+        self.measure(&mut rows, Some(&measured));
         (rows, self.samples > 1)
     }
 
     /// KalCode's own owner id.
     pub fn self_user(&mut self, self_pid: u32) -> Option<String> {
+        if let Some((pid, user)) = &self.self_user
+            && *pid == self_pid
+        {
+            return user.clone();
+        }
         let pid = Pid::from_u32(self_pid);
-        self.refresh(ProcessesToUpdate::Some(&[pid]));
-        self.system
+        self.system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[pid]),
+            false,
+            Self::identity_kind(),
+        );
+        let user = self
+            .system
             .process(pid)
-            .and_then(|p| p.user_id().map(|u| u.to_string()))
+            .and_then(|p| p.user_id().map(|u| u.to_string()));
+        if user.is_some() {
+            self.self_user = Some((self_pid, user.clone()));
+        }
+        user
     }
 
     /// Samples and classifies.
     pub fn list(&mut self, ctx: &ProcessContext, scope: ProcessScope) -> ProcessList {
         let me = self.self_user(ctx.self_pid);
-        let (rows, cpu_ready) = self.rows();
+        let (rows, cpu_ready) = match scope {
+            ProcessScope::Related => self.related_rows(ctx, me.as_deref()),
+            ProcessScope::All => self.rows(),
+        };
         classify(&rows, ctx, me.as_deref(), scope, cpu_ready)
     }
 
@@ -1051,6 +1162,48 @@ mod tests {
         assert!(!inside(sibling, root));
         assert!(inside(child, root));
         assert!(inside(root, root));
+    }
+
+    #[test]
+    fn the_related_scope_measures_cpu_and_memory_for_what_it_shows() {
+        let mut sampler = ProcessSampler::new();
+        let me = std::process::id();
+        let ctx = ProcessContext {
+            self_pid: me,
+            ..ProcessContext::default()
+        };
+        let first = sampler.list(&ctx, ProcessScope::Related);
+        assert!(!first.cpu_ready, "CPU use needs two samples");
+        let this = |list: &ProcessList| {
+            list.processes
+                .iter()
+                .find(|p| p.pid == me)
+                .cloned()
+                .expect("self listed")
+        };
+        assert!(
+            this(&first).memory_bytes > 0,
+            "memory is read on the first sample"
+        );
+        // Burn some CPU so the second sample has something to measure.
+        let until = Instant::now() + Duration::from_millis(300);
+        while Instant::now() < until {
+            std::hint::black_box(0u64);
+        }
+        let second = sampler.list(&ctx, ProcessScope::Related);
+        assert!(second.cpu_ready);
+        let cpu = this(&second)
+            .cpu_percent
+            .expect("measured twice: a CPU figure");
+        assert!(cpu > 0.0, "{cpu}");
+        assert!(second.hidden > 0, "unrelated processes stay hidden");
+        // The full list still measures everything once it has a baseline for it.
+        let all = sampler.list(&ctx, ProcessScope::All);
+        assert!(
+            all.processes
+                .iter()
+                .any(|p| p.pid == me && p.cpu_percent.is_some())
+        );
     }
 
     #[test]

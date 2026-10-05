@@ -37,6 +37,7 @@ use kalcode_providers::interactive::{
     ApprovalExpiry, DEFAULT_DECISION_ROUTING, DecisionRouting, HookChannelState, PaneInfo,
     TitleSink,
 };
+use kalcode_pty::{CoalesceConfig, OutputCoalescer};
 use kalcode_threads::{CreateIdleThread, ThreadRuntime};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{Manager, State, Webview};
@@ -823,14 +824,16 @@ pub fn provider_pane_attach(
     let unacked = Arc::new(AtomicUsize::new(0));
     let lagged = Arc::new(AtomicBool::new(false));
     let (sent, behind) = (unacked.clone(), lagged.clone());
+    // Coalesced like shell terminals (`terminal_attach`): bursts become one message per interval.
+    let output = OutputCoalescer::new(CoalesceConfig::default(), move |bytes| {
+        on_output.send(InvokeResponseBody::Raw(bytes)).is_ok()
+    });
     let Some(pty_attach) = panes.panes.attach(&thread_id, move |bytes| {
         if sent.fetch_add(bytes.len(), Ordering::SeqCst) + bytes.len() > MAX_UNACKED_BYTES {
             behind.store(true, Ordering::SeqCst);
             return false;
         }
-        on_output
-            .send(InvokeResponseBody::Raw(bytes.to_vec()))
-            .is_ok()
+        output.push(bytes)
     }) else {
         return Ok(None);
     };
@@ -897,7 +900,11 @@ pub fn provider_pane_detach(
 }
 
 /// The person's keystrokes. Bounded like Z1 terminal writes.
-#[tauri::command]
+///
+/// Off the main thread: a write takes the pane's lifecycle lock (and, for voice, the registry
+/// lock), which a handoff delivery can hold for its acknowledged write. The view keeps a pane's
+/// writes in order by sending the next only after the previous one resolved.
+#[tauri::command(async)]
 pub fn provider_pane_write(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     panes: crate::runtime_coordinator::RuntimeState<ProviderPanesState>,

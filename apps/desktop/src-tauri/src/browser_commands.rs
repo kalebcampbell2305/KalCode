@@ -1425,7 +1425,9 @@ fn native_browser_url(
     read_native().filter(safe_runtime_url)
 }
 
-#[tauri::command]
+/// Polled about every 750 ms per visible Browser pane, so it stays off the main thread; the
+/// native URL read still hops to the main thread on its own.
+#[tauri::command(async)]
 pub fn browser_info(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     webview: Webview,
