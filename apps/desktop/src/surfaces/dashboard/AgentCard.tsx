@@ -40,7 +40,10 @@ import { fleetGroupOf } from "./data/board.ts";
 import { formatElapsed, providerName, runDurationMs } from "./data/format.ts";
 import { CommitChanges } from "./fleet/CommitChanges.tsx";
 import type { MergeReadiness } from "./fleet/fleetModel.ts";
+import { OverlapNote } from "./fleet/OverlapNote.tsx";
+import type { AgentOverlap } from "./fleet/overlap.ts";
 import { InlineApproval } from "./InlineApproval.tsx";
+import { AgentOutcome } from "./outcome/AgentOutcome.tsx";
 
 export interface AgentCardProps {
   thread: ThreadSummary;
@@ -70,6 +73,8 @@ export interface AgentCardProps {
   onToggleExpanded?: (threadId: string) => void;
   /** One-click remove for a failed, finished or stopped agent (the X); absent: not offered. */
   onDismiss?: (thread: ThreadSummary) => void;
+  /** Other agents in the same project editing the same files (clicking one opens it). */
+  overlaps?: readonly AgentOverlap[];
 }
 
 /**
@@ -155,6 +160,7 @@ export const AgentCard = memo(function AgentCard({
   expanded = false,
   onToggleExpanded,
   onDismiss,
+  overlaps,
 }: AgentCardProps) {
   const display = displayStatusOf(thread.status);
   const resourceWait = isWaitingForResources(thread) ? presentThread(thread) : null;
@@ -356,6 +362,9 @@ export const AgentCard = memo(function AgentCard({
         </p>
       ) : null}
 
+      {/* What the work amounted to: agent → changed → tests → merge → release, each observed. */}
+      {archived ? null : <AgentOutcome thread={thread} worktree={worktree} variant="card" />}
+
       {/* The inline approval already says what the agent asks for; anything else, say it here. */}
       {actionNeeded && request ? null : (
         <p className={styles.activity} data-tone={tone} data-group={group} title={activity}>
@@ -379,13 +388,8 @@ export const AgentCard = memo(function AgentCard({
         </div>
       ) : null}
 
-      {/* A finished agent in its own worktree says what still stands between it and a merge. */}
-      {!archived && readiness && !readiness.ready && (display.status === "done" || display.status === "idle") ? (
-        <p className={styles.mergeNote}>
-          <GitMerge aria-hidden="true" />
-          <span>Not ready to merge: {readiness.reason}</span>
-        </p>
-      ) : null}
+      {/* Another agent edits the same files: seen now, not at merge time. */}
+      {!archived && overlaps && overlaps.length > 0 ? <OverlapNote overlaps={overlaps} onFocus={onFocus} /> : null}
 
       {confirmStop ? (
         // biome-ignore lint/a11y/useSemanticElements: a labelled group of buttons, not form fields.

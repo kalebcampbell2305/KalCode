@@ -70,6 +70,8 @@ export interface ThreadsMemory {
   autoNamePane(threadId: string, prompt: string): ThreadSummary;
   /** A pane's hook or process signal changed the thread's status (the one status machine). */
   setPaneStatus(threadId: string, status: ThreadStatus, activity: string | null, pendingApprovals?: number): void;
+  /** Records how many files a pane agent changed (ui-test fixtures for outcomes). */
+  setPaneFiles(threadId: string, filesChanged: number): void;
   /**
    * Fixture history for other surfaces' ui-test scenarios (Z7-W2 rail and home): adds a thread
    * with no live session, as if it had run earlier. Returns its summary.
@@ -861,6 +863,8 @@ export function createThreadsMemory(
       changed: facts.changed,
       untracked: 0,
       conflicts: false,
+      changedPaths: [],
+      changedPathsTruncated: false,
       observedAt: now(),
     };
   };
@@ -1260,6 +1264,10 @@ export function createThreadsMemory(
       if (pendingApprovals !== undefined) t.summary = { ...t.summary, pendingApprovals };
       if (TERMINAL.has(status)) t.live = false;
       setStatus(t, status, activity, "provider");
+    },
+    setPaneFiles(threadId, filesChanged) {
+      const t = threads.get(threadId);
+      if (t) t.summary = { ...t.summary, filesChanged };
     },
     resolveApproval(requestId, approved) {
       for (const t of threads.values()) {

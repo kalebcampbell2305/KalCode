@@ -48,6 +48,7 @@ import { canDismiss, useAgentCleanup } from "./fleet/agentCleanup.ts";
 import { isFolded, useFleetLayout } from "./fleet/fleetLayout.ts";
 import { mergeReadiness } from "./fleet/fleetModel.ts";
 import { morphIntoAgent } from "./fleet/morph.ts";
+import { useAgentOverlaps } from "./fleet/useAgentOverlaps.ts";
 import { useWorktreeStates } from "./fleet/useWorktreeStates.ts";
 import { useNow } from "./useNow.ts";
 import { useVirtualRows } from "./useVirtualRows.ts";
@@ -257,6 +258,7 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
   );
 
   const { states: worktrees, apply: applyWorktree } = useWorktreeStates(threads);
+  const overlaps = useAgentOverlaps({ threads: threads ?? NO_THREADS, states: worktrees }).byAgent;
   const onReviewApprovals = useCallback(() => permissions.setPanelOpen(true), [permissions.setPanelOpen]);
   const onDismiss = useCallback((thread: ThreadSummary) => void cleanup.dismissAgent(thread.id), [cleanup]);
 
@@ -343,6 +345,7 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
                 expanded={expanded.has(thread.id)}
                 onToggleExpanded={toggleCard}
                 onDismiss={canDismiss(thread.status) ? onDismiss : undefined}
+                overlaps={overlaps.get(thread.id)}
               />
             </div>
           </CodingAgentContextMenu>

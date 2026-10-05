@@ -211,6 +211,36 @@ fn branch_comparison_and_merge_prediction() {
         Some(false)
     );
 
+    // The files the agent touched: committed since the fork (not main's own commits), then
+    // uncommitted and untracked work too. Without a base only uncommitted files are known.
+    let (_, touched) =
+        worktree::changed_paths(&fx.git, &repo, &new.path, Some(base), branch).expect("paths");
+    assert_eq!(touched.paths, vec!["agent.txt".to_owned()]);
+    assert!(!touched.truncated);
+    std::fs::write(new.path.join("src.rs"), "fn main() {}\n").expect("write");
+    std::fs::write(new.path.join("agent.txt"), "agent work, edited\n").expect("write");
+    let (dirty, touched) =
+        worktree::changed_paths(&fx.git, &repo, &new.path, Some(base), branch).expect("paths");
+    assert_eq!(
+        touched.paths,
+        vec!["agent.txt".to_owned(), "src.rs".to_owned()]
+    );
+    assert_eq!((dirty.changed, dirty.untracked), (1, 1));
+    let (_, uncommitted) =
+        worktree::changed_paths(&fx.git, &repo, &new.path, None, branch).expect("paths");
+    assert_eq!(
+        uncommitted.paths,
+        vec!["agent.txt".to_owned(), "src.rs".to_owned()]
+    );
+    assert!(worktree::changed_paths(&fx.git, &repo, &new.path, Some("--all"), branch).is_err());
+    common::run_plain(&new.path, &["add", "-A"]);
+    common::run_plain(&new.path, &["commit", "-q", "--no-verify", "-m", "agent 2"]);
+    assert_eq!(
+        worktree::ahead_behind(&fx.git, &repo, base, branch).expect("count"),
+        (2, 2),
+        "(behind, ahead)"
+    );
+
     // Both sides change the same line: a conflict, and nothing in either folder changes.
     std::fs::write(new.path.join("README.md"), "agent hello\n").expect("write");
     common::run_plain(

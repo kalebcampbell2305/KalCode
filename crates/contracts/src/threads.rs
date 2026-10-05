@@ -316,8 +316,9 @@ pub struct ThreadSummary {
 }
 
 /// Git facts about a thread's own worktree (`thread_worktree_states`), from which the UI decides
-/// whether the agent's work is ready to merge. Computed natively on request; paths never cross
-/// IPC.
+/// whether the agent's work is ready to merge and whether agents edit the same files. Computed
+/// natively on request; filesystem locations never cross IPC (only repository-relative file
+/// names do).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -340,6 +341,13 @@ pub struct ThreadWorktreeState {
     /// Whether merging the worktree branch into the base branch would conflict. `null` when
     /// unknown (no base branch, Git older than 2.38, or a repository-defined merge driver).
     pub conflicts: Option<bool>,
+    /// Files the agent touched, relative to the repository top level: committed on the branch
+    /// since it forked from the base, plus uncommitted and untracked files. Sorted, at most 200.
+    #[serde(default)]
+    pub changed_paths: Vec<String>,
+    /// More files changed than `changed_paths` lists.
+    #[serde(default)]
+    pub changed_paths_truncated: bool,
     /// When these facts were read (RFC 3339).
     pub observed_at: String,
 }

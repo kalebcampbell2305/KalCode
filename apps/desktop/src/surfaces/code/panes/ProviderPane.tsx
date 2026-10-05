@@ -26,6 +26,7 @@ import {
 import { type KeyboardEvent, memo, type RefObject, useEffect, useId, useRef, useState } from "react";
 import { toKalCodeError } from "../../../ipc/errors.ts";
 import { useRuntime } from "../../../runtime/RuntimeProvider.tsx";
+import { AgentOutcome } from "../../dashboard/outcome/AgentOutcome.tsx";
 import { ApprovalPrompt } from "../../permissions/ApprovalPrompt.tsx";
 import { MODE_LABELS } from "../../permissions/labels.ts";
 import { usePermissions } from "../../permissions/PermissionsProvider.tsx";
@@ -242,6 +243,8 @@ export const ProviderPane = memo(function ProviderPane({
         onContinue={onContinue}
       />
       {onContinue ? <PaneAccountSuggestion thread={thread} account={account} onContinue={onContinue} /> : null}
+      {/* The agent's outcome beside its terminal; the list floats over it, never resizing it. */}
+      <AgentOutcome thread={thread} variant="pane" />
       {confirmStop && !closePending ? (
         <div
           className={styles.confirm}

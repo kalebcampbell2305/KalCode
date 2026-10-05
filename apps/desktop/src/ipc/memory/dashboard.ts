@@ -159,7 +159,8 @@ interface ThreadSeed {
   files: number | null;
   branch: string | null;
   /** Agent Fleet: the thread runs in its own worktree with these Git facts. */
-  worktree?: { ahead: number; changed: number; conflicts: boolean };
+  /** `paths`: the files the agent touched (repository-relative), for overlapping-edit detection. */
+  worktree?: { ahead: number; changed: number; conflicts: boolean; paths?: string[] };
   unread?: number;
   error?: { code: string; message: string };
 }
@@ -195,7 +196,12 @@ const BUSY_THREADS: readonly ThreadSeed[] = [
     lastMinAgo: 0,
     files: 2,
     branch: "fix/checkout-flake",
-    worktree: { ahead: 1, changed: 2, conflicts: false },
+    worktree: {
+      ahead: 1,
+      changed: 2,
+      conflicts: false,
+      paths: ["apps/web/checkout/cart.test.ts", "apps/web/checkout/cart.ts"],
+    },
   },
   {
     n: 3,
@@ -211,7 +217,12 @@ const BUSY_THREADS: readonly ThreadSeed[] = [
     lastMinAgo: 0,
     files: 3,
     branch: "feat/invoices",
-    worktree: { ahead: 0, changed: 4, conflicts: false },
+    worktree: {
+      ahead: 0,
+      changed: 4,
+      conflicts: false,
+      paths: ["apps/web/checkout/cart.ts", "db/migrations/0007_invoices.sql", "db/schema.ts", "src/invoices.ts"],
+    },
   },
   {
     n: 4,
@@ -887,6 +898,8 @@ export function createDashboardFixtures(scenario: DashboardScenario, emit: Emit,
         changed: 0,
         untracked: 0,
         conflicts: next.conflicts,
+        changedPaths: next.paths ?? [],
+        changedPathsTruncated: false,
         observedAt: new Date().toISOString(),
       };
     },
@@ -907,6 +920,8 @@ export function createDashboardFixtures(scenario: DashboardScenario, emit: Emit,
             changed: facts.changed,
             untracked: 0,
             conflicts: facts.conflicts,
+            changedPaths: facts.paths ?? [],
+            changedPathsTruncated: false,
             observedAt: new Date().toISOString(),
           },
         ];
