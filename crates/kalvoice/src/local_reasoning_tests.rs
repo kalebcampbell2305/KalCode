@@ -271,7 +271,7 @@ fn model_controlled_text_bounds_apply_to_the_original_canonical_value() {
 
 #[test]
 fn the_local_interpreter_can_never_send_or_clear_prompt_text() {
-    use kalcode_contracts::sessions::SessionAttention;
+    use kalcode_contracts::sessions::{SessionAttention, SessionScope};
     let workspaces = vec![WorkspaceOption {
         id: WORKSPACE_ID.into(),
         name: "KalCode".into(),
@@ -293,9 +293,11 @@ fn the_local_interpreter_can_never_send_or_clear_prompt_text() {
         KalVoiceIntent::FocusPrevious,
         KalVoiceIntent::FocusByState {
             state: SessionAttention::WaitingForPermission,
+            scope: SessionScope::Agents,
         },
         KalVoiceIntent::WhichSessions {
             state: SessionAttention::Failed,
+            scope: SessionScope::Threads,
         },
     ] {
         assert!(

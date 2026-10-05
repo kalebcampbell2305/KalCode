@@ -9,7 +9,7 @@
 //! session resolver (which clarifies instead of guessing).
 
 use kalcode_contracts::kalvoice::KalVoiceIntent;
-use kalcode_contracts::sessions::SessionAttention;
+use kalcode_contracts::sessions::{SessionAttention, SessionScope};
 
 use super::{
     Build, Caps, Confidence, MAX_COMMAND_TOKENS, Understood, count_word, strip_filler,
@@ -280,13 +280,59 @@ fn question_word(word: &str) -> Option<bool> {
 
 // ---------------------------------------------------------------------------------------------
 // Pattern rules: sessions by state. Added ahead of the approvals rules so "what needs
-// permission" reads back the sessions (and opens the approvals panel) rather than only the panel.
+// permission" reads back the agents (and shows them) rather than only the panel.
+//
+// Agents and Threads are separate product concepts (AGENTS.md: "AGENT means a coding agent").
+// A phrase that names an agent, a terminal, a pane or a provider, or names nothing ("the one",
+// "what failed", "is anything stuck"), is about coding agents of every provider; one that names
+// a thread or a session keeps reading chat threads.
 
 const FOCUS_VERB: &str =
     "(open|show|show me|focus|focus on|go to|take me to|switch to|jump to|bring up|pull up|find)";
-const ONE: &str =
-    "(the one|the thread|the agent|the session|the terminal|the provider|the pane|whichever one)";
-const WHICH: &str = "(which|what) (one|ones|agent|agents|thread|threads|session|sessions|provider|providers|terminal|terminals)";
+
+/// What one session is called, per scope.
+fn one(scope: SessionScope) -> &'static str {
+    match scope {
+        SessionScope::Agents => {
+            "(the one|the agent|the coding agent|the terminal|the provider|the pane|whichever one)"
+        }
+        SessionScope::Threads => "(the thread|the session|the chat|the chat thread)",
+    }
+}
+
+/// "Which one / which agents / which threads", per scope.
+fn which_noun(scope: SessionScope) -> &'static str {
+    match scope {
+        SessionScope::Agents => {
+            "(which|what) (one|ones|agent|agents|coding agent|coding agents|provider|providers|terminal|terminals)"
+        }
+        SessionScope::Threads => "(which|what) (thread|threads|session|sessions)",
+    }
+}
+
+/// "Is anything / any agent / any thread …", per scope.
+fn anything(scope: SessionScope) -> &'static str {
+    match scope {
+        SessionScope::Agents => "(anything|anyone|anybody|any agent|any agents)",
+        SessionScope::Threads => "(any thread|any threads|any session|any sessions)",
+    }
+}
+
+/// Nouns after a state adjective ("the failed agent", "the stuck thread").
+fn noun_one(scope: SessionScope) -> &'static str {
+    match scope {
+        SessionScope::Agents => "(one|agent|coding agent|terminal|pane)",
+        SessionScope::Threads => "(thread|session)",
+    }
+}
+
+fn noun_many(scope: SessionScope) -> &'static str {
+    match scope {
+        SessionScope::Agents => "(agents|coding agents)",
+        SessionScope::Threads => "(threads|sessions)",
+    }
+}
+
 const BE: &str =
     "[is|are|has|have|was|were|that is|which is|that are|that|which] [currently|still]";
 
@@ -309,7 +355,7 @@ fn state_phrases(state: SessionAttention) -> &'static [&'static str] {
             "waiting",
             "waiting on me",
             "waiting (for|on) (input|my input|an answer|a reply|my answer)",
-            "(needs|need|needing) (me|input|my input|an answer)",
+            "(needs|need|needing) (me|input|my input|an answer|my attention)",
         ],
     }
 }
@@ -351,66 +397,68 @@ const ATTENTION: [SessionAttention; 4] = [
     SessionAttention::WaitingForYou,
 ];
 
+fn focus_by_state(state: SessionAttention, scope: SessionScope) -> Build {
+    Box::new(move |_: &Caps| Understood::intent(KalVoiceIntent::FocusByState { state, scope }))
+}
+
+fn which_sessions(state: SessionAttention, scope: SessionScope) -> Build {
+    Box::new(move |_: &Caps| Understood::intent(KalVoiceIntent::WhichSessions { state, scope }))
+}
+
 pub(super) fn state_rules(add: &mut impl FnMut(String, Build)) {
-    for state in ATTENTION {
-        let focus = move |_: &Caps| Understood::intent(KalVoiceIntent::FocusByState { state });
-        let which = move |_: &Caps| Understood::intent(KalVoiceIntent::WhichSessions { state });
-        for phrase in state_phrases(state) {
-            add(format!("{FOCUS_VERB} {ONE} {BE} {phrase}"), Box::new(focus));
-            add(format!("{WHICH} {BE} {phrase}"), Box::new(which));
-            add(
-                format!(
-                    "(is|are|has|did) (anything|anyone|anybody|any thread|any agent|any session) {BE} {phrase}"
-                ),
-                Box::new(which),
-            );
-            add(format!("who {BE} {phrase}"), Box::new(which));
-        }
-        if let Some(adjective) = state_adjectives(state) {
-            add(
-                format!(
-                    "{FOCUS_VERB} [me] the {adjective} (one|thread|agent|session|terminal|pane)"
-                ),
-                Box::new(focus),
-            );
-            add(
-                format!("(what|which) {adjective} (threads|agents|sessions) [are there|do i have]"),
-                Box::new(which),
-            );
+    for scope in [SessionScope::Agents, SessionScope::Threads] {
+        let (one, which_noun, anything) = (one(scope), which_noun(scope), anything(scope));
+        for state in ATTENTION {
+            for phrase in state_phrases(state) {
+                add(
+                    format!("{FOCUS_VERB} {one} {BE} {phrase}"),
+                    focus_by_state(state, scope),
+                );
+                add(
+                    format!("{which_noun} {BE} {phrase}"),
+                    which_sessions(state, scope),
+                );
+                add(
+                    format!("(is|are|has|have|did) {anything} {BE} {phrase}"),
+                    which_sessions(state, scope),
+                );
+                if scope == SessionScope::Agents {
+                    add(format!("who {BE} {phrase}"), which_sessions(state, scope));
+                }
+            }
+            if let Some(adjective) = state_adjectives(state) {
+                add(
+                    format!("{FOCUS_VERB} [me] the {adjective} {}", noun_one(scope)),
+                    focus_by_state(state, scope),
+                );
+                add(
+                    format!(
+                        "(what|which) {adjective} {} [are there|do i have]",
+                        noun_many(scope)
+                    ),
+                    which_sessions(state, scope),
+                );
+            }
         }
     }
-    // "What needs permission?" (a question about sessions), "what failed?", "what's stuck?".
+    // "What needs permission?", "what failed?", "what's stuck?": nothing named, so the coding
+    // agents of every provider.
+    let agents = SessionScope::Agents;
     add(
         "what (needs|need|requires|require|wants) permission".into(),
-        Box::new(|_: &Caps| {
-            Understood::intent(KalVoiceIntent::WhichSessions {
-                state: SessionAttention::WaitingForPermission,
-            })
-        }),
+        which_sessions(SessionAttention::WaitingForPermission, agents),
     );
     add(
         "what (is|are) (waiting|asking) (for|on) permission".into(),
-        Box::new(|_: &Caps| {
-            Understood::intent(KalVoiceIntent::WhichSessions {
-                state: SessionAttention::WaitingForPermission,
-            })
-        }),
+        which_sessions(SessionAttention::WaitingForPermission, agents),
     );
     add(
         "what (failed|crashed|broke|errored)".into(),
-        Box::new(|_: &Caps| {
-            Understood::intent(KalVoiceIntent::WhichSessions {
-                state: SessionAttention::Failed,
-            })
-        }),
+        which_sessions(SessionAttention::Failed, agents),
     );
     add(
         "what (is|are) stuck".into(),
-        Box::new(|_: &Caps| {
-            Understood::intent(KalVoiceIntent::WhichSessions {
-                state: SessionAttention::Stuck,
-            })
-        }),
+        which_sessions(SessionAttention::Stuck, agents),
     );
 }
 

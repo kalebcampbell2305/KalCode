@@ -318,6 +318,7 @@ export type { SessionConfig } from "./SessionConfig.ts";
 export type { SessionFollowUp } from "./SessionFollowUp.ts";
 export type { SessionMatchTier } from "./SessionMatchTier.ts";
 export type { SessionResolution } from "./SessionResolution.ts";
+export type { SessionScope } from "./SessionScope.ts";
 export type { SessionUsage } from "./SessionUsage.ts";
 export type { Settings } from "./Settings.ts";
 export type { SettingsPatch } from "./SettingsPatch.ts";
