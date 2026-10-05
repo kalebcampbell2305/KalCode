@@ -184,6 +184,12 @@ export function FloatingAssistant() {
       }
     : undefined;
 
+  // The result's settle timer: held while pointed at or focused; longer while "Type it instead" shows.
+  const [held, setHeld] = useState(false);
+  const actionShown = panel.visible && panel.view !== "orb" && state.phase === "done" && kv.canTypeInstead;
+  const heldShown = held && panel.visible && panel.view !== "orb";
+  const showResult = kv.showResult;
+  useEffect(() => showResult({ held: heldShown, actionShown }), [showResult, heldShown, actionShown]);
   if (!panel.visible || !status) return null;
 
   const resting = positionFor(floatsOverHeader ? { ...panel, anchor: "top" } : panel, viewport, size, area);
@@ -313,6 +319,13 @@ export function FloatingAssistant() {
       data-anchor={panel.anchor}
       aria-label="KalVoice widget"
       style={{ left: position.left, top: position.top }}
+      // A finished result stays while the person points at or focuses it (it may be in use).
+      onPointerEnter={() => setHeld(true)}
+      onPointerLeave={() => setHeld(false)}
+      onFocus={() => setHeld(true)}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setHeld(false);
+      }}
     >
       {/* Collapsed to the orb, the push-to-talk bar announces activity instead (no double reading). */}
       {view === "orb" ? null : (
