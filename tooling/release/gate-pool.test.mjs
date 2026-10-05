@@ -8,6 +8,7 @@ import {
   captureToolchain,
   checkFingerprint,
   evidenceEnvironment,
+  isCheckOutput,
   prepareCheckEvidence,
 } from "./lifecycle/gate-evidence.mjs";
 import { runGatePool } from "./lifecycle/gate-pool.mjs";
@@ -331,4 +332,28 @@ test("real six-process acceptance proves four overlapping checks on this machine
   const ends = [0, 1, 2, 3].map((id) => Number(readFileSync(join(root, `${id}.end`), "utf8")));
   assert.ok(Math.max(...starts) < Math.min(...ends), "four actual child checks overlapped");
   assert.ok([4, 5].every((id) => readFileSync(join(root, `${id}.end`), "utf8")));
+});
+
+test("check outputs written into the checkout never count as a changed candidate", () => {
+  // Gate 37323803563: desktop-ui refreshed tracked QA screenshots, then rust and native e2e failed
+  // in 0 s with "source changed before check".
+  assert.equal(isCheckOutput("apps/desktop/qa/screenshots/w0/dashboard-dark.png"), true);
+  assert.equal(isCheckOutput("docs/release/cursor-provider/pane.png"), true);
+  assert.equal(isCheckOutput("apps/desktop/qa/screenshots/report.json"), true);
+  assert.equal(isCheckOutput("apps/desktop/src/App.tsx"), false);
+  assert.equal(isCheckOutput("crates/threads/src/runtime.rs"), false);
+});
+
+test("a check that ends before running still logs why it failed", async () => {
+  const lines = [];
+  const outcome = await runGates(
+    [{ id: "rust", run: ["cargo test"], env: {}, unsetEnv: [], requires: [], state: "selected" }],
+    {
+      jobs: 2,
+      log: (line) => lines.push(line),
+      evidence: { run: async (gate) => ({ id: gate.id, state: "fail", why: "source changed before check" }) },
+    },
+  );
+  assert.equal(outcome.status, "FAIL");
+  assert.ok(lines.includes("FAIL rust: source changed before check"), lines.join("\n"));
 });

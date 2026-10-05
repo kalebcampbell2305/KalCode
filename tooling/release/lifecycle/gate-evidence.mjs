@@ -11,6 +11,11 @@ const digest = (value) => createHash("sha256").update(JSON.stringify(value)).dig
 // Deliberately broad closures: retain EVERY root config, lockfile, package, tool and
 // native dependency. Only established unrelated product/documentation trees are omitted.
 // Unknown checks use the entire tree. New or unusual root directories invalidate all.
+/** Files the checks themselves write into the checkout: screenshots and QA captures, never source. */
+export function isCheckOutput(path) {
+  return /\.(png|jpe?g|webp|gif)$/i.test(path) || /(^|\/)qa\/screenshots\//.test(path);
+}
+
 export function relevantGateInput(id, path) {
   if (["rust", "cargo-deny", "cargo-audit", "desktop-native-e2e"].includes(id)) {
     return !/^(docs|marketing|apps\/website|apps\/api)\//.test(path);
@@ -140,8 +145,12 @@ export function prepareCheckEvidence(
         }),
       ]),
   );
+  // The candidate is exact while HEAD is unchanged and no tracked source differs from it. Checks
+  // legitimately write outputs into the checkout (the visual suite refreshes tracked QA screenshots,
+  // test runs leave untracked reports), so those never invalidate a later check (gate 37323803563
+  // failed rust and native e2e in 0 s with "source changed before check" after desktop-ui).
   const stillExact = () =>
-    git.rev("HEAD") === g.head && git.diff("HEAD", null).length === 0 && git.untracked().length === 0;
+    git.rev("HEAD") === g.head && git.diff("HEAD", null).every(({ path }) => isCheckOutput(path));
   // Snapshot trustworthy completed receipts before any code under test executes.
   const reusable = new Map();
   for (const [id, key] of checks) {

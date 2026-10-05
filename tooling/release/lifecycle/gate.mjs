@@ -282,6 +282,9 @@ export async function runGates(plan, options) {
           );
         if (result.reusedFrom)
           log(`PASS ${gate.id}: verified inputs reused from ${result.reusedFrom}, bound to ${result.reboundTo}`);
+        // A check that ended before running (evidence or capacity refusal) still says why.
+        else if (result.state !== "pass" && result.why && !buffer.includes(`FAIL ${gate.id}`))
+          log(`FAIL ${gate.id}: ${result.why}`);
         const completed = { ...result, startedAt, finishedAt: new Date().toISOString() };
         report?.finish(completed);
         return completed;
