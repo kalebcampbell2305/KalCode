@@ -248,6 +248,7 @@ export function PaneFrame(props: PaneFrameProps) {
         data-collapsed={collapsedStrip ? "strip" : "bar"}
         data-focused={focused || undefined}
         data-attention={attentionInfo?.attention}
+        data-tone={activeInfo?.tone}
         data-kalvoice-target={kalVoiceTarget ? "listening" : undefined}
         hidden={hidden}
         aria-current={focused ? "true" : undefined}
@@ -298,6 +299,7 @@ export function PaneFrame(props: PaneFrameProps) {
       data-pane-id={leaf.paneId}
       data-focused={focused || undefined}
       data-attention={attentionInfo?.attention}
+      data-tone={activeInfo?.tone}
       data-kalvoice-target={kalVoiceTarget ? "listening" : undefined}
       data-maximized={maximized || undefined}
       data-drop-target={dropTarget || undefined}

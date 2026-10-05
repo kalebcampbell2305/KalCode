@@ -874,9 +874,71 @@
   gap: var(--space-6);
 }
 
+/*
+ * The Code landing is a launch bay (space design system, cinematic but calm): the card carries its
+ * own far star plane and nebula, so open space reads deeper here than on the work surfaces, while
+ * the copy sits on the sunken graphite at full contrast. Static layers only.
+ */
 .codeWelcome {
-  padding: var(--space-7);
-  background: linear-gradient(120deg, var(--color-accent-soft), transparent 42%), var(--color-bg-sunken);
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  padding: var(--space-8) var(--space-7) var(--space-7);
+  border-color: var(--color-border-lit-soft);
+  background:
+    var(--atmosphere-stars-far) 220px 40px / var(--atmosphere-stars-far-size),
+    var(--atmosphere-nebula),
+    linear-gradient(120deg, var(--color-accent-soft), transparent 46%),
+    var(--color-bg-sunken);
+  box-shadow: var(--shadow-panel), var(--glow-subtle);
+}
+
+/* A thin lit horizon along the top edge, fading out: the bay's one accent line. */
+.codeWelcome::before {
+  position: absolute;
+  top: 0;
+  left: 8%;
+  right: 8%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--color-border-lit), transparent);
+  content: "";
+  pointer-events: none;
+}
+
+/* The bay's mark: a lit tile inside one static orbit ring. */
+.launchArt {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 3rem;
+  height: 3rem;
+  border: 1px solid var(--color-border-lit-soft);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, var(--color-accent-soft), transparent), var(--color-surface-2);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.06),
+    0 0 30px -8px var(--color-glow);
+  color: var(--color-accent-icy);
+}
+
+.launchArt::before {
+  position: absolute;
+  inset: -0.625rem;
+  border: 1px solid var(--color-border-lit-soft);
+  border-radius: var(--radius-full);
+  content: "";
+  mask: linear-gradient(135deg, rgb(0 0 0) 0%, transparent 55%, rgb(0 0 0) 100%);
+  pointer-events: none;
+}
+
+.launchEyebrow {
+  margin: 0 0 var(--space-1);
+  color: var(--color-accent-text);
+  font-family: var(--font-label);
+  font-size: var(--type-label);
+  font-weight: var(--type-label-weight);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
 }
 
 .emptyArt {
@@ -898,16 +960,20 @@
 
 .entryFeatures li {
   display: grid;
-  grid-template-columns: 1.75rem minmax(0, 1fr);
+  grid-template-columns: 2rem minmax(0, 1fr);
   align-items: start;
   gap: var(--space-2);
   padding: var(--space-2) 0;
 }
 
 .entryFeatures svg {
-  width: 1rem;
-  height: 1rem;
-  margin: 0.125rem 0 0 0.125rem;
+  box-sizing: content-box;
+  width: 0.875rem;
+  height: 0.875rem;
+  padding: 0.3125rem;
+  border: 1px solid var(--color-border-lit-soft);
+  border-radius: var(--radius-md);
+  background: var(--color-accent-soft);
   color: var(--color-accent-icy);
   stroke-width: 1.6;
 }
