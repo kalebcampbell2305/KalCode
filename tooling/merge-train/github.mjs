@@ -88,7 +88,9 @@ export function gateStateFrom(runs, jobs, sha, branch) {
  */
 export function parseGateLog(text, number) {
   const merge = new RegExp(`\\+([0-9a-f]{40}):refs/remotes/pull/${Number(number)}/merge\\b`).exec(text);
-  const parents = /HEAD is now at [0-9a-f]+ Merge ([0-9a-f]{40}) into ([0-9a-f]{40})/.exec(text);
+  // The runner reuses its workspace, so the log first shows the previous run's HEAD before the fetch;
+  // the tested commit is the checkout that follows the fetch (the last one, gate 37266349381).
+  const parents = [...text.matchAll(/HEAD is now at [0-9a-f]+ Merge ([0-9a-f]{40}) into ([0-9a-f]{40})/g)].at(-1);
   const counts = [...text.matchAll(/gate: lanes [^;\n]*; (\d+) changed file/g)].map((m) => Number(m[1]));
   return {
     testedMerge: merge?.[1] ?? null,
