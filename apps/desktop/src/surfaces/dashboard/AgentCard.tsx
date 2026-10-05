@@ -44,10 +44,12 @@ import { OverlapNote } from "./fleet/OverlapNote.tsx";
 import type { AgentOverlap } from "./fleet/overlap.ts";
 import { InlineApproval } from "./InlineApproval.tsx";
 import { AgentOutcome } from "./outcome/AgentOutcome.tsx";
+import { useClock } from "./useNow.ts";
 
 export interface AgentCardProps {
   thread: ThreadSummary;
-  now: number;
+  /** The time the card's relative texts read from; omitted, the card follows the shared clock. */
+  now?: number;
   /** Pending approval requests from this thread, oldest first. */
   approvals: readonly ApprovalView[];
   /** The action in flight for this thread, if any. */
@@ -138,7 +140,11 @@ function isInteractive(target: EventTarget | null): boolean {
 }
 
 /** Every text the card derives from `now`: the elapsed time, started, archived and last activity. */
-function clockTexts({ thread, now, archived = false }: AgentCardProps): string {
+function clockTexts({
+  thread,
+  now,
+  archived = false,
+}: Pick<AgentCardProps, "thread" | "archived"> & { now: number }): string {
   const elapsedMs = runDurationMs(thread, now);
   return [
     elapsedMs === null || archived ? "" : elapsedMs < 60_000 ? "<1 min" : formatElapsed(elapsedMs),
@@ -149,15 +155,17 @@ function clockTexts({ thread, now, archived = false }: AgentCardProps): string {
 }
 
 /**
- * The board's clock ticks every card; a card re-renders for a tick only when a time it shows
- * changes (each card's whole menu subtree re-rendered every 30 s otherwise).
+ * A card given `now` re-renders for a new time only when a time it shows changes (each card's
+ * whole menu subtree re-rendered every 30 s otherwise).
  */
 export function sameAgentCardProps(prev: AgentCardProps, next: AgentCardProps): boolean {
   for (const key of Object.keys(next) as (keyof AgentCardProps)[]) {
     if (key !== "now" && !Object.is(prev[key], next[key])) return false;
   }
   for (const key of Object.keys(prev)) if (!(key in next)) return false;
-  return prev.now === next.now || clockTexts(prev) === clockTexts(next);
+  if (prev.now === next.now) return true;
+  if (prev.now === undefined || next.now === undefined) return false;
+  return clockTexts({ ...prev, now: prev.now }) === clockTexts({ ...next, now: next.now });
 }
 
 /**
@@ -168,7 +176,7 @@ export function sameAgentCardProps(prev: AgentCardProps, next: AgentCardProps): 
  */
 export const AgentCard = memo(function AgentCard({
   thread,
-  now,
+  now: givenNow,
   approvals,
   pendingAction,
   onFocus,
@@ -185,6 +193,10 @@ export const AgentCard = memo(function AgentCard({
   onDismiss,
   overlaps,
 }: AgentCardProps) {
+  // Following the shared clock, a tick re-renders this card only when one of its times changes
+  // (the board and every card's menu subtree no longer re-render on each tick).
+  const clock = useClock((at) => (givenNow === undefined ? clockTexts({ thread, now: at, archived }) : null));
+  const now = givenNow ?? clock;
   const display = displayStatusOf(thread.status);
   const resourceWait = isWaitingForResources(thread) ? presentThread(thread) : null;
   const ready = !archived && readiness?.ready === true;

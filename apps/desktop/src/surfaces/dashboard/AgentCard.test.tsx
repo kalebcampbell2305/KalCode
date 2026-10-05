@@ -1,7 +1,8 @@
 import type { ThreadSummary } from "@kalcode/protocol";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { Profiler } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentCard, type AgentCardProps, sameAgentCardProps, startedText } from "./AgentCard.tsx";
 
 function thread(accountLabel: string | null): ThreadSummary {
@@ -360,5 +361,39 @@ describe("AgentCard clock ticks", () => {
     const base = props(t, "2026-09-28T13:10:05Z", { archived: true });
     expect(sameAgentCardProps(base, { ...base, now: Date.parse("2026-09-28T13:10:20Z") })).toBe(true);
     expect(sameAgentCardProps(base, { ...base, now: Date.parse("2026-09-28T14:40:00Z") })).toBe(false);
+  });
+});
+
+describe("AgentCard on the shared clock", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("without a given time, re-renders on a tick only when a time it shows changes", () => {
+    vi.useFakeTimers();
+    // 12:00:40: started 40 s ago ("Started just now", "<1 min").
+    vi.setSystemTime(Date.parse("2026-09-28T12:00:40Z"));
+    const t = { ...thread(null), status: "active" as const };
+    const onRender = vi.fn();
+    render(
+      <Profiler id="card" onRender={onRender}>
+        <AgentCard
+          thread={t}
+          approvals={[]}
+          pendingAction={undefined}
+          onFocus={vi.fn()}
+          onAction={vi.fn()}
+          onDecide={vi.fn()}
+          onReviewApprovals={vi.fn()}
+        />
+      </Profiler>,
+    );
+    onRender.mockClear();
+    act(() => vi.advanceTimersByTime(20_000)); // 12:01:00: one minute, the texts change
+    expect(onRender).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("article", { name: "Research" }).textContent).toContain("1 min");
+    onRender.mockClear();
+    act(() => vi.advanceTimersByTime(30_000)); // 12:01:30: still one minute
+    expect(onRender).not.toHaveBeenCalled();
   });
 });
