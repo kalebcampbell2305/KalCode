@@ -3130,9 +3130,12 @@ mod tests {
     }
 
     /// How long the delayed fake holds its first `account/read`. Long enough that a launch which
-    /// waited for it is unmistakable from one that preempted it, even on a loaded machine.
+    /// waited for it is unmistakable from one that preempted it, even on a loaded machine: under
+    /// the gate's parallel test load a preempting launch measured 6.75 s (gate 37253600852), so
+    /// the launch bound (a third of this) must sit well above that. A passing run never waits for
+    /// it: the preempted observer is terminated.
     #[cfg(any(windows, target_os = "macos"))]
-    const DELAYED_OBSERVER_READ: Duration = Duration::from_secs(15);
+    const DELAYED_OBSERVER_READ: Duration = Duration::from_secs(45);
 
     /// Installs only the certified read-only Codex app-server account surface. This fake never
     /// reads provider credentials or contacts a provider.
