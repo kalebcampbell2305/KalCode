@@ -21,6 +21,18 @@ export interface ProviderPaneEntry {
 const WAITING_POLL_MS = 1500;
 const CODEX_WAITING_POLL_MS = 4000;
 const REFRESH_DEBOUNCE_MS = 120;
+/** A multi-agent launch starts this many sessions at once (each is still its own fresh session). */
+const LAUNCH_CONCURRENCY = 4;
+
+/** Which panes a refresh re-reads: all, or only these thread ids (plus any not known yet). */
+type RefreshScope = "all" | ReadonlySet<string>;
+
+function widenScope(a: RefreshScope | null, b: RefreshScope | null): RefreshScope | null {
+  if (a === null) return b;
+  if (b === null) return a;
+  if (a === "all" || b === "all") return "all";
+  return new Set([...a, ...b]);
+}
 
 /** Small IPC records (thread, pane info): equal when their serialized fields are. */
 function sameRecord(a: unknown, b: unknown): boolean {
@@ -66,6 +78,12 @@ export interface ProviderPanes {
   clearLaunchError: () => void;
   /** Starts a coding agent (Claude Code by default): the real CLI in a PTY pane. */
   create: (providerId?: PaneProviderId, launch?: AgentLaunch) => Promise<ThreadSummary | null>;
+  /**
+   * Starts `count` coding agents, each a fresh session, a few at a time; the panes join the list
+   * in one update. A refusal stops further starts; sessions already started are kept and returned
+   * (oldest first).
+   */
+  createMany: (providerId: PaneProviderId, launch: AgentLaunch, count: number) => Promise<ThreadSummary[]>;
   /** A thread changed (rename, stop). */
   updated: (thread: ThreadSummary) => void;
   refresh: () => Promise<void>;
@@ -90,52 +108,79 @@ export function useProviderPanes(workspace: Workspace, { active = true }: Provid
   /** Panes whose last info read answered "no live pane" (ended/restored): no info will arrive by polling. */
   const [settled, setSettled] = useState<string[]>([]);
   const generation = useRef(0);
+  // What the latest render knows, so a scoped refresh can keep the panes it doesn't re-read.
+  const known = useRef({ panes, settled });
+  known.current = { panes, settled };
+  /** The scope of the refresh in flight: a newer refresh supersedes it, so it inherits its scope. */
+  const inflightScope = useRef<RefreshScope | null>(null);
 
-  const refresh = useCallback(async () => {
-    if (!enabled) return;
-    const current = ++generation.current;
-    try {
-      const threads = await client.listThreads({ workspaceId: workspace.id });
-      const candidates = threads.filter((t) => isPaneProvider(t.providerId));
-      const infos = await Promise.allSettled(candidates.map((t) => channel.info(t.id)));
-      if (current !== generation.current) return;
-      const answeredNone = (index: number) => {
-        const result = infos[index];
-        return result?.status === "fulfilled" && result.value === null;
-      };
-      const nextChatIds = candidates
-        .filter((thread, index) => thread.runtimeKind !== "interactive_pty" && answeredNone(index))
-        .map((thread) => thread.id);
-      setChatIds((previous) => (sameIds(previous, nextChatIds) ? previous : nextChatIds));
-      const nextSettled = candidates.filter((_, index) => answeredNone(index)).map((thread) => thread.id);
-      setSettled((previous) => (sameIds(previous, nextSettled) ? previous : nextSettled));
-      // Unchanged entries keep their identity, and an unchanged list stays the same array, so a
-      // quiet poll re-renders nothing.
-      setPanes((previous) => {
-        const next: ProviderPaneEntry[] = [];
-        candidates.forEach((thread, i) => {
-          const result = infos[i];
-          const before = previous.find((entry) => entry.thread.id === thread.id);
-          const info = result?.status === "fulfilled" ? result.value : before?.info;
-          if (!info && thread.runtimeKind !== "interactive_pty") return;
-          const entry = { thread, info: info ?? null };
-          next.push(
-            before && sameRecord(before.thread, thread) && sameRecord(before.info, entry.info) ? before : entry,
-          );
+  /**
+   * Re-reads the list and pane info. A thread event re-reads only the panes it names (`only`);
+   * unknown threads are always read, and the others keep their last info.
+   */
+  const refreshScoped = useCallback(
+    async (only?: ReadonlySet<string>) => {
+      if (!enabled) return;
+      const current = ++generation.current;
+      const scope = widenScope(inflightScope.current, only ?? "all") as RefreshScope;
+      inflightScope.current = scope;
+      try {
+        const threads = await client.listThreads({ workspaceId: workspace.id });
+        const candidates = threads.filter((t) => isPaneProvider(t.providerId));
+        const { panes: knownPanes, settled: knownSettled } = known.current;
+        const infos = await Promise.allSettled(
+          candidates.map((t) => {
+            if (scope !== "all" && !scope.has(t.id)) {
+              const before = knownPanes.find((entry) => entry.thread.id === t.id)?.info;
+              if (before) return Promise.resolve(before);
+              if (knownSettled.includes(t.id)) return Promise.resolve(null);
+            }
+            return channel.info(t.id);
+          }),
+        );
+        if (current !== generation.current) return;
+        inflightScope.current = null;
+        const answeredNone = (index: number) => {
+          const result = infos[index];
+          return result?.status === "fulfilled" && result.value === null;
+        };
+        const nextChatIds = candidates
+          .filter((thread, index) => thread.runtimeKind !== "interactive_pty" && answeredNone(index))
+          .map((thread) => thread.id);
+        setChatIds((previous) => (sameIds(previous, nextChatIds) ? previous : nextChatIds));
+        const nextSettled = candidates.filter((_, index) => answeredNone(index)).map((thread) => thread.id);
+        setSettled((previous) => (sameIds(previous, nextSettled) ? previous : nextSettled));
+        // Unchanged entries keep their identity, and an unchanged list stays the same array, so a
+        // quiet poll re-renders nothing.
+        setPanes((previous) => {
+          const next: ProviderPaneEntry[] = [];
+          candidates.forEach((thread, i) => {
+            const result = infos[i];
+            const before = previous.find((entry) => entry.thread.id === thread.id);
+            const info = result?.status === "fulfilled" ? result.value : before?.info;
+            if (!info && thread.runtimeKind !== "interactive_pty") return;
+            const entry = { thread, info: info ?? null };
+            next.push(
+              before && sameRecord(before.thread, thread) && sameRecord(before.info, entry.info) ? before : entry,
+            );
+          });
+          next.sort((a, b) => a.thread.createdAt.localeCompare(b.thread.createdAt));
+          return next.length === previous.length && next.every((entry, i) => entry === previous[i]) ? previous : next;
         });
-        next.sort((a, b) => a.thread.createdAt.localeCompare(b.thread.createdAt));
-        return next.length === previous.length && next.every((entry, i) => entry === previous[i]) ? previous : next;
-      });
-      const failed = infos.find((result) => result.status === "rejected");
-      setListError(failed?.status === "rejected" ? toKalCodeError(failed.reason).message : null);
-      setLoaded(true);
-    } catch (cause) {
-      if (current === generation.current) {
-        setListError(toKalCodeError(cause).message);
+        const failed = infos.find((result) => result.status === "rejected");
+        setListError(failed?.status === "rejected" ? toKalCodeError(failed.reason).message : null);
         setLoaded(true);
+      } catch (cause) {
+        if (current === generation.current) {
+          inflightScope.current = null;
+          setListError(toKalCodeError(cause).message);
+          setLoaded(true);
+        }
       }
-    }
-  }, [client, channel, workspace.id, enabled]);
+    },
+    [client, channel, workspace.id, enabled],
+  );
+  const refresh = useCallback(() => refreshScoped(), [refreshScoped]);
 
   useEffect(() => {
     void refresh();
@@ -165,9 +210,22 @@ export function useProviderPanes(workspace: Workspace, { active = true }: Provid
   // Thread and approval events for this workspace (or its panes) refresh the list; each event
   // is looked at once and refreshes are coalesced. The feed is read directly, so unrelated
   // runtime events don't re-render the Code canvas.
+  // An event naming a thread re-reads that pane only; a workspace-wide event re-reads them all.
+  // While a multi-agent launch runs, events only widen the scope: one refresh follows the batch.
   const paneIds = useRef(new Set<string>());
   paneIds.current = new Set(panes.map((p) => p.thread.id));
   const scheduled = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingScope = useRef<RefreshScope | null>(null);
+  const launching = useRef(0);
+  const flushScheduled = useCallback(() => {
+    if (scheduled.current || launching.current > 0 || pendingScope.current === null) return;
+    scheduled.current = setTimeout(() => {
+      scheduled.current = null;
+      const scope = pendingScope.current;
+      pendingScope.current = null;
+      if (scope !== null) void refreshScoped(scope === "all" ? undefined : scope);
+    }, REFRESH_DEBOUNCE_MS);
+  }, [refreshScoped]);
   useEffect(() => {
     if (!enabled) return;
     let lastSeq = feed.getSnapshot().events[0]?.seq ?? 0;
@@ -177,17 +235,18 @@ export function useProviderPanes(workspace: Workspace, { active = true }: Provid
       lastSeq = Math.max(lastSeq, events[0]?.seq ?? 0);
       const provider = fresh.find((e) => e.type.startsWith("provider."));
       if (provider) setProviderSeq(provider.seq);
-      const related = fresh.some((e) => {
+      let scope: RefreshScope | null = null;
+      for (const e of fresh) {
         const threadId = e.correlation.threadId;
-        return e.correlation.workspaceId === workspace.id || (threadId !== null && paneIds.current.has(threadId));
-      });
-      if (!related || scheduled.current) return;
-      scheduled.current = setTimeout(() => {
-        scheduled.current = null;
-        void refresh();
-      }, REFRESH_DEBOUNCE_MS);
+        if (threadId !== null && (paneIds.current.has(threadId) || e.correlation.workspaceId === workspace.id))
+          scope = widenScope(scope, new Set([threadId]));
+        else if (e.correlation.workspaceId === workspace.id) scope = "all";
+      }
+      if (scope === null) return;
+      pendingScope.current = widenScope(pendingScope.current, scope);
+      flushScheduled();
     });
-  }, [feed, refresh, workspace.id, enabled]);
+  }, [feed, flushScheduled, workspace.id, enabled]);
   useEffect(
     () => () => {
       if (scheduled.current) clearTimeout(scheduled.current);
@@ -207,51 +266,95 @@ export function useProviderPanes(workspace: Workspace, { active = true }: Provid
       (p.info?.hookChannel === "waiting" && p.thread.providerId === "claude-code"),
   );
   const codexWaiting = panes.some((p) => p.info?.hookChannel === "waiting" && p.thread.providerId === "codex");
+  // Only the panes still waiting are polled; the others keep their info until an event names them.
   useEffect(() => {
     if (!active || (!waiting && !codexWaiting)) return;
-    const timer = setInterval(() => void refresh(), waiting ? WAITING_POLL_MS : CODEX_WAITING_POLL_MS);
+    const timer = setInterval(
+      () => {
+        const { panes: current, settled: done } = known.current;
+        const polled = current.filter(
+          (p) => (!p.info && !done.includes(p.thread.id)) || p.info?.hookChannel === "waiting",
+        );
+        void refreshScoped(new Set(polled.map((p) => p.thread.id)));
+      },
+      waiting ? WAITING_POLL_MS : CODEX_WAITING_POLL_MS,
+    );
     return () => clearInterval(timer);
-  }, [active, waiting, codexWaiting, refresh]);
+  }, [active, waiting, codexWaiting, refreshScoped]);
 
-  const create = useCallback(
-    async (providerId: PaneProviderId = "claude-code", launch: AgentLaunch = {}) => {
+  const createMany = useCallback(
+    async (providerId: PaneProviderId = "claude-code", launch: AgentLaunch = {}, count = 1) => {
       setCreating(providerId);
       setLaunchError(null);
+      launching.current += 1;
       try {
         // The spinner is already visible. If the provider-wide settings read is still in flight,
         // read the canonical local value now rather than guessing Auto or Approve and widening a
         // saved Plan preference. A read failure is surfaced below and no pane is created.
         const permissionMode = await resolvePaneStartMode(settings, () => client.getPermissionSettings());
-        const thread = await channel.create({
+        const input = {
           providerId,
           providerAccountId: launch.providerAccountId ?? null,
           model: launch.model ?? null,
           effort: launch.effort ?? null,
           workspaceId: workspace.id,
           permissionMode,
-        });
-        // Creation owns this exact terminal identity. A list read can still describe
-        // the instant before creation; never drop a fresh terminal on that snapshot.
-        generation.current += 1;
-        setSettled((previous) => (previous.includes(thread.id) ? previous.filter((id) => id !== thread.id) : previous));
-        setPanes((previous) => [...previous.filter((entry) => entry.thread.id !== thread.id), { thread, info: null }]);
-        try {
-          const info = await channel.info(thread.id);
-          setPanes((previous) => previous.map((entry) => (entry.thread.id === thread.id ? { thread, info } : entry)));
-        } catch (cause) {
-          // The session already exists. A metadata read cannot undo it or make the
-          // launcher offer to create a duplicate; keep its terminal identity visible.
-          setListError(toKalCodeError(cause).message);
+        };
+        // Every agent is its own fresh session. A refusal stops further starts; sessions already
+        // starting finish and are kept, so a retry never duplicates them.
+        const started: ThreadSummary[] = [];
+        let refusal: { cause: unknown } | null = null;
+        let next = 0;
+        const worker = async () => {
+          while (refusal === null && next < count) {
+            next += 1;
+            try {
+              started.push(await channel.create(input));
+            } catch (cause) {
+              refusal ??= { cause };
+            }
+          }
+        };
+        await Promise.all(Array.from({ length: Math.max(0, Math.min(LAUNCH_CONCURRENCY, count)) }, worker));
+        const threads = started.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+        if (threads.length > 0) {
+          // Creation owns these exact terminal identities. A list read can still describe
+          // the instant before creation; never drop a fresh terminal on that snapshot.
+          generation.current += 1;
+          const ids = new Set(threads.map((thread) => thread.id));
+          const infos = await Promise.allSettled(threads.map((thread) => channel.info(thread.id)));
+          setSettled((previous) =>
+            previous.some((id) => ids.has(id)) ? previous.filter((id) => !ids.has(id)) : previous,
+          );
+          setPanes((previous) => [
+            ...previous.filter((entry) => !ids.has(entry.thread.id)),
+            ...threads.map((thread, i) => {
+              const result = infos[i];
+              return { thread, info: result?.status === "fulfilled" ? result.value : null };
+            }),
+          ]);
+          // A session already exists even when its metadata read failed. That read cannot undo
+          // it or make the launcher offer to create a duplicate; keep its terminal identity.
+          const failed = infos.find((result) => result.status === "rejected");
+          if (failed?.status === "rejected") setListError(toKalCodeError(failed.reason).message);
         }
-        return thread;
+        if (refusal !== null) setLaunchError(toKalCodeError((refusal as { cause: unknown }).cause).message);
+        return threads;
       } catch (cause) {
         setLaunchError(toKalCodeError(cause).message);
-        return null;
+        return [];
       } finally {
         setCreating(null);
+        launching.current -= 1;
+        flushScheduled();
       }
     },
-    [channel, client, workspace.id, settings],
+    [channel, client, workspace.id, settings, flushScheduled],
+  );
+  const create = useCallback(
+    async (providerId: PaneProviderId = "claude-code", launch: AgentLaunch = {}) =>
+      (await createMany(providerId, launch, 1))[0] ?? null,
+    [createMany],
   );
 
   const clearLaunchError = useCallback(() => setLaunchError(null), []);
@@ -279,9 +382,24 @@ export function useProviderPanes(workspace: Workspace, { active = true }: Provid
       error,
       clearLaunchError,
       create,
+      createMany,
       updated,
       refresh,
     }),
-    [enabled, channel, panes, chatIds, isLoaded, creating, offered, error, clearLaunchError, create, updated, refresh],
+    [
+      enabled,
+      channel,
+      panes,
+      chatIds,
+      isLoaded,
+      creating,
+      offered,
+      error,
+      clearLaunchError,
+      create,
+      createMany,
+      updated,
+      refresh,
+    ],
   );
 }

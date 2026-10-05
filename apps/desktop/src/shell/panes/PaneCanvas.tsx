@@ -1,10 +1,11 @@
 import type { PaneContent, PaneNode } from "@kalcode/protocol";
-import { ObjectContextMenu, type ObjectMenuItem } from "@kalcode/ui/components";
+import type { ObjectMenuItem } from "@kalcode/ui/components";
 import {
   memo,
   type PointerEvent,
   type ReactNode,
   type RefObject,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -37,7 +38,16 @@ import {
 import styles from "./PaneCanvas.module.css";
 import { PaneDivider } from "./PaneDivider.tsx";
 import { PaneDock } from "./PaneDock.tsx";
-import { bodyDomId, PaneFrame, paneDomId, panelDomId, tabDomId } from "./PaneFrame.tsx";
+import {
+  bodyDomId,
+  HostContextMenu,
+  PaneFrame,
+  type PaneFrameProps,
+  PaneHostVersion,
+  paneDomId,
+  panelDomId,
+  tabDomId,
+} from "./PaneFrame.tsx";
 import {
   listenForPaneCommands,
   type PaneCommand,
@@ -260,12 +270,17 @@ function PaneCanvasSurface({
   void registryVersion;
   const describe = (content: PaneContent): TabInfo =>
     host.describe(content) ?? registeredRenderer(content)?.describe(content) ?? describeBuiltin(content);
-  const renderContent = (content: PaneContent, context: PaneRenderContext) => {
-    const own = host.render(content, context);
-    if (own !== null && own !== undefined) return own;
-    const registered = registeredRenderer(content);
-    return registered ? registered.render(content, context) : renderBuiltin(content);
-  };
+  const hostRender = host.render;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a registration (registryVersion) changes what renders.
+  const renderContent = useCallback(
+    (content: PaneContent, context: PaneRenderContext) => {
+      const own = hostRender(content, context);
+      if (own !== null && own !== undefined) return own;
+      const registered = registeredRenderer(content);
+      return registered ? registered.render(content, context) : renderBuiltin(content);
+    },
+    [hostRender, registryVersion],
+  );
 
   const titleOfPane = (paneId: string) => {
     const leaf = findLeaf(layout, paneId);
@@ -406,6 +421,85 @@ function PaneCanvasSurface({
     window.addEventListener("pointercancel", onCancel);
   };
 
+  // ---------- Stable frame and content handlers ----------
+  // Frames and content hosts are memoized, so each pane (and each content) keeps one set of
+  // handlers for its lifetime; they act on the latest render's state through `live`.
+  const tabsByPane = new Map<string, TabInfo[]>();
+  const contentPlaces = new Map<string, { paneId: string | null; visible: boolean; content: PaneContent }>();
+  const live = useRef({ tabsByPane, contentPlaces, beginDrag, titleOfPane, describe });
+  live.current = { tabsByPane, contentPlaces, beginDrag, titleOfPane, describe };
+  const hostCalls = useMemo(
+    () => ({
+      renderEmpty: (paneId: string) => latestHost.current.renderEmpty(paneId),
+      addMenu: (paneId: string) => latestHost.current.addMenu(paneId),
+      contextMenu: (content: PaneContent, paneId: string) => latestHost.current.contextMenu?.(content, paneId) ?? [],
+      onFocus: (paneId: string) => {
+        const current = latestController.current;
+        if (current.focusedPaneId !== paneId) current.focusPane(paneId, false);
+      },
+      consumeClick: () => suppressClick.current,
+    }),
+    [],
+  );
+  const frameHandlers = useRef(new Map<string, FrameHandlers>());
+  const handlersFor = (paneId: string): FrameHandlers => {
+    let handlers = frameHandlers.current.get(paneId);
+    if (handlers) return handlers;
+    const controller = () => latestController.current;
+    handlers = {
+      onActivate: (i, focusContent) => {
+        controller().activate(paneId, i);
+        controller().focusPane(paneId, focusContent);
+      },
+      onCloseTab: (i) => {
+        const info = live.current.tabsByPane.get(paneId)?.[i];
+        if (info?.onClose) info.onClose();
+        else controller().hideTab(paneId, i);
+      },
+      onSplit: (axis) => controller().split(paneId, axis),
+      onMaximize: () => controller().toggleMaximize(paneId),
+      onCollapse: () => controller().toggleCollapse(paneId),
+      onClose: () => controller().close(paneId),
+      onDock: () => controller().dock(paneId),
+      onSwap: (direction) => controller().swapWith(paneId, direction),
+      onTabPointerDown: (event, i) =>
+        live.current.beginDrag(event, {
+          kind: "tab",
+          paneId,
+          index: i,
+          title: live.current.tabsByPane.get(paneId)?.[i]?.title ?? "Tab",
+        }),
+      onHeaderPointerDown: (event) => {
+        const target = event.target as HTMLElement;
+        if (target.closest('[role="tab"], [data-no-drag], button')) return;
+        live.current.beginDrag(event, { kind: "pane", paneId, index: -1, title: live.current.titleOfPane(paneId) });
+      },
+    };
+    frameHandlers.current.set(paneId, handlers);
+    return handlers;
+  };
+  for (const paneId of frameHandlers.current.keys()) {
+    if (!panes.some((pane) => pane.paneId === paneId)) frameHandlers.current.delete(paneId);
+  }
+  const contentFocusHandlers = useRef(new Map<string, () => void>());
+  const contentFocusFor = (key: string) => {
+    let handler = contentFocusHandlers.current.get(key);
+    if (!handler) {
+      handler = () => {
+        const place = live.current.contentPlaces.get(key);
+        if (place?.paneId && place.visible) {
+          live.current.describe(place.content).onAttentionSeen?.();
+          latestController.current.focusPane(place.paneId, false);
+        }
+      };
+      contentFocusHandlers.current.set(key, handler);
+    }
+    return handler;
+  };
+  for (const key of contentFocusHandlers.current.keys()) {
+    if (!currentKeys.has(key)) contentFocusHandlers.current.delete(key);
+  }
+
   const overlay =
     drag?.active && drag.target
       ? (() => {
@@ -443,7 +537,7 @@ function PaneCanvasSurface({
   const multiple = count > 1;
   const openPanes = panes.filter((p) => !p.collapsed).length;
 
-  return (
+  const surface = (
     // biome-ignore lint/a11y/useSemanticElements: a group of panes, not a form; fieldset would imply form controls.
     <div
       ref={ref}
@@ -500,6 +594,7 @@ function PaneCanvasSurface({
           if (!rect) return null;
           const hidden = maximized !== null && maximized !== leaf.paneId;
           const tabs = leaf.tabs.map(describe);
+          tabsByPane.set(leaf.paneId, tabs);
           return (
             <PaneFrame
               workspaceId={scope}
@@ -521,36 +616,12 @@ function PaneCanvasSurface({
               multiple={multiple}
               dropTarget={drag?.active === true && drag.target?.paneId === leaf.paneId}
               tabs={tabs}
-              renderEmpty={host.renderEmpty}
-              addMenu={host.addMenu}
-              contextMenu={host.contextMenu}
-              onFocus={(paneId) => {
-                if (controller.focusedPaneId !== paneId) controller.focusPane(paneId, false);
-              }}
-              onActivate={(i, focusContent) => {
-                controller.activate(leaf.paneId, i);
-                controller.focusPane(leaf.paneId, focusContent);
-              }}
-              onCloseTab={(i) => {
-                const info = tabs[i];
-                if (info?.onClose) info.onClose();
-                else controller.hideTab(leaf.paneId, i);
-              }}
-              onSplit={(axis) => controller.split(leaf.paneId, axis)}
-              onMaximize={() => controller.toggleMaximize(leaf.paneId)}
-              onCollapse={() => controller.toggleCollapse(leaf.paneId)}
-              onClose={() => controller.close(leaf.paneId)}
-              onDock={() => controller.dock(leaf.paneId)}
-              onSwap={(direction) => controller.swapWith(leaf.paneId, direction)}
-              onTabPointerDown={(event, i) =>
-                beginDrag(event, { kind: "tab", paneId: leaf.paneId, index: i, title: tabs[i]?.title ?? "Tab" })
-              }
-              onHeaderPointerDown={(event) => {
-                const target = event.target as HTMLElement;
-                if (target.closest('[role="tab"], [data-no-drag], button')) return;
-                beginDrag(event, { kind: "pane", paneId: leaf.paneId, index: -1, title: titleOfPane(leaf.paneId) });
-              }}
-              consumeClick={() => suppressClick.current}
+              renderEmpty={hostCalls.renderEmpty}
+              addMenu={hostCalls.addMenu}
+              contextMenu={host.contextMenu ? hostCalls.contextMenu : undefined}
+              onFocus={hostCalls.onFocus}
+              consumeClick={hostCalls.consumeClick}
+              {...handlersFor(leaf.paneId)}
             />
           );
         })}
@@ -572,6 +643,7 @@ function PaneCanvasSurface({
             });
           }
           const focus = leaf ? contentFocus.current.get(leaf.paneId) : undefined;
+          contentPlaces.set(key, { paneId: leaf?.paneId ?? null, visible, content });
           const context: PaneRenderContext = {
             paneId: leaf?.paneId ?? "",
             tabId: leaf && location ? tabDomId(leaf.paneId, location.index) : "",
@@ -586,15 +658,11 @@ function PaneCanvasSurface({
               context={context}
               active={active}
               parking={parking}
+              placement={layout}
               renderContent={renderContent}
-              contextMenu={host.contextMenu}
+              contextMenu={host.contextMenu ? hostCalls.contextMenu : undefined}
               title={describe(content).title}
-              onFocus={() => {
-                if (leaf && visible) {
-                  describe(content).onAttentionSeen?.();
-                  controller.focusPane(leaf.paneId, false);
-                }
-              }}
+              onFocus={contentFocusFor(key)}
             />
           );
         })}
@@ -615,10 +683,61 @@ function PaneCanvasSurface({
       </div>
     </div>
   );
+  // Memoized frames and content hosts read the current host from here.
+  return <PaneHostVersion.Provider value={host}>{surface}</PaneHostVersion.Provider>;
 }
 
+type FrameHandlers = Pick<
+  PaneFrameProps,
+  | "onActivate"
+  | "onCloseTab"
+  | "onSplit"
+  | "onMaximize"
+  | "onCollapse"
+  | "onClose"
+  | "onDock"
+  | "onSwap"
+  | "onTabPointerDown"
+  | "onHeaderPointerDown"
+>;
+
 /** The portal target never changes. Only its DOM placement does: no React remount or PTY detach. */
-function PersistentContent({
+interface PersistentContentProps {
+  content: PaneContent;
+  context: PaneRenderContext;
+  active: boolean;
+  parking: RefObject<HTMLDivElement | null>;
+  /** The layout it was placed for: any layout change re-checks the DOM placement. */
+  placement: unknown;
+  renderContent: (content: PaneContent, context: PaneRenderContext) => ReactNode;
+  contextMenu: PaneHost["contextMenu"];
+  title: string;
+  onFocus: () => void;
+}
+
+/** Memoized: the canvas re-renders for any pane's change, a content host only for its own. */
+function samePersistentContentProps(a: PersistentContentProps, b: PersistentContentProps): boolean {
+  const x = a.context;
+  const y = b.context;
+  return (
+    a.content === b.content &&
+    a.active === b.active &&
+    a.parking === b.parking &&
+    a.placement === b.placement &&
+    a.renderContent === b.renderContent &&
+    a.contextMenu === b.contextMenu &&
+    a.title === b.title &&
+    a.onFocus === b.onFocus &&
+    (x === y ||
+      (x.paneId === y.paneId &&
+        x.tabId === y.tabId &&
+        x.focused === y.focused &&
+        x.visible === y.visible &&
+        x.focusRequest === y.focusRequest))
+  );
+}
+
+const PersistentContent = memo(function PersistentContent({
   content,
   context,
   active,
@@ -627,16 +746,7 @@ function PersistentContent({
   contextMenu,
   title,
   onFocus,
-}: {
-  content: PaneContent;
-  context: PaneRenderContext;
-  active: boolean;
-  parking: RefObject<HTMLDivElement | null>;
-  renderContent: (content: PaneContent, context: PaneRenderContext) => ReactNode;
-  contextMenu: PaneHost["contextMenu"];
-  title: string;
-  onFocus: () => void;
-}) {
+}: PersistentContentProps) {
   const [container] = useState(() => document.createElement("div"));
   useLayoutEffect(() => {
     const destination = document.getElementById(bodyDomId(context.paneId)) ?? parking.current;
@@ -661,15 +771,15 @@ function PersistentContent({
   );
   return createPortal(
     contextMenu ? (
-      <ObjectContextMenu label={`${title} actions`} items={contextMenu(content, context.paneId)}>
+      <HostContextMenu contextMenu={contextMenu} content={content} paneId={context.paneId} title={title}>
         {body}
-      </ObjectContextMenu>
+      </HostContextMenu>
     ) : (
       body
     ),
     container,
   );
-}
+}, samePersistentContentProps);
 
 const StablePaneCanvas = memo(PaneCanvasSurface);
 
