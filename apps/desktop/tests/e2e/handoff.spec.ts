@@ -117,7 +117,7 @@ test("handoffs deliver once, queue until ready, return explicit results, and int
     await expect(page.getByRole("heading", { level: 1, name: "handoff-project" })).toBeVisible();
 
     await waitForProviderAdmission(page);
-    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     const launcher = page.getByRole("dialog", { name: "New agent" });
     await launcher.getByLabel("Agents", { exact: true }).fill("2");
     await launcher.getByRole("button", { name: "Launch 2 Claude Code agents", exact: true }).click();

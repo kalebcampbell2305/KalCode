@@ -160,7 +160,7 @@ test("connected accounts survive restart, launch without Refresh and isolate gen
     });
     await expect.poll(() => existsSync(codexAReadMarker), { timeout: 30_000 }).toBe(true);
     await waitForProviderAdmission(app.page);
-    await app.page.getByRole("button", { name: "New agent", exact: true }).click();
+    await app.page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     const launcher = app.page.getByRole("dialog", { name: "New agent" });
     // The launcher lists each provider's accounts as options; the restored default is marked.
     const codexGroup = launcher.getByRole("group", { name: "Codex", exact: true });
@@ -190,7 +190,7 @@ test("connected accounts survive restart, launch without Refresh and isolate gen
       { timeout: 30_000 },
     );
 
-    await app.page.getByRole("button", { name: "New agent", exact: true }).click();
+    await app.page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     await account(codexGroup, "Codex B").click();
     await expect(account(codexGroup, "Codex B")).toHaveAttribute("aria-selected", "true");
     await launcher.getByRole("button", { name: "Launch Codex agent", exact: true }).click();
@@ -209,7 +209,7 @@ test("connected accounts survive restart, launch without Refresh and isolate gen
       { timeout: 30_000 },
     );
 
-    await app.page.getByRole("button", { name: "New agent", exact: true }).click();
+    await app.page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     const claudeGroup = launcher.getByRole("group", { name: "Claude Code", exact: true });
     await expect(claudeGroup.getByRole("option")).toHaveCount(2);
     await account(claudeGroup, "Claude B").click();
