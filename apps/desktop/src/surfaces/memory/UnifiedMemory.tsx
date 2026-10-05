@@ -5,7 +5,7 @@ import {
   type MemoryRecord,
   type MemorySettings,
 } from "@kalcode/protocol";
-import { Button, IconButton } from "@kalcode/ui/components";
+import { Button, EmptyState, IconButton } from "@kalcode/ui/components";
 import {
   ArrowLeft,
   BrainCircuit,
@@ -92,12 +92,20 @@ export function UnifiedMemory() {
         <WorkspaceMemory key={active.id} workspaceId={active.id} name={active.name} />
       ) : (
         <div className={styles.empty}>
-          <FolderOpen size={36} />
-          <h2>A home for your project knowledge</h2>
-          <p>Open a project to keep its decisions, conventions and useful context together.</p>
-          <Button variant="primary" onClick={() => void openFolder()}>
-            Open project
-          </Button>
+          <EmptyState
+            className={styles.emptyWell}
+            art={<FolderOpen />}
+            title="A home for your project knowledge"
+            headingLevel={2}
+            align="center"
+            actions={
+              <Button variant="primary" onClick={() => void openFolder()}>
+                Open project
+              </Button>
+            }
+          >
+            <p>Open a project to keep its decisions, conventions and useful context together.</p>
+          </EmptyState>
         </div>
       )}
     </section>

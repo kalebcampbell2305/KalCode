@@ -33,10 +33,13 @@
   overflow: hidden;
   border: 1px solid var(--empty-well-border);
   border-radius: var(--radius-card);
-  /* The deep-space field: faint stars under a blue wash (both off in high contrast). */
+  /* The deep-space field: two faint star planes and a whisper of nebula under a blue wash, all off
+     in high contrast. An empty state is open space, so it may be the most atmospheric part of a page. */
   background:
     radial-gradient(26rem 12rem at 0% 0%, color-mix(in srgb, var(--color-accent) 7%, transparent), transparent 70%),
     var(--atmosphere-stars) 0 0 / var(--atmosphere-stars-size),
+    var(--atmosphere-stars-far) 120px 60px / var(--atmosphere-stars-far-size),
+    var(--atmosphere-nebula),
     var(--empty-well-bg);
 }
 
@@ -54,6 +57,8 @@
   background:
     radial-gradient(30rem 14rem at 50% 0%, color-mix(in srgb, var(--color-accent) 8%, transparent), transparent 72%),
     var(--atmosphere-stars) 0 0 / var(--atmosphere-stars-size),
+    var(--atmosphere-stars-far) 120px 60px / var(--atmosphere-stars-far-size),
+    var(--atmosphere-nebula),
     var(--empty-well-bg);
 }
 
@@ -68,6 +73,7 @@
 }
 
 .tile {
+  position: relative;
   display: inline-grid;
   place-items: center;
   width: 2.75rem;
@@ -79,6 +85,17 @@
     inset 0 1px 0 rgb(255 255 255 / 0.05),
     0 0 24px -8px var(--color-glow);
   color: var(--color-accent-text);
+}
+
+/* A faint orbit around the glyph: static, one hairline, gone in high contrast with the glow. */
+.tile::after {
+  position: absolute;
+  inset: -0.4375rem;
+  border: 1px solid var(--color-border-lit-soft);
+  border-radius: var(--radius-full);
+  opacity: 0.45;
+  content: "";
+  pointer-events: none;
 }
 
 .tile svg {
