@@ -53,6 +53,8 @@ export interface PaneControls {
   configure(options: Partial<PaneOptions>): void;
   /** Output of a pane as text (tests). */
   text(threadId: string): string;
+  /** The pane's agent finishes its turn having changed `filesChanged` files. */
+  finish(threadId: string, filesChanged: number): void;
 }
 
 export interface PanesMemory {
@@ -450,6 +452,10 @@ export function createPanesMemory(options: {
         config = { ...config, ...next };
       },
       text: (threadId) => panes.get(threadId)?.output ?? "",
+      finish(threadId, filesChanged) {
+        threads.setPaneFiles(threadId, filesChanged);
+        threads.setPaneStatus(threadId, "completed", null, 0);
+      },
     },
   };
 }
