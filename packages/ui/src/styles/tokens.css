@@ -16,7 +16,8 @@
  * [data-text-size="large"|"larger"] (scales the rem-based UI).
  *
  * Token families: color, surface/elevation, hairline, type roles, space, radius, motion, focus,
- * status, chart, loading, empty, error, atmosphere. Components and surfaces use these only;
+ * status, chart, loading, empty, error, atmosphere, space levels (stars/nebula intensity), glow,
+ * lift, glass and the focus trace. Components and surfaces use these only;
  * apps/desktop/src/designTokens.test.ts fails on colour literals in UI stylesheets.
  *
  * Z7-W0 (premium direction) adds, without changing any existing value the website relies on:
@@ -350,6 +351,48 @@
     radial-gradient(80rem 36rem at 82% -16%, rgb(76 141 255 / 0.085), transparent 62%),
     radial-gradient(56rem 30rem at -8% 112%, rgb(76 141 255 / 0.04), transparent 60%);
 
+  /* ---- Space design system (owner directive 2026-10-05: "Code the future") ----
+     Space is the atmosphere; KalCode is the product. Every layer is static (no animation loop, no
+     per-frame work) and sits behind opaque work surfaces. The Shell sets one intensity per surface
+     ([data-space] on the frame): quiet (Settings, forms, dense text) · standard (Code, Operations,
+     Accounts, Browser) · cinematic (Mission Control, KalVoice, launch and empty states). */
+  /* A sparser, finer far star field (a second depth plane) for standard and cinematic levels. */
+  --atmosphere-stars-far: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='540' height='540'%3E%3Cg fill='%23c9d8ff'%3E%3Ccircle cx='41' cy='77' r='0.45' opacity='0.5'/%3E%3Ccircle cx='173' cy='29' r='0.35' opacity='0.4'/%3E%3Ccircle cx='263' cy='131' r='0.5' opacity='0.45'/%3E%3Ccircle cx='389' cy='53' r='0.4' opacity='0.35'/%3E%3Ccircle cx='487' cy='167' r='0.45' opacity='0.45'/%3E%3Ccircle cx='97' cy='211' r='0.35' opacity='0.35'/%3E%3Ccircle cx='331' cy='239' r='0.6' opacity='0.5'/%3E%3Ccircle cx='443' cy='311' r='0.35' opacity='0.35'/%3E%3Ccircle cx='59' cy='353' r='0.4' opacity='0.4'/%3E%3Ccircle cx='211' cy='379' r='0.5' opacity='0.45'/%3E%3Ccircle cx='367' cy='421' r='0.35' opacity='0.35'/%3E%3Ccircle cx='521' cy='457' r='0.45' opacity='0.4'/%3E%3Ccircle cx='149' cy='499' r='0.35' opacity='0.35'/%3E%3Ccircle cx='293' cy='517' r='0.4' opacity='0.4'/%3E%3Ccircle cx='17' cy='479' r='0.35' opacity='0.3'/%3E%3Ccircle cx='419' cy='97' r='0.3' opacity='0.3'/%3E%3C/g%3E%3C/svg%3E");
+  --atmosphere-stars-far-size: 540px 540px;
+  /* Restrained nebula: midnight blue and a faint indigo cloud, never behind dense text at strength. */
+  --atmosphere-nebula:
+    radial-gradient(60rem 32rem at 74% 8%, rgb(64 112 235 / 0.16), transparent 64%),
+    radial-gradient(46rem 30rem at 18% 92%, rgb(98 86 220 / 0.1), transparent 66%),
+    radial-gradient(34rem 22rem at 46% 54%, rgb(52 110 210 / 0.035), transparent 70%);
+  /* Intensity per level (opacity of the star and nebula planes). */
+  --space-quiet-stars: 0.35;
+  --space-quiet-nebula: 0;
+  --space-standard-stars: 0.7;
+  --space-standard-nebula: 0.55;
+  --space-cinematic-stars: 1;
+  --space-cinematic-nebula: 1;
+
+  /* Illumination: only what matters glows. Active = the focused pane or selected tile. */
+  --glow-active: 0 0 0 1px var(--color-border-lit), 0 0 24px -8px rgb(76 141 255 / 0.5);
+  --glow-subtle: 0 0 0 1px var(--color-border-lit-soft), 0 0 16px -10px rgb(76 141 255 / 0.35);
+  --glow-waiting: 0 0 0 1px var(--status-waiting-line), 0 0 18px -10px rgb(242 181 68 / 0.45);
+  --glow-failed: 0 0 0 1px var(--status-failed-line), 0 0 18px -10px rgb(239 95 107 / 0.45);
+  /* Depth lift of a focused pane or raised tile (beneath --shadow-panel). */
+  --lift-active: 0 22px 44px -28px rgb(0 0 0 / 0.95), 0 2px 10px -6px rgb(10 30 80 / 0.55);
+  /* Glass: floating chrome over the atmosphere (palette, KalVoice, popovers). Small radius only. */
+  --glass-bg: rgb(16 19 25 / 0.78);
+  --glass-border: rgb(170 195 240 / 0.14);
+  --blur-glass: 14px;
+  /* The energy trace a pane draws once when it takes focus: a short electric-blue sweep. */
+  --trace-color: rgb(120 172 255 / 0.95);
+  --trace-gradient: conic-gradient(
+    from var(--trace-angle, 0deg),
+    transparent 0deg,
+    var(--trace-color) 40deg,
+    transparent 80deg
+  );
+  --dur-trace: 560ms;
+
   color-scheme: dark;
 }
 
@@ -479,6 +522,17 @@
   /* Light keeps the blue wash only: a star field belongs to the dark sky. */
   --atmosphere-stars: none;
   --atmosphere-stars-size: auto;
+  --atmosphere-stars-far: none;
+  --atmosphere-stars-far-size: auto;
+  --atmosphere-nebula: radial-gradient(60rem 32rem at 74% 8%, rgb(29 91 224 / 0.05), transparent 64%);
+  --glow-active: 0 0 0 1px var(--color-border-lit), 0 0 18px -10px rgb(29 91 224 / 0.35);
+  --glow-subtle: 0 0 0 1px var(--color-border-lit-soft);
+  --glow-waiting: 0 0 0 1px var(--status-waiting-line);
+  --glow-failed: 0 0 0 1px var(--status-failed-line);
+  --lift-active: 0 18px 36px -26px rgb(20 40 90 / 0.35);
+  --glass-bg: rgb(255 255 255 / 0.86);
+  --glass-border: rgb(20 40 90 / 0.12);
+  --trace-color: rgb(29 91 224 / 0.8);
   --atmosphere-glow:
     radial-gradient(80rem 36rem at 82% -16%, rgb(29 91 224 / 0.05), transparent 62%),
     radial-gradient(56rem 30rem at -8% 112%, rgb(29 91 224 / 0.025), transparent 60%);
@@ -530,6 +584,15 @@
   --skeleton-highlight: rgb(215 225 245 / 0.12);
   --atmosphere-stars: none;
   --atmosphere-glow: linear-gradient(transparent, transparent);
+  --atmosphere-stars-far: none;
+  --atmosphere-nebula: linear-gradient(transparent, transparent);
+  --glow-active: 0 0 0 2px var(--color-border-focus);
+  --glow-subtle: 0 0 0 1px var(--color-border-strong);
+  --glow-waiting: 0 0 0 2px var(--status-waiting);
+  --glow-failed: 0 0 0 2px var(--status-failed);
+  --lift-active: none;
+  --glass-bg: var(--color-surface-3);
+  --trace-color: transparent;
 }
 
 :root[data-theme="light"][data-contrast="more"] {
@@ -565,6 +628,15 @@
   --skeleton-base: rgb(10 20 40 / 0.12);
   --atmosphere-stars: none;
   --atmosphere-glow: linear-gradient(transparent, transparent);
+  --atmosphere-stars-far: none;
+  --atmosphere-nebula: linear-gradient(transparent, transparent);
+  --glow-active: 0 0 0 2px var(--color-border-focus);
+  --glow-subtle: 0 0 0 1px var(--color-border-strong);
+  --glow-waiting: 0 0 0 2px var(--status-waiting);
+  --glow-failed: 0 0 0 2px var(--status-failed);
+  --lift-active: none;
+  --glass-bg: var(--color-surface-3);
+  --trace-color: transparent;
 }
 
 /* ---------- Text size: the UI is rem-based, so the root size scales it proportionally ---------- */
@@ -595,6 +667,7 @@
 /* ---------- Motion ---------- */
 [data-motion="reduced"] {
   --dur-shimmer: 0ms;
+  --dur-trace: 0ms;
   --dur-status: 0ms;
   --dur-instant: 0ms;
   --dur-fast: 0ms;
@@ -606,6 +679,7 @@
 @media (prefers-reduced-motion: reduce) {
   :root:not([data-motion="full"]) {
     --dur-shimmer: 0ms;
+    --dur-trace: 0ms;
     --dur-status: 0ms;
     --dur-instant: 0ms;
     --dur-fast: 0ms;
