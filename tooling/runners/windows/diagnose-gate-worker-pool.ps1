@@ -27,6 +27,9 @@ function Get-SafeLogFacts([string]$Text) {
         acl_failure='ACL failed|Cannot secure'
         partial_refusal='partial pool directory|partial worker container|pre-existing worker'
         token_request='Cannot obtain the short-lived runner registration token'
+        service_logon='logon failure|logon as a service|log on as a service|error\s*1069'
+        listener_start='Runner\.Listener|RunnerService|runner service'
+        incorrect_function='Incorrect function'
     }
     foreach ($entry in $patterns.GetEnumerator()) { if ($Text -match $entry.Value) { $codes += $entry.Key } }
     $sourceLines = @([regex]::Matches($Text,'setup-gate-worker-pool\.ps1:(\d+)') | ForEach-Object { [int]$_.Groups[1].Value } | Select-Object -Unique)
@@ -35,7 +38,10 @@ function Get-SafeLogFacts([string]$Text) {
     })
     $method = $null
     if ($Text -match "does not contain a method named '(Trim|Split|WaitForExit|Refresh)'" ) { $method=$Matches[1] }
-    return @{codes=$codes;sourceLines=$sourceLines;toolFailures=$toolFailures;missingKnownMethod=$method;rawOutputIncluded=$false}
+    $exceptions=@([regex]::Matches($Text,'\b(?:System\.)?(?:UnauthorizedAccessException|IOException|Win32Exception|DirectoryNotFoundException|FileNotFoundException|TypeInitializationException)\b') | ForEach-Object {$_.Value} | Select-Object -Unique)
+    $errorNumbers=@([regex]::Matches($Text,'\b0x[0-9a-fA-F]{8}\b') | ForEach-Object {$_.Value} | Select-Object -Unique)
+    $poolPaths=@([regex]::Matches($Text,'C:\\(?:kalcode-ci-pool|ProgramData\\KalCodeGatePool)(?:\\[A-Za-z0-9_. -]+)*') | ForEach-Object {$_.Value.TrimEnd(' ','.')} | Select-Object -Unique)
+    return @{codes=$codes;sourceLines=$sourceLines;toolFailures=$toolFailures;missingKnownMethod=$method;exceptions=$exceptions;errorNumbers=$errorNumbers;poolPaths=$poolPaths;rawOutputIncluded=$false}
 }
 function Assert-Plain([string]$Path) {
     $cursor=[IO.Path]::GetFullPath($Path)
@@ -51,7 +57,7 @@ $reportDirectory=[IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($Report))
 if ($reportDirectory -ne [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($InstallReceipt)) -or [IO.Path]::GetExtension($Report) -ne '.json') { throw 'Report must be a new JSON beside the installation receipt.' }
 Assert-Plain $Report
 if (Test-Path -LiteralPath $Report) { throw 'Preserve previous diagnostic reports.' }
-$result=[ordered]@{schema='kalcode-gate-worker-diagnostic/v1';state='PREFLIGHT';phase='authority';host=[Environment]::MachineName;at=[DateTime]::UtcNow.ToString('o');errorCode=$null;readOnly=$true;validateOnly=[bool]$ValidateOnly;logs=@();paths=@();sources=@();accounts=@();services=@();slotAccounts=@();slotServices=@()}
+$result=[ordered]@{schema='kalcode-gate-worker-diagnostic/v1';state='PREFLIGHT';phase='authority';host=[Environment]::MachineName;at=[DateTime]::UtcNow.ToString('o');errorCode=$null;readOnly=$true;validateOnly=[bool]$ValidateOnly;logs=@();paths=@();sources=@();accounts=@();services=@();slotAccounts=@();slotServices=@();runnerLogs=@();serviceEvents=@();workerAcl=@();workerGroups=@()}
 try {
     $principal=[Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
     if (-not $ValidateOnly -and -not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'windows_uac_required' }
@@ -88,13 +94,19 @@ try {
         }
         $result.phase='inventory'
         foreach ($path in @($stage,'C:\ProgramData\KalCodeGatePool','C:\kalcode-ci-pool','C:\ProgramData\KalCodeGatePool\tools','C:\ProgramData\KalCodeGatePool\tools\rustup','C:\ProgramData\KalCodeGatePool\tools\cargo','C:\ProgramData\KalCodeGatePool\tools\npm','C:\ProgramData\KalCodeGatePool\installed.json','C:\ProgramData\KalCodeGatePool\tools\rustup-init.exe','C:\ProgramData\KalCodeGatePool\tools\cargo\bin\cargo.exe','C:\ProgramData\KalCodeGatePool\tools\cargo\bin\cargo-deny.exe','C:\ProgramData\KalCodeGatePool\tools\cargo\bin\cargo-audit.exe','C:\ProgramData\KalCodeGatePool\tools\npm\pnpm.cmd','C:\ProgramData\KalCodeGatePool\tools\actions-runner-win-x64-2.337.0.zip')) {
-            Assert-Plain $path
+            # Inspect inventory leaves without dereferencing them. Rustup may legitimately
+            # install cargo.exe as a link; reporting it must not abort the remaining audit.
+            Assert-Plain (Split-Path -Parent $path)
             $entry=@{path=$path;exists=(Test-Path -LiteralPath $path)}
             if ($entry.exists) {
                 $item=Get-Item -LiteralPath $path -Force
                 $entry.directory=[bool]$item.PSIsContainer
-                $entry.sddl=(Get-Acl -LiteralPath $path).Sddl
-                if (-not $item.PSIsContainer) { $entry.length=$item.Length; $entry.sha256=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash }
+                $entry.reparsePoint=[bool]($item.Attributes -band [IO.FileAttributes]::ReparsePoint)
+                if ($entry.reparsePoint) { $entry.linkType=[string]$item.LinkType; $entry.followed=$false }
+                else {
+                    $entry.sddl=(Get-Acl -LiteralPath $path).Sddl
+                    if (-not $item.PSIsContainer) { $entry.length=$item.Length; $entry.sha256=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash }
+                }
             }
             $result.paths += $entry
         }
@@ -110,7 +122,39 @@ try {
             $result.slotAccounts += @{slot=$slot;exists=($null -ne $account);sid=$(if ($account) {$account.SID.Value} else {$null})}
             $name="actions.runner.kalebcampbell2305-KalCode.kalcode-win-gate-w$slot"
             $service=Get-CimInstance Win32_Service -Filter "Name='$name'"
-            $result.slotServices += @{slot=$slot;exists=($null -ne $service);state=$service.State;account=$service.StartName}
+            $result.slotServices += @{slot=$slot;exists=($null -ne $service);state=$service.State;account=$service.StartName;exitCode=$service.ExitCode;serviceSpecificExitCode=$service.ServiceSpecificExitCode;startMode=$service.StartMode}
+        }
+        $result.phase='worker-startup'
+        $workerRoot='C:\kalcode-ci-pool\worker-w1'
+        $runnerRoot=Join-Path $workerRoot 'runner'
+        foreach ($path in @('C:\kalcode-ci-pool',$workerRoot,$runnerRoot,(Join-Path $runnerRoot 'bin'))) {
+            Assert-Plain $path
+            if (Test-Path -LiteralPath $path) { $result.workerAcl += @{path=$path;sddl=(Get-Acl -LiteralPath $path).Sddl} }
+        }
+        $workerAccount=Get-LocalUser -Name 'kalcode-ci-w1' -ErrorAction SilentlyContinue
+        if ($workerAccount) {
+            foreach ($groupSid in @('S-1-5-32-544','S-1-5-32-545','S-1-5-32-558')) {
+                $members=@(Get-LocalGroupMember -SID $groupSid -ErrorAction Stop)
+                $result.workerGroups += @{groupSid=$groupSid;member=@($members | Where-Object {$_.SID.Value -eq $workerAccount.SID.Value}).Count -gt 0}
+            }
+        }
+        $diagnostics=Join-Path $runnerRoot '_diag'
+        Assert-Plain $diagnostics
+        if (Test-Path -LiteralPath $diagnostics -PathType Container) {
+            foreach ($file in @(Get-ChildItem -LiteralPath $diagnostics -File | Where-Object {$_.Name -match '^Runner_[0-9-]+\.log$' -and $_.LastWriteTimeUtc -ge [DateTime]::Parse($receipt.started).ToUniversalTime()} | Sort-Object LastWriteTimeUtc | Select-Object -Last 4)) {
+                Assert-Plain $file.FullName
+                if ($file.Length -gt 16MB) { throw 'log_size_requires_review' }
+                $result.runnerLogs += @{name=$file.Name;length=$file.Length;sha256=(Get-FileHash -LiteralPath $file.FullName).Hash;facts=(Get-SafeLogFacts (Get-Content -LiteralPath $file.FullName -Raw))}
+            }
+        }
+        $since=[DateTime]::Parse($receipt.started).ToUniversalTime()
+        foreach ($log in @('Application','System')) {
+            $events=@(Get-WinEvent -FilterHashtable @{LogName=$log;StartTime=$since} -MaxEvents 200 -ErrorAction SilentlyContinue)
+            foreach ($event in $events) {
+                $allowed=($log -eq 'Application' -and (($event.ProviderName -eq 'ActionsRunnerService' -and $event.Id -in @(0,100)) -or $event.Id -in @(1000,1026))) -or ($log -eq 'System' -and $event.ProviderName -eq 'Service Control Manager' -and $event.Id -in @(7000,7001,7009,7011,7023,7031,7034,7045))
+                if (-not $allowed -or $event.Message -notmatch 'kalcode-win-gate-w1|C:\\kalcode-ci-pool(?:\\worker-w1)?\b') { continue }
+                $result.serviceEvents += @{log=$log;id=$event.Id;provider=$event.ProviderName;at=$event.TimeCreated.ToUniversalTime().ToString('o');facts=(Get-SafeLogFacts $event.Message)}
+            }
         }
     }
     $result.state=$(if ($ValidateOnly) {'VERIFIED_NO_INSPECTION'} else {'INSPECTED'}); $result.phase='complete'

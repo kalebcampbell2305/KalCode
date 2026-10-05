@@ -8,6 +8,8 @@ param(
     [ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ResumeDiagnosticSha256,
     [string]$ToolsManifest,
     [ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ToolsManifestSha256,
+    [string]$ResumeServiceState,
+    [ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ResumeServiceStateSha256,
     [ValidatePattern('^\d+\.\d+\.\d+$')][string]$RunnerVersion = '2.337.0',
     [string]$RunnerSha256,
     [ValidatePattern('^\d+\.\d+\.\d+$')][string]$PnpmVersion = '10.33.2'
@@ -16,6 +18,7 @@ $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'gate-worker-pool.psm1') -Force
 Assert-GateWorkerHost
 $plans = @(1..5 | ForEach-Object { Get-GateWorkerPlan -Slot $_ })
+$allPlans = $plans
 if (-not $Install) { $plans | ConvertTo-Json -Depth 4; exit 0 }
 $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -156,6 +159,72 @@ function Assert-InspectedPreToolResume {
             (Get-Service -Name "actions.runner.kalebcampbell2305-KalCode.kalcode-win-gate-worker-$oldWorker" -ErrorAction SilentlyContinue)) { throw 'Prior worker identity exists; resume refused.' }
     }
 }
+function Assert-FirstServiceResume {
+    Assert-OrdinaryPath $ResumeServiceState
+    if (-not $ResumeServiceStateSha256 -or (Get-FileHash -LiteralPath $ResumeServiceState).Hash -ne $ResumeServiceStateSha256) { throw 'Service continuation manifest changed.' }
+    $state=Get-Content -LiteralPath $ResumeServiceState -Raw | ConvertFrom-Json
+    if ($state.schema -ne 'kalcode-gate-first-service-resume/v1' -or $state.host -ne 'DESKTOP-KOOB7VV' -or $state.slot -ne 1 -or $state.runnerId -ne 27) { throw 'Unexpected service continuation identity.' }
+    $receiptPath=Join-Path $PSScriptRoot 'resume-service-receipt.json'
+    $sourcesPath=Join-Path $PSScriptRoot 'resume-service-sources.json'
+    foreach ($pair in @(@{path=$receiptPath;hash=$state.failedReceipt.sha256},@{path=$sourcesPath;hash=$state.failedSources.sha256})) {
+        Assert-OrdinaryPath $pair.path
+        if ((Get-FileHash -LiteralPath $pair.path).Hash -ne $pair.hash) { throw 'Service continuation provenance changed.' }
+    }
+    $failed=Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json
+    if ($failed.state -ne 'FAILED' -or $failed.phase -ne 'installer' -or $failed.exitCode -ne 1 -or
+        $failed.sourceManifestSha256 -ne $state.failedSources.sha256 -or $failed.runnerSha256 -ne $RunnerSha256 -or
+        $failed.protectedLogDirectory -notmatch '^C:\\ProgramData\\KalCodeGatePoolSetup-[a-f0-9]{32}$') { throw 'Unexpected failed installer receipt.' }
+    $failedSources=Get-Content -LiteralPath $sourcesPath -Raw | ConvertFrom-Json
+    if ($failedSources.Count -ne 4) { throw 'Unexpected failed source inventory.' }
+    foreach ($source in $failedSources) {
+        $name=[IO.Path]::GetFileName($source.Path)
+        if ($name -notin @('setup-gate-worker-pool.ps1','gate-worker-pool.psm1','gate-worker-hook.ps1','test-gate-worker-pool.ps1')) { throw 'Unexpected failed source name.' }
+        $oldPath=Join-Path $failed.protectedLogDirectory $name; Assert-OrdinaryPath $oldPath
+        if ((Get-FileHash -LiteralPath $oldPath).Hash -ne $source.Hash) { throw 'Failed staged source changed.' }
+        if ($name -in @('gate-worker-pool.psm1','gate-worker-hook.ps1')) {
+            $protected=Join-Path $pool $name; Assert-OrdinaryPath $protected
+            if ((Get-FileHash -LiteralPath $protected).Hash -ne $source.Hash) { throw 'Prepared protected source changed.' }
+        }
+    }
+    if ((Get-Acl -LiteralPath $workerContainer).Sddl -cne $state.parentSddl -or
+        (Get-Acl -LiteralPath $pool).Sddl -cne $state.poolSddl) { throw 'Inspected parent or pool ACL changed.' }
+    $first=Get-GateWorkerPlan -Slot 1
+    $account=Get-LocalUser -Name $first.Account -ErrorAction Stop
+    if ($account.SID.Value -ne $state.accountSid -or -not $account.Enabled) { throw 'First worker account changed.' }
+    $serviceName="actions.runner.kalebcampbell2305-KalCode.$($first.Name)"
+    $service=Get-CimInstance Win32_Service -Filter "Name='$serviceName'"
+    $expectedExe='"' + (Join-Path $first.Root 'runner\bin\RunnerService.exe') + '"'
+    if ($null -eq $service -or $service.State -ne 'Stopped' -or $service.ProcessId -ne 0 -or $service.StartName -ne ".\$($first.Account)" -or $service.PathName -ne $expectedExe) { throw 'First worker service changed.' }
+    $runnerSettings=Join-Path $first.Root 'runner\.runner'; Assert-OrdinaryPath $runnerSettings
+    $registration=Get-Content -LiteralPath $runnerSettings -Raw | ConvertFrom-Json
+    if ($registration.agentId -ne $state.runnerId -or $registration.agentName -ne $first.Name -or $registration.gitHubUrl.TrimEnd('/') -ne 'https://github.com/kalebcampbell2305/KalCode') { throw 'First worker registration changed.' }
+    $original=Get-CimInstance Win32_Service -Filter "Name='actions.runner.kalebcampbell2305-KalCode.kalcode-win-gate'"
+    foreach ($key in @('Name','State','StartName','PathName','ProcessId')) {
+        if ($original.$key -ne $state.originalService.$key) { throw 'Original runner identity or state changed; no repair attempted.' }
+    }
+    if (Test-Path -LiteralPath $marker) { throw 'Completed pool cannot use partial continuation.' }
+    $roots=@(Get-ChildItem -LiteralPath $workerContainer -Force)
+    if ($roots.Count -ne 1 -or $roots[0].Name -ne 'worker-w1') { throw 'Unexpected partial worker roots.' }
+    foreach ($plan in @($plans | Where-Object {$_.Slot -ne 1})) {
+        if ((Get-LocalUser -Name $plan.Account -ErrorAction SilentlyContinue) -or
+            (Get-Service -Name "actions.runner.kalebcampbell2305-KalCode.$($plan.Name)" -ErrorAction SilentlyContinue)) { throw 'Another partial worker exists.' }
+    }
+    foreach ($shared in @($leaseRoot,$heavyRoot,$reportRoot,$evidenceRoot)) {
+        Assert-OrdinaryPath $shared
+        if (@(Get-ChildItem -LiteralPath $shared -Force).Count -ne 0) { throw 'Prepared pool is in use; no repair attempted.' }
+    }
+    $prepared=@{
+        "actions-runner-win-x64-$RunnerVersion.zip"=$RunnerSha256
+        'cargo\bin\cargo-deny.exe'='C2D046F2FF2616B06B02B1D02F0F1CC5AFA4EF72477D51457CA6D3E8D9E99DBE'
+        'cargo\bin\cargo-audit.exe'='FA45E38A91807A508239E725C773B512685A8B9A5C8905749EAA937B9081B9E7'
+        'rustup-init.exe'='6F4BEF66261261FCB43131BE8720BAB817D403A09EDEC7455C371974B90BDB7E'
+    }
+    foreach ($relative in $prepared.Keys) {
+        $path=Join-Path $tools $relative; Assert-OrdinaryPath $path
+        if ((Get-FileHash -LiteralPath $path).Hash -ne $prepared[$relative]) { throw 'Prepared tool or archive changed.' }
+    }
+    return $state
+}
 Assert-OrdinaryPath $pool
 Assert-OrdinaryPath $workerContainer
 foreach ($tool in @('C:\Program Files\nodejs\node.exe','C:\Program Files\nodejs\npm.cmd','C:\Program Files\Git\cmd\git.exe')) {
@@ -172,7 +241,11 @@ if (Test-Path -LiteralPath $marker) {
     Write-Host 'The five additional gate services already exist and are running; nothing changed.'
     exit 0
 }
-if ($ResumeDiagnostic) {
+if ($ResumeServiceState) {
+    if ($ResumeDiagnostic -or $ToolsManifest) { throw 'Continuation modes cannot be combined.' }
+    $serviceState=Assert-FirstServiceResume
+    $plans=@($plans | Where-Object {$_.Slot -ne 1})
+} elseif ($ResumeDiagnostic) {
     if (-not $ResumeDiagnosticSha256) { throw 'A reviewed diagnostic hash is required to resume.' }
     Assert-InspectedPreToolResume
 } else {
@@ -181,12 +254,14 @@ if ($ResumeDiagnostic) {
     if (Test-Path -LiteralPath $workerContainer) { throw 'Unrecognized or partial worker container already exists; nothing will be overwritten.' }
 }
 if ($ToolsManifestSha256 -and -not $ToolsManifest) { throw 'Approved tools manifest path is required.' }
+if ($ResumeServiceStateSha256 -and -not $ResumeServiceState) { throw 'Service continuation path is required.' }
 foreach ($plan in $plans) {
     if ((Get-LocalUser -Name $plan.Account -ErrorAction SilentlyContinue) -or (Test-Path -LiteralPath $plan.Root)) {
         throw "Unfinished or pre-existing worker $($plan.Slot); inspect it before retrying. No account passwords are reset."
     }
 }
 if ((Get-PSDrive C).Free -lt 40GB) { throw 'At least 40 GiB free is required before provisioning tools and isolated workers.' }
+if (-not $ResumeServiceState) {
 if (-not $ResumeDiagnostic) {
 New-Item -ItemType Directory -Path $pool,$tools,$leaseRoot,$reportRoot,$evidenceRoot,$workerContainer -Force | Out-Null
 & icacls $pool /inheritance:r /grant:r 'SYSTEM:(OI)(CI)F' 'Administrators:(OI)(CI)F' | Out-Null
@@ -218,12 +293,21 @@ Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'gate-worker-hook.ps1') -Destina
     Set-Content -LiteralPath (Join-Path $pool 'before.cmd') -Encoding ascii
 @('powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0gate-worker-hook.ps1" -Phase After','exit /b %errorlevel%') |
     Set-Content -LiteralPath (Join-Path $pool 'after.cmd') -Encoding ascii
+} else {
+    # Root-only read/traverse, with no inheritance into other workers' private trees.
+    & icacls $workerContainer /grant "*$($serviceState.accountSid):RX" | Out-Null
+    if ($LASTEXITCODE) { throw 'First worker parent traversal ACL failed.' }
+    $firstService='actions.runner.kalebcampbell2305-KalCode.kalcode-win-gate-w1'
+    Start-Service -Name $firstService
+    (Get-Service -Name $firstService).WaitForStatus('Running',[TimeSpan]::FromSeconds(30))
+}
 
 # Install one administrator-owned toolchain, read-only to worker accounts. Build caches remain
 # per worker. This does not borrow the owner's credentials, existing runner cache, or release cache.
 $rustupDir = Join-Path $tools 'rustup'
 $toolCargo = Join-Path $tools 'cargo'
 $npm = Join-Path $tools 'npm'
+if (-not $ResumeServiceState) {
 $savedRustup = $env:RUSTUP_HOME; $savedCargo = $env:CARGO_HOME
 try {
     $env:RUSTUP_HOME = $rustupDir; $env:CARGO_HOME = $toolCargo
@@ -246,6 +330,7 @@ try {
 $archive = Join-Path $tools "actions-runner-win-x64-$RunnerVersion.zip"
 Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/actions/runner/releases/download/v$RunnerVersion/actions-runner-win-x64-$RunnerVersion.zip" -OutFile $archive
 if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $RunnerSha256) { throw 'Runner archive hash mismatch.' }
+} else { $archive=Join-Path $tools "actions-runner-win-x64-$RunnerVersion.zip" }
 
 if ($FetchRegistrationToken) {
     # Request only after tools are prepared, so the short-lived token does not expire during
@@ -270,6 +355,8 @@ try {
         $secure = ConvertTo-SecureString $password -AsPlainText -Force
         New-LocalUser -Name $plan.Account -Password $secure -PasswordNeverExpires -UserMayNotChangePassword -Description 'KalCode main-PC optional gate worker' | Out-Null
         $sid = (Get-LocalUser -Name $plan.Account).SID.Value
+        & icacls $workerContainer /grant "*${sid}:RX" | Out-Null
+        if ($LASTEXITCODE) { throw 'Worker parent traversal ACL failed.' }
         $runner = Join-Path $plan.Root 'runner'; $workerHome = Join-Path $plan.Root 'home'; $temp = Join-Path $workerHome 'tmp'
         New-Item -ItemType Directory -Path $runner,$workerHome,$temp -Force | Out-Null
         & icacls $plan.Root /inheritance:r /grant:r 'SYSTEM:(OI)(CI)F' 'Administrators:(OI)(CI)F' "*${sid}:(OI)(CI)M" | Out-Null
@@ -310,7 +397,7 @@ try {
     [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($tokenPtr)
 }
 [ordered]@{ machine = 'DESKTOP-KOOB7VV'; runnerVersion = $RunnerVersion; runnerSha256 = $RunnerSha256
-    installed = [DateTime]::UtcNow.ToString('o'); workers = $plans; preservedExistingWorker = $true } |
+    installed = [DateTime]::UtcNow.ToString('o'); workers = $allPlans; preservedExistingWorker = $true } |
     ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $marker -Encoding UTF8
 Write-Host 'Five workers installed with staging labels. Activate kalcode-gate only after the compatible pool workflow is ready and obsolete queued workflows cannot be assigned. Preserve the active original gate.'
 Write-Host 'Verify all six online identities, isolated ports, pressure waits, and four overlapping lightweight jobs before claiming the pool operational.'

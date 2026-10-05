@@ -9,6 +9,8 @@ param(
     [ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ResumeDiagnosticSha256,
     [string]$ToolsManifest,
     [ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ToolsManifestSha256,
+    [string]$ResumeServiceState,
+    [ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ResumeServiceStateSha256,
     [switch]$ValidateOnly
 )
 $ErrorActionPreference = 'Stop'
@@ -19,7 +21,7 @@ if ([IO.Path]::GetExtension($Receipt) -ne '.json' -or
 if (Test-Path -LiteralPath $Receipt) { throw 'Use a new receipt path; preserve earlier attempts.' }
 $result = [ordered]@{ schema='kalcode-gate-worker-install/v1'; state='PREFLIGHT'; phase='authority'; host=[Environment]::MachineName
     started=[DateTime]::UtcNow.ToString('o'); finished=$null; sourceManifestSha256=$SourceManifestSha256
-    runnerSha256=$RunnerSha256; toolsManifestSha256=$ToolsManifestSha256; pid=$null; exitCode=$null; errorCode=$null; protectedLogDirectory=$null
+    runnerSha256=$RunnerSha256; toolsManifestSha256=$ToolsManifestSha256; resumeServiceStateSha256=$ResumeServiceStateSha256; pid=$null; exitCode=$null; errorCode=$null; protectedLogDirectory=$null
     workers=@(); activeOriginalRunnerModified=$false; productionChecksPassed=$false; validateOnly=[bool]$ValidateOnly }
 function Save-Result {
     $temporary = "$Receipt.$([Guid]::NewGuid().ToString('N')).tmp"
@@ -55,6 +57,17 @@ function Read-ApprovedCargoTools([string]$Path,[string]$Hash) {
     }
     return $manifest.tools
 }
+function Read-ApprovedServiceState([string]$Path,[string]$Hash) {
+    Assert-OrdinaryToolPath $Path
+    if (-not $Hash -or (Get-FileHash -LiteralPath $Path).Hash -ne $Hash) { throw 'Service continuation manifest changed.' }
+    $state=Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    if ($state.schema -ne 'kalcode-gate-first-service-resume/v1' -or $state.host -ne 'DESKTOP-KOOB7VV' -or $state.slot -ne 1 -or $state.runnerId -ne 27) { throw 'Unexpected service continuation identity.' }
+    foreach ($inputFile in @($state.failedReceipt,$state.failedSources)) {
+        Assert-OrdinaryToolPath $inputFile.path
+        if ($inputFile.sha256 -notmatch '^[a-fA-F0-9]{64}$' -or (Get-FileHash -LiteralPath $inputFile.path).Hash -ne $inputFile.sha256) { throw 'Service continuation provenance changed.' }
+    }
+    return $state
+}
 Save-Result
 $stage = $null
 try {
@@ -84,6 +97,11 @@ try {
         $result.phase='approved-tools'; Save-Result
         $approvedTools=@(Read-ApprovedCargoTools $ToolsManifest $ToolsManifestSha256)
     } elseif ($ToolsManifestSha256) { Refuse 'tools_manifest_path_missing' }
+    $serviceState=$null
+    if ($ResumeServiceState) {
+        if ($ResumeDiagnostic -or $ToolsManifest) { Refuse 'resume_modes_conflict' }
+        $serviceState=Read-ApprovedServiceState $ResumeServiceState $ResumeServiceStateSha256
+    } elseif ($ResumeServiceStateSha256) { Refuse 'service_resume_path_missing' }
     if ($ValidateOnly) {
         $result.state='VERIFIED_NO_INSTALL'; $result.phase='complete'
     } else {
@@ -119,6 +137,17 @@ try {
                 if ((Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash -ne $tool.sha256) { Refuse 'staged_tool_bytes_changed' }
             }
             $arguments += @('-ToolsManifest',$stagedManifest,'-ToolsManifestSha256',$ToolsManifestSha256)
+        }
+        if ($ResumeServiceState) {
+            $stagedState=Join-Path $stage 'resume-service-state.json'
+            Copy-Item -LiteralPath $ResumeServiceState -Destination $stagedState
+            if ((Get-FileHash -LiteralPath $stagedState).Hash -ne $ResumeServiceStateSha256) { Refuse 'staged_service_state_changed' }
+            foreach ($pair in @(@{input=$serviceState.failedReceipt;name='resume-service-receipt.json'},@{input=$serviceState.failedSources;name='resume-service-sources.json'})) {
+                $destination=Join-Path $stage $pair.name
+                Copy-Item -LiteralPath $pair.input.path -Destination $destination
+                if ((Get-FileHash -LiteralPath $destination).Hash -ne $pair.input.sha256) { Refuse 'staged_service_provenance_changed' }
+            }
+            $arguments += @('-ResumeServiceState',$stagedState,'-ResumeServiceStateSha256',$ResumeServiceStateSha256)
         }
         # Child inherits this background priority from creation, before any long tool work.
         (Get-Process -Id $PID).PriorityClass='BelowNormal'

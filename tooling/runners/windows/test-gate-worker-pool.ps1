@@ -48,7 +48,7 @@ foreach ($file in @('gate-worker-pool.psm1','gate-worker-hook.ps1','setup-gate-w
     if ($reservedWrites.Count) { throw "Reserved process variable assignment in $file : $($reservedWrites.Extent.Text -join ', ')" }
 }
 $wrapperAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'invoke-gate-worker-pool-install.ps1'),[ref]$tokens,[ref]$parseErrors)
-foreach ($name in @('Assert-OrdinaryToolPath','Read-ApprovedCargoTools')) {
+foreach ($name in @('Assert-OrdinaryToolPath','Read-ApprovedCargoTools','Read-ApprovedServiceState')) {
     $definition=$wrapperAst.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name},$false)
     Invoke-Expression $definition.Extent.Text
 }
@@ -82,6 +82,25 @@ try {
         $rejected=$false
         try { Read-ApprovedCargoTools $manifestPath $hash | Out-Null } catch { $rejected=$true }
         Assert-Equal $rejected $true "Untrusted tool manifest rejected: $case"
+    }
+    $statePath=Join-Path $temporaryRoot 'service-state.json'
+    $provenance=@{path=$manifestPath;sha256=(Get-FileHash -LiteralPath $manifestPath).Hash}
+    $stateBase=@{schema='kalcode-gate-first-service-resume/v1';host='DESKTOP-KOOB7VV';slot=1;runnerId=27;failedReceipt=$provenance;failedSources=$provenance}|ConvertTo-Json -Depth 4
+    [IO.File]::WriteAllText($statePath,$stateBase)
+    Assert-Equal (Read-ApprovedServiceState $statePath (Get-FileHash -LiteralPath $statePath).Hash).runnerId 27 'Continuation provenance accepted without OS mutation'
+    foreach ($case in @('wrong-slot','wrong-runner','stale-provenance','stale-state')) {
+        $data=$stateBase|ConvertFrom-Json
+        switch ($case) {
+            wrong-slot {$data.slot=2}
+            wrong-runner {$data.runnerId=22}
+            stale-provenance {$data.failedReceipt.sha256='0'*64}
+        }
+        [IO.File]::WriteAllText($statePath,($data|ConvertTo-Json -Depth 4))
+        $hash=(Get-FileHash -LiteralPath $statePath).Hash
+        if ($case -eq 'stale-state') {$hash='0'*64}
+        $rejected=$false
+        try {Read-ApprovedServiceState $statePath $hash|Out-Null} catch {$rejected=$true}
+        Assert-Equal $rejected $true "Changed continuation refused: $case"
     }
 } finally {
     # Only this function's freshly created data-only fixture directory is removed.

@@ -12,6 +12,8 @@ param(
     [string]$ResumeDiagnosticSha256,
     [string]$ToolsManifest,
     [string]$ToolsManifestSha256,
+    [string]$ResumeServiceState,
+    [string]$ResumeServiceStateSha256,
     [switch]$ValidateOnly
 )
 $ErrorActionPreference = 'Stop'
@@ -22,6 +24,7 @@ if (-not $Install) {
 $parameters=@{SourceManifest=$SourceManifest;SourceManifestSha256=$SourceManifestSha256;RunnerSha256=$RunnerSha256;Receipt=$Receipt}
 if ($ResumeDiagnostic) { $parameters.ResumeDiagnostic=$ResumeDiagnostic; $parameters.ResumeDiagnosticSha256=$ResumeDiagnosticSha256 }
 if ($ToolsManifest -or $ToolsManifestSha256) { $parameters.ToolsManifest=$ToolsManifest; $parameters.ToolsManifestSha256=$ToolsManifestSha256 }
+if ($ResumeServiceState -or $ResumeServiceStateSha256) { $parameters.ResumeServiceState=$ResumeServiceState; $parameters.ResumeServiceStateSha256=$ResumeServiceStateSha256 }
 if ($ValidateOnly) { $parameters.ValidateOnly=$true }
 & (Join-Path $PSScriptRoot 'invoke-gate-worker-pool-install.ps1') @parameters
 exit $LASTEXITCODE
