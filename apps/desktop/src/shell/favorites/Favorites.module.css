@@ -22,7 +22,7 @@
   align-items: center;
   gap: 5px;
   color: var(--color-text-muted);
-  font-size: 11px;
+  font-size: var(--type-label);
 }
 .collectionLabel svg,
 .target svg,

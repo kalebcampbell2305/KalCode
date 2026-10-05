@@ -181,13 +181,13 @@ describe("AgentCard waiting states", () => {
   it("a held launch offers Stop, never Pause or Archive", async () => {
     mount({ ...thread(null), ...WAITING });
     await userEvent.click(screen.getByRole("button", { name: "More actions for Research" }));
-    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Open", "Stop…"]);
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Open", "Pin globally", "Stop…"]);
   });
 
   it("an idle thread offers Archive, not Stop", async () => {
     mount(thread(null));
     await userEvent.click(screen.getByRole("button", { name: "More actions for Research" }));
-    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Open", "Archive"]);
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Open", "Pin globally", "Archive"]);
   });
 });
 

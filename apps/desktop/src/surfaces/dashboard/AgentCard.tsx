@@ -243,10 +243,13 @@ export const AgentCard = memo(function AgentCard({
       onClick={onCardClick}
     >
       <header className={styles.top}>
-        <FavoriteButton
-          target={{ kind: "agent", id: thread.id, workspaceId: thread.workspaceId }}
-          title={thread.name}
-        />
+        {/* An archived card is read-only: its one action is Unarchive. */}
+        {archived ? null : (
+          <FavoriteButton
+            target={{ kind: "agent", id: thread.id, workspaceId: thread.workspaceId }}
+            title={thread.name}
+          />
+        )}
         <span className={styles.signal} data-tone={archived ? "muted" : tone} aria-hidden="true" />
         {accountLabel ? (
           <span className={styles.who} title={`Account: ${accountLabel}`}>
