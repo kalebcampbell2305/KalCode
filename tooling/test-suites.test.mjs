@@ -219,6 +219,37 @@ test("a flaky Playwright gate names its flaky tests", () => {
   assert.deepEqual(playwrightFlakyTitles({}), []);
 });
 
+test("a flaky Playwright test carries the first line of its failed attempt's error", () => {
+  const report = {
+    suites: [
+      {
+        file: "pages.spec.ts",
+        specs: [
+          {
+            file: "pages.spec.ts",
+            title: "/kalvoice renders",
+            tests: [
+              {
+                status: "flaky",
+                results: [
+                  {
+                    status: "failed",
+                    error: { message: "\u001b[31mError: expect(received).toEqual(expected)\u001b[39m\n\n- []" },
+                  },
+                  { status: "passed" },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  assert.deepEqual(playwrightFlakyTitles(report), [
+    "pages.spec.ts › /kalvoice renders [Error: expect(received).toEqual(expected)]",
+  ]);
+});
+
 test("the reviewed inventory covers every required workspace suite and Rust ignore", () => {
   assert.equal(inventory.suites.length, 13);
   assert.deepEqual(
