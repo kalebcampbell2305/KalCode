@@ -67,6 +67,27 @@ describe("nameFromPrompt (mirrors crates/threads/src/naming.rs)", () => {
 });
 
 describe("memory thread runtime", () => {
+  it.each(["managed", "pane"])(
+    "keeps a stopped %s session manually resumable without automatic recovery",
+    async (kind) => {
+      const { client, transport } = await setup();
+      const thread =
+        kind === "managed"
+          ? await create(client, "Preserve this session")
+          : await transport.invoke<ThreadSummary>("provider_pane_create", {
+              providerId: "claude-code",
+              workspaceId: WORKSPACE,
+              permissionMode: "approve",
+              name: "Preserve this session",
+            });
+      expect(thread.resumable).toBe(true);
+      const stopped = await client.stopThread(thread.id);
+      expect(stopped).toMatchObject({ status: "interrupted", resumable: true, currentActivity: "Stopped by you" });
+      expect(stopped.restartRecoverable).toBe(false);
+      expect((await client.getThread(thread.id)).resumable).toBe(true);
+    },
+  );
+
   it("keeps queued input stopped until the dedicated resume action allows it", () => {
     const runtime = createThreadsMemory(
       () => undefined,
@@ -116,6 +137,10 @@ describe("memory thread runtime", () => {
     expect(runtime.handlers.thread_resume({ threadId: id, allowPendingInput: true })).toMatchObject({
       status: "idle",
       resumeHasPendingInput: false,
+    });
+    expect(runtime.handlers.thread_stop({ threadId: id })).toMatchObject({
+      resumable: true,
+      restartRecoverable: false,
     });
   });
 

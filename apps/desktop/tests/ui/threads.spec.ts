@@ -315,7 +315,7 @@ test.describe("threads", () => {
     await openThreads(page);
     await createThread(page, "slow migration");
     await detail(page).getByRole("button", { name: "Stop" }).click();
-    await expect(detail(page).getByText("Stopped", { exact: true })).toBeVisible();
+    await expect(detail(page).getByText("Stopped · resumable", { exact: true })).toBeVisible();
     await expect(detail(page).getByText("Stopped by you")).toBeVisible();
     await expect(detail(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
     await expect(detail(page).getByRole("button", { name: "Resume and send" })).toBeVisible();

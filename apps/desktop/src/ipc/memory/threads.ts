@@ -574,6 +574,7 @@ export function createThreadsMemory(
       );
     }
     t.providerSessionId = t.providerSessionId ?? `session-${t.summary.id.slice(0, 8)}`;
+    t.summary = { ...t.summary, resumable: provider?.supportsResume === true };
     if (firstInput) send(t, firstInput);
     else setStatus(t, "idle");
   };
@@ -686,7 +687,7 @@ export function createThreadsMemory(
     t.live = false;
     flush(t);
     cancelTools(t);
-    t.summary = { ...t.summary, pendingApprovals: 0 };
+    t.summary = { ...t.summary, pendingApprovals: 0, restartRecoverable: false };
     setStatus(t, "interrupted", activity);
   };
 
@@ -981,6 +982,7 @@ export function createThreadsMemory(
       if (!t.live) {
         if (TERMINAL.has(t.summary.status))
           invalid("thread_not_running", "This thread isn't running. Resume it to continue.");
+        t.summary = { ...t.summary, restartRecoverable: false };
         setStatus(t, "interrupted", "Stopped by you");
         return summary(t);
       }
@@ -1258,6 +1260,7 @@ export function createThreadsMemory(
       t.paneStop = onStop;
       t.live = true;
       t.providerSessionId = `session-${t.summary.id.slice(0, 8)}`;
+      t.summary = { ...t.summary, resumable: plan.provider.supportsResume };
       emit({ type: "thread.started", payload: { threadId: t.summary.id } }, corr(t));
       return summary(t);
     },

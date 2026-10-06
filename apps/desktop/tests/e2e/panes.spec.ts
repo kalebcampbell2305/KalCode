@@ -21,8 +21,8 @@ import {
  * Z7-W1 end to end against the real app: arrange a pane layout (real shells in real PTYs and a
  * provider pane running the FAKE provider CLI), quit KalCode, relaunch, and find the same layout
  * restored from the layout store (`workspace_layouts`, schema v9): pane count, divider position,
- * a collapsed pane and every tab, with ended shells offering Restart and the provider pane shown
- * as ended in an earlier run. Then a change followed by a forced kill is restored too. Closing a
+ * a collapsed pane and every tab, with ended shells offering Restart and the recoverable provider
+ * pane resumed automatically. Then a change followed by a forced kill is restored too. Closing a
  * pane ends its terminals and agents; reopening restores only its pane slot.
  *
  * The provider is `kalcode-fake-provider` copied as `claude.exe` first on PATH; no AI service is
@@ -170,8 +170,8 @@ test("a pane layout is saved per workspace and restored after a graceful quit an
     const stored = storedLayout(dataDir);
     expect(stored).toEqual({ rows: 1, version: 1, panes: 3 });
 
-    // Relaunch opens the restored workspace directly in Code, with the same layout, ended shells
-    // offering Restart and the provider pane ended.
+    // Relaunch restores the layout immediately, leaves ended shells stopped and resumes the
+    // saved-open provider session in the background.
     app = await launch(dataDir, env);
     page = app.page;
     await expect(page.getByRole("heading", { level: 1, name: "w1-panes" })).toBeVisible();
@@ -180,8 +180,8 @@ test("a pane layout is saved per workspace and restored after a graceful quit an
     await expect(page.locator("[data-pane-id][data-collapsed]")).toHaveCount(1);
     await expect(page.locator("[data-provider-pane]")).toHaveCount(1);
     await expect(page.locator("[data-provider-pane] [data-pane-terminal] .xterm-rows")).toContainText(
-      "ended in an earlier run",
-      { timeout: 20_000 },
+      "KalCode fake provider (interactive)",
+      { timeout: 30_000 },
     );
     // Pane 1's shell ended when its pane closed, so its restored slot is empty. The collapsed
     // pane's shell ended with KalCode and offers Restart.
