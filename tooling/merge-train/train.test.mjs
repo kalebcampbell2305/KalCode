@@ -16,7 +16,15 @@ import {
   queueFromGraphql,
 } from "./github.mjs";
 import { releaseKitCommand } from "./on-landed.mjs";
-import { assertCandidateWorkflow, candidateBranch, createTrain, parseArgs, QUEUE_LABEL, withLock } from "./train.mjs";
+import {
+  assertCandidateWorkflow,
+  candidateBranch,
+  createTrain,
+  makeGit,
+  parseArgs,
+  QUEUE_LABEL,
+  withLock,
+} from "./train.mjs";
 
 const temps = [];
 after(() => {
@@ -1079,6 +1087,21 @@ describe("merge train pieces", () => {
     assert.match(workflow, /%\(trailers:key=Merge-Train-Base,valueonly\)/);
     assert.match(workflow, /--keep-going/);
   });
+});
+
+test("a git that exits before reading its input is reported by its exit code, never a pipe crash", async () => {
+  // gate 37410227962: on a slow machine a git child closed its stdin before the write landed and the
+  // unhandled EPIPE failed the run. `git --version` never reads stdin; 8 MiB cannot fit a pipe buffer.
+  const repo = mkdtempSync(join(tmpdir(), "kc-train-stdin-"));
+  temps.push(repo);
+  const git = makeGit(repo);
+  const unread = await git(["--version"], { allowFail: true, input: "x".repeat(8 * 1024 * 1024) });
+  assert.equal(unread.code, 0);
+  assert.match(unread.stdout, /^git version /);
+  sh(repo, ["init", "-q"]);
+  const hashed = await git(["hash-object", "--stdin"], { input: "kalcode\n" });
+  assert.equal(hashed.stdout.trim(), sh(repo, ["hash-object", "--stdin"], "kalcode\n"), "input still reaches git");
+  assert.equal((await git(["rev-parse", "--is-inside-work-tree"])).stdout.trim(), "true", "no input: no stdin pipe");
 });
 
 test("PR-specific landing is refused even with a valid queued PR", async () => {
