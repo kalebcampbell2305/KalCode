@@ -142,13 +142,48 @@ describe("useOperations", () => {
     expect(read).toHaveBeenCalledTimes(2);
     expect(result.current.refreshing).toBe(false);
 
-    // A manual refresh joining the poll in flight shows until that answer lands.
+    // A manual refresh joining the poll in flight shows until its own fresh read lands.
     act(() => void result.current.refresh());
     expect(read).toHaveBeenCalledTimes(2);
     expect(result.current.refreshing).toBe(true);
     await act(async () => resolve(snapshot(2)));
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(result.current.refreshing).toBe(true);
+    await act(async () => resolve(snapshot(3)));
     expect(result.current.refreshing).toBe(false);
+    expect(result.current.snapshot?.revision).toBe(3);
+  });
+
+  it("a refresh after an action never settles on a poll that started before it", async () => {
+    const pending: Array<(value: OperationsSnapshot) => void> = [];
+    const read = vi.fn(
+      () =>
+        new Promise<OperationsSnapshot>((done) => {
+          pending.push(done);
+        }),
+    );
+    const client = api(read);
+    const { result } = renderHook(() => useOperations(client));
+    expect(read).toHaveBeenCalledTimes(1);
+
+    // Cancel commits while that poll is in flight, then the page refreshes, twice.
+    let refreshed = false;
+    act(() => {
+      void result.current.refresh().then(() => {
+        refreshed = true;
+      });
+      void result.current.refresh();
+    });
+    // The old poll answers with the run still running: the refresh is not done yet.
+    await act(async () => pending[0]?.({ ...snapshot(1), paused: false }));
+    expect(refreshed).toBe(false);
+    expect(read).toHaveBeenCalledTimes(2);
+
+    await act(async () => pending[1]?.({ ...snapshot(2), paused: true }));
+    expect(refreshed).toBe(true);
     expect(result.current.snapshot?.revision).toBe(2);
+    expect(result.current.refreshing).toBe(false);
+    expect(read).toHaveBeenCalledTimes(2);
   });
 
   it("keeps an unchanged snapshot while the observation time moves on", async () => {
