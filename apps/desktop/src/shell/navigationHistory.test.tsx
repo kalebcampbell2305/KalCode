@@ -1,7 +1,8 @@
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { Destination } from "./navigation.tsx";
 import { initialHistory, navigationEntryLabel, visitLocation } from "./navigationHistory.ts";
+import { IS_MAC, useShortcuts } from "./shortcuts.ts";
 import { useNavigationHistory } from "./useNavigationHistory.ts";
 
 const visible = new Set<Destination>(["code", "dashboard", "settings", "providers", "threads"]);
@@ -222,5 +223,35 @@ describe("navigation history", () => {
     expect(result.current.current).toBe("code");
     expect(workspace).toBe("one");
     expect(focused).toEqual(["one", "one"]);
+  });
+
+  it("keyboard Back replays through asynchronous restorers instead of cancelling itself", async () => {
+    const { result } = renderHook(() => {
+      const history = useNavigationHistory("dashboard", visible);
+      useShortcuts({
+        openPalette: () => undefined,
+        toggleSidebar: () => undefined,
+        back: () => void history.back(),
+        forward: () => void history.forward(),
+      });
+      return history;
+    });
+    const focus = vi.fn(() => undefined);
+    act(() => {
+      // Like NavigationBridge: the prepare phase always awaits (workspace activation, thread reads).
+      result.current.registerRestorer(async () => undefined, "prepare");
+      result.current.registerRestorer(focus);
+      result.current.navigate("code");
+    });
+    const chord = IS_MAC ? { key: "[", metaKey: true } : { key: "ArrowLeft", altKey: true };
+    act(() => {
+      document.body.dispatchEvent(new KeyboardEvent("keydown", { key: IS_MAC ? "Meta" : "Alt", bubbles: true }));
+      document.body.dispatchEvent(new KeyboardEvent("keydown", { ...chord, bubbles: true }));
+    });
+    await waitFor(() => expect(result.current.current).toBe("dashboard"));
+    expect(result.current.historyIndex).toBe(0);
+    await waitFor(() =>
+      expect(focus).toHaveBeenCalledWith(expect.objectContaining({ destination: "dashboard" }), expect.any(Function)),
+    );
   });
 });
