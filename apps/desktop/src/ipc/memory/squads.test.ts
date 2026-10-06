@@ -390,12 +390,21 @@ describe("Squads memory runtime", () => {
     );
 
     unavailable.clear();
-    await f.operations.handlers.operations_hold?.({ id: operationId, paused: false });
+    // As native: Resume cannot restart a paused member; Run now does, with the same identity.
+    expect(() => f.operations.handlers.operations_hold?.({ id: operationId, paused: false })).toThrow(
+      expect.objectContaining({ code: "operation_squad_run_required" }),
+    );
+    await f.operations.handlers.operations_pause?.({ paused: true });
+    await f.operations.handlers.operations_run_now?.({ id: operationId });
     await f.invoke("squads_snapshot");
     expect(f.operations.agents.exact([operationId])[0]).toEqual(
       expect.objectContaining({ status: "running", threadId: expect.any(String) }),
     );
     expect(f.operations.agents.exact([operationId])[0]?.id).toBe(operationId);
+    // A started member may hold its task, so Run now never sends it again.
+    expect(() => f.operations.handlers.operations_run_now?.({ id: operationId })).toThrow(
+      expect.objectContaining({ code: "operation_not_pending" }),
+    );
   });
 
   it("holds an unavailable selected account before any pane starts", async () => {

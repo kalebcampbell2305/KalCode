@@ -755,6 +755,13 @@ export function createOperationsMemory({ empty, workspaces, requireCore }: Opera
       if (typeof args.paused !== "boolean") fail("ipc_rejected", "KalCode couldn't complete that request.");
       const current = record(id);
       if (!pending(current)) fail("operation_not_pending", "Only pending Operations tasks can be paused or resumed.");
+      if (!args.paused && squadMembers.has(id) && current.status === "paused") {
+        // As native: a paused member has no launch consent left, so only Run now restarts it.
+        fail(
+          "operation_squad_run_required",
+          "Run this Squad member to start it. Paused members need your confirmation again.",
+        );
+      }
       const status = args.paused ? "paused" : current.blockers.length > 0 ? "blocked" : "queued";
       const { attentionReason: _attentionReason, ...withoutAttention } = current;
       items = items.map((item) =>
@@ -778,8 +785,25 @@ export function createOperationsMemory({ empty, workspaces, requireCore }: Opera
     },
     operations_run_now: (args) => {
       requireCore();
-      if (paused) fail("operations_paused", "Resume Operations before starting queued work.");
       const id = stringArg(args.id);
+      if (squadMembers.has(id)) {
+        // As native: a Squad member's Run now is the person's own action. It bypasses the global
+        // pause, clears its hold, and the Squad dispatcher starts it once nothing blocks it. A
+        // member that already started may hold its task, so it is never sent again.
+        const member = record(id);
+        if (!pending(member)) {
+          fail(
+            "operation_not_pending",
+            "This Squad member already started, so KalCode will not send its task again. Open its pane, or launch a replacement.",
+          );
+        }
+        const { attentionReason: _attentionReason, ...withoutAttention } = member;
+        const status = member.blockers.length > 0 ? "blocked" : "queued";
+        items = items.map((item) => (item.id === id ? { ...withoutAttention, status, currentAction: null } : item));
+        touch("run_now");
+        return;
+      }
+      if (paused) fail("operations_paused", "Resume Operations before starting queued work.");
       const current = record(id);
       if (!pending(current)) fail("operation_not_pending", "This Operations task is no longer pending.");
       if (current.status === "paused") fail("operation_paused", "Resume this task before running it.");

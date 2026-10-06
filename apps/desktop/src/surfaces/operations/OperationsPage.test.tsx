@@ -625,6 +625,42 @@ describe("OperationsPage", () => {
     await waitFor(() => expect(client.reorder).toHaveBeenCalledWith(["two", "one"], 7));
   });
 
+  it("offers Run now, not Resume, for a paused Squad member", async () => {
+    const member = { ...queued("member", 0), status: "paused" as const };
+    member.spec = { ...member.spec, name: "Squad reviewer" };
+    const ordinary = { ...queued("ordinary", 1), status: "paused" as const };
+    ordinary.spec = { ...ordinary.spec, name: "Held build" };
+    seams.snapshot = { ...baseSnapshot(), items: [member, ordinary] };
+    const squads = {
+      snapshot: vi.fn(async () => ({
+        squads: [],
+        recipes: [],
+        operations: [],
+        launches: [
+          {
+            id: "launch-1",
+            squadId: "squad-1",
+            name: "Crew",
+            goal: "Review",
+            workspaceId: "workspace-1",
+            createdAt: "2026-10-06T12:00:00Z",
+            members: [{ key: "reviewer", role: "review", managerKey: null, operationId: member.id, ownedPaths: [] }],
+          },
+        ],
+      })),
+    } as unknown as SquadsApi;
+    const client = operations();
+    const user = userEvent.setup();
+    render(page(client, squads));
+    await user.click(screen.getByRole("tab", { name: "Queue" }));
+
+    const row = (id: string) => document.querySelector(`[data-operations-queue-id="${id}"]`) as HTMLElement;
+    await waitFor(() => expect(within(row(member.id)).queryByRole("button", { name: "Resume" })).toBeNull());
+    await user.click(within(row(member.id)).getByRole("button", { name: "Run now" }));
+    expect(client.runNow).toHaveBeenCalledExactlyOnceWith(member.id);
+    expect(within(row(ordinary.id)).getByRole("button", { name: "Resume" })).toBeVisible();
+  });
+
   it("names dependency blockers without changing an explicitly Later dependency", async () => {
     const later = queued("later-dependency", 2);
     later.spec = { ...later.spec, name: "Prepare artifacts", lane: "later" };

@@ -607,13 +607,14 @@ impl OperationsStore {
         validate_id(id)?;
         let spec = normalize_squad_member_spec(spec)?;
         self.write(|tx| {
-            require_revision(tx, revision)?;
+            // Main rejects a missing prompt before it reads the revision; keep that order.
             if spec.kind == OperationKind::Agent
                 && spec.prompt.is_none()
                 && !is_squad_member(tx, id)?
             {
                 return Err(prompt_required());
             }
+            require_revision(tx, revision)?;
             let status = operation_status(tx, id)?;
             if !is_pending(status) {
                 return Err(invalid_state(
@@ -1240,6 +1241,67 @@ impl OperationsStore {
             auto_order(tx)?;
             bump_revision(tx)?;
             Ok(())
+        })
+    }
+
+    /// Settles a member whose dispatch panicked while it was `starting`. The thread runtime
+    /// persists a user `agent.message` before any provider write, so without one on the reserved
+    /// thread since the start the task provably never left KalCode: the member returns to an
+    /// actionable hold. Otherwise it may already hold the prompt, so it ends `interrupted` and is
+    /// never prepared or sent again. Returns the resulting status.
+    pub fn settle_panicked_start(&self, id: &str, hold_reason: &str) -> Result<OperationStatus> {
+        const INTERRUPTED: &str = "Stopped unexpectedly while starting. Its task may already have been sent, so KalCode did not send it again; inspect its pane.";
+        validate_id(id)?;
+        validate_text(hold_reason, 512, false, "invalid_operation_action")?;
+        reject_secret(hold_reason)?;
+        self.write(|tx| {
+            let active: Option<(Option<String>, Option<String>, Option<String>)> = tx
+                .query_row(
+                    "SELECT terminal_id, thread_id, started_at
+                     FROM operations WHERE id = ?1 AND status = 'starting'",
+                    [id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()?;
+            let Some((terminal_id, thread_id, started_at)) = active else {
+                return operation_status(tx, id);
+            };
+            let attempted = terminal_id.is_some()
+                || match thread_id.as_deref() {
+                    None => false,
+                    Some(thread_id) => tx.query_row(
+                        "SELECT EXISTS(
+                           SELECT 1 FROM events
+                           WHERE type = 'agent.message'
+                             AND thread_id = ?1
+                             AND (?2 IS NULL OR occurred_at >= ?2)
+                             AND json_extract(payload, '$.threadId') = ?1
+                             AND json_extract(payload, '$.role') = 'user'
+                         )",
+                        params![thread_id, started_at],
+                        |row| row.get(0),
+                    )?,
+                };
+            if !attempted {
+                tx.execute(
+                    "UPDATE operations SET status = 'paused', started_at = NULL, ended_at = NULL,
+                        current_action = NULL, attention_reason = ?2, outcome = NULL WHERE id = ?1",
+                    params![id, hold_reason],
+                )?;
+                append_moment(tx, id, "paused", hold_reason)?;
+            } else {
+                tx.execute(
+                    "UPDATE operations SET status = 'interrupted', ended_at = ?2,
+                        current_action = NULL, attention_reason = NULL, outcome = ?3
+                     WHERE id = ?1",
+                    params![id, now_rfc3339(), INTERRUPTED],
+                )?;
+                append_moment(tx, id, "interrupted", INTERRUPTED)?;
+            }
+            refresh_blocked(tx)?;
+            auto_order(tx)?;
+            bump_revision(tx)?;
+            operation_status(tx, id)
         })
     }
 

@@ -568,6 +568,7 @@ export function OperationsPage({ client, squads, threadOptions, providerAccounts
             mutate={mutate}
             threadOptions={threadOptions}
             providerAccounts={providerAccounts}
+            squads={squads}
             onRun={showRun}
           />
         </TabsContent>
@@ -833,6 +834,27 @@ export type OperationsMutationRunner = (
   success?: string,
 ) => Promise<boolean>;
 
+/** Operation ids that belong to a Squad launch. Launch history keeps every member it started. */
+function useSquadMemberIds(squads: SquadsApi | undefined, revision: number): ReadonlySet<string> {
+  const [ids, setIds] = useState<ReadonlySet<string>>(() => new Set());
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new queue revision may add Squad members.
+  useEffect(() => {
+    if (!squads) return;
+    let live = true;
+    squads.snapshot().then(
+      (snapshot) => {
+        if (!live) return;
+        setIds(new Set(snapshot.launches.flatMap((launch) => launch.members.map((member) => member.operationId))));
+      },
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, [squads, revision]);
+  return ids;
+}
+
 function QueueView({
   snapshot,
   client,
@@ -840,6 +862,7 @@ function QueueView({
   mutate,
   threadOptions,
   providerAccounts,
+  squads,
   onRun,
 }: {
   snapshot: OperationsSnapshot;
@@ -848,9 +871,11 @@ function QueueView({
   mutate: OperationsMutationRunner;
   threadOptions: () => Promise<ThreadOptions>;
   providerAccounts?: () => Promise<ProviderAccount[]>;
+  squads?: SquadsApi;
   onRun: (id: string) => void;
 }) {
   const sections = queueSections(snapshot.items);
+  const squadMembers = useSquadMemberIds(squads, snapshot.revision);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const [dragged, setDragged] = useState<string | null>(null);
@@ -1007,14 +1032,17 @@ function QueueView({
                 >
                   <Play /> Run now
                 </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={busy !== null}
-                  onClick={() => void mutate(`hold:${item.id}`, () => client.hold(item.id, item.status !== "paused"))}
-                >
-                  {item.status === "paused" ? <Play /> : <Pause />} {item.status === "paused" ? "Resume" : "Hold"}
-                </Button>
+                {/* A paused Squad member restarts only through Run now, which asks again. */}
+                {item.status === "paused" && squadMembers.has(item.id) ? null : (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy !== null}
+                    onClick={() => void mutate(`hold:${item.id}`, () => client.hold(item.id, item.status !== "paused"))}
+                  >
+                    {item.status === "paused" ? <Play /> : <Pause />} {item.status === "paused" ? "Resume" : "Hold"}
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant="danger"

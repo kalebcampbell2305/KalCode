@@ -759,7 +759,11 @@ impl OperationsState {
             Ok(OperationStatus::Queued | OperationStatus::Blocked | OperationStatus::Paused) => {
                 self.store.hold_with_reason(id, REASON)
             }
-            Ok(OperationStatus::Starting) => self.store.hold_starting_with_reason(id, REASON),
+            // The panic may have come after the prompt reached the pane but before bind. Only a
+            // provably unsent member returns to a hold; any other ends interrupted, never resent.
+            Ok(OperationStatus::Starting) => {
+                self.store.settle_panicked_start(id, REASON).map(|_| ())
+            }
             Ok(_) => Ok(()),
             Err(error) => Err(error),
         };
@@ -1139,8 +1143,11 @@ impl OperationsState {
                         return Ok(false);
                     }
                     if row.blockers.is_empty() {
-                        // The pane is waiting again and nothing blocks it: start it now.
-                        return self.run_squad_member_once(id, canceled, lease, false);
+                        // The pane is waiting again and nothing blocks it: start it now. Keep
+                        // reporting a pane this dispatch created so a cancel still reaps it.
+                        return self
+                            .run_squad_member_once(id, canceled, lease, false)
+                            .map(|created| created || !existed);
                     }
                     return Ok(!existed);
                 }
@@ -3040,6 +3047,20 @@ fn dispatch_in_progress() -> KalError {
         "This Squad member is already starting. Wait for its pane to be ready, then try again.",
     )
 }
+/// Run now only re-sends a Squad member that never started. A started, interrupted or finished
+/// member may already have its task, so it must never be re-prepared or sent again.
+fn ensure_squad_member_pending(row: &OperationRecord) -> Result<()> {
+    if matches!(
+        row.status,
+        OperationStatus::Queued | OperationStatus::Blocked | OperationStatus::Paused
+    ) {
+        return Ok(());
+    }
+    Err(KalError::validation(
+        "operation_not_pending",
+        "This Squad member already started, so KalCode will not send its task again. Open its pane, or launch a replacement.",
+    ))
+}
 fn dispatch_canceled(state: &AtomicU8) -> bool {
     state.load(Ordering::Acquire) != 0
 }
@@ -3624,7 +3645,9 @@ impl OperationsState {
         let row = {
             let _gate = self.gate.lock().map_err(|_| poisoned())?;
             self.ensure_dispatch_idle(id)?;
-            self.store.detail(id)?.run
+            let row = self.store.detail(id)?.run;
+            ensure_squad_member_pending(&row)?;
+            row
         };
         let exact_revision = (member.worktree && row.thread_id.as_deref() == Some(row.id.as_str()))
             .then(|| (row.branch.clone(), row.version.clone()));
@@ -3641,6 +3664,7 @@ impl OperationsState {
         // The native confirmation ran outside the gate; a dispatch may have started since.
         self.ensure_dispatch_idle(id)?;
         let current = self.store.detail(id)?.run;
+        ensure_squad_member_pending(&current)?;
         if current.spec != row.spec {
             return Err(KalError::validation(
                 "operation_authorization_changed",
@@ -5239,6 +5263,76 @@ mod tests {
                 .is_some_and(|reason| reason.contains("stopped unexpectedly"))
         );
         assert!(squad.state.gate.lock().is_ok(), "the gate stays usable");
+        squad.shutdown();
+    }
+
+    #[test]
+    fn a_panic_after_the_task_was_sent_never_sends_it_again() {
+        let squad = SquadHarness::new(&[("sent", &[]), ("unsent", &[])]);
+        for key in ["sent", "unsent"] {
+            squad.prepare_waiting(key);
+            let id = squad.id(key);
+            squad
+                .state
+                .store
+                .claim_user_squad_agent(&id)
+                .expect("claim")
+                .expect("claimable");
+            squad
+                .state
+                .store
+                .reserve_agent_thread(&id, None, None)
+                .expect("reserve pane");
+        }
+        // The pane received "sent"'s task (the runtime persists it before the provider write),
+        // then the dispatcher panicked before bind.
+        let sent = squad.id("sent");
+        squad
+            .core
+            .emit(kalcode_contracts::events::NewEvent {
+                source: kalcode_contracts::events::EventSource::Ui,
+                correlation: kalcode_contracts::events::Correlation {
+                    workspace_id: Some(squad.workspace_id.clone()),
+                    thread_id: Some(sent.clone()),
+                    ..Default::default()
+                },
+                event: EventPayload::AgentMessage {
+                    thread_id: sent.clone(),
+                    message_id: kalcode_contracts::ids::new_id(),
+                    role: kalcode_contracts::threads::MessageRole::User,
+                },
+            })
+            .expect("delivered task evidence");
+        squad.state.hold_panicked_dispatch(&sent);
+        squad.state.hold_panicked_dispatch(&squad.id("unsent"));
+
+        let row = squad.row("sent");
+        assert_eq!(
+            row.status,
+            OperationStatus::Interrupted,
+            "never re-preparable"
+        );
+        assert!(row.attention_reason.is_none());
+        let error = squad
+            .state
+            .run_now_command(&AllowAll, &TestLease, &sent)
+            .expect_err("Run now refuses a member that may hold its task");
+        assert_eq!(error.code, "operation_not_pending");
+        assert!(
+            !squad.panes.rearmed.lock().expect("rearmed").contains(&sent),
+            "its pane is never re-armed"
+        );
+        assert_eq!(squad.row("sent").status, OperationStatus::Interrupted);
+
+        // Without delivery evidence the member provably never got its task: it stays held.
+        let unsent = squad.row("unsent");
+        assert_eq!(unsent.status, OperationStatus::Paused);
+        assert!(
+            unsent
+                .attention_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("stopped unexpectedly"))
+        );
         squad.shutdown();
     }
 

@@ -1934,11 +1934,20 @@ fn execution_shape_is_validated_before_persistence_and_binding() {
     let mut taskless_edit = queued.spec.clone();
     taskless_edit.prompt = None;
     let revision = store.snapshot().expect("snapshot").0;
-    // As on main, a stale edit reports the stale revision before any content error.
+    // As on main, a missing prompt is rejected before the revision is read.
     assert_eq!(
         store
             .update(&queued.id, taskless_edit.clone(), revision - 1)
             .expect_err("stale taskless edit")
+            .code,
+        "operation_prompt_required"
+    );
+    let mut stale_edit = queued.spec.clone();
+    stale_edit.name = "Renamed".into();
+    assert_eq!(
+        store
+            .update(&queued.id, stale_edit, revision - 1)
+            .expect_err("stale edit")
             .code,
         "stale_operations_revision"
     );
