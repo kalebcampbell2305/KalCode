@@ -1,9 +1,9 @@
 import type { PaneContent, PaneLayout } from "@kalcode/protocol";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { StrictMode } from "react";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { findLeaf, makeLeaf } from "./model.ts";
-import { usePaneController } from "./usePaneController.ts";
+import { LOAD_RETRY_MS, SAVE_DEBOUNCE_MS, usePaneController } from "./usePaneController.ts";
 
 it("Tidy is exactly reversible and never closes running work", async () => {
   const { result } = await setup();
@@ -242,4 +242,46 @@ it("requests one close for all tabs and preserves work opened while the decision
   act(() => result.current.show(terminal("new")));
   act(() => requestClose.mock.calls[0]?.[1]());
   expect(findLeaf(result.current.layout, "pane")?.tabs).toEqual([terminal("new")]);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+it("a failed layout load never saves the default over the saved layout, and retries", async () => {
+  vi.useFakeTimers();
+  const fallback: PaneLayout = {
+    schemaVersion: 1,
+    root: makeLeaf([terminal("default")], "d"),
+    dock: [],
+    maximizedPaneId: null,
+  };
+  const saved: PaneLayout = {
+    schemaVersion: 1,
+    root: makeLeaf([terminal("saved")], "s"),
+    dock: [],
+    maximizedPaneId: null,
+  };
+  const store = {
+    load: vi.fn<() => Promise<PaneLayout | null>>().mockRejectedValue(new Error("runtime_not_ready")),
+    save: vi.fn().mockResolvedValue(undefined),
+  };
+  const { result } = renderHook(() =>
+    usePaneController({ scope: "load-fails", store, initial: () => fallback, titleOf: () => "Terminal" }),
+  );
+  await act(() => vi.advanceTimersByTimeAsync(0));
+  expect(result.current.ready).toBe(true);
+  expect(result.current.layout).toEqual(fallback);
+  await act(() => vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS * 2));
+  expect(store.save).not.toHaveBeenCalled();
+
+  store.load.mockResolvedValue(saved);
+  await act(() => vi.advanceTimersByTimeAsync(LOAD_RETRY_MS * 4));
+  expect(result.current.layout).toEqual(saved);
+  await act(() => vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS * 2));
+  expect(store.save).not.toHaveBeenCalled();
+
+  act(() => result.current.split("s", "horizontal", terminal("edit")));
+  await act(() => vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS * 2));
+  expect(store.save).toHaveBeenCalledExactlyOnceWith(result.current.layout);
 });
