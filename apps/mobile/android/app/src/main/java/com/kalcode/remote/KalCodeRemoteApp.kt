@@ -58,7 +58,9 @@ class KalCodeRemoteApp : Application() {
         appScope.launch {
             client.notifications.collect { note ->
                 if (_foreground.value) {
-                    _inAppNotices.tryEmit(note)
+                    // In the app, Mission Control already shows finishes and deploys live; only
+                    // what needs a decision or went wrong interrupts as a banner.
+                    if (note.kind in IN_APP_KINDS) _inAppNotices.tryEmit(note)
                 } else {
                     Notifications.post(this@KalCodeRemoteApp, note, client.workstation.value?.wid)
                 }
@@ -86,6 +88,8 @@ class KalCodeRemoteApp : Application() {
     }
 
     companion object {
+        private val IN_APP_KINDS = setOf("needs_you", "agent_failed", "run_failed")
+
         lateinit var instance: KalCodeRemoteApp
             private set
     }

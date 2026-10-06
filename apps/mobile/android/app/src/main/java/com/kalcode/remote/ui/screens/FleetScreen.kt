@@ -3,6 +3,18 @@ package com.kalcode.remote.ui.screens
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.windowInsetsBottomHeight
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.DesktopWindows
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Memory
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.TaskAlt
+import com.kalcode.remote.ui.Copy
+import com.kalcode.remote.ui.components.ControlShape
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -119,7 +131,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun FleetScreen(selectedAgentId: String?, onOpenAgent: (String) -> Unit) {
+fun FleetScreen(selectedAgentId: String?, onOpenAgent: (String) -> Unit, onOpenSettings: () -> Unit) {
     val client = LocalClient.current
     val messages = LocalMessages.current
     val scope = rememberCoroutineScope()
@@ -133,86 +145,65 @@ fun FleetScreen(selectedAgentId: String?, onOpenAgent: (String) -> Unit) {
     val needs = remember(fleet.needsYou) { fleet.sortedNeedsYou }
     val agentNames = remember(fleet.agents) { fleet.agents.associate { it.id to it.name } }
     val online = status == ConnectionStatus.Online
-    val listState = rememberLazyListState()
+    val name = fleet.workstation?.name ?: workstation?.name ?: "your workstation"
 
     SpaceBackground(SpaceLevel.CINEMATIC) {
-        // Lists stop at the status bar: the space background shows there, never scrolled text.
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top)).testTag("fleetList"),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 104.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            item(key = "header", contentType = "header") {
-                FleetHeader(
-                    workstation = workstation,
-                    fleet = fleet,
-                    status = status,
-                    lastUpdate = lastUpdate,
-                    onRetry = client::retryNow,
-                    onFilter = { filter = it },
-                    onCloseIdle = {
-                        scope.launch {
-                            runCatching { client.call(Ops.TIDY_CLOSE_IDLE, args(), Summary.serializer()) }
-                                .onSuccess { messages.post(it.summary) }
-                                .onFailure { messages.post(it.message ?: "Couldn't close idle agents") }
-                        }
-                    },
-                )
-            }
-            if (needs.isNotEmpty()) {
-                item(key = "needs-header", contentType = "section") {
-                    SectionHeader("Needs you", count = needs.size, modifier = Modifier.padding(top = 4.dp))
+        Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))) {
+            MissionTopBar(onOpenSettings = onOpenSettings, onLaunch = { launching = true }, canLaunch = online)
+            LazyColumn(
+                modifier = Modifier.fillMaxSize().testTag("fleetList"),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 32.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                item(key = "workstation", contentType = "workstation") {
+                    WorkstationCard(workstation, fleet, status, onFilter = { filter = it })
                 }
-                items(needs, key = { "needs:" + it.id }, contentType = { "needs" }) { item ->
-                    NeedsYouCard(
-                        item = item,
-                        agentName = item.agentId?.let(agentNames::get),
-                        enabled = online,
-                        onOpenAgent = item.agentId?.takeIf { agentNames.containsKey(it) }?.let { id -> { onOpenAgent(id) } },
+                if (status != ConnectionStatus.Online) {
+                    item(key = "banner", contentType = "banner") {
+                        ConnectionBanner(status, name, lastUpdate, onRetry = client::retryNow)
+                    }
+                }
+                if (needs.isNotEmpty()) {
+                    item(key = "needs-header", contentType = "section") {
+                        SectionHeader("Needs You", count = needs.size, modifier = Modifier.padding(top = 10.dp), color = Kc.WaitingText)
+                    }
+                    items(needs.take(4), key = { "needs:" + it.id }, contentType = { "needs" }) { item ->
+                        NeedsYouCard(
+                            item = item,
+                            agentName = item.agentId?.let(agentNames::get),
+                            enabled = online,
+                            onOpenAgent = item.agentId?.takeIf { agentNames.containsKey(it) }?.let { id -> { onOpenAgent(id) } },
+                            modifier = Modifier.animateItem().stale(!online),
+                        )
+                    }
+                }
+                stickyHeader(key = "filters", contentType = "filters") {
+                    FilterRow(fleet, filter) { filter = it }
+                }
+                if (agents.isEmpty()) {
+                    item(key = "empty", contentType = "empty") {
+                        if (fleet.agents.isEmpty()) {
+                            EmptyState(
+                                Icons.Outlined.AutoAwesome,
+                                if (fleet.hasSnapshot) "No agents running" else "Getting ready…",
+                                if (fleet.hasSnapshot) "Launch one with + or from KalCode on $name. It shows up here live." else "Agents appear as soon as $name answers.",
+                            )
+                        } else {
+                            EmptyState(Icons.Outlined.Inbox, "Nothing here", "No agent is ${filter.title.lowercase()} right now.")
+                        }
+                    }
+                }
+                items(agents, key = { it.id }, contentType = { "agent" }) { agent ->
+                    AgentCard(
+                        agent = agent,
+                        selected = agent.id == selectedAgentId,
+                        onClick = { onOpenAgent(agent.id) },
                         modifier = Modifier.animateItem().stale(!online),
                     )
                 }
-            }
-            stickyHeader(key = "filters", contentType = "filters") {
-                FilterRow(fleet, filter) { filter = it }
-            }
-            if (agents.isEmpty()) {
-                item(key = "empty", contentType = "empty") {
-                    if (fleet.agents.isEmpty()) {
-                        EmptyState(
-                            Icons.Outlined.AutoAwesome,
-                            if (fleet.hasSnapshot) "No agents running" else "Connecting to your workstation",
-                            if (fleet.hasSnapshot) "Launch one here or on your desktop. It shows up live." else "Agents appear as soon as the workstation answers.",
-                        )
-                    } else {
-                        EmptyState(Icons.Outlined.Inbox, "Nothing here", "No agent is ${filter.title.lowercase()} right now.")
-                    }
-                }
-            }
-            items(agents, key = { it.id }, contentType = { "agent" }) { agent ->
-                AgentCard(
-                    agent = agent,
-                    selected = agent.id == selectedAgentId,
-                    onClick = { onOpenAgent(agent.id) },
-                    modifier = Modifier.animateItem().stale(!online),
-                )
+                item("inset") { Spacer(Modifier.windowInsetsBottomHeight(WindowInsets.navigationBars)) }
             }
         }
-        val fabExpanded = listState.firstVisibleItemIndex < 2
-        ExtendedFloatingActionButton(
-            onClick = { launching = true },
-            expanded = fabExpanded,
-            icon = { Icon(Icons.Outlined.Add, contentDescription = if (fabExpanded) null else "Launch agent") },
-            text = { Text("Launch agent", style = MaterialTheme.typography.labelLarge) },
-            containerColor = Kc.Constellation,
-            contentColor = Kc.AccentFg,
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.End))
-                .padding(20.dp)
-                .testTag("launchFab"),
-        )
     }
     if (launching) {
         LaunchSheet(
@@ -231,99 +222,134 @@ fun FleetScreen(selectedAgentId: String?, onOpenAgent: (String) -> Unit) {
     }
 }
 
+/** Settings · Mission Control · Launch (iOS: gear, title, +). */
 @Composable
-private fun FleetHeader(
-    workstation: PairedWorkstation?,
-    fleet: FleetState,
-    status: ConnectionStatus,
-    lastUpdate: Long?,
-    onRetry: () -> Unit,
-    onFilter: (FleetFilter) -> Unit,
-    onCloseIdle: () -> Unit,
-) {
-    val ws = fleet.workstation
-    var menu by remember { mutableStateOf(false) }
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(top = 12.dp, bottom = 6.dp),
+private fun MissionTopBar(onOpenSettings: () -> Unit, onLaunch: () -> Unit, canLaunch: Boolean) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
+        RoundIconButton(Icons.Outlined.Settings, "Settings", onOpenSettings, Modifier.testTag("openSettings"))
+        Text(
+            "Mission Control",
+            style = MaterialTheme.typography.titleMedium,
+            color = Kc.Starlight,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            modifier = Modifier.weight(1f).headingSemantics(),
+        )
+        RoundIconButton(Icons.Outlined.Add, "Launch an agent", onLaunch, Modifier.testTag("launchFab"), accent = true, enabled = canLaunch)
+    }
+}
+
+@Composable
+private fun RoundIconButton(icon: ImageVector, label: String, onClick: () -> Unit, modifier: Modifier = Modifier, accent: Boolean = false, enabled: Boolean = true) {
+    IconButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier
+            .size(44.dp)
+            .background(if (accent) Kc.AccentSoft else Kc.Surface2, androidx.compose.foundation.shape.CircleShape)
+            .border(1.dp, if (accent) Kc.BorderLitSoft else Kc.Border, androidx.compose.foundation.shape.CircleShape),
+    ) {
+        Icon(icon, contentDescription = label, tint = if (!enabled) Kc.TextFaint else if (accent) Kc.AccentText else Kc.AccentText)
+    }
+}
+
+@Composable
+private fun WorkstationCard(workstation: PairedWorkstation?, fleet: FleetState, status: ConnectionStatus, onFilter: (FleetFilter) -> Unit) {
+    val ws = fleet.workstation
+    val platform = when ((ws?.platform ?: workstation?.hostPlatform).orEmpty()) {
+        "macos" -> "macOS"
+        "windows" -> "Windows"
+        "linux" -> "Linux"
+        else -> (ws?.platform ?: workstation?.hostPlatform).orEmpty().replaceFirstChar { it.uppercase() }
+    }
+    val version = ws?.version ?: workstation?.hostVersion
+    val build = ws?.build ?: workstation?.hostBuild
+    KcCard(Modifier.fillMaxWidth().testTag("workstationCard"), padding = PaddingValues(18.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Image(painterResource(R.drawable.kalcode_mark), contentDescription = null, modifier = Modifier.size(30.dp))
-            Spacer(Modifier.width(10.dp))
-            Eyebrow("Mission Control", color = Kc.AccentText)
+            Eyebrow("Workstation")
             Spacer(Modifier.weight(1f))
             ConnectionPill(status)
-            Box {
-                IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreVert, contentDescription = "More", tint = Kc.Nebula) }
-                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = Kc.Overlay) {
-                    DropdownMenuItem(
-                        text = { Text("Close idle agents") },
-                        leadingIcon = { Icon(Icons.Outlined.CleaningServices, null) },
-                        enabled = status == ConnectionStatus.Online,
-                        onClick = {
-                            menu = false
-                            onCloseIdle()
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Reconnect now") },
-                        leadingIcon = { Icon(Icons.Outlined.Refresh, null) },
-                        onClick = {
-                            menu = false
-                            onRetry()
-                        },
-                    )
-                }
-            }
         }
-        Spacer(Modifier.height(18.dp))
-        Text(
-            ws?.name ?: workstation?.name ?: "Workstation",
-            style = MaterialTheme.typography.displaySmall,
-            color = Kc.Starlight,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.headingSemantics(),
-        )
-        Spacer(Modifier.height(4.dp))
-        val platform = (ws?.platform ?: workstation?.hostPlatform).orEmpty().replaceFirstChar { it.uppercase() }
-        val version = ws?.version ?: workstation?.hostVersion
-        val active = fleet.activeWorkspace?.name
-        Text(
-            listOfNotNull(
-                platform.takeIf { it.isNotBlank() },
-                version?.takeIf { it.isNotBlank() }?.let { "KalCode $it" },
-                active?.let { "Active: $it" },
-            ).joinToString("  ·  "),
-            style = MaterialTheme.typography.bodyMedium,
-            color = Kc.Nebula,
-        )
-        Spacer(Modifier.height(18.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().stale(status != ConnectionStatus.Online)) {
-            StatTile("Working", fleet.count(FleetFilter.WORKING), Tone.Working, Modifier.weight(1f)) { onFilter(FleetFilter.WORKING) }
-            StatTile("Needs you", fleet.count(FleetFilter.NEEDS_YOU), Tone.Waiting, Modifier.weight(1f)) { onFilter(FleetFilter.NEEDS_YOU) }
-            StatTile("Failed", fleet.count(FleetFilter.FAILED), Tone.Failed, Modifier.weight(1f)) { onFilter(FleetFilter.FAILED) }
-            StatTile("Done", fleet.count(FleetFilter.DONE), Tone.Done, Modifier.weight(1f)) { onFilter(FleetFilter.DONE) }
-        }
-        when (status) {
-            is ConnectionStatus.Reconnecting, ConnectionStatus.Connecting -> {
-                Spacer(Modifier.height(12.dp))
-                val now by LocalNow.current
-                val ago = lastUpdate?.let { formatDuration(now - it) }
-                Notice(
-                    if (ago != null && fleet.hasSnapshot) "Reconnecting. Showing the state from $ago ago." else "Connecting to your workstation…",
-                    Tone.Waiting,
-                    icon = Icons.Outlined.SyncProblem,
-                    action = { GhostButton("Retry", onRetry, color = Kc.WaitingText) },
+        Spacer(Modifier.height(14.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(52.dp).background(Kc.AccentSoft, ControlShape).border(1.dp, Kc.BorderLitSoft, ControlShape),
+                contentAlignment = Alignment.Center,
+            ) { Icon(Icons.Outlined.DesktopWindows, contentDescription = null, tint = Kc.Icy, modifier = Modifier.size(26.dp)) }
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    ws?.name ?: workstation?.name ?: "Workstation",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = Kc.Starlight,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.headingSemantics(),
+                )
+                Text(
+                    listOfNotNull(
+                        platform.takeIf { it.isNotBlank() },
+                        version?.takeIf { it.isNotBlank() }?.let { v -> "KalCode $v" + (build?.takeIf { it > 0 }?.let { " ($it)" } ?: "") },
+                    ).joinToString(" · "),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Kc.Nebula,
                 )
             }
-            is ConnectionStatus.Offline -> {
-                Spacer(Modifier.height(12.dp))
-                Notice(status.reason.message, Tone.Muted, icon = Icons.Outlined.CloudOff, action = { GhostButton("Try again", onRetry) })
-            }
-            else -> Unit
         }
+        fleet.activeWorkspace?.let { active ->
+            Spacer(Modifier.height(14.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Eyebrow("Active project")
+                Spacer(Modifier.width(12.dp))
+                Icon(Icons.Outlined.Folder, contentDescription = null, tint = Kc.AccentText, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(active.name, style = MaterialTheme.typography.titleSmall, color = Kc.Starlight, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        Spacer(Modifier.height(14.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().stale(status != ConnectionStatus.Online)) {
+            StatTile("Working", fleet.count(FleetFilter.WORKING), Tone.Working, Modifier.weight(1f)) { onFilter(FleetFilter.WORKING) }
+            StatTile("Needs You", fleet.count(FleetFilter.NEEDS_YOU), Tone.Waiting, Modifier.weight(1f)) { onFilter(FleetFilter.NEEDS_YOU) }
+            StatTile("Failed", fleet.count(FleetFilter.FAILED), Tone.Failed, Modifier.weight(1f)) { onFilter(FleetFilter.FAILED) }
+        }
+    }
+}
+
+/** Reconnecting / Offline, worded as on iOS. Never shows stale state as live. */
+@Composable
+fun ConnectionBanner(status: ConnectionStatus, name: String, lastUpdate: Long?, onRetry: () -> Unit, modifier: Modifier = Modifier) {
+    val now by LocalNow.current
+    val (title, detail, tone) = when (status) {
+        ConnectionStatus.Connecting -> Triple("Connecting securely to $name…", null, Tone.Waiting)
+        is ConnectionStatus.Reconnecting -> Triple(
+            "Reconnecting to $name…",
+            lastUpdate?.let { "Updated ${formatDuration(now - it)} ago" },
+            Tone.Waiting,
+        )
+        is ConnectionStatus.Offline -> Copy.offline(status.reason, name).let { (t, d) -> Triple(t, d, Tone.Muted) }
+        else -> return
+    }
+    Row(
+        modifier
+            .fillMaxWidth()
+            .background(tone.soft, ControlShape)
+            .border(1.dp, tone.line, ControlShape)
+            .padding(start = 14.dp, end = 6.dp, top = 10.dp, bottom = 10.dp)
+            .testTag("connectionBanner"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            if (status is ConnectionStatus.Offline) Icons.Outlined.CloudOff else Icons.Outlined.SyncProblem,
+            contentDescription = null, tint = tone.text, modifier = Modifier.size(18.dp),
+        )
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleSmall, color = tone.text)
+            if (detail != null) Text(detail, style = MaterialTheme.typography.bodySmall, color = Kc.TextSecondary)
+        }
+        GhostButton("Try again", onRetry, color = tone.text)
     }
 }
 
@@ -334,6 +360,7 @@ private fun StatTile(label: String, value: Int, tone: Tone, modifier: Modifier, 
         onClick = onClick,
         padding = PaddingValues(horizontal = 10.dp, vertical = 12.dp),
         background = Kc.Surface1,
+        shape = ControlShape,
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -345,7 +372,11 @@ private fun StatTile(label: String, value: Int, tone: Tone, modifier: Modifier, 
             Box(Modifier.size(7.dp).background(if (value > 0) tone.color else Kc.MutedLine, androidx.compose.foundation.shape.CircleShape))
         }
         Spacer(Modifier.height(2.dp))
-        Text(label, style = MaterialTheme.typography.labelMedium.copy(fontSize = 11.5.sp), color = Kc.Nebula, maxLines = 1, softWrap = false)
+        // Narrow panes (phone landscape list) get a slightly smaller label rather than a clipped one.
+        androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val size = if (maxWidth < 64.dp) 10.5.sp else 12.sp
+            Text(label, style = MaterialTheme.typography.labelMedium.copy(fontSize = size), color = Kc.TextSecondary, maxLines = 1, softWrap = false)
+        }
     }
 }
 
@@ -361,17 +392,10 @@ private fun FilterRow(fleet: FleetState, filter: FleetFilter, onSelect: (FleetFi
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         items(FleetFilter.entries, key = { it.name }) { f ->
-            val tone = when (f) {
-                FleetFilter.NEEDS_YOU -> Tone.Waiting
-                FleetFilter.WORKING -> Tone.Working
-                FleetFilter.FAILED -> Tone.Failed
-                FleetFilter.DONE -> Tone.Done
-                FleetFilter.ALL -> null
-            }
             FilterPill(f.title, fleet.count(f), f == filter, onClick = {
                 haptics.tick()
                 onSelect(f)
-            }, tone = tone)
+            })
         }
     }
 }
@@ -504,8 +528,10 @@ fun NeedsYouCard(item: NeedsYouItem, agentName: String?, enabled: Boolean, onOpe
     val messages = LocalMessages.current
     val haptics = rememberHaptics()
     val scope = rememberCoroutineScope()
+    val ws = client.workstation.collectAsStateWithLifecycle().value?.name ?: "your workstation"
     var busy by remember(item.id) { mutableStateOf<String?>(null) }
     val tone = if (item.kind == "failed") Tone.Failed else Tone.Waiting
+    val decision = item.canApprove || item.canDeny
     fun decide(decision: String) {
         val approval = item.approvalId ?: return
         busy = decision
@@ -518,43 +544,54 @@ fun NeedsYouCard(item: NeedsYouItem, agentName: String?, enabled: Boolean, onOpe
                         when (it.status) {
                             "approved" -> "Approved once"
                             "denied" -> "Denied"
-                            "already_answered" -> "Already answered"
+                            "already_answered" -> "Already answered."
                             else -> it.status
                         },
                     )
                 }
                 .onFailure {
                     haptics.reject()
-                    messages.post(it.message ?: "Couldn't send your answer")
+                    messages.post(Copy.error(it, ws))
                 }
             busy = null
         }
     }
-    KcCard(modifier.fillMaxWidth().testTag("needs:${item.id}"), lit = tone.line) {
+    KcCard(
+        modifier.fillMaxWidth().testTag("needs:${item.id}"),
+        lit = tone.line,
+        onClick = if (!decision) onOpenAgent else null,
+        onClickLabel = "Open agent",
+    ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(needsIcon(item.kind), contentDescription = null, tint = tone.text, modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(8.dp))
             Eyebrow(needsLabel(item.kind), color = tone.text)
             Spacer(Modifier.weight(1f))
             AgoText(item.createdAt)
+            if (!decision && onOpenAgent != null) {
+                Spacer(Modifier.width(4.dp))
+                Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, contentDescription = null, tint = Kc.TextFaint, modifier = Modifier.size(18.dp))
+            }
         }
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(8.dp))
         Text(item.title, style = MaterialTheme.typography.titleMedium, color = Kc.Starlight)
         if (item.detail.isNotBlank()) {
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(2.dp))
             Text(item.detail, style = MaterialTheme.typography.bodyMedium, color = Kc.TextSecondary)
         }
         if (agentName != null) {
-            Spacer(Modifier.height(8.dp))
-            Text(
-                agentName,
-                style = KcText.Mono,
-                color = Kc.AccentText,
-                modifier = if (onOpenAgent != null) Modifier.clickable(onClickLabel = "Open agent", onClick = onOpenAgent) else Modifier,
-            )
+            Spacer(Modifier.height(6.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = if (decision && onOpenAgent != null) Modifier.clickable(onClickLabel = "Open agent", onClick = onOpenAgent) else Modifier,
+            ) {
+                Icon(Icons.Outlined.Memory, contentDescription = null, tint = Kc.TextFaint, modifier = Modifier.size(15.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(agentName, style = MaterialTheme.typography.bodyMedium, color = Kc.TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
-        if (item.canApprove || item.canDeny || onOpenAgent != null) {
-            Spacer(Modifier.height(14.dp))
+        if (decision) {
+            Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (item.canApprove) {
                     PrimaryButton(
@@ -568,13 +605,62 @@ fun NeedsYouCard(item: NeedsYouItem, agentName: String?, enabled: Boolean, onOpe
                         "Deny", { decide("deny") },
                         enabled = enabled && busy == null, busy = busy == "deny",
                         modifier = Modifier.weight(1f).testTag("deny:${item.id}"),
-                        tone = Kc.FailedText,
                     )
                 }
-                if (!item.canApprove && !item.canDeny && onOpenAgent != null) {
-                    SecondaryButton("Open agent", onOpenAgent, modifier = Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+/** Needs You: decisions first (approvals, questions), then what needs attention. */
+@Composable
+fun NeedsYouScreen(selectedAgentId: String?, onOpenAgent: (String) -> Unit) {
+    val client = LocalClient.current
+    val fleet by client.fleet.collectAsStateWithLifecycle()
+    val status by client.status.collectAsStateWithLifecycle()
+    val online = status == ConnectionStatus.Online
+    val agentNames = remember(fleet.agents) { fleet.agents.associate { it.id to it.name } }
+    val (decisions, attention) = remember(fleet.needsYou) { fleet.sortedNeedsYou.partition { it.kind == "approval" || it.kind == "question" } }
+    SpaceBackground(SpaceLevel.STANDARD) {
+        LazyColumn(
+            Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)).testTag("needsList"),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            item("title") {
+                Text(
+                    "Needs You",
+                    style = MaterialTheme.typography.displaySmall,
+                    color = Kc.Starlight,
+                    modifier = Modifier.padding(top = 28.dp, bottom = 6.dp).headingSemantics(),
+                )
+            }
+            if (decisions.isEmpty() && attention.isEmpty()) {
+                item("empty") {
+                    EmptyState(Icons.Outlined.TaskAlt, "Nothing needs you", "Approvals, questions and failures from your agents show up here.")
                 }
             }
+            if (decisions.isNotEmpty()) {
+                item("d-h") { SectionHeader("Decisions", count = decisions.size, color = Kc.WaitingText) }
+                items(decisions, key = { "d:" + it.id }) { item ->
+                    NeedsYouCard(
+                        item, item.agentId?.let(agentNames::get), online,
+                        item.agentId?.takeIf { agentNames.containsKey(it) }?.let { id -> { onOpenAgent(id) } },
+                        Modifier.animateItem().stale(!online),
+                    )
+                }
+            }
+            if (attention.isNotEmpty()) {
+                item("a-h") { SectionHeader("Attention", count = attention.size, color = Kc.WaitingText, modifier = Modifier.padding(top = 8.dp)) }
+                items(attention, key = { "a:" + it.id }) { item ->
+                    NeedsYouCard(
+                        item, item.agentId?.let(agentNames::get), online,
+                        item.agentId?.takeIf { agentNames.containsKey(it) }?.let { id -> { onOpenAgent(id) } },
+                        Modifier.animateItem().stale(!online),
+                    )
+                }
+            }
+            item("inset") { Spacer(Modifier.windowInsetsBottomHeight(WindowInsets.navigationBars)) }
         }
     }
 }

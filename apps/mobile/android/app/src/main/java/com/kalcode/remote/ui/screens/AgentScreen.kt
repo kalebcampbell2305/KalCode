@@ -41,11 +41,15 @@ import androidx.compose.material.icons.automirrored.outlined.CallSplit
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Difference
+import androidx.compose.material.icons.outlined.Layers
+import androidx.compose.material.icons.automirrored.outlined.Notes
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.FlagCircle
 import androidx.compose.material.icons.outlined.HourglassTop
 import androidx.compose.material.icons.outlined.Replay
 import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.StopCircle
 import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material3.AlertDialog
@@ -122,7 +126,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
-fun AgentScreen(agentId: String, onBack: () -> Unit, onOpenDiff: () -> Unit, inPane: Boolean = false) {
+fun AgentScreen(agentId: String, onBack: () -> Unit, onOpenDiff: () -> Unit, onOpenLog: () -> Unit, inPane: Boolean = false) {
     val client = LocalClient.current
     val messages = LocalMessages.current
     val haptics = rememberHaptics()
@@ -188,32 +192,40 @@ fun AgentScreen(agentId: String, onBack: () -> Unit, onOpenDiff: () -> Unit, inP
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                item("head") { AgentHead(agent) }
+                item("head") { AgentHead(agent, detail) }
                 if (needs.isNotEmpty()) {
+                    item("needs-h") { SectionHeader("Needs You", count = needs.size, color = Kc.WaitingText) }
                     items(needs, key = { "n:" + it.id }) { item ->
                         NeedsYouCard(item, agentName = null, enabled = online, onOpenAgent = null)
                     }
                 }
-                item("now") { NowCard(agent, detail) }
-                if (agent.filesChanged > 0 || agent.state.isFinished || agent.state == AgentState.FAILED) {
-                    item("changes") {
-                        KcCard(Modifier.fillMaxWidth(), onClick = onOpenDiff, onClickLabel = "View diff") {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Outlined.Difference, contentDescription = null, tint = Kc.AccentText, modifier = Modifier.size(22.dp))
-                                Spacer(Modifier.width(12.dp))
-                                Column(Modifier.weight(1f)) {
-                                    Text("Changes", style = MaterialTheme.typography.titleMedium, color = Kc.Starlight)
-                                    Text(
-                                        if (agent.filesChanged > 0) "${agent.filesChanged} file${if (agent.filesChanged == 1) "" else "s"} changed" else "No files changed yet",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = Kc.Nebula,
-                                    )
-                                }
-                                Text("View diff", style = MaterialTheme.typography.labelLarge, color = Kc.AccentText, modifier = Modifier.testTag("viewDiff"))
-                            }
+                item("actions") {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        SecondaryButton(
+                            "Changes", onOpenDiff, icon = Icons.Outlined.Difference,
+                            modifier = Modifier.weight(1f).testTag("viewDiff"),
+                        )
+                        SecondaryButton(
+                            "Full log", onOpenLog, icon = Icons.AutoMirrored.Outlined.Notes,
+                            modifier = Modifier.weight(1f).testTag("fullLog"),
+                        )
+                        if (agent.state.isActive || agent.state == AgentState.WAITING || agent.state == AgentState.NEEDS_YOU) {
+                            SecondaryButton(
+                                "Stop", { confirmStop = true },
+                                icon = Icons.Outlined.StopCircle, tone = Kc.FailedText,
+                                enabled = online, busy = acting == Ops.AGENT_STOP,
+                                modifier = Modifier.weight(1f).testTag("stop"),
+                            )
+                        } else if (agent.state == AgentState.FAILED || agent.state == AgentState.STOPPED) {
+                            PrimaryButton(
+                                "Retry", { act(Ops.AGENT_RETRY, "Resumed") },
+                                icon = Icons.Outlined.Replay, enabled = online, busy = acting == Ops.AGENT_RETRY,
+                                modifier = Modifier.weight(1f).testTag("retry"),
+                            )
                         }
                     }
                 }
+                item("now") { NowCard(agent, detail) }
                 val result = detail?.messages?.lastOrNull { it.role == "assistant" }
                 if (agent.state == AgentState.DONE && result != null) {
                     item("result") {
@@ -232,7 +244,7 @@ fun AgentScreen(agentId: String, onBack: () -> Unit, onOpenDiff: () -> Unit, inP
                 val d = detail
                 when {
                     d == null && !online -> item("wait") {
-                        Text("Output loads when your workstation is back.", style = MaterialTheme.typography.bodyMedium, color = Kc.Nebula)
+                        Text("Output loads when ${client.workstation.value?.name ?: "your workstation"} is connected.", style = MaterialTheme.typography.bodyMedium, color = Kc.Nebula)
                     }
                     d == null && loadError != null -> item("err") { Notice(loadError!!, Tone.Failed, icon = Icons.Outlined.ErrorOutline) }
                     d == null -> item("loading") {
@@ -246,40 +258,6 @@ fun AgentScreen(agentId: String, onBack: () -> Unit, onOpenDiff: () -> Unit, inP
                             item("none") { Text("No output yet.", style = MaterialTheme.typography.bodyMedium, color = Kc.Nebula) }
                         }
                         items(feed, key = { it.key }) { entry -> FeedRow(entry) }
-                        d.worktree?.let { wt ->
-                            item("wt") {
-                                KcCard(Modifier.fillMaxWidth(), background = Kc.Surface1) {
-                                    Eyebrow("Worktree")
-                                    Spacer(Modifier.height(6.dp))
-                                    Text(wt.path, style = KcText.Mono, color = Kc.TextSecondary)
-                                    Spacer(Modifier.height(4.dp))
-                                    Text(
-                                        wt.branch + (wt.baseBranch?.let { "  ←  $it" } ?: ""),
-                                        style = KcText.Mono,
-                                        color = Kc.AccentText,
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-                item("actions") {
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(top = 6.dp)) {
-                        if (agent.state.isActive || agent.state == AgentState.WAITING || agent.state == AgentState.NEEDS_YOU) {
-                            SecondaryButton(
-                                "Stop", { confirmStop = true },
-                                icon = Icons.Outlined.StopCircle, tone = Kc.FailedText,
-                                enabled = online, busy = acting == Ops.AGENT_STOP,
-                                modifier = Modifier.weight(1f).testTag("stop"),
-                            )
-                        }
-                        if (agent.state == AgentState.FAILED || agent.state == AgentState.STOPPED) {
-                            PrimaryButton(
-                                "Retry", { act(Ops.AGENT_RETRY, "Resumed") },
-                                icon = Icons.Outlined.Replay, enabled = online, busy = acting == Ops.AGENT_RETRY,
-                                modifier = Modifier.weight(1f).testTag("retry"),
-                            )
-                        }
                     }
                 }
             }
@@ -292,7 +270,7 @@ fun AgentScreen(agentId: String, onBack: () -> Unit, onOpenDiff: () -> Unit, inP
             onDismissRequest = { confirmStop = false },
             containerColor = Kc.Overlay,
             title = { Text("Stop ${agent?.name ?: "this agent"}?") },
-            text = { Text("The agent stops on your workstation. Its changes stay in the worktree.", color = Kc.TextSecondary) },
+            text = { Text("It stops where it is. Its changes stay in the worktree.", color = Kc.TextSecondary) },
             confirmButton = {
                 TextButton(onClick = {
                     confirmStop = false
@@ -326,32 +304,62 @@ fun DetailTopBar(title: String, onBack: () -> Unit, showBack: Boolean = true, tr
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun AgentHead(agent: Agent) {
-    Column(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 4.dp)) {
+private fun AgentHead(agent: Agent, detail: AgentDetail?) {
+    val lit = when (agent.state) {
+        AgentState.NEEDS_YOU, AgentState.WAITING -> Kc.WaitingLine
+        AgentState.FAILED -> Kc.FailedLine
+        else -> null
+    }
+    KcCard(Modifier.fillMaxWidth(), lit = lit, padding = PaddingValues(18.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             StateChip(agent.state)
-            Spacer(Modifier.width(10.dp))
+            Spacer(Modifier.weight(1f))
             Icon(Icons.Outlined.Schedule, contentDescription = null, tint = Kc.TextFaint, modifier = Modifier.size(14.dp))
             Spacer(Modifier.width(4.dp))
             ElapsedText(agent)
         }
         Spacer(Modifier.height(12.dp))
         Text(agent.name, style = MaterialTheme.typography.headlineSmall, color = Kc.Starlight, modifier = Modifier.headingSemantics().testTag("agentName"))
-        Spacer(Modifier.height(6.dp))
-        Text(
-            agent.providerName + "  ·  " + (agent.accountLabel ?: "Default account") + "  ·  " + agent.workspaceName,
-            style = MaterialTheme.typography.bodyMedium,
-            color = Kc.Nebula,
-        )
         Spacer(Modifier.height(12.dp))
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            MonoChip(agent.model ?: "model unknown", icon = Icons.Outlined.AutoAwesome, color = Kc.Icy)
-            MonoChip("effort " + (agent.effort ?: "default"))
-            agent.branch?.let { MonoChip(if (agent.worktree) "$it · worktree" else it, icon = Icons.AutoMirrored.Outlined.CallSplit) }
-            MonoChip(if (agent.runtime == "headless") "headless" else "terminal pane")
+        Box(Modifier.fillMaxWidth().height(1.dp).background(Kc.BorderSubtle))
+        Spacer(Modifier.height(6.dp))
+        HeadRow("Provider") {
+            Text(agent.providerName + " · " + (agent.accountLabel ?: "Default account"), style = MaterialTheme.typography.bodyMedium, color = Kc.Starlight)
         }
+        HeadRow("Model") {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                MonoChip(agent.model ?: "unknown", color = Kc.Icy)
+                MonoChip(agent.effort ?: "default effort", color = Kc.Icy)
+            }
+        }
+        HeadRow("Project") { Text(agent.workspaceName, style = MaterialTheme.typography.bodyMedium, color = Kc.Starlight) }
+        agent.branch?.let { branch ->
+            HeadRow("Branch") {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(branch, style = KcText.Mono, color = Kc.AccentText, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                    if (agent.worktree) {
+                        Spacer(Modifier.width(8.dp))
+                        MonoChip("worktree", icon = Icons.Outlined.Layers, color = Kc.AccentText)
+                    }
+                }
+            }
+        }
+        detail?.worktree?.baseBranch?.let { base -> HeadRow("From") { Text(base, style = KcText.Mono, color = Kc.TextSecondary) } }
+        detail?.worktree?.path?.takeIf { it.isNotBlank() }?.let { path ->
+            HeadRow("Path") {
+                // The end of a path is the useful part.
+                Text(if (path.length > 38) "…" + path.takeLast(37) else path, style = KcText.Mono, color = Kc.TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
+}
+
+@Composable
+private fun HeadRow(label: String, value: @Composable () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 6.dp).semantics(mergeDescendants = true) {}, verticalAlignment = Alignment.CenterVertically) {
+        Text(label.uppercase(), style = KcText.Eyebrow, color = Kc.TextFaint, modifier = Modifier.width(92.dp))
+        Box(Modifier.weight(1f)) { value() }
     }
 }
 
@@ -403,12 +411,23 @@ private fun buildFeed(d: AgentDetail): List<FeedEntry> {
 private fun FeedRow(entry: FeedEntry) {
     val m = entry.message
     val t = entry.tool
-    if (m != null) {
-        val (label, color) = when (m.role) {
-            "user" -> "You" to Kc.AccentText
-            "assistant" -> "Agent" to Kc.WorkingText
-            else -> "System" to Kc.Nebula
+    if (m != null && m.role == "user") {
+        Column(Modifier.fillMaxWidth().semantics(mergeDescendants = true) {}, horizontalAlignment = Alignment.End) {
+            Text("You", style = MaterialTheme.typography.labelMedium, color = Kc.AccentText)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                m.text,
+                style = MaterialTheme.typography.bodyMedium,
+                color = Kc.Starlight,
+                modifier = Modifier
+                    .widthIn(max = 320.dp)
+                    .background(Kc.AccentSoft, RoundedCornerShape(16.dp))
+                    .border(1.dp, Kc.BorderLitSoft, RoundedCornerShape(16.dp))
+                    .padding(horizontal = 14.dp, vertical = 9.dp),
+            )
         }
+    } else if (m != null) {
+        val (label, color) = if (m.role == "assistant") "Agent" to Kc.WorkingText else "System" to Kc.Nebula
         Row(Modifier.fillMaxWidth().semantics(mergeDescendants = true) {}) {
             Box(Modifier.padding(top = 7.dp).size(6.dp).background(color, CircleShape))
             Spacer(Modifier.width(10.dp))
@@ -509,12 +528,17 @@ private fun PromptComposer(agent: Agent, queued: List<Pair<String, String>>, blo
             }
         }
         if (blocked) {
-            Text(
-                "Answer the approval first. Prompts never go to an agent with an open approval.",
-                style = MaterialTheme.typography.bodySmall,
-                color = Kc.WaitingText,
-                modifier = Modifier.padding(start = 4.dp, bottom = 8.dp),
-            )
+            // One quiet line instead of a disabled field: the approval above is the next step.
+            Row(Modifier.fillMaxWidth().heightIn(min = 44.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.Shield, contentDescription = null, tint = Kc.WaitingText, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "Answer the approval first. Prompts never go to an agent with an open approval.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Kc.WaitingText,
+                )
+            }
+            return@Column
         }
         Row(verticalAlignment = Alignment.Bottom) {
             OutlinedTextField(
@@ -533,7 +557,7 @@ private fun PromptComposer(agent: Agent, queued: List<Pair<String, String>>, blo
                         }
                     }
                     .testTag("promptField"),
-                placeholder = { Text("Send a prompt to ${agent.name}", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                placeholder = { Text("Message ${agent.name}…", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 textStyle = MaterialTheme.typography.bodyLarge,
                 shape = ControlShape,
                 enabled = canQueue && !blocked,

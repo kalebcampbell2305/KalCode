@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -88,6 +89,8 @@ import com.kalcode.remote.ui.screens.AgentScreen
 import com.kalcode.remote.ui.screens.DiffScreen
 import com.kalcode.remote.ui.screens.EnvironmentScreen
 import com.kalcode.remote.ui.screens.FleetScreen
+import com.kalcode.remote.ui.screens.LogScreen
+import com.kalcode.remote.ui.screens.NeedsYouScreen
 import com.kalcode.remote.ui.screens.PairingScreen
 import com.kalcode.remote.ui.screens.RemovedScreen
 import com.kalcode.remote.ui.screens.RunScreen
@@ -202,14 +205,21 @@ private fun ReplacePairingDialog(link: String, current: String, onDone: () -> Un
     val messages = LocalMessages.current
     val scope = rememberCoroutineScope()
     val payload = remember(link) { runCatching { PairingLink.parse(link) } }
+    val same = payload.getOrNull()?.wid != null && payload.getOrNull()?.wid == client.workstation.value?.wid
     AlertDialog(
         onDismissRequest = onDone,
         containerColor = Kc.Overlay,
-        title = { Text("Pair with a different workstation?") },
+        title = { Text(if (same) "Pair again with $current?" else "Pair with a different workstation?") },
         text = {
             Text(
                 payload.fold(
-                    { "This replaces $current with ${it.name}. This device forgets $current and its key." },
+                    {
+                        if (same) {
+                            "This device gets a new key and replaces its current pairing."
+                        } else {
+                            "This replaces your pairing with $current. This device forgets $current and its key."
+                        }
+                    },
                     { it.message ?: "This pairing link can't be used." },
                 ),
                 color = Kc.TextSecondary,
@@ -271,14 +281,18 @@ private fun MainShell(app: KalCodeRemoteApp, nav: Navigator) {
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val width = maxWidth
+        val height = maxHeight
         val rail = width >= 600.dp
         val twoPane = width >= 720.dp
         CompositionLocalProvider(LocalLayout provides Layout(twoPane, rail)) {
             if (rail) {
                 Row(Modifier.fillMaxSize()) {
-                    KcRail(nav)
+                    KcRail(nav, compact = height < 520.dp)
                     VerticalDivider(color = Kc.BorderSubtle)
-                    Box(Modifier.weight(1f).fillMaxHeight()) { TabContent(nav, twoPane, width - 81.dp) }
+                    // The rail already sits in the start inset (cutout / nav bar); panes don't repeat it.
+                    Box(Modifier.weight(1f).fillMaxHeight().consumeWindowInsets(WindowInsets.safeDrawing.only(WindowInsetsSides.Start))) {
+                        TabContent(nav, twoPane, width - 81.dp)
+                    }
                 }
             } else {
                 Column(Modifier.fillMaxSize()) {
@@ -354,57 +368,82 @@ private fun TabContent(nav: Navigator, twoPane: Boolean, width: Dp) {
         label = "tab",
     ) { tab ->
         when (tab) {
-            Tab.FLEET -> FleetTab(nav, twoPane, width)
+            Tab.FLEET -> AgentStackTab(nav, Tab.FLEET, twoPane, width) { selected, open ->
+                FleetScreen(
+                    selectedAgentId = selected,
+                    onOpenAgent = open,
+                    onOpenSettings = { nav.push(Dest.Settings, Tab.FLEET) },
+                )
+            }
+            Tab.NEEDS_YOU -> AgentStackTab(nav, Tab.NEEDS_YOU, twoPane, width) { selected, open ->
+                NeedsYouScreen(selectedAgentId = selected, onOpenAgent = open)
+            }
             Tab.RUNS -> RunsTab(nav, twoPane, width)
             Tab.VOICE -> VoiceScreen()
-            Tab.SETTINGS -> SettingsScreen()
         }
     }
 }
 
-private fun listPaneWidth(width: Dp): Dp = (width * 0.42f).coerceIn(340.dp, 460.dp)
+private fun listPaneWidth(width: Dp): Dp = (width * 0.45f).coerceIn(384.dp, 480.dp)
 
+/**
+ * A list of agents (Mission Control or Needs You) with Agent → Changes / Full log above it.
+ * Phones stack them; wide screens show list + agent, or agent + changes/log, side by side.
+ */
 @Composable
-private fun FleetTab(nav: Navigator, twoPane: Boolean, width: Dp) {
-    val stack = nav.stack(Tab.FLEET)
+private fun AgentStackTab(
+    nav: Navigator,
+    tab: Tab,
+    twoPane: Boolean,
+    width: Dp,
+    root: @Composable (selectedAgentId: String?, open: (String) -> Unit) -> Unit,
+) {
+    val stack = nav.stack(tab)
+    val detail: @Composable (Dest, Boolean) -> Unit = { dest, inPane ->
+        when (dest) {
+            is Dest.Agent -> AgentScreen(
+                dest.id,
+                onBack = { nav.pop() },
+                onOpenDiff = { if (twoPane) nav.show(tab, Dest.Agent(dest.id), Dest.Diff(dest.id)) else nav.push(Dest.Diff(dest.id), tab) },
+                onOpenLog = { if (twoPane) nav.show(tab, Dest.Agent(dest.id), Dest.Log(dest.id)) else nav.push(Dest.Log(dest.id), tab) },
+                inPane = inPane,
+            )
+            is Dest.Diff -> DiffScreen(dest.id, onBack = { nav.pop() })
+            is Dest.Log -> LogScreen(dest.id, onBack = { nav.pop() })
+            Dest.Settings -> SettingsScreen(onBack = { nav.pop() })
+            else -> Unit
+        }
+    }
+    if (stack.lastOrNull() == Dest.Settings) {
+        BackHandler { nav.pop() }
+        SettingsScreen(onBack = { nav.pop() })
+        return
+    }
     if (twoPane) {
         val agentId = stack.filterIsInstance<Dest.Agent>().lastOrNull()?.id
-        val diff = stack.lastOrNull() as? Dest.Diff
+        val sub = stack.lastOrNull()?.takeIf { it is Dest.Diff || it is Dest.Log }
         BackHandler(enabled = stack.isNotEmpty()) { nav.pop() }
         Row(Modifier.fillMaxSize()) {
             Box(Modifier.width(listPaneWidth(width)).fillMaxHeight()) {
-                if (diff != null) {
-                    AgentScreen(diff.id, onBack = { nav.pop() }, onOpenDiff = {}, inPane = true)
+                if (sub != null && agentId != null) {
+                    AgentScreen(agentId, onBack = { nav.pop() }, onOpenDiff = { nav.show(tab, Dest.Agent(agentId), Dest.Diff(agentId)) }, onOpenLog = { nav.show(tab, Dest.Agent(agentId), Dest.Log(agentId)) }, inPane = true)
                 } else {
-                    FleetScreen(selectedAgentId = agentId, onOpenAgent = { nav.show(Tab.FLEET, Dest.Agent(it)) })
+                    root(agentId) { nav.show(tab, Dest.Agent(it)) }
                 }
             }
             VerticalDivider(color = Kc.BorderSubtle)
             Box(Modifier.weight(1f).fillMaxHeight()) {
-                PaneSwitch(target = diff ?: agentId?.let { Dest.Agent(it) }) { dest ->
-                    when (dest) {
-                        is Dest.Diff -> DiffScreen(dest.id, onBack = { nav.pop() })
-                        is Dest.Agent -> AgentScreen(
-                            dest.id,
-                            onBack = { nav.reset(Tab.FLEET) },
-                            onOpenDiff = { nav.show(Tab.FLEET, Dest.Agent(dest.id), Dest.Diff(dest.id)) },
-                            inPane = true,
-                        )
-                        else -> PanePlaceholder("Select an agent", "Its live output, changes and controls appear here.")
+                PaneSwitch(target = sub ?: agentId?.let { Dest.Agent(it) }) { dest ->
+                    if (dest == null) {
+                        PanePlaceholder("Select an agent", "Its live output, changes and controls appear here.")
+                    } else {
+                        detail(dest, true)
                     }
                 }
             }
         }
     } else {
-        BackStack(stack, onPop = { nav.pop() }, root = {
-            FleetScreen(selectedAgentId = null, onOpenAgent = { nav.push(Dest.Agent(it), Tab.FLEET) })
-        }) { dest ->
-            when (dest) {
-                is Dest.Agent -> AgentScreen(dest.id, onBack = { nav.pop() }, onOpenDiff = { nav.push(Dest.Diff(dest.id), Tab.FLEET) })
-                is Dest.Diff -> DiffScreen(dest.id, onBack = { nav.pop() })
-                else -> Unit
-            }
-        }
+        BackStack(stack, onPop = { nav.pop() }, root = { root(null) { nav.push(Dest.Agent(it), tab) } }) { dest -> detail(dest, false) }
     }
 }
 
@@ -528,7 +567,7 @@ private fun KcBottomBar(nav: Navigator) {
                 selected = nav.tab == tab,
                 onClick = { nav.select(tab) },
                 icon = { TabIcon(tab, fleet) },
-                label = { Text(tab.title, style = MaterialTheme.typography.labelMedium) },
+                label = { Text(tab.title, style = MaterialTheme.typography.labelMedium.copy(fontSize = androidx.compose.ui.unit.TextUnit(11.5f, androidx.compose.ui.unit.TextUnitType.Sp)), maxLines = 1, softWrap = false) },
                 colors = NavigationBarItemDefaults.colors(
                     selectedIconColor = Kc.Starlight,
                     selectedTextColor = Kc.Starlight,
@@ -542,27 +581,29 @@ private fun KcBottomBar(nav: Navigator) {
 }
 
 @Composable
-private fun KcRail(nav: Navigator) {
+private fun KcRail(nav: Navigator, compact: Boolean) {
     val client = LocalClient.current
     val fleet by client.fleet.collectAsStateWithLifecycle()
     NavigationRail(
         containerColor = Kc.Surface1,
         windowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Start + WindowInsetsSides.Vertical),
-        header = {
+        header = if (compact) null else {
+            {
             androidx.compose.foundation.Image(
                 painter = androidx.compose.ui.res.painterResource(com.kalcode.remote.R.drawable.kalcode_mark),
                 contentDescription = "KalCode",
                 modifier = Modifier.padding(top = 12.dp, bottom = 8.dp).size(40.dp),
             )
+            }
         },
     ) {
-        Spacer(Modifier.height(8.dp))
+        if (!compact) Spacer(Modifier.height(8.dp))
         Tab.entries.forEach { tab ->
             NavigationRailItem(
                 selected = nav.tab == tab,
                 onClick = { nav.select(tab) },
                 icon = { TabIcon(tab, fleet) },
-                label = { Text(tab.title, style = MaterialTheme.typography.labelMedium) },
+                label = { Text(tab.title, style = MaterialTheme.typography.labelMedium.copy(fontSize = androidx.compose.ui.unit.TextUnit(11.5f, androidx.compose.ui.unit.TextUnitType.Sp)), maxLines = 1, softWrap = false) },
                 colors = NavigationRailItemDefaults.colors(
                     selectedIconColor = Kc.Starlight,
                     selectedTextColor = Kc.Starlight,
@@ -570,7 +611,7 @@ private fun KcRail(nav: Navigator) {
                     unselectedIconColor = Kc.Nebula,
                     unselectedTextColor = Kc.Nebula,
                 ),
-                modifier = Modifier.padding(vertical = 4.dp),
+                modifier = Modifier.padding(vertical = if (compact) 0.dp else 4.dp),
             )
         }
     }
@@ -578,7 +619,7 @@ private fun KcRail(nav: Navigator) {
 
 @Composable
 private fun TabIcon(tab: Tab, fleet: FleetState) {
-    val needs = if (tab == Tab.FLEET) fleet.needsYou.size else 0
+    val needs = if (tab == Tab.NEEDS_YOU) fleet.needsYou.size else 0
     androidx.compose.material3.BadgedBox(badge = {
         if (needs > 0) {
             androidx.compose.material3.Badge(containerColor = Kc.Waiting, contentColor = Kc.AccentFg) { Text("$needs") }

@@ -21,12 +21,12 @@ data class PairingPayload(
 }
 
 enum class PairingLinkError(val message: String) {
-    NOT_A_PAIRING_LINK("That isn't a KalCode pairing link."),
-    MALFORMED("This pairing link is damaged. Copy it again from KalCode on your desktop."),
-    UNSUPPORTED_VERSION("This pairing link is from a newer KalCode. Update KalCode Remote."),
-    INVALID_KEY("This pairing link is damaged. Copy it again from KalCode on your desktop."),
-    NO_ADDRESSES("This pairing link has no reachable address."),
-    EXPIRED("This pairing code has expired. Show a new code in KalCode on your desktop."),
+    NOT_A_PAIRING_LINK("That isn't a KalCode pairing link. It starts with kalcode-remote://pair"),
+    MALFORMED("This link is incomplete. Copy the whole link from your workstation."),
+    UNSUPPORTED_VERSION("This link needs a newer version of KalCode Remote. Update the app and try again."),
+    INVALID_KEY("This link's security key isn't valid. Show a new pairing code on your workstation."),
+    NO_ADDRESSES("This link doesn't include an address to reach your workstation."),
+    EXPIRED("This pairing link has expired. Show a new code on your workstation."),
 }
 
 class PairingLinkException(val error: PairingLinkError) : Exception(error.message)

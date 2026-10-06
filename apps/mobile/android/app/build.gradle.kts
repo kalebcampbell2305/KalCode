@@ -106,5 +106,6 @@ dependencies {
     androidTestImplementation(libs.androidx.test.rules)
     androidTestImplementation(libs.androidx.test.junit)
     androidTestImplementation(libs.androidx.test.uiautomator)
+    androidTestImplementation(libs.androidx.test.espresso)
     androidTestImplementation(libs.kotlinx.coroutines.test)
 }

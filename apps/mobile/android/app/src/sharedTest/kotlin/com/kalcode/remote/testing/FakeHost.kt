@@ -50,7 +50,7 @@ import kotlin.concurrent.thread
 class FakeHost(agentCount: Int = 4, val name: String = "Test Workstation") {
     val key: KeyPair = KeyPair.generate()
     val wid = "ws_fake0000000000000000test"
-    private val server = ServerSocket(0, 50, InetAddress.getLoopbackAddress())
+    private val server = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1")) // Android's getLoopbackAddress() is ::1
     val port: Int get() = server.localPort
 
     private val random = SecureRandom()
@@ -409,6 +409,21 @@ class FakeHost(agentCount: Int = 4, val name: String = "Test Workstation") {
                     }
                 })
             }
+            "agent.log" -> agent?.let {
+                val before = args["beforeId"].str()?.removePrefix("log_")?.toIntOrNull() ?: 40
+                val from = maxOf(0, before - 20)
+                ok(id, buildJsonObject {
+                    putJsonArray("entries") {
+                        for (n in from until before) {
+                            add(buildJsonObject {
+                                put("id", "log_$n"); put("kind", listOf("message", "tool", "output", "status")[n % 4])
+                                put("text", "Log line $n"); put("at", "2026-10-05T21:09:27Z")
+                            })
+                        }
+                    }
+                    put("more", from > 0)
+                })
+            } ?: err(id, "not_found", "This agent has ended")
             "tidy.closeIdle" -> ok(id, buildJsonObject { put("summary", "Closed 0 idle agents") })
             else -> err(id, "invalid", "unknown operation $op")
         }

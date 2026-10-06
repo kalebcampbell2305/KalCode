@@ -42,7 +42,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.ContentPaste
+import androidx.compose.material.icons.outlined.DesktopWindows
+import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.LinkOff
 import androidx.compose.material.icons.outlined.Lock
@@ -92,6 +93,7 @@ import com.kalcode.remote.client.RemovedReason
 import com.kalcode.remote.protocol.PairingLink
 import com.kalcode.remote.protocol.PairingLinkException
 import com.kalcode.remote.protocol.PairingPayload
+import com.kalcode.remote.ui.Copy
 import com.kalcode.remote.ui.LocalClient
 import com.kalcode.remote.ui.components.ControlShape
 import com.kalcode.remote.ui.components.Eyebrow
@@ -127,7 +129,7 @@ fun PairingScreen(initialLink: String?, onLinkConsumed: () -> Unit) {
     val scope = rememberCoroutineScope()
     val reduced = LocalReducedMotion.current
     var step by remember { mutableStateOf<PairStep>(PairStep.Home) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var error by remember { mutableStateOf<Pair<String?, String>?>(null) }
     var pasting by remember { mutableStateOf(false) }
     var pairing by remember { mutableStateOf(false) }
 
@@ -137,7 +139,7 @@ fun PairingScreen(initialLink: String?, onLinkConsumed: () -> Unit) {
         haptics.confirm()
         true
     } catch (e: PairingLinkException) {
-        error = e.message
+        error = null to (e.message ?: "")
         haptics.reject()
         false
     }
@@ -161,7 +163,7 @@ fun PairingScreen(initialLink: String?, onLinkConsumed: () -> Unit) {
                 onCode = { code -> if (PairingLink.looksLikePairingLink(code)) accept(code) },
                 onClose = { step = PairStep.Home },
                 onDenied = {
-                    error = "Camera access is off. Paste the pairing link instead."
+                    error = "Camera access is off" to "Allow the camera in Settings to scan the pairing code, or paste the link instead."
                     step = PairStep.Home
                 },
             )
@@ -177,14 +179,23 @@ fun PairingScreen(initialLink: String?, onLinkConsumed: () -> Unit) {
                 ) {
                     Column(Modifier.widthIn(max = 480.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         Spacer(Modifier.height(24.dp))
-                        Image(
-                            painterResource(R.drawable.kalcode_mascot),
-                            contentDescription = "KalCode",
-                            modifier = Modifier.size(if (current is PairStep.Confirm) 120.dp else 176.dp),
-                        )
-                        Spacer(Modifier.height(12.dp))
-                        Eyebrow("KalCode Remote", color = Kc.AccentText)
-                        Spacer(Modifier.height(10.dp))
+                        if (current is PairStep.Confirm) {
+                            Box(
+                                Modifier
+                                    .size(112.dp)
+                                    .background(androidx.compose.ui.graphics.Brush.radialGradient(listOf(Kc.Constellation.copy(alpha = 0.22f), Color.Transparent)), CircleShape),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Box(
+                                    Modifier.size(84.dp).background(Kc.Surface1, CircleShape).border(1.5.dp, Kc.BorderLit, CircleShape),
+                                    contentAlignment = Alignment.Center,
+                                ) { Icon(Icons.Outlined.DesktopWindows, contentDescription = null, tint = Kc.Icy, modifier = Modifier.size(40.dp)) }
+                            }
+                            Spacer(Modifier.height(20.dp))
+                        } else {
+                            Image(painterResource(R.drawable.kalcode_mascot), contentDescription = "KalCode", modifier = Modifier.size(196.dp))
+                            Spacer(Modifier.height(20.dp))
+                        }
                         if (current is PairStep.Confirm) {
                             ConfirmPairing(
                                 payload = current.payload,
@@ -198,7 +209,11 @@ fun PairingScreen(initialLink: String?, onLinkConsumed: () -> Unit) {
                                             .onSuccess { haptics.confirm() }
                                             .onFailure {
                                                 haptics.reject()
-                                                error = it.message
+                                                error = if (it is com.kalcode.remote.client.PairingFailedException) {
+                                                    Copy.pairFailure(it.reason, current.payload.name)
+                                                } else {
+                                                    Copy.pairFailure(null, current.payload.name)
+                                                }
                                             }
                                         pairing = false
                                     }
@@ -210,7 +225,7 @@ fun PairingScreen(initialLink: String?, onLinkConsumed: () -> Unit) {
                             )
                         } else {
                             Text(
-                                "Your agents, in your pocket",
+                                "KalCode Remote",
                                 style = MaterialTheme.typography.headlineMedium,
                                 color = Kc.Starlight,
                                 textAlign = TextAlign.Center,
@@ -218,20 +233,14 @@ fun PairingScreen(initialLink: String?, onLinkConsumed: () -> Unit) {
                             )
                             Spacer(Modifier.height(8.dp))
                             Text(
-                                "Watch every agent on your workstation live, answer approvals, send prompts and launch new work.",
+                                "Mission Control for your agents — approve, steer and ship from anywhere on your network.",
                                 style = MaterialTheme.typography.bodyLarge,
                                 color = Kc.Nebula,
                                 textAlign = TextAlign.Center,
                             )
-                            Spacer(Modifier.height(24.dp))
-                            KcCard(Modifier.fillMaxWidth()) {
-                                Step(1, "On your desktop, open KalCode › Settings › Remote.")
-                                Step(2, "Choose Pair a device to show a QR code.")
-                                Step(3, "Scan it here, or paste the pairing link.")
-                            }
-                            Spacer(Modifier.height(20.dp))
+                            Spacer(Modifier.height(28.dp))
                             PrimaryButton(
-                                "Scan QR code",
+                                "Scan pairing code",
                                 {
                                     error = null
                                     step = PairStep.Scanning
@@ -243,20 +252,43 @@ fun PairingScreen(initialLink: String?, onLinkConsumed: () -> Unit) {
                             SecondaryButton(
                                 "Paste pairing link",
                                 { pasting = true },
-                                icon = Icons.Outlined.ContentPaste,
+                                icon = Icons.Outlined.Link,
                                 modifier = Modifier.fillMaxWidth().testTag("pasteLink"),
                             )
+                            Spacer(Modifier.height(14.dp))
+                            KcCard(Modifier.fillMaxWidth(), background = Kc.Surface1, padding = androidx.compose.foundation.layout.PaddingValues(14.dp)) {
+                                Text(
+                                    "On your workstation",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Kc.Nebula,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    "KalCode → Settings → Remote → Pair a device",
+                                    style = com.kalcode.remote.ui.theme.KcText.Mono,
+                                    color = Kc.AccentText,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
                         }
-                        error?.let {
+                        error?.let { (title, message) ->
                             Spacer(Modifier.height(16.dp))
-                            Notice(it, Tone.Failed, icon = Icons.Outlined.ErrorOutline, modifier = Modifier.testTag("pairError"))
+                            Notice(
+                                if (title != null) "$title. $message" else message,
+                                Tone.Failed,
+                                icon = Icons.Outlined.ErrorOutline,
+                                modifier = Modifier.testTag("pairError"),
+                            )
                         }
                         Spacer(Modifier.height(20.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Outlined.Lock, contentDescription = null, tint = Kc.TextFaint, modifier = Modifier.size(14.dp))
                             Spacer(Modifier.width(6.dp))
                             Text(
-                                "End-to-end encrypted. Pinned to your workstation's key.",
+                                "End-to-end encrypted. No cloud account.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = Kc.TextFaint,
                             )
@@ -297,32 +329,35 @@ private fun ConfirmPairing(payload: PairingPayload, pairing: Boolean, onPair: ()
     )
     Spacer(Modifier.height(8.dp))
     Text(
-        "This device gets its own key and pins this workstation. Only you can approve it on your desktop.",
+        "Check this name matches your workstation.",
         style = MaterialTheme.typography.bodyMedium,
         color = Kc.Nebula,
         textAlign = TextAlign.Center,
     )
     Spacer(Modifier.height(20.dp))
-    KcCard(Modifier.fillMaxWidth(), lit = Kc.BorderLitSoft) {
+    KcCard(Modifier.fillMaxWidth(), background = Kc.Surface1) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(payload.name, style = MaterialTheme.typography.titleMedium, color = Kc.Starlight, modifier = Modifier.weight(1f))
-            if (left > 0) StatusPill("Code valid ${formatDuration(left)}", Tone.Accent) else StatusPill("Code expired", Tone.Failed)
+            Text("Workstation", style = MaterialTheme.typography.bodyMedium, color = Kc.Nebula, modifier = Modifier.weight(1f))
+            Text(payload.name, style = MaterialTheme.typography.titleSmall, color = Kc.Starlight)
         }
-        Spacer(Modifier.height(12.dp))
+        Divider()
         Eyebrow("Addresses")
         Spacer(Modifier.height(6.dp))
-        payload.addrs.forEach {
-            MonoChip(it)
-            Spacer(Modifier.height(6.dp))
+        payload.addrs.forEach { Text(it, style = com.kalcode.remote.ui.theme.KcText.Mono, color = Kc.AccentText) }
+        Divider()
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Code expires", style = MaterialTheme.typography.bodyMedium, color = Kc.Nebula, modifier = Modifier.weight(1f))
+            val s = (left / 1000).coerceAtLeast(0)
+            Text(
+                if (left > 0) "%d:%02d".format(s / 60, s % 60) else "Expired",
+                style = com.kalcode.remote.ui.theme.KcText.Mono,
+                color = if (left > 0) Kc.TextSecondary else Kc.FailedText,
+            )
         }
-        Spacer(Modifier.height(6.dp))
-        Eyebrow("Workstation key")
-        Spacer(Modifier.height(6.dp))
-        Text(payload.pk.take(22) + "…", style = com.kalcode.remote.ui.theme.KcText.Mono, color = Kc.TextSecondary)
     }
     Spacer(Modifier.height(20.dp))
     PrimaryButton(
-        if (pairing) "Pairing…" else "Pair",
+        if (pairing) "Connecting securely…" else "Pair",
         onPair,
         enabled = left > 0,
         busy = pairing,
@@ -330,6 +365,13 @@ private fun ConfirmPairing(payload: PairingPayload, pairing: Boolean, onPair: ()
     )
     Spacer(Modifier.height(10.dp))
     SecondaryButton("Cancel", onCancel, enabled = !pairing, modifier = Modifier.fillMaxWidth())
+}
+
+@Composable
+private fun Divider() {
+    Spacer(Modifier.height(12.dp))
+    Box(Modifier.fillMaxWidth().height(1.dp).background(Kc.BorderSubtle))
+    Spacer(Modifier.height(12.dp))
 }
 
 @Composable
@@ -346,7 +388,7 @@ private fun PasteDialog(onDismiss: () -> Unit, onSubmit: (String) -> Unit) {
         title = { Text("Paste pairing link") },
         text = {
             Column {
-                Text("Copy it from KalCode › Settings › Remote on your desktop.", color = Kc.TextSecondary, style = MaterialTheme.typography.bodyMedium)
+                Text("Copy the pairing link from KalCode → Settings → Remote → Pair a device, then paste it here.", color = Kc.TextSecondary, style = MaterialTheme.typography.bodyMedium)
                 Spacer(Modifier.height(12.dp))
                 OutlinedTextField(
                     value = text,
@@ -463,10 +505,10 @@ private fun QrScanner(onCode: (String) -> Unit, onClose: () -> Unit, onDenied: (
             Modifier.fillMaxWidth().align(Alignment.BottomCenter).windowInsetsPadding(WindowInsets.safeDrawing).padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text("Scan the pairing code", style = MaterialTheme.typography.titleLarge, color = Kc.Starlight)
+            Text("Point at the code on your workstation", style = MaterialTheme.typography.titleLarge, color = Kc.Starlight)
             Spacer(Modifier.height(6.dp))
             Text(
-                "KalCode › Settings › Remote › Pair a device on your desktop.",
+                "KalCode → Settings → Remote → Pair a device",
                 style = MaterialTheme.typography.bodyMedium,
                 color = Kc.TextSecondary,
                 textAlign = TextAlign.Center,
@@ -499,8 +541,9 @@ fun RemovedScreen(status: ConnectionStatus.Removed, onPairAgain: () -> Unit) {
                 Spacer(Modifier.height(18.dp))
                 StatusPill("Removed", Tone.Failed)
                 Spacer(Modifier.height(14.dp))
+                val noun = com.kalcode.remote.ui.deviceNoun(LocalContext.current)
                 Text(
-                    "Removed from ${status.workstationName}",
+                    "This $noun was removed",
                     style = MaterialTheme.typography.headlineMedium,
                     color = Kc.Starlight,
                     textAlign = TextAlign.Center,
@@ -509,8 +552,8 @@ fun RemovedScreen(status: ConnectionStatus.Removed, onPairAgain: () -> Unit) {
                 Spacer(Modifier.height(10.dp))
                 Text(
                     when (status.reason) {
-                        RemovedReason.REVOKED -> "${status.workstationName} removed this device. Its key was deleted from this phone, so nothing from that workstation is left here."
-                        RemovedReason.UNPAIRED -> "${status.workstationName} no longer knows this device. Its key was deleted from this phone."
+                        RemovedReason.REVOKED -> "${status.workstationName} removed this $noun. It no longer has access to your agents, and its key has been erased from this device."
+                        RemovedReason.UNPAIRED -> "${status.workstationName} no longer knows this $noun. Its key has been erased from this device."
                     },
                     style = MaterialTheme.typography.bodyLarge,
                     color = Kc.Nebula,
@@ -518,7 +561,7 @@ fun RemovedScreen(status: ConnectionStatus.Removed, onPairAgain: () -> Unit) {
                 )
                 Spacer(Modifier.height(10.dp))
                 Text(
-                    "To use Remote again, pair from a new code. This device will get a new key.",
+                    "If that wasn't you, check KalCode → Settings → Remote on your workstation.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = Kc.TextFaint,
                     textAlign = TextAlign.Center,

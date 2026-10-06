@@ -1,6 +1,9 @@
 package com.kalcode.remote.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -93,6 +96,7 @@ fun RunsScreen(selected: Dest?, onOpen: (Dest) -> Unit) {
     val status by client.status.collectAsStateWithLifecycle()
     val online = status == ConnectionStatus.Online
     val runs = remember(fleet.runs) { fleet.runs.sortedByDescending { it.updatedAt ?: 0 } }
+    var section by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(if (selected is Dest.Environment) 2 else 0) }
     SpaceBackground(SpaceLevel.STANDARD) {
         LazyColumn(
             Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top)).testTag("runsList"),
@@ -100,47 +104,85 @@ fun RunsScreen(selected: Dest?, onOpen: (Dest) -> Unit) {
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             item("head") {
-                Column(Modifier.padding(top = 16.dp, bottom = 8.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Eyebrow("Operations", color = Kc.AccentText)
-                        Spacer(Modifier.weight(1f))
-                        ConnectionPill(status)
+                Text(
+                    "Runs",
+                    style = MaterialTheme.typography.displaySmall,
+                    color = Kc.Starlight,
+                    modifier = Modifier.padding(top = 28.dp, bottom = 12.dp).headingSemantics(),
+                )
+                Segmented(
+                    listOf("Runs" to runs.size, "Services" to fleet.services.size, "Environments" to fleet.environments.size),
+                    section,
+                ) { section = it }
+                Spacer(Modifier.height(6.dp))
+            }
+            val ws = fleet.workstation?.name ?: "your workstation"
+            when (section) {
+                0 -> {
+                    if (runs.isEmpty()) item("runs-empty") { EmptyState(Icons.Outlined.RocketLaunch, "No runs", "Builds, tests and deploys started on $ws appear here.") }
+                    items(runs, key = { "run:" + it.id }) { run ->
+                        RunCard(run, selected = selected == Dest.Run(run.id), modifier = Modifier.stale(!online)) { onOpen(Dest.Run(run.id)) }
                     }
-                    Spacer(Modifier.height(14.dp))
-                    Text("Runs", style = MaterialTheme.typography.displaySmall, color = Kc.Starlight, modifier = Modifier.headingSemantics())
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        "${runs.count { it.status == "running" }} running  ·  ${fleet.services.count { it.status == "running" }} services up  ·  ${fleet.environments.size} environments",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Kc.Nebula,
-                    )
                 }
-            }
-            item("runs-h") { SectionHeader("Runs", count = runs.size) }
-            if (runs.isEmpty()) item("runs-empty") { Text("No runs right now.", style = MaterialTheme.typography.bodyMedium, color = Kc.Nebula) }
-            items(runs, key = { "run:" + it.id }) { run ->
-                RunCard(run, selected = selected == Dest.Run(run.id), modifier = Modifier.stale(!online)) { onOpen(Dest.Run(run.id)) }
-            }
-            item("svc-h") { SectionHeader("Services", count = fleet.services.size, modifier = Modifier.padding(top = 8.dp)) }
-            if (fleet.services.isEmpty()) item("svc-empty") { Text("No services running.", style = MaterialTheme.typography.bodyMedium, color = Kc.Nebula) }
-            if (fleet.services.isNotEmpty()) {
-                item("services") {
-                    KcCard(Modifier.fillMaxWidth().stale(!online), padding = PaddingValues(vertical = 4.dp)) {
-                        fleet.services.forEachIndexed { i, svc ->
-                            ServiceRow(svc)
-                            if (i < fleet.services.lastIndex) {
-                                Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(1.dp).background(Kc.BorderSubtle))
+                1 -> {
+                    if (fleet.services.isEmpty()) {
+                        item("svc-empty") { EmptyState(Icons.Outlined.Dns, "No services", "Dev servers and background services started by KalCode appear here.") }
+                    } else {
+                        item("services") {
+                            KcCard(Modifier.fillMaxWidth().stale(!online), padding = PaddingValues(vertical = 4.dp)) {
+                                fleet.services.forEachIndexed { i, svc ->
+                                    ServiceRow(svc)
+                                    if (i < fleet.services.lastIndex) {
+                                        Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(1.dp).background(Kc.BorderSubtle))
+                                    }
+                                }
                             }
                         }
                     }
                 }
-            }
-            item("env-h") { SectionHeader("Environments", count = fleet.environments.size, modifier = Modifier.padding(top = 8.dp)) }
-            if (fleet.environments.isEmpty()) item("env-empty") { Text("No environments configured.", style = MaterialTheme.typography.bodyMedium, color = Kc.Nebula) }
-            items(fleet.environments, key = { "env:" + it.id }) { env ->
-                EnvironmentCard(env, selected = selected == Dest.Environment(env.id), modifier = Modifier.stale(!online)) { onOpen(Dest.Environment(env.id)) }
+                else -> {
+                    if (fleet.environments.isEmpty()) {
+                        item("env-empty") { EmptyState(Icons.Outlined.Cloud, "No environments", "Deploy targets connected in KalCode appear here with their health.") }
+                    }
+                    items(fleet.environments, key = { "env:" + it.id }) { env ->
+                        EnvironmentCard(env, selected = selected == Dest.Environment(env.id), modifier = Modifier.stale(!online)) { onOpen(Dest.Environment(env.id)) }
+                    }
+                }
             }
             item("inset") { Spacer(Modifier.windowInsetsBottomHeight(WindowInsets.navigationBars)) }
+        }
+    }
+}
+
+/** Runs · Services · Environments, as one segmented control. */
+@Composable
+private fun Segmented(options: List<Pair<String, Int>>, selected: Int, onSelect: (Int) -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(Kc.Surface1, androidx.compose.foundation.shape.RoundedCornerShape(14.dp))
+            .border(1.dp, Kc.Border, androidx.compose.foundation.shape.RoundedCornerShape(14.dp))
+            .padding(4.dp)
+            .testTag("segments"),
+    ) {
+        options.forEachIndexed { i, (label, count) ->
+            val on = i == selected
+            Row(
+                Modifier
+                    .weight(1f)
+                    .heightIn(min = 44.dp)
+                    .background(if (on) Kc.Surface3 else androidx.compose.ui.graphics.Color.Transparent, androidx.compose.foundation.shape.RoundedCornerShape(11.dp))
+                    .border(1.dp, if (on) Kc.BorderLitSoft else androidx.compose.ui.graphics.Color.Transparent, androidx.compose.foundation.shape.RoundedCornerShape(11.dp))
+                    .clickable(role = androidx.compose.ui.semantics.Role.Tab) { onSelect(i) }
+                    .semantics(mergeDescendants = true) { contentDescription = "$label, $count" + if (on) ", selected" else "" }
+                    .padding(horizontal = 6.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(label, style = MaterialTheme.typography.labelLarge, color = if (on) Kc.Starlight else Kc.TextSecondary, maxLines = 1, softWrap = false)
+                Spacer(Modifier.width(5.dp))
+                Text("$count", style = KcText.MonoSmall, color = if (on) Kc.AccentText else Kc.TextFaint)
+            }
         }
     }
 }

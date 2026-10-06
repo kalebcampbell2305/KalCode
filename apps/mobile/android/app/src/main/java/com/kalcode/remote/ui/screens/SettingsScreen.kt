@@ -64,7 +64,7 @@ import com.kalcode.remote.ui.theme.SpaceBackground
 import com.kalcode.remote.ui.theme.SpaceLevel
 
 @Composable
-fun SettingsScreen() {
+fun SettingsScreen(onBack: () -> Unit) {
     val client = LocalClient.current
     val context = LocalContext.current
     val haptics = rememberHaptics()
@@ -77,22 +77,21 @@ fun SettingsScreen() {
     val canNotify = remember(permissionTick) { Notifications.canPost(context) }
     val askNotifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { permissionTick++ }
 
+    val noun = com.kalcode.remote.ui.deviceNoun(context)
     SpaceBackground(SpaceLevel.QUIET) {
+      Column(Modifier.fillMaxSize()) {
+        DetailTopBar(title = "Settings", onBack = onBack)
         Column(
             Modifier
                 .fillMaxSize()
-                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp)
                 .testTag("settings"),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Column(Modifier.widthIn(max = 720.dp)) {
-                Spacer(Modifier.height(16.dp))
-                Eyebrow("KalCode Remote", color = Kc.AccentText)
-                Spacer(Modifier.height(12.dp))
-                Text("Settings", style = MaterialTheme.typography.displaySmall, color = Kc.Starlight, modifier = Modifier.headingSemantics())
-                Spacer(Modifier.height(20.dp))
+                Spacer(Modifier.height(4.dp))
 
                 SectionHeader("Workstation", trailing = { ConnectionPill(status) })
                 KcCard(Modifier.fillMaxWidth()) {
@@ -128,9 +127,9 @@ fun SettingsScreen() {
                         )
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
-                            Text(if (canNotify) "On" else "Off", style = MaterialTheme.typography.titleMedium, color = Kc.Starlight)
+                            Text(if (canNotify) "Notifications are on" else "Notifications are off", style = MaterialTheme.typography.titleMedium, color = Kc.Starlight)
                             Text(
-                                "Approvals, questions, failures and finished agents while KalCode Remote is open or recently used.",
+                                "KalCode notifies you only for decisions and outcomes — an agent needs you, failed or finished, a run failed, a deployment changed. Delivered while the app is connected.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = Kc.Nebula,
                             )
@@ -138,7 +137,7 @@ fun SettingsScreen() {
                     }
                     if (!canNotify) {
                         Spacer(Modifier.height(12.dp))
-                        SecondaryButton("Turn on notifications", {
+                        SecondaryButton("Enable", {
                             val asked = context.getSharedPreferences("ui", 0).getBoolean("askedNotify", false)
                             if (!asked) {
                                 context.getSharedPreferences("ui", 0).edit().putBoolean("askedNotify", true).apply()
@@ -157,13 +156,13 @@ fun SettingsScreen() {
                 SectionHeader("Security")
                 KcCard(Modifier.fillMaxWidth()) {
                     Text(
-                        "This device holds its own key in the Android Keystore and talks to your pinned workstation over an end-to-end encrypted Noise session. No provider credentials ever reach this phone. Approvals are Approve once or Deny only.",
+                        "End-to-end encrypted with Noise IK. Your workstation is the only server. This $noun's key lives in the Android Keystore; no provider credentials ever reach it.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = Kc.TextSecondary,
                     )
                     Spacer(Modifier.height(14.dp))
                     SecondaryButton(
-                        "Unpair this device",
+                        "Unpair this $noun",
                         { confirmUnpair = true },
                         icon = Icons.Outlined.LinkOff,
                         tone = Kc.FailedText,
@@ -176,22 +175,23 @@ fun SettingsScreen() {
                 KcCard(Modifier.fillMaxWidth()) {
                     InfoRow("Version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
                     InfoRow("Protocol", "KalCode Remote v1", mono = true)
-                    InfoRow("Fonts", "Lexend Deca, JetBrains Mono (SIL OFL 1.1)")
+                    Text("Fonts: Lexend Deca & JetBrains Mono — SIL OFL 1.1", style = MaterialTheme.typography.bodySmall, color = Kc.TextFaint, modifier = Modifier.padding(top = 6.dp))
                 }
                 Spacer(Modifier.height(24.dp))
                 Spacer(Modifier.windowInsetsBottomHeight(WindowInsets.navigationBars))
             }
         }
+      }
     }
 
     if (confirmUnpair) {
         AlertDialog(
             onDismissRequest = { confirmUnpair = false },
             containerColor = Kc.Overlay,
-            title = { Text("Unpair from ${ws?.name ?: "this workstation"}?") },
+            title = { Text("Unpair this $noun?") },
             text = {
                 Text(
-                    "This device forgets the workstation and deletes its key. To use Remote again, pair from a new code in KalCode on your desktop.",
+                    "This $noun stops seeing your agents right away. To use Remote again, pair from a new code.",
                     color = Kc.TextSecondary,
                 )
             },

@@ -208,15 +208,26 @@ fun Eyebrow(text: String, modifier: Modifier = Modifier, color: Color = Kc.Nebul
 }
 
 @Composable
-fun SectionHeader(title: String, modifier: Modifier = Modifier, count: Int? = null, trailing: (@Composable RowScope.() -> Unit)? = null) {
+fun SectionHeader(
+    title: String,
+    modifier: Modifier = Modifier,
+    count: Int? = null,
+    color: Color = Kc.TextSecondary,
+    trailing: (@Composable RowScope.() -> Unit)? = null,
+) {
     Row(
         modifier.fillMaxWidth().padding(top = 8.dp, bottom = 10.dp).semantics(mergeDescendants = true) {},
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Eyebrow(title, color = Kc.TextSecondary)
+        Eyebrow(title, color = color)
         if (count != null) {
             Spacer(Modifier.width(8.dp))
-            Text("$count", style = KcText.MonoSmall, color = Kc.TextFaint)
+            Text(
+                "$count",
+                style = KcText.MonoSmall,
+                color = color,
+                modifier = Modifier.background(color.copy(alpha = 0.14f), ChipShape).padding(horizontal = 7.dp, vertical = 1.dp),
+            )
         }
         Spacer(Modifier.weight(1f))
         trailing?.invoke(this)

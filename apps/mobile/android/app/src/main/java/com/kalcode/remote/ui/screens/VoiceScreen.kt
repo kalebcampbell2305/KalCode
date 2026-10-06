@@ -40,7 +40,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -143,6 +142,11 @@ fun VoiceScreen() {
     var partial by remember { mutableStateOf("") }
     var speechNote by remember { mutableStateOf<String?>(null) }
     val canSend = status == ConnectionStatus.Online || status is ConnectionStatus.Reconnecting
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    // Bring the newest exchange into view (it sits under the orb header).
+    androidx.compose.runtime.LaunchedEffect(VoiceLog.entries.size) {
+        if (VoiceLog.entries.isNotEmpty()) listState.animateScrollToItem(1)
+    }
 
     fun run(command: String) {
         val text = command.trim()
@@ -204,7 +208,8 @@ fun VoiceScreen() {
     SpaceBackground(SpaceLevel.CINEMATIC) {
         Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top)).imePadding()) {
             LazyColumn(
-                Modifier.weight(1f).fillMaxWidth().testTag("voice"),
+                state = listState,
+                modifier = Modifier.weight(1f).fillMaxWidth().testTag("voice"),
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -220,36 +225,24 @@ fun VoiceScreen() {
                             ConnectionPill(status)
                         }
                         Spacer(Modifier.height(8.dp))
-                        Orb(listening, reduced, onClick = ::toggleMic)
+                        Orb(listening, reduced)
                         Text(
-                            if (listening) "Listening…" else "Talk to your workstation",
+                            if (listening) "Listening…" else "What should your agents do?",
                             style = MaterialTheme.typography.headlineSmall,
                             color = Kc.Starlight,
                             modifier = Modifier.headingSemantics(),
                         )
                         Spacer(Modifier.height(6.dp))
                         Text(
-                            partial.ifBlank { speechNote ?: "Ask what needs you, tell an agent what to do, or tidy up. Same rules as KalVoice on your desktop." },
+                            partial.ifBlank { speechNote ?: "Ask for status, steer an agent, approve, launch or tidy up — the same commands as KalVoice on ${client.workstation.value?.name ?: "your workstation"}." },
                             style = MaterialTheme.typography.bodyMedium,
                             color = if (speechNote != null && partial.isBlank()) Kc.WaitingText else Kc.Nebula,
                             textAlign = TextAlign.Center,
                             modifier = Modifier.widthIn(max = 420.dp).semantics { liveRegion = LiveRegionMode.Polite },
                         )
-                        Spacer(Modifier.height(16.dp))
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            items(listOf("What needs me?", "Status of all agents", "Close idle agents")) { s ->
-                                Text(
-                                    s,
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = Kc.TextSecondary,
-                                    modifier = Modifier
-                                        .background(Kc.Surface2, ChipShape)
-                                        .border(1.dp, Kc.Border, ChipShape)
-                                        .clickable(enabled = canSend, role = Role.Button) { run(s) }
-                                        .padding(horizontal = 14.dp, vertical = 9.dp),
-                                )
-                            }
-                        }
+                        Spacer(Modifier.height(22.dp))
+                        MicButton(listening, onClick = ::toggleMic)
+                        Spacer(Modifier.height(8.dp))
                     }
                 }
                 if (VoiceLog.entries.isNotEmpty()) {
@@ -269,7 +262,7 @@ fun VoiceScreen() {
                     value = typed,
                     onValueChange = { if (it.length <= 4_000) typed = it },
                     modifier = Modifier.weight(1f).heightIn(min = 52.dp).testTag("voiceField"),
-                    placeholder = { Text("Type a command") },
+                    placeholder = { Text("Or type a command…") },
                     singleLine = true,
                     enabled = canSend,
                     shape = ControlShape,
@@ -302,7 +295,7 @@ fun VoiceScreen() {
 }
 
 @Composable
-private fun Orb(listening: Boolean, reduced: Boolean, onClick: () -> Unit) {
+private fun Orb(listening: Boolean, reduced: Boolean) {
     val scale = if (listening && !reduced) {
         val t = rememberInfiniteTransition(label = "orb")
         val s by t.animateFloat(0.96f, 1.04f, infiniteRepeatable(tween(1400), RepeatMode.Reverse), label = "breathe")
@@ -313,7 +306,7 @@ private fun Orb(listening: Boolean, reduced: Boolean, onClick: () -> Unit) {
     Box(
         Modifier
             .padding(vertical = 8.dp)
-            .size(220.dp)
+            .size(232.dp)
             .drawBehind {
                 drawCircle(
                     Brush.radialGradient(
@@ -328,19 +321,26 @@ private fun Orb(listening: Boolean, reduced: Boolean, onClick: () -> Unit) {
         Image(
             painterResource(R.drawable.kalvoice_orb),
             contentDescription = null,
-            modifier = Modifier.size(170.dp).graphicsLayer { scaleX = scale; scaleY = scale },
+            modifier = Modifier.size(196.dp).graphicsLayer { scaleX = scale; scaleY = scale },
         )
+    }
+}
+
+@Composable
+private fun MicButton(listening: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier.size(96.dp).border(1.dp, Kc.BorderLitSoft, CircleShape).padding(8.dp),
+        contentAlignment = Alignment.Center,
+    ) {
         IconButton(
             onClick = onClick,
             modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .size(64.dp)
+                .fillMaxSize()
                 .background(if (listening) Kc.Failed else Kc.Constellation, CircleShape)
-                .border(4.dp, Kc.Graphite, CircleShape)
                 .testTag("mic")
                 .semantics { contentDescription = if (listening) "Stop listening" else "Speak a command" },
         ) {
-            Icon(if (listening) Icons.Outlined.Stop else Icons.Outlined.Mic, contentDescription = null, tint = Kc.AccentFg, modifier = Modifier.size(28.dp))
+            Icon(if (listening) Icons.Outlined.Stop else Icons.Outlined.Mic, contentDescription = null, tint = Kc.AccentFg, modifier = Modifier.size(30.dp))
         }
     }
 }
