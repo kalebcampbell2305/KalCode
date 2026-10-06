@@ -185,6 +185,18 @@ public final class RemoteClient {
         if case .removed = status { status = .unpaired }
     }
 
+    #if DEBUG
+    /// Development only (never in Release): render a fixture without a workstation, for
+    /// design review in the simulator. Requests still fail with `notConnected`.
+    public func debugLoad(fleet: FleetState, status: ConnectionStatus, workstation: PairedWorkstation?) {
+        stopLoop()
+        self.fleet = fleet
+        self.status = status
+        self.workstation = workstation
+        lastUpdate = env.now()
+    }
+    #endif
+
     // MARK: Requests
 
     /// Runs an operation (protocol §5) and decodes its `result`.
