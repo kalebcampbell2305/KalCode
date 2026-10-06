@@ -67,6 +67,9 @@ pub struct AccountUsageSnapshot {
 
 /// `degraded_reason` of a signed-out snapshot whose session expired or was rejected (401).
 pub const SESSION_EXPIRED_REASON: &str = "session_expired";
+/// `degraded_reason` when the OS credential store could not be read at startup (locked
+/// keychain, denied access prompt). The saved session is kept; bootstrapping again retries.
+pub const SECURE_STORE_UNAVAILABLE_REASON: &str = "secure_store_unavailable";
 
 /// The complete account value available to the WebView. Secret-bearing types below deliberately
 /// do not implement `Serialize`.

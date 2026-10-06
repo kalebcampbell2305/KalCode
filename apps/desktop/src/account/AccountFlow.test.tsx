@@ -284,6 +284,7 @@ describe("account onboarding integration", () => {
     };
     const client: AccountOperations = {
       status: vi.fn(async () => signedOut),
+      bootstrap: vi.fn(async () => signedOut),
       runtimeStatus: vi.fn<() => Promise<RuntimeStatus>>(async () => ({ phase: "signed_out", ready: false })),
       retryRuntime: vi.fn(async () => undefined),
       startEmail: vi.fn(async () => {

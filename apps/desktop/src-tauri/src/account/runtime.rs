@@ -17,7 +17,7 @@ use super::api::{
 };
 use super::model::{
     AccountAuthority, AccountPhase, AccountSnapshot, AccountTier, AccountUsageSnapshot,
-    PendingAuthSecret, PublicAccount, SessionSecret,
+    PendingAuthSecret, PublicAccount, SECURE_STORE_UNAVAILABLE_REASON, SessionSecret,
 };
 use super::session_store::{
     AccountSessionStore, CachedAccountSecret, PendingCheckoutSecret, SessionStoreError,
@@ -386,7 +386,10 @@ impl AccountRuntime {
             return Ok(self.snapshot());
         }
         let result = self.bootstrap_once();
-        if result.is_err() {
+        // An unreadable credential store did not restore anything: a later bootstrap may retry.
+        if result.as_ref().map_or(true, |snapshot| {
+            snapshot.degraded_reason.as_deref() == Some(SECURE_STORE_UNAVAILABLE_REASON)
+        }) {
             self.bootstrap_started.store(false, Ordering::SeqCst);
         }
         result
@@ -399,7 +402,12 @@ impl AccountRuntime {
         let generation = self.advance_generation();
         let stored = match self.session_store()?.load() {
             Ok(value) => value,
-            Err(_) => {
+            // A locked keychain, a denied access prompt or a transient Credential Manager error
+            // says nothing about the saved session: keep it and let a later bootstrap read it.
+            Err(SessionStoreError::Backend) => {
+                return Ok(self.publish_degraded(generation, SECURE_STORE_UNAVAILABLE_REASON));
+            }
+            Err(SessionStoreError::Corrupt) => {
                 let _ = self.session_store()?.clear();
                 return Ok(self.publish_degraded(generation, "stored_session_invalid"));
             }

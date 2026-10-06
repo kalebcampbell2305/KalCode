@@ -150,6 +150,9 @@ export function createAccountMemory(scenario: AccountMemoryScenario) {
   });
 
   const handlers: Record<AccountCommandName, AccountMemoryHandler> = {
+    async account_bootstrap() {
+      return snapshot;
+    },
     async account_status() {
       return snapshot;
     },
