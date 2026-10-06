@@ -1,52 +1,71 @@
 /*
- * The Command Deck frame: the top bar (workspace, branch, environment, mode, command) above the
- * deck body, which runs to the bottom edge of the window.
+ * The window's backdrop: the deep-space atmosphere, blue washes on graphite. The star and nebula
+ * planes are two static layers (.atmosphere) whose strength follows the surface's space level
+ * ([data-space]); panels are opaque on top, so the atmosphere only shows in open space (tokens.css
+ * turns it off in high contrast and keeps light theme to the wash). No animation loop: a level
+ * change is one fade.
  */
-.frame {
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
-  height: 100%;
-  /* The deep-space atmosphere: blue washes on graphite. The star and nebula planes are two static
-     layers below whose strength follows the surface's space level ([data-space]); panels are
-     opaque on top, so the atmosphere only shows in open space (tokens.css turns it off in high
-     contrast and keeps light theme to the wash). No animation loop: a level change is one fade. */
+.space {
   position: relative;
   isolation: isolate;
+  height: 100%;
   background: var(--atmosphere-glow), var(--color-bg);
   --space-stars: var(--space-standard-stars);
   --space-nebula: var(--space-standard-nebula);
 }
 
-.frame[data-space="quiet"] {
+.space[data-space="quiet"] {
   --space-stars: var(--space-quiet-stars);
   --space-nebula: var(--space-quiet-nebula);
 }
 
-.frame[data-space="cinematic"] {
+.space[data-space="cinematic"] {
   --space-stars: var(--space-cinematic-stars);
   --space-nebula: var(--space-cinematic-nebula);
 }
 
-.frame::before,
-.frame::after {
-  content: "";
+/*
+ * The Command Deck frame: the top bar (workspace, branch, environment, mode, command) above the
+ * deck body, which runs to the bottom edge of the window. Transparent over the backdrop.
+ */
+.frame {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  height: 100%;
+  position: relative;
+  isolation: isolate;
+}
+
+/* The atmosphere layer (Shell.tsx): an aria-hidden element behind the frame, holding the two
+   planes. Real elements rather than ::before/::after on the frame, so axe's colour-contrast check
+   still evaluates the text above it (a large absolute pseudo-element in a text node's ancestry
+   makes axe report "incomplete" for every node in the shell). A sibling before the frame, not its
+   child: axe 4.13 stacks a z-index -1 child above in-flow text of the same stacking context
+   (bgOverlap), while a later sibling's stacking context always paints, and sorts, above it. */
+.atmosphere {
   position: absolute;
   inset: 0;
   z-index: -1;
   pointer-events: none;
+}
+
+.stars,
+.nebula {
+  position: absolute;
+  inset: 0;
   transition: opacity var(--dur-slow) var(--ease-out);
 }
 
 /* Near and far star planes. */
-.frame::before {
+.stars {
   background:
     var(--atmosphere-stars) 0 0 / var(--atmosphere-stars-size),
     var(--atmosphere-stars-far) 180px 90px / var(--atmosphere-stars-far-size);
   opacity: var(--space-stars);
 }
 
-/* The nebula. */
-.frame::after {
+/* The nebula, painted over the stars. */
+.nebula {
   background: var(--atmosphere-nebula);
   opacity: var(--space-nebula);
 }

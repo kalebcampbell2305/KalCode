@@ -41,9 +41,13 @@
   box-shadow: var(--glow-active), var(--lift-active);
 }
 
+/* The rail and the top edge are aria-hidden elements (AgentCard.tsx: .rail first, .horizon last,
+   the paint order of the ::before/::after they replace), never pseudo-elements: axe's
+   colour-contrast check reports "incomplete" for every text node under an absolute pseudo-element
+   with a background, so the card's text went unchecked. */
+
 /* The tone-lit top edge: the tile's state read from across the bridge. */
-.card::after {
-  content: "";
+.card > .horizon {
   position: absolute;
   top: 0;
   left: 12%;
@@ -54,7 +58,7 @@
   pointer-events: none;
 }
 
-.card[data-tone="muted"]::after {
+.card[data-tone="muted"] > .horizon {
   opacity: 0;
 }
 
@@ -63,8 +67,7 @@
 }
 
 /* Status rail along the left edge. */
-.card::before {
-  content: "";
+.card > .rail {
   position: absolute;
   top: 10px;
   bottom: 10px;
@@ -112,7 +115,7 @@
   --tone-soft: var(--status-muted-soft);
   --tone-text: var(--color-text-muted);
 }
-.card[data-tone="muted"]::before {
+.card[data-tone="muted"] > .rail {
   box-shadow: none;
   opacity: 0.6;
 }
@@ -138,8 +141,8 @@
 }
 
 /* WORKING breathes softly; a state that changes on screen flashes once. */
-.card[data-tone="working"]::before,
-.card[data-tone="recovering"]::before {
+.card[data-tone="working"] > .rail,
+.card[data-tone="recovering"] > .rail {
   animation: breathe var(--dur-pulse) var(--ease-in-out) infinite;
 }
 
@@ -181,7 +184,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  :root:not([data-motion="full"]) .card::before,
+  :root:not([data-motion="full"]) .card > .rail,
   :root:not([data-motion="full"]) .signal::after,
   :root:not([data-motion="full"]) .state {
     animation: none;
@@ -189,7 +192,7 @@
 }
 
 /* :root keeps the app's Reduced motion setting above the tone rules that start the animations. */
-:root[data-motion="reduced"] .card::before,
+:root[data-motion="reduced"] .card > .rail,
 :root[data-motion="reduced"] .signal::after,
 :root[data-motion="reduced"] .state {
   animation: none;

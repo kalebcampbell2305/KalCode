@@ -17,8 +17,10 @@
   box-shadow: var(--shadow-panel);
 }
 
-.prompt::before {
-  content: "";
+/* The rail: an aria-hidden element (PermissionPrompt.tsx, first child), not ::before, so axe's
+   colour-contrast check evaluates the prompt's text (it reports "incomplete" for text under an
+   absolute pseudo-element with a background). */
+.prompt > .rail {
   position: absolute;
   left: 0;
   top: 0;

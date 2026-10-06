@@ -1,5 +1,5 @@
-import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
+import { expectNoSeriousA11yViolations } from "./a11y.ts";
 import { goTo } from "./nav.ts";
 
 /** Opens Providers (Accounts is its default tab), then Setup unless another tab is named. */
@@ -10,19 +10,6 @@ async function openProviders(page: Page, scenario?: string, tab: "Setup" | "Acco
   await expect(page.getByRole("heading", { level: 1, name: "Providers" })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Accounts" })).toHaveAttribute("aria-selected", "true");
   if (tab === "Setup") await page.getByRole("tab", { name: "Setup" }).click();
-}
-
-async function expectNoSeriousA11yViolations(page: Page) {
-  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze();
-  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
-  expect(
-    serious,
-    JSON.stringify(
-      serious.map((v) => ({ id: v.id, nodes: v.nodes.map((n) => n.target) })),
-      null,
-      2,
-    ),
-  ).toEqual([]);
 }
 
 const section = (page: Page, name: string) => page.getByRole("region", { name, exact: true });

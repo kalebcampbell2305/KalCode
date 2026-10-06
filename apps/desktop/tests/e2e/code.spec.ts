@@ -184,8 +184,9 @@ test("open a folder, run commands in real shells, restart KalCode, restore and r
     await page.keyboard.press("Control+Shift+E"); // leave the terminal so Ctrl+B reaches KalCode
     await page.keyboard.press("Control+B");
     await expect(page.getByRole("button", { name: "Expand sidebar" })).toBeVisible();
-    await page.waitForTimeout(500); // fit, then the debounced resize reaches ConPTY
-    expect(await columns()).toBeGreaterThan(narrow);
+    // Fit, then the debounced resize reaches ConPTY: poll for it rather than sleeping a fixed time,
+    // which lost the race on a loaded gate machine (gate 37413248990).
+    await expect.poll(columns, { timeout: 20_000 }).toBeGreaterThan(narrow);
     await page.getByRole("button", { name: "Expand sidebar" }).click();
 
     // Reloading the page drops its attachments natively; the new page re-attaches and the

@@ -29,8 +29,9 @@
   position: relative;
 }
 
-.hero::after {
-  content: "";
+/* An aria-hidden element (last in the hero), not ::after: axe's colour-contrast check reports
+   "incomplete" for any text under an absolute pseudo-element with a background. */
+.heroRule {
   position: absolute;
   left: 0;
   bottom: -1px;

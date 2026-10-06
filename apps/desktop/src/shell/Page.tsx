@@ -24,6 +24,7 @@ export function Page({ title, description, actions, children, width = "default" 
           {description ? <p className={styles.description}>{description}</p> : null}
         </div>
         {actions ? <div className={styles.actions}>{actions}</div> : null}
+        <span className={styles.rule} aria-hidden="true" />
       </header>
       {children}
     </div>

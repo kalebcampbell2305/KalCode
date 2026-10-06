@@ -40,6 +40,9 @@ export function EmptyState({
   const Heading = `h${headingLevel}` as const;
   return (
     <div className={cx(styles.empty, framed && styles.framed, className)} data-align={align}>
+      {/* The well's lit top edge: an inert element, not ::before (see States.module.css). Pages
+          restyle it through [data-empty-edge]. */}
+      {framed ? <span className={styles.edge} data-empty-edge="" aria-hidden="true" /> : null}
       {art ? (
         <div className={cx(styles.art, artStyle === "tile" && styles.tile)} aria-hidden="true">
           {art}

@@ -1,5 +1,5 @@
-import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
+import { expectNoSeriousA11yViolations } from "./a11y.ts";
 import { goTo, needsYouButton } from "./nav.ts";
 
 /**
@@ -33,19 +33,6 @@ const cards = (page: Page) => board(page).getByRole("article");
 const chips = (page: Page) => page.getByRole("group", { name: "Filter agents" });
 const chip = (page: Page, label: string) => chips(page).getByRole("button", { name: new RegExp(`^${label}, \\d+$`) });
 const dock = (page: Page) => page.getByRole("complementary", { name: "Widgets" });
-
-async function expectNoSeriousA11yViolations(page: Page) {
-  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze();
-  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
-  expect(
-    serious,
-    JSON.stringify(
-      serious.map((v) => ({ id: v.id, nodes: v.nodes.map((n) => n.target) })),
-      null,
-      2,
-    ),
-  ).toEqual([]);
-}
 
 async function setTheme(page: Page, theme: "light" | "dark") {
   await page.getByRole("button", { name: "Settings", exact: true }).click();

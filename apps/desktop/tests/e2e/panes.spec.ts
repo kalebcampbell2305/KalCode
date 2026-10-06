@@ -163,7 +163,8 @@ test("a pane layout is saved per workspace and restored after a graceful quit an
     await expect(divider(page)).toHaveAttribute("aria-valuenow", arrangedRatio ?? "");
 
     // The reopened slot, provider pane and collapsed shell are the graceful-restart layout.
-    await page.waitForTimeout(1200); // debounced save
+    // The debounced save lands before quitting: poll the stored layout instead of a fixed wait.
+    await expect.poll(() => storedLayout(dataDir).panes, { timeout: 20_000 }).toBe(3);
     await closeGracefully(app);
 
     const stored = storedLayout(dataDir);
@@ -195,7 +196,8 @@ test("a pane layout is saved per workspace and restored after a graceful quit an
     // A change, then a forced kill: the layout saved after the change is what comes back.
     await page.keyboard.press("Control+Alt+2");
     await expect(panes(page)).toHaveCount(2);
-    await page.waitForTimeout(1500);
+    // The forced kill must come after the debounced save of this change, however long it takes.
+    await expect.poll(() => storedLayout(dataDir).panes, { timeout: 20_000 }).toBe(2);
     await killForcibly(app);
     expect(storedLayout(dataDir).panes).toBe(2);
 

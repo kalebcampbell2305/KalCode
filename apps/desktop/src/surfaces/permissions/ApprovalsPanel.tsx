@@ -23,6 +23,8 @@ export function ApprovalsPanel() {
             panelReturnFocus();
           }}
         >
+          {/* The lit edge on an inert element, not ::before (see ApprovalsPanel.module.css). */}
+          <span className={styles.edge} aria-hidden="true" />
           <header className={styles.header}>
             <div>
               <Dialog.Title className={styles.title}>Approvals</Dialog.Title>

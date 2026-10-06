@@ -1,6 +1,6 @@
 import { mkdirSync } from "node:fs";
-import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
+import { expectNoSeriousA11yViolations } from "./a11y.ts";
 import { goTo } from "./nav.ts";
 
 /**
@@ -27,19 +27,6 @@ async function open(page: Page, scenario: string, theme: "dark" | "light") {
 
 /** Opens a place from the sidebar (Code and Activity directly, other surfaces through More). */
 const nav = (page: Page, name: string) => goTo(page, name);
-
-async function expectAxeClean(page: Page, where: string) {
-  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze();
-  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
-  expect(
-    serious,
-    `${where}: ${JSON.stringify(
-      serious.map((v) => ({ id: v.id, nodes: v.nodes.map((n) => n.target) })),
-      null,
-      2,
-    )}`,
-  ).toEqual([]);
-}
 
 type Scene = { name: string; run: (page: Page, theme: "dark" | "light") => Promise<void> };
 
@@ -135,16 +122,18 @@ const SCENES: Scene[] = [
   },
 ];
 
+// One test per scene, never one test looping all ten: each scene is a fresh boot plus a full axe
+// scan (contrast on every text node), so ten in one budget ran 1.3-2.2 min on a loaded gate and
+// timed out in whichever scan crossed 120 s, on both gate machines.
 test.describe("Z7-W0 design system accessibility", () => {
   for (const theme of ["dark", "light"] as const) {
-    test(`every restyled surface passes axe in ${theme} theme`, async ({ page }) => {
-      test.setTimeout(120_000);
-      await page.setViewportSize({ width: 1440, height: 900 });
-      for (const scene of SCENES) {
+    for (const scene of SCENES) {
+      test(`${scene.name} passes axe in ${theme} theme`, async ({ page }) => {
+        await page.setViewportSize({ width: 1440, height: 900 });
         await scene.run(page, theme);
-        await expectAxeClean(page, `${scene.name} (${theme})`);
-      }
-    });
+        await expectNoSeriousA11yViolations(page, `${scene.name} (${theme})`);
+      });
+    }
   }
 });
 
@@ -192,27 +181,26 @@ test.describe("appearance modes", () => {
     await expect(page.locator("html")).toHaveAttribute("data-contrast", "more");
   });
 
+  // Per scene, like the theme checks above.
   for (const theme of ["dark", "light"] as const) {
-    test(`every restyled surface passes axe in ${theme} high contrast`, async ({ page }) => {
-      test.setTimeout(120_000);
-      await page.setViewportSize({ width: 1440, height: 900 });
-      for (const scene of SCENES) {
+    for (const scene of SCENES) {
+      test(`${scene.name} passes axe in ${theme} high contrast`, async ({ page }) => {
+        await page.setViewportSize({ width: 1440, height: 900 });
         await scene.run(page, theme);
         await mode(page, { contrast: "more" });
-        await expectAxeClean(page, `${scene.name} (${theme}, high contrast)`);
-      }
-    });
+        await expectNoSeriousA11yViolations(page, `${scene.name} (${theme}, high contrast)`);
+      });
+    }
   }
 
-  test("every restyled surface passes axe at the larger text size", async ({ page }) => {
-    test.setTimeout(120_000);
-    await page.setViewportSize({ width: 1440, height: 900 });
-    for (const scene of SCENES) {
+  for (const scene of SCENES) {
+    test(`${scene.name} passes axe at the larger text size`, async ({ page }) => {
+      await page.setViewportSize({ width: 1440, height: 900 });
       await scene.run(page, "dark");
       await mode(page, { textSize: "larger" });
-      await expectAxeClean(page, `${scene.name} (larger text)`);
-    }
-  });
+      await expectNoSeriousA11yViolations(page, `${scene.name} (larger text)`);
+    });
+  }
 });
 
 const SIZES = [

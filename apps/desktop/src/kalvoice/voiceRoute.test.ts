@@ -91,6 +91,21 @@ describe("routeVoice", () => {
     expect(document.querySelector(`[${VOICE_TARGET_ATTR}]`)).toBeNull();
   });
 
+  it("stops quietly when the document is gone before a retry runs", () => {
+    vi.useFakeTimers();
+    const heard = vi.fn();
+    window.addEventListener(VOICE_ROUTE_EVENT, heard);
+    routeVoice("surface");
+    vi.stubGlobal("document", undefined);
+    try {
+      expect(() => vi.advanceTimersByTime(1_000)).not.toThrow();
+    } finally {
+      vi.unstubAllGlobals();
+      window.removeEventListener(VOICE_ROUTE_EVENT, heard);
+    }
+    expect(heard).not.toHaveBeenCalled();
+  });
+
   it("relights rather than stacking timers when routed twice", () => {
     vi.useFakeTimers();
     const el = document.getElementById("code") as HTMLElement;

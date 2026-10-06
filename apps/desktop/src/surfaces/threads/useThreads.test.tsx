@@ -165,3 +165,52 @@ describe("thread list contents", () => {
     expect(result.current.entries.map((entry) => entry.thread.id)).toEqual(["chat"]);
   });
 });
+
+describe("earlier thread messages", () => {
+  const message = (n: number) => ({ id: `m-${String(n).padStart(4, "0")}`, role: "user", content: `${n}` });
+  const range = (from: number, to: number) => Array.from({ length: to - from }, (_, i) => message(from + i));
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    runtime.events = [];
+    runtime.client = client();
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("offers earlier messages only after a full page and prepends them by cursor", async () => {
+    const api = runtime.client as ReturnType<typeof client>;
+    api.threadMessages.mockImplementation(async (_id: string, _limit: number, before?: string) =>
+      before === "m-0200" ? range(50, 200) : range(200, 400),
+    );
+    const { result } = renderHook(() => useThreadDetail("thread-a"));
+    await flush();
+    expect(result.current.messages).toHaveLength(200);
+    expect(result.current.hasEarlier).toBe(true);
+
+    await act(async () => {
+      expect(await result.current.loadEarlier()).toBe(true);
+    });
+    expect(api.threadMessages).toHaveBeenLastCalledWith("thread-a", 200, "m-0200");
+    expect(result.current.messages.map((m) => m.id)).toEqual(range(50, 400).map((m) => m.id));
+    // A short page is the start of the thread.
+    expect(result.current.hasEarlier).toBe(false);
+
+    // A refresh after new messages keeps the earlier pages and leaves no gap.
+    api.threadMessages.mockResolvedValue(range(205, 405));
+    await act(async () => result.current.reload());
+    expect(result.current.messages.map((m) => m.id)).toEqual(range(50, 405).map((m) => m.id));
+  });
+
+  it("hides the control for a short thread and reports a failed page", async () => {
+    const api = runtime.client as ReturnType<typeof client>;
+    api.threadMessages.mockResolvedValue(range(0, 3));
+    const { result } = renderHook(() => useThreadDetail("thread-a"));
+    await flush();
+    expect(result.current.hasEarlier).toBe(false);
+    api.threadMessages.mockRejectedValue(new Error("offline"));
+    await act(async () => {
+      expect(await result.current.loadEarlier()).toBe(false);
+    });
+    expect(result.current.messages).toHaveLength(3);
+  });
+});

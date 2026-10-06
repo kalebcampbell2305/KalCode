@@ -43,13 +43,14 @@
     var(--empty-well-bg);
 }
 
-/* A blue-lit hairline along the top edge: the one accent a quiet state carries. */
-.framed::before {
+/* A blue-lit hairline along the top edge: the one accent a quiet state carries. An aria-hidden
+   element (States.tsx, first child), not ::before: axe's colour-contrast check reports
+   "incomplete" for every text node under an absolute pseudo-element with a background. */
+.framed > .edge {
   position: absolute;
   inset: 0 0 auto;
   height: 1px;
   background: linear-gradient(90deg, transparent, var(--color-border-lit-soft) 30%, transparent 85%);
-  content: "";
   pointer-events: none;
 }
 
@@ -62,7 +63,7 @@
     var(--empty-well-bg);
 }
 
-.framed[data-align="center"]::before {
+.framed[data-align="center"] > .edge {
   background: linear-gradient(90deg, transparent 15%, var(--color-border-lit-soft) 50%, transparent 85%);
 }
 

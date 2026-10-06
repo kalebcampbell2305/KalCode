@@ -131,6 +131,8 @@ export function KalVoicePage() {
       }
     >
       <figure className={styles.hero}>
+        {/* Lit edges on inert elements, not pseudo-elements (see KalVoicePage.module.css). */}
+        <span className={styles.heroEdge} aria-hidden="true" />
         <Orb phase={state.phase} levelRef={levelRef} size={120} />
         <figcaption className={styles.heroText}>
           <KalVoiceWordmark className={styles.heroWordmark} />
@@ -158,6 +160,7 @@ export function KalVoicePage() {
         {status ? (
           <ul className={styles.tiles}>
             <li className={styles.tile}>
+              <span className={styles.tileEdge} aria-hidden="true" />
               <p className={styles.tileTitle}>Push to talk</p>
               {dictation ? <Badge tone={dictation.tone}>{dictation.label}</Badge> : null}
               <p className={styles.tileDetail}>{dictation?.detail}</p>
@@ -174,6 +177,7 @@ export function KalVoicePage() {
               ) : null}
             </li>
             <li className={styles.tile}>
+              <span className={styles.tileEdge} aria-hidden="true" />
               <p className={styles.tileTitle}>Commands</p>
               <Badge tone="success">Available</Badge>
               <p className={styles.tileDetail}>
@@ -184,6 +188,7 @@ export function KalVoicePage() {
               <p className={styles.tileMeta}>Dictation is never counted</p>
             </li>
             <li className={styles.tile}>
+              <span className={styles.tileEdge} aria-hidden="true" />
               <p className={styles.tileTitle}>Intelligence</p>
               {intelligence ? <Badge tone={intelligence.tone}>{intelligence.label}</Badge> : null}
               <p className={styles.tileDetail}>{retryError ?? intelligence?.detail}</p>
@@ -198,6 +203,7 @@ export function KalVoicePage() {
               ) : null}
             </li>
             <li className={styles.tile}>
+              <span className={styles.tileEdge} aria-hidden="true" />
               <p className={styles.tileTitle}>This month</p>
               {limitReached(status.usage) ? <Badge tone="waiting">Limit reached</Badge> : null}
               <p className={styles.tileFigure}>

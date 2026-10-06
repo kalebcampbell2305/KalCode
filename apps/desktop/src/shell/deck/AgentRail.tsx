@@ -311,6 +311,8 @@ function AgentRow({
         onClick={() => onOpen(thread)}
         aria-label={`${thread.name}, ${label}, ${thread.providerName} in ${thread.workspaceName}. Open agent`}
       >
+        {/* The warm edge on an inert element, not ::before (see AgentRail.module.css). */}
+        {state === "needs_you" ? <span className={styles.attentionEdge} aria-hidden="true" /> : null}
         <span className={styles.rowGlyph} aria-hidden="true">
           <ProviderGlyph provider={thread.providerId} size="sm" />
           <span className={styles.rowDot} data-pulse={live || undefined} />

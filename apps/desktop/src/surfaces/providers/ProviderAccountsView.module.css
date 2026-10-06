@@ -344,6 +344,17 @@
   white-space: nowrap;
 }
 
+/* Why there is no number can be a sentence ("Usage appears after the first agent run"): let it
+   wrap to two lines instead of cutting it off mid-word. */
+.cellUsage > .sub {
+  display: -webkit-box;
+  white-space: normal;
+  text-wrap: pretty;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
 .sub[data-tone="stale"] {
   color: var(--status-waiting-text);
 }
