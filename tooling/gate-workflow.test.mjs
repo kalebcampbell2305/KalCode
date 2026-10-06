@@ -295,7 +295,8 @@ test("the gate split runs every selected check exactly once across the three job
   for (const id of ["rust", "desktop-native-e2e", "cargo-deny", "cargo-audit"])
     assert.ok(native.includes(id), `${id} runs in the build PC's native job`);
   // The desktop readers run in the build PC's main job, in parallel with the native chain.
-  for (const id of ["desktop-frontend", "desktop-ui"]) assert.ok(main.includes(id), `${id} stays in the build PC's main job`);
+  for (const id of ["desktop-frontend", "desktop-ui"])
+    assert.ok(main.includes(id), `${id} stays in the build PC's main job`);
   assert.deepEqual(
     splitGateIds(["a-check-added-later"]).main,
     ["a-check-added-later"],
@@ -319,12 +320,19 @@ test("the gate split runs every selected check exactly once across the three job
 
 test("the build PC's gate runs as two matrix jobs that never cancel each other", () => {
   const header = windows.split(/\n {4}steps:/)[0];
-  assert.match(header, /name: \$\{\{ matrix\.half == 'native' && 'Gate \(Windows, native\)' \|\| 'Gate \(Windows\)' \}\}/);
+  assert.match(
+    header,
+    /name: \$\{\{ matrix\.half == 'native' && 'Gate \(Windows, native\)' \|\| 'Gate \(Windows\)' \}\}/,
+  );
   assert.match(header, /fail-fast: false/);
   assert.match(header, /half: \[main, native\]/);
   const plan = script(steps.find((step) => step.startsWith("name: Plan change-based gate")));
   assert.match(plan, /gate-split\.mjs \$env:GATE_HALF/);
   assert.match(plan, /Unknown build-PC gate half/);
   const evidence = steps.find((step) => step.startsWith("name: Preserve exact candidate evidence"));
-  assert.match(evidence, /gate-evidence-\$\{\{ matrix\.half == 'native' && 'native-' \|\| '' \}\}/, "distinct artifact per job");
+  assert.match(
+    evidence,
+    /gate-evidence-\$\{\{ matrix\.half == 'native' && 'native-' \|\| '' \}\}/,
+    "distinct artifact per job",
+  );
 });

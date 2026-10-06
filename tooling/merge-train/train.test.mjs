@@ -938,7 +938,10 @@ describe("merge train pieces", () => {
       "stale",
     );
     assert.equal(state(native, pc2), "pending", "the native job never satisfies the main job");
-    assert.equal(state({ ...main, conclusion: "failure" }, native, { ...pc2, status: "queued", conclusion: null }), "failure");
+    assert.equal(
+      state({ ...main, conclusion: "failure" }, native, { ...pc2, status: "queued", conclusion: null }),
+      "failure",
+    );
   });
 
   test("the canonical registry includes exactly the original worker and five additional slots", () => {

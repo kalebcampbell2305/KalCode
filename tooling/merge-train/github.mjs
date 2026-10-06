@@ -114,12 +114,14 @@ function jobState(matching, run, sha, trusted) {
 export function gateStateFrom(runs, jobs, sha, branch) {
   const run = runs[0];
   if (!run || !isCandidateRun(run, sha, branch)) return { state: "missing" };
-  const parts = [jobState(
-    jobs.filter((j) => j.name === GATE_JOB),
-    run,
-    sha,
-    isMainPcJob,
-  )];
+  const parts = [
+    jobState(
+      jobs.filter((j) => j.name === GATE_JOB),
+      run,
+      sha,
+      isMainPcJob,
+    ),
+  ];
   const nativeJobs = jobs.filter((j) => j.name === NATIVE_GATE_JOB);
   if (nativeJobs.length) parts.push(jobState(nativeJobs, run, sha, isMainPcJob));
   const pc2Jobs = jobs.filter((j) => j.name === PC2_GATE_JOB);
