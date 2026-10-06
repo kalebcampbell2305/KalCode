@@ -482,6 +482,78 @@ fn status_follows_structured_events_only() {
 }
 
 #[test]
+fn a_turn_the_provider_starts_after_an_interrupt_is_not_reported_as_interrupted() {
+    // A coding-terminal agent: the person types each prompt into the provider's own pane, so
+    // KalCode learns of a new turn only from the provider's status, never from `send`.
+    let h = Harness::new();
+    let id = started(&h, "first turn");
+    let session = h.provider.last_session();
+    h.runtime.interrupt(&id).expect("interrupt");
+    wait_until("the interrupted turn completed", || {
+        h.events_for(&id)
+            .iter()
+            .any(|event| matches!(event.event, EventPayload::AgentTurnCompleted { .. }))
+    });
+    let completions = |h: &Harness| {
+        h.events_for(&id)
+            .into_iter()
+            .filter_map(|event| match event.event {
+                EventPayload::AgentTurnCompleted {
+                    ok, interrupted, ..
+                } => Some((ok, interrupted)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    // The person's next prompt, typed in the pane, succeeds.
+    session.emit(AgentEvent::Status {
+        status: ThreadStatus::Active,
+        detail: None,
+    });
+    wait_status(&h, &id, ThreadStatus::Active);
+    session.emit(AgentEvent::TurnCompleted { ok: true });
+    wait_until("second completion", || completions(&h).len() == 2);
+    assert_eq!(
+        completions(&h)[1],
+        (true, false),
+        "a finished turn is not interrupted"
+    );
+
+    // The one after that fails: the agent shows FAILED, not a plain idle.
+    session.emit(AgentEvent::Status {
+        status: ThreadStatus::Active,
+        detail: None,
+    });
+    wait_status(&h, &id, ThreadStatus::Active);
+    session.emit(AgentEvent::Error {
+        code: "provider_rate_limit".into(),
+        message: "Rate limited.".into(),
+        recoverable: true,
+    });
+    session.emit(AgentEvent::TurnCompleted { ok: false });
+    wait_until("third completion", || completions(&h).len() == 3);
+    assert_eq!(completions(&h)[2], (false, false));
+    wait_until("idle after the failed turn", || {
+        h.runtime
+            .get(&id)
+            .expect("thread")
+            .current_activity
+            .as_deref()
+            == Some(kalcode_threads::runtime::LAST_TURN_FAILED_ACTIVITY)
+    });
+    assert_eq!(status(&h, &id), ThreadStatus::Idle);
+
+    // A new turn begins with a clean slate, as one KalCode sends does.
+    session.emit(AgentEvent::Status {
+        status: ThreadStatus::Active,
+        detail: None,
+    });
+    wait_status(&h, &id, ThreadStatus::Active);
+    assert_eq!(h.runtime.get(&id).expect("thread").error, None);
+}
+
+#[test]
 fn turn_completion_events_preserve_provider_result_and_owner_interruption() {
     let h = Harness::new();
     let id = started(&h, "first turn");
