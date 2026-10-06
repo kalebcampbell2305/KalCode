@@ -8,6 +8,7 @@ import {
   OwnedApplicationRegistry,
   ownedChildIsTerminal,
   settleOwnedApplications,
+  settleOwnedWebview,
   waitForExit,
 } from "../../tests/e2e/harness.ts";
 
@@ -127,6 +128,56 @@ describe("native E2E helper inventory", () => {
     const registry = new OwnedApplicationRegistry<string>();
     expect(() => registry.requireActive("missing-test")).toThrow("requires the harness test fixture");
     expect(registry.count("missing-test")).toBe(0);
+  });
+
+  it("waits for the owned WebView2 tree before closing CDP, ending only those processes if they linger", async () => {
+    // Gates 37529315873 / 37520284094: the CDP endpoint is the app's msedgewebview2.exe, which
+    // outlives kalcode.exe under load; closing CDP while it shut down hung past 5 seconds.
+    const fakeProbe = (exitAt: Map<number, number>, endsWhenTerminated = true) => {
+      let clock = 0;
+      const terminated: number[] = [];
+      return {
+        terminated,
+        probe: {
+          list: () => [...exitAt].filter(([pid, at]) => clock < at && !terminated.includes(pid)).map(([pid]) => pid),
+          terminate: (pid: number) => {
+            if (endsWhenTerminated) terminated.push(pid);
+          },
+          sleep: async (milliseconds: number) => {
+            clock += milliseconds;
+          },
+          now: () => clock,
+        },
+      };
+    };
+
+    const exitsInGrace = fakeProbe(new Map([[11, 6_700]]));
+    await expect(settleOwnedWebview(exitsInGrace.probe)).resolves.toBeUndefined();
+    expect(exitsInGrace.terminated).toEqual([]);
+
+    const lingers = fakeProbe(
+      new Map([
+        [21, Number.POSITIVE_INFINITY],
+        [22, Number.POSITIVE_INFINITY],
+      ]),
+    );
+    await expect(settleOwnedWebview(lingers.probe)).resolves.toBeUndefined();
+    expect(lingers.terminated).toEqual([21, 22]);
+
+    const survives = fakeProbe(new Map([[31, Number.POSITIVE_INFINITY]]), false);
+    await expect(settleOwnedWebview(survives.probe)).rejects.toThrow(
+      "Owned WebView2 processes outlived the E2E app: 31",
+    );
+
+    for (const exit of [
+      "export async function closeGracefully",
+      "export async function killForcibly",
+      "async function cleanupOwnedApplication",
+    ]) {
+      const body = harnessSource.slice(harnessSource.indexOf(exit));
+      expect(body.indexOf("settleOwnedWebview("), exit).toBeGreaterThan(-1);
+      expect(body.indexOf("settleOwnedWebview("), exit).toBeLessThan(body.indexOf("closeBrowserBounded("));
+    }
   });
 
   it("treats an already signaled owned child as terminal", () => {

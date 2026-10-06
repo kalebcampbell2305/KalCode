@@ -1,7 +1,7 @@
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { type Browser, chromium, type Page, test as playwrightTest, type TestInfo } from "@playwright/test";
 import { type LaunchReadinessTimer, waitForLaunchConnection, waitForLaunchReadiness } from "./launchReadiness.ts";
 
@@ -27,12 +27,14 @@ const ACCOUNT_FIXTURE_INITIALIZED_CONTENT = "kalcode-account-e2e-initialized-v1\
 
 export interface Running {
   child: ChildProcess;
+  dataDir: string;
   browser: Browser;
   page: Page;
 }
 
 interface OwnedApplication {
   child: ChildProcess;
+  dataDir: string;
   browser: Browser | null;
   page: Page | null;
 }
@@ -267,7 +269,7 @@ export async function launch(dataDir: string, env: Record<string, string> = {}):
     },
     stdio: "ignore",
   });
-  const owned: OwnedApplication = { child, browser: null, page: null };
+  const owned: OwnedApplication = { child, dataDir, browser: null, page: null };
   ownedApplications.track(owner, owned);
   let spawnError: Error | null = null;
   child.once("error", (error) => {
@@ -380,6 +382,7 @@ export async function closeGracefully(app: Running) {
   }
   if (!requested && !ownedChildIsTerminal(app.child)) app.child.kill();
   if (!(await waitForOwnedExit(app.child, 10_000))) await stopOwnedProcess(app.child, true);
+  await settleOwnedWebview(ownedWebviewProbe(app.dataDir));
   await closeBrowserBounded(app.browser);
   ownedApplications.release(currentOwner(), app);
 }
@@ -387,6 +390,7 @@ export async function closeGracefully(app: Running) {
 /** Simulates a desktop crash while preserving its independent process-cleanup guardian. */
 export async function killForcibly(app: Running): Promise<void> {
   await stopOwnedProcess(app.child, true);
+  await settleOwnedWebview(ownedWebviewProbe(app.dataDir));
   await closeBrowserBounded(app.browser);
   ownedApplications.release(currentOwner(), app);
 }
@@ -426,12 +430,85 @@ async function closeBrowserBounded(browser: Browser): Promise<void> {
   }
 }
 
+/** The processes `settleOwnedWebview` watches and, only past its grace period, terminates. */
+export interface OwnedWebviewProbe {
+  list(): number[];
+  terminate(pid: number): void;
+  sleep(milliseconds: number): Promise<void>;
+  now(): number;
+}
+
+/**
+ * The CDP endpoint the harness connects to is served by the app's msedgewebview2.exe browser
+ * process (a child of kalcode.exe), not by kalcode.exe. That WebView2 tree outlives the app by
+ * seconds under load, and closing the CDP connection while it is still shutting down can hang:
+ * "The owned E2E browser did not close within 5 seconds" (gates 37529315873, 37520284094). So once
+ * the app has exited, wait for its own WebView2 tree to exit, terminate exactly those processes if
+ * they linger past the grace period, and fail if any survive. Only then close the connection.
+ */
+export async function settleOwnedWebview(
+  probe: OwnedWebviewProbe,
+  graceMilliseconds = 15_000,
+  confirmMilliseconds = 5_000,
+  pollMilliseconds = 250,
+): Promise<void> {
+  const remainingAfter = async (milliseconds: number): Promise<number[]> => {
+    const deadline = probe.now() + milliseconds;
+    for (;;) {
+      const pids = probe.list();
+      if (pids.length === 0 || probe.now() >= deadline) return pids;
+      await probe.sleep(pollMilliseconds);
+    }
+  };
+  const lingering = await remainingAfter(graceMilliseconds);
+  if (lingering.length === 0) return;
+  console.warn(
+    `[e2e] owned WebView2 processes outlived the app by ${graceMilliseconds}ms; ending ${lingering.join(", ")}`,
+  );
+  for (const pid of lingering) {
+    try {
+      probe.terminate(pid);
+    } catch {
+      // Exited between the listing and the signal; the confirmation below rechecks.
+    }
+  }
+  const survivors = await remainingAfter(confirmMilliseconds);
+  if (survivors.length > 0) {
+    throw new Error(`Owned WebView2 processes outlived the E2E app: ${survivors.join(", ")}`);
+  }
+}
+
+/** The WebView2 processes whose user data lives in this test's own data directory (Windows). */
+function ownedWebviewProbe(dataDir: string): OwnedWebviewProbe {
+  const needle = `${dataDir}${sep}`.replaceAll("'", "''");
+  const script = `Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf('${needle}', [StringComparison]::OrdinalIgnoreCase) -ge 0 } | ForEach-Object { $_.ProcessId }`;
+  return {
+    list: () =>
+      process.platform !== "win32"
+        ? []
+        : execFileSync("powershell", ["-NoProfile", "-Command", script], { encoding: "utf8", windowsHide: true })
+            .split(/\r?\n/)
+            .map((line) => Number.parseInt(line.trim(), 10))
+            .filter((pid) => Number.isFinite(pid)),
+    terminate: (pid) => process.kill(pid),
+    sleep: (milliseconds) => new Promise((resolveSleep) => setTimeout(resolveSleep, milliseconds)),
+    now: Date.now,
+  };
+}
+
 async function cleanupOwnedApplication(app: OwnedApplication): Promise<void> {
   const failures: string[] = [];
   try {
     await stopOwnedProcess(app.child, true);
   } catch {
     failures.push("process");
+  }
+  if (ownedChildIsTerminal(app.child)) {
+    try {
+      await settleOwnedWebview(ownedWebviewProbe(app.dataDir));
+    } catch {
+      failures.push("webview");
+    }
   }
   if (app.browser) {
     try {
