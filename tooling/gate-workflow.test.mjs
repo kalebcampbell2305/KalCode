@@ -149,6 +149,66 @@ ${reuse}`,
   }
 });
 
+test("a release kit PR that changes only the release record and notes skips both gate halves", {
+  skip: process.platform !== "win32",
+}, () => {
+  const record = "apps/website/src/data/releases.json";
+  const notes = "docs/releases/0.1.9+1908.md";
+  const cases = [
+    ["record-and-notes", [{ filename: record }, { filename: notes }], true],
+    ["notes-only", [{ filename: notes }], true],
+    ["plus-code", [{ filename: record }, { filename: "apps/desktop/src/main.tsx" }], false],
+    ["other-website-file", [{ filename: record }, { filename: "apps/website/src/pages/updates.astro" }], false],
+    ["renamed-from-code", [{ filename: notes, previous_filename: "tooling/merge-train/train.mjs" }], false],
+    ["renamed-within-notes", [{ filename: notes, previous_filename: "docs/releases/old.md" }], true],
+    ["no-files", [], false],
+    ["api-error", null, false],
+  ];
+  const root = mkdtempSync(join(tmpdir(), "kalcode-gate-records-"));
+  for (const [job, jobSteps] of [
+    ["windows", steps],
+    ["pc2", pc2Steps],
+  ]) {
+    const step = jobSteps.find((s) => s.startsWith("name: Reuse the merge-train"));
+    assert.match(step, /startsWith\(github\.head_ref, 'release\/website-'\)/, `${job}: only kit branches qualify`);
+    const reuse = script(step);
+    for (const [name, files, expected] of cases) {
+      const output = join(root, `${job}-${name}.out`);
+      const path = join(root, `${job}-${name}.ps1`);
+      writeFileSync(output, "");
+      writeFileSync(
+        path,
+        `$fixtureFiles = '${JSON.stringify(files).replaceAll("'", "''")}' | ConvertFrom-Json
+function Invoke-RestMethod {
+  param($Headers, $Uri)
+  if ($Uri -match '/pulls/304/files\\?per_page=100&page=1$') { if ($null -eq $fixtureFiles) { throw 'HTTP 502' }; return $fixtureFiles }
+  throw "Unexpected request $Uri"
+}
+${reuse}`,
+      );
+      const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path], {
+        encoding: "utf8",
+        windowsHide: true,
+        env: {
+          ...process.env,
+          GH_TOKEN: "fixture-only",
+          GITHUB_API_URL: "https://example.invalid",
+          GITHUB_REPOSITORY: "fixture/repo",
+          GITHUB_EVENT_NAME: "pull_request",
+          PR_NUMBER: "304",
+          GITHUB_OUTPUT: output,
+        },
+      });
+      assert.equal(result.status, 0, `${job} ${name}: ${result.stdout}${result.stderr}`);
+      assert.equal(
+        readFileSync(output, "utf8").trim() === "reused=true",
+        expected,
+        `${job} ${name}: ${result.stdout}${result.stderr}`,
+      );
+    }
+  }
+});
+
 test("selected-check outputs use Actions-compatible bytes on Windows PowerShell", {
   skip: process.platform !== "win32",
 }, () => {
