@@ -98,6 +98,8 @@ function NeedsYouSection() {
       data-empty={items.length === 0 || undefined}
       data-urgent={urgent || undefined}
     >
+      {/* The urgent edge on an inert element, not ::before (see Dashboard.module.css). */}
+      {urgent ? <span className={styles.urgentEdge} aria-hidden="true" /> : null}
       <span className={styles.needsYouGlyph} aria-hidden="true">
         {items.length === 0 ? <CircleCheckBig /> : <BellDot />}
       </span>

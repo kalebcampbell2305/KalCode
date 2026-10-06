@@ -47,14 +47,23 @@
   color: var(--color-text);
 }
 
-/* The active tab carries a lit underline. */
-.line .trigger::after {
-  content: "";
+/* The active tab carries a lit underline: an aria-hidden element (last in every trigger,
+   Tabs.tsx), not ::after: axe's colour-contrast check reports "incomplete" for a tab's small text
+   (a count beside the label) under an absolute pseudo-element with a background. It only exists
+   in the line variant (as the ::after did): elsewhere it is not rendered as a box at all, and its
+   margin is pinned so a consumer's `button span` rule cannot move it. */
+.underline {
+  display: none;
+}
+
+.line .trigger > .underline {
+  display: block;
   position: absolute;
   left: var(--space-2);
   right: var(--space-2);
   bottom: -1px;
   height: 2px;
+  margin: 0;
   border-radius: var(--radius-full) var(--radius-full) 0 0;
   background: var(--color-accent);
   box-shadow: 0 0 10px var(--color-glow);
@@ -65,7 +74,7 @@
     transform var(--dur-base) var(--ease-emphasized);
 }
 
-.line .trigger[data-state="active"]::after {
+.line .trigger[data-state="active"] > .underline {
   opacity: 1;
   transform: none;
 }

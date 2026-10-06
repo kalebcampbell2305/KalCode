@@ -77,6 +77,8 @@ function AccountCircuit({ phase }: { phase: AccountSnapshot["phase"] }) {
     <ol className={styles.circuit} aria-label="Account setup progress">
       {FLOW.map((label, index) => (
         <li key={label} data-state={index < current ? "done" : index === current ? "current" : "next"}>
+          {/* Decoration on inert elements, not pseudo-elements (see Account.module.css). */}
+          <span className={styles.circuitLink} aria-hidden="true" />
           <span className={styles.circuitNode} aria-hidden="true">
             {index < current ? <Check /> : <Circle />}
           </span>
@@ -115,6 +117,7 @@ export function AccountOnboarding({ snapshot, busy, error, actions }: AccountOnb
   return (
     <main className={styles.screen} aria-labelledby="account-title">
       <section className={styles.card}>
+        <span className={styles.cardEdge} aria-hidden="true" />
         <header className={styles.header}>
           <Mark size={44} className={styles.mark} />
           <AccountCircuit phase={snapshot.phase} />
@@ -227,6 +230,7 @@ export function AccountOnboarding({ snapshot, busy, error, actions }: AccountOnb
                 const price = planPrice(plan, billing);
                 return (
                   <article className={styles.plan} key={plan.tier} data-featured={plan.popular || undefined}>
+                    {plan.popular ? <span className={styles.featuredEdge} aria-hidden="true" /> : null}
                     <div>
                       {plan.popular ? <p className={styles.popular}>Most popular</p> : null}
                       <p className={styles.stage}>{plan.stage}</p>

@@ -364,8 +364,10 @@
   box-shadow: inset 0 0 0 1px var(--color-border-lit-soft);
 }
 
-.workspaceRow[data-active]::before {
-  content: "";
+/* Its lit edge: an aria-hidden element rendered only on the active row (first in the row,
+   RailTree.tsx), not ::before: axe's colour-contrast check reports "incomplete" for the row's
+   text under an absolute pseudo-element with a background. */
+.workspaceRow[data-active] > .activeEdge {
   position: absolute;
   left: 0;
   top: 22%;
