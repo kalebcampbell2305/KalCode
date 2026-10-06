@@ -16,7 +16,7 @@ import {
   Skeleton,
   TextInput,
 } from "@kalcode/ui/components";
-import { Archive, BroomSparkles, ChevronDown, CircleX, Layers, ListX, Power, Search, Sparkles, X } from "lucide-react";
+import { Archive, BroomSparkles, ChevronDown, CircleX, Layers, ListX, Power, Rocket, Search, Sparkles, X } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { useOptionalUiIntents } from "../../runtime/uiIntents.tsx";
@@ -412,7 +412,13 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
           <p>Archived agents stay off the Dashboard. Show them to look back, or unarchive one to bring it back.</p>
         </EmptyState>
       ) : (
-        <EmptyState title="No agents yet" className={styles.state} actions={newAgent}>
+        <EmptyState
+          title="No agents yet"
+          className={`${styles.state} ${styles.launch}`}
+          art={<Rocket />}
+          align="center"
+          actions={newAgent}
+        >
           {providerPanes ? (
             <p>
               Launch a <ProviderMark provider="claude-code" size="sm" />, <ProviderMark provider="codex" size="sm" />,{" "}

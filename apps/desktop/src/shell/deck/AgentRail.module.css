@@ -308,19 +308,30 @@
 }
 
 .row:hover {
-  border-color: var(--color-border);
+  border-color: var(--color-border-lit-soft);
   background: var(--color-surface-hover);
 }
 
 .row:focus-visible {
-  outline: 2px solid var(--color-border-focus);
-  outline-offset: -1px;
+  outline: none;
+  border-color: var(--color-border-lit);
+  box-shadow: var(--glow-active);
 }
 
 /* Agents waiting on the person carry a warm edge: the rail's loudest state. */
 .row[data-group="attention"] {
   border-color: color-mix(in srgb, var(--_c) 30%, transparent);
   background: linear-gradient(90deg, color-mix(in srgb, var(--_c) 12%, transparent), transparent 85%);
+}
+
+.row[data-group="attention"][data-tone="waiting"] {
+  box-shadow: var(--glow-waiting);
+}
+
+/* Keyboard focus stays the brightest signal, even on a row that needs the person. */
+.row[data-group="attention"]:focus-visible {
+  border-color: var(--color-border-lit);
+  box-shadow: var(--glow-active);
 }
 
 .row[data-group="attention"]::before {
@@ -350,6 +361,7 @@
   border: 2px solid var(--color-surface-1);
   border-radius: var(--radius-full);
   background: var(--_c);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--_c) 55%, transparent);
   box-sizing: content-box;
 }
 

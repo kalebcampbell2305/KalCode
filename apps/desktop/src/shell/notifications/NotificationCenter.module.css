@@ -299,6 +299,11 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   border-bottom: 1px solid var(--color-border-subtle);
+  /* Scroll cue: a soft shade at the bottom edge while more items sit below; the sheet-coloured
+     cover scrolls with the content and hides it at the end. */
+  background:
+    linear-gradient(transparent, var(--color-surface-3) 70%) 0 100% / 100% 2.5rem no-repeat local,
+    radial-gradient(farthest-side at 50% 100%, rgb(0 0 0 / 0.55), transparent) 0 100% / 100% 0.875rem no-repeat;
 }
 
 .historyTitle {

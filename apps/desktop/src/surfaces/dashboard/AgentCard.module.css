@@ -1,6 +1,8 @@
-/* One coding agent in the Agent Fleet. A compact graphite tile: a status rail on its left edge
-   carries the tone (never colour alone: the state is always written next to it), then who it runs
-   as, its task, where it runs and what it is doing now. Dense, calm, and alive while it works. */
+/* One coding agent in the Agent Fleet: a live mission tile. A status rail on its left edge and a
+   faint tone-lit top edge carry the state (never colour alone: the state is always written next
+   to it), then who it runs as, its task, where it runs and what it is doing now. Dense and calm;
+   only what matters is lit: blue when focused, amber when it needs you. Every effect is static or
+   a one-shot transition (no loop beyond the working rail and signal). */
 
 .card {
   --card-px: var(--space-3-5);
@@ -22,21 +24,38 @@
   overflow: hidden;
   cursor: pointer;
   transition:
-    border-color 180ms var(--ease-out),
-    box-shadow 180ms var(--ease-out),
-    transform 180ms var(--ease-out);
+    border-color var(--dur-base) var(--ease-out),
+    box-shadow var(--dur-base) var(--ease-out),
+    transform var(--dur-base) var(--ease-out);
 }
 
+/* Hover lifts the tile a pixel toward the person; focus lights its edge in electric blue. */
 .card:hover {
   border-color: var(--color-border-lit-soft);
-  box-shadow:
-    var(--shadow-panel),
-    0 10px 30px -18px color-mix(in srgb, var(--color-accent) 35%, transparent);
+  box-shadow: var(--shadow-panel), var(--lift-active);
+  transform: translateY(-1px);
 }
 
 .card:focus-within {
   border-color: var(--color-border-lit);
-  box-shadow: var(--shadow-lit);
+  box-shadow: var(--glow-active), var(--lift-active);
+}
+
+/* The tone-lit top edge: the tile's state read from across the bridge. */
+.card::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 12%;
+  right: 12%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--tone) 70%, transparent), transparent);
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.card[data-tone="muted"]::after {
+  opacity: 0;
 }
 
 .card:active:not(:has(button:active)) {
@@ -98,9 +117,16 @@
   opacity: 0.6;
 }
 
+/* Needs you: the one tile state that glows without focus (amber, static). */
 .card[data-status="permission_required"],
 .card[data-status="waiting_for_you"] {
   border-color: var(--status-waiting-line);
+  box-shadow: var(--shadow-panel), var(--glow-waiting);
+}
+
+.card[data-status="permission_required"]:focus-within,
+.card[data-status="waiting_for_you"]:focus-within {
+  box-shadow: var(--glow-active), var(--glow-waiting);
 }
 
 .card[data-ready] {
