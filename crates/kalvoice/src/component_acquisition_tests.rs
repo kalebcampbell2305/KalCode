@@ -217,10 +217,17 @@ impl ArtifactTransport for LoopbackArtifactTransport {
     }
 }
 
-fn loopback_body(
-    bytes: &'static [u8],
-    between_bytes: Duration,
-) -> (LoopbackArtifactTransport, std::thread::JoinHandle<()>) {
+/// A loopback server for one artifact body: it sends `bytes` one at a time, `between_bytes` apart.
+/// `sent` counts the body bytes written; dropping `release` ends any remaining wait at once, so a
+/// stall can be far longer than the bound under test without the test waiting it out.
+struct LoopbackBody {
+    transport: LoopbackArtifactTransport,
+    worker: std::thread::JoinHandle<()>,
+    sent: Arc<AtomicUsize>,
+    release: std::sync::mpsc::Sender<()>,
+}
+
+fn loopback_body(bytes: &'static [u8], between_bytes: Duration) -> LoopbackBody {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("loopback bind");
     let url = format!(
         "http://{}/component",
@@ -229,6 +236,9 @@ fn loopback_body(
     listener
         .set_nonblocking(true)
         .expect("bounded fixture accept");
+    let sent = Arc::new(AtomicUsize::new(0));
+    let sent_by_worker = sent.clone();
+    let (release, released) = std::sync::mpsc::channel::<()>();
     let worker = std::thread::spawn(move || {
         // Setup, not the behaviour under test: on a gate machine shared with other gates and release
         // builds, connecting took over 3 s (lane gate 37357319224). The stall bound is timed separately.
@@ -270,21 +280,29 @@ fn loopback_body(
         )
         .expect("headers");
         for (index, byte) in bytes.iter().enumerate() {
-            if index > 0 {
-                std::thread::sleep(between_bytes);
+            if index > 0
+                && !matches!(
+                    released.recv_timeout(between_bytes),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                )
+            {
+                break;
             }
             if socket.write_all(&[*byte]).is_err() {
                 break;
             }
+            sent_by_worker.fetch_add(1, Ordering::SeqCst);
         }
     });
-    (
-        LoopbackArtifactTransport {
+    LoopbackBody {
+        transport: LoopbackArtifactTransport {
             agent: UreqTransport::new().agent,
             url,
         },
         worker,
-    )
+        sent,
+        release,
+    }
 }
 
 #[test]
@@ -293,7 +311,12 @@ fn production_transport_installs_a_verified_body_progressing_longer_than_five_se
     let key = signing_key(7);
     let bytes = b"12345678";
     let (mut acquirer, store, _) = harness(&temp, &key, FakeTransport::new(vec![]));
-    let (transport, worker) = loopback_body(bytes, Duration::from_millis(900));
+    let LoopbackBody {
+        transport,
+        worker,
+        release: _release,
+        ..
+    } = loopback_body(bytes, Duration::from_millis(900));
     acquirer.transport = Arc::new(transport);
     let started = std::time::Instant::now();
     let result = acquirer.acquire(
@@ -322,7 +345,18 @@ fn production_transport_stalled_body_is_bounded_and_cancel_is_not_a_network_fail
         let key = signing_key(7);
         let bytes = b"ab";
         let (mut acquirer, store, _) = harness(&temp, &key, FakeTransport::new(vec![]));
-        let (transport, worker) = loopback_body(bytes, Duration::from_secs(7));
+        // The fixture stalls after the first body byte far longer than the 5 s idle bound. The read
+        // is bounded when acquisition fails before the server ever sends the second byte: an
+        // outcome, not a wall-clock reading. Gate machines run tests at below-normal priority, and
+        // normal-priority builds delayed wake-ups by seconds (6.5 s bound measured at 11.4 s, gate
+        // 37393478801 attempt 4) without the bound being wrong.
+        let stall = Duration::from_secs(60);
+        let LoopbackBody {
+            transport,
+            worker,
+            sent,
+            release,
+        } = loopback_body(bytes, stall);
         acquirer.transport = Arc::new(transport);
         let cancel = Arc::new(AtomicBool::new(false));
         let cancellation = cancel.clone();
@@ -336,23 +370,22 @@ fn production_transport_stalled_body_is_bounded_and_cancel_is_not_a_network_fail
                 cancellation.store(true, Ordering::SeqCst);
             }
         });
-        // Time the stalled read from the first body byte, where the stall begins: connecting and
-        // receiving headers are bounded separately, and on a loaded gate machine they added
-        // seconds to a clock started before the request (7.2 s measured; the bound fired at 5 s).
-        let first_byte = std::cell::Cell::new(None::<std::time::Instant>);
+        let started = std::time::Instant::now();
         let result = acquirer.acquire(&token(&key, bytes), NOW, true, &cancel, |received, _| {
             if received == 1 {
-                first_byte.set(Some(std::time::Instant::now()));
                 let _ = progress_tx.try_send(());
             }
         });
-        let elapsed = first_byte.get().expect("first byte received").elapsed();
+        let elapsed = started.elapsed();
+        let sent_before_return = sent.load(Ordering::SeqCst);
+        drop(release);
         canceller.join().expect("joined canceller");
         worker.join().expect("joined loopback fixture");
-        assert!(
-            elapsed < Duration::from_millis(6500),
-            "blocked read was not bounded: {elapsed:?}"
+        assert_eq!(
+            sent_before_return, 1,
+            "blocked read was not bounded: it waited out the stall ({elapsed:?})"
         );
+        assert!(elapsed < stall, "blocked read was not bounded: {elapsed:?}");
         if cancelled {
             assert!(
                 matches!(result, Err(ComponentAcquisitionError::Cancelled)),
