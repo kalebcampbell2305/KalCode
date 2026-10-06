@@ -106,7 +106,13 @@ export function packUiBundle(distDir) {
   if (paths.length > MAX_UI_FILES) fail("the UI build has too many files");
   const contents = paths.map((path) => {
     if (!bundlePathOk(path)) fail(`unsafe UI file name: ${path}`);
-    return readFileSync(join(distDir, ...path.split("/")));
+    const bytes = readFileSync(join(distDir, ...path.split("/")));
+    // KalCode's CSP allows only same-origin scripts and styles; an inline one would be blocked
+    // in a live UI and fail its health check, so refuse it at build time.
+    if (path.endsWith(".html") && /<script(?![^>]*\ssrc=)[^>]*>|<style[\s>]/i.test(bytes.toString("utf8"))) {
+      fail(`inline script or style in ${path}`);
+    }
+    return bytes;
   });
   const index = Buffer.from(
     JSON.stringify({

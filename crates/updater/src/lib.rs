@@ -1346,6 +1346,30 @@ impl UpdateMachine {
         Ok(())
     }
 
+    /// Puts back a build that was verified and staged before a check meant to replace it, when
+    /// that check found nothing newer to stage. Only the operation that took the build out may
+    /// restore it.
+    pub fn restore_ready(
+        &mut self,
+        token: OperationToken,
+        candidate: Candidate,
+    ) -> Result<(), UpdateError> {
+        self.check_token(token)?;
+        if self.status.phase == UpdatePhase::Installing {
+            return Err(UpdateError::new(
+                "update_state_invalid",
+                "The update operation is in the wrong state.",
+            ));
+        }
+        self.status.phase = UpdatePhase::Ready;
+        self.status.available_version = Some(candidate.version.clone());
+        self.status.downloaded_bytes = candidate.metadata.size;
+        self.status.total_bytes = Some(candidate.metadata.size);
+        self.status.last_error = None;
+        self.candidate = Some(candidate);
+        Ok(())
+    }
+
     pub fn fail(
         &mut self,
         token: OperationToken,

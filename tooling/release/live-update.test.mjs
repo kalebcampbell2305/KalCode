@@ -77,15 +77,20 @@ describe("live update release tooling", () => {
     }
   });
 
-  it("refuses a UI build without an entry page or with unsafe names", () => {
+  it("refuses a UI build without an entry page, with unsafe names, or with inline code", () => {
     const noIndex = dist({ "app.js": "x" });
     const unsafe = dist({ "index.html": "x", "bad name.js": "y" });
+    const inline = dist({ "index.html": "<script>alert(1)</script>" });
+    const styled = dist({ "index.html": "<style>a{}</style>" });
+    const fine = dist({ "index.html": '<script type="module" crossorigin src="/assets/a.js"></script>' });
     try {
       assert.throws(() => packUiBundle(noIndex), /no index.html/);
       assert.throws(() => packUiBundle(unsafe), /unsafe UI file name/);
+      assert.throws(() => packUiBundle(inline), /inline script or style/);
+      assert.throws(() => packUiBundle(styled), /inline script or style/);
+      assert.equal(packUiBundle(fine).files, 1);
     } finally {
-      rmSync(noIndex, { recursive: true, force: true });
-      rmSync(unsafe, { recursive: true, force: true });
+      for (const dir of [noIndex, unsafe, inline, styled, fine]) rmSync(dir, { recursive: true, force: true });
     }
   });
 

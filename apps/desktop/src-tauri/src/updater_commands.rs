@@ -486,7 +486,7 @@ impl DesktopUpdaterState {
         let updater = self.clone();
         tauri::async_runtime::spawn(async move {
             if updater.feed_announces_newer(&staged).await
-                && let Err(error) = updater.check_when(staged_recheck_allowed).await
+                && let Err(error) = updater.check_replacing_staged().await
             {
                 tracing::warn!(
                     event = "updater.background_check_failed",
@@ -494,6 +494,65 @@ impl DesktopUpdaterState {
                 );
             }
         });
+    }
+
+    /// A check that replaces the staged build with the newer one the feed announces. The staged
+    /// build is held aside, not discarded: when no newer build ends up staged (a failed download
+    /// or verification, or the feed changed again), it is put back, still ready to install.
+    async fn check_replacing_staged(&self) -> Result<UpdateStatus, UpdateError> {
+        let public_key = self.key()?.to_owned();
+        let _target = self.target()?;
+        let (token, channel, registration, kept) = {
+            let mut runtime = self.runtime();
+            if !staged_recheck_allowed(runtime.machine.status().phase) {
+                return Ok(runtime.status());
+            }
+            let kept = runtime.prepared.take();
+            match runtime.begin_cancellable_check() {
+                Ok((token, channel, registration)) => (token, channel, registration, kept),
+                Err(error) => {
+                    runtime.prepared = kept;
+                    return Err(error);
+                }
+            }
+        };
+        let result =
+            Abortable::new(self.check_inner(token, channel, &public_key), registration).await;
+        let mut runtime = self.runtime();
+        runtime.finish_check(token);
+        let replaced = runtime.prepared.is_some();
+        let restored = !replaced
+            && kept.as_ref().is_some_and(|old| {
+                runtime
+                    .machine
+                    .restore_ready(token, old.candidate.clone())
+                    .is_ok()
+            });
+        let old = if restored {
+            runtime.prepared = kept;
+            None
+        } else {
+            kept
+        };
+        let status = runtime.status();
+        drop(runtime);
+        if let Some(installer) = old.and_then(|old| old.installer) {
+            discard_staged(installer);
+        }
+        match result {
+            Ok(Err(error)) if !restored => {
+                let _ = self.runtime().machine.fail(token, error.to_string());
+                Err(error)
+            }
+            Ok(Err(error)) => {
+                tracing::warn!(
+                    event = "updater.replacement_failed_staged_kept",
+                    error_code = error.code()
+                );
+                Ok(status)
+            }
+            _ => Ok(status),
+        }
     }
 
     /// Whether the selected channel's feed now announces a build newer than `staged`. Any

@@ -47,11 +47,24 @@ const HANDOFF_SNAPSHOT_WAIT: Duration = Duration::from_secs(5);
 /// A handoff record older than this is not restored (the relaunch did not happen promptly).
 const HANDOFF_RESTORE_WINDOW: Duration = Duration::from_secs(10 * 60);
 const HANDOFF_FILE: &str = "handoff.json";
+/// Failed handoffs of one build before it is left to install on close.
+const MAX_HANDOFF_FAILURES: u32 = 3;
 const USER_AGENT: &str = concat!("KalCode/", env!("CARGO_PKG_VERSION"));
 
 pub const STAGED_EVENT: &str = "live-update://ui-staged";
 pub const HANDOFF_EVENT: &str = "live-update://handoff";
 pub const STATUS_EVENT: &str = "live-update://status";
+
+/// The updater key that every live UI must be signed with: the release key compiled into this
+/// shell. Test builds (debug and `e2e`) may name a throwaway key instead, for the end-to-end
+/// suite's local live updates.
+fn trusted_public_key() -> Option<String> {
+    #[cfg(any(debug_assertions, feature = "e2e"))]
+    if let Ok(key) = std::env::var("KALCODE_TEST_UPDATER_PUBLIC_KEY") {
+        return Some(key);
+    }
+    option_env!("KALCODE_UPDATER_PUBLIC_KEY").map(str::to_owned)
+}
 
 /// The native fingerprint compiled into this shell, or `None` in development builds.
 #[must_use]
@@ -275,7 +288,16 @@ impl tauri::Assets<Wry> for LiveAssets {
         };
         let store = LiveStore::new(data_dir.join("updates").join("live"));
         let shell_version = app.package_info().version.to_string();
-        let (chosen, recovery) = store.startup(native_fingerprint(), &shell_version);
+        let Ok(target) = UpdateTarget::current() else {
+            return;
+        };
+        let public_key = trusted_public_key();
+        let (chosen, recovery) = store.startup(&live::StartupTrust {
+            native_fingerprint: native_fingerprint(),
+            version: &shell_version,
+            public_key: public_key.as_deref(),
+            target,
+        });
         if let StartupUi::Live(ui, manifest) = &chosen {
             self.shared.serve(Some(served_bundle(&store, ui, manifest)));
             self.shared.arm_health(Some(ui.bundle_sha256.clone()));
@@ -526,7 +548,7 @@ async fn consider_inner(
         let root = root.clone();
         let final_name = final_name.clone();
         tauri::async_runtime::spawn_blocking(move || {
-            stage_bundle(&bytes, &descriptor, &root, &final_name)
+            stage_bundle(&bytes, &raw, &descriptor, &root, &final_name)
         })
         .await
         .map_err(|_| network_error())??
@@ -548,6 +570,7 @@ async fn consider_inner(
         dir: final_name,
         bundle_sha256: descriptor.ui.sha256.clone(),
         native_fingerprint: descriptor.shell.native_fingerprint.clone(),
+        channel,
         unhealthy_boots: 0,
         healthy: false,
     };
@@ -578,8 +601,11 @@ async fn consider_inner(
     Ok(())
 }
 
+/// Unpacks and verifies `bytes` beside its signed `envelope` (kept so every later start can
+/// re-prove it), then makes it appear under its final name in one rename.
 fn stage_bundle(
     bytes: &[u8],
+    envelope: &[u8],
     descriptor: &live::LiveDescriptor,
     root: &Path,
     final_name: &str,
@@ -589,11 +615,16 @@ fn stage_bundle(
         && let Ok(manifest) = live::verify_unpacked(&final_dir)
         && manifest.bundle_sha256 == descriptor.ui.sha256
     {
+        live::seal_bundle(&final_dir, envelope, bytes)?;
         return Ok(manifest);
     }
     let _ = std::fs::remove_dir_all(&final_dir);
     let staging = root.join(format!(".staging-{}", kalcode_contracts::ids::new_id()));
     let manifest = live::unpack_bundle(bytes, descriptor, &staging)?;
+    if let Err(error) = live::seal_bundle(&staging, envelope, bytes) {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(error);
+    }
     // One rename makes the complete, verified bundle appear under its final name.
     std::fs::rename(&staging, &final_dir).map_err(|_| {
         let _ = std::fs::remove_dir_all(&staging);
@@ -613,16 +644,18 @@ fn watch_health(app: AppHandle) {
             loop {
                 std::thread::sleep(Duration::from_secs(5));
                 let Some(shared) = shared(&app) else { return };
+                // Claimed under the lock: a ready report either takes the entry first (and
+                // nothing is rolled back) or finds it gone.
                 let expired = {
-                    let health = shared
+                    let mut health = shared
                         .health
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
                     match health.as_ref() {
-                        None => continue,
-                        Some((bundle, since)) => {
-                            (since.elapsed() >= HEALTH_TIMEOUT).then(|| bundle.clone())
+                        Some((_, since)) if since.elapsed() >= HEALTH_TIMEOUT => {
+                            health.take().map(|(bundle, _)| bundle)
                         }
+                        _ => continue,
                     }
                 };
                 if let Some(bundle) = expired {
@@ -633,27 +666,44 @@ fn watch_health(app: AppHandle) {
 }
 
 fn roll_back_ui(app: &AppHandle, shared: &Arc<LiveShared>, bundle: Option<&str>) {
-    *shared
-        .health
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     // Only a live UI can be rolled back; the embedded UI is the floor.
     let Some(bundle) = bundle else { return };
     let Some(store) = shared.store.get() else {
         return;
     };
+    // A UI that reported ready since it started is healthy, however late its report came.
     if store
         .current()
         .is_none_or(|current| current.bundle_sha256 != bundle)
+        || store.current_is_ready()
     {
         return;
     }
     tracing::error!(event = "live_update.ui_rolled_back");
-    let previous = store.roll_back().ok().flatten();
+    let previous = match store.roll_back() {
+        Ok(previous) => previous,
+        Err(error) => {
+            // The bad UI must not be served again at the next start either.
+            tracing::error!(
+                event = "live_update.rollback_unrecorded",
+                error_code = error.code()
+            );
+            let _ = store.clear();
+            None
+        }
+    };
+    let public_key = trusted_public_key();
     let served = previous.as_ref().and_then(|ui| {
-        live::verify_unpacked(&store.bundle_dir(&ui.dir))
-            .ok()
-            .map(|manifest| served_bundle(store, ui, &manifest))
+        let target = UpdateTarget::current().ok()?;
+        live::verify_sealed(
+            &store.bundle_dir(&ui.dir),
+            public_key.as_deref()?,
+            &ui.version,
+            target,
+            ui.channel,
+        )
+        .ok()
+        .map(|manifest| served_bundle(store, ui, &manifest))
     });
     if previous.is_some() && served.is_none() {
         let _ = store.clear();
@@ -763,6 +813,9 @@ impl HandoffWatcher {
         let _ = std::thread::Builder::new()
             .name("kalcode-live-handoff".into())
             .spawn(move || {
+                // A handoff that failed is retried later and less often; after
+                // MAX_HANDOFF_FAILURES the build installs when KalCode closes instead.
+                let mut failures: (String, u32, Instant) = (String::new(), 0, Instant::now());
                 loop {
                     std::thread::sleep(HANDOFF_POLL);
                     let Some(shared) = shared(&app) else { return };
@@ -792,7 +845,16 @@ impl HandoffWatcher {
                             }
                         }
                         None => {
-                            hand_off(&app, &shared, &updater, &version);
+                            if failures.0 != version {
+                                failures = (version.clone(), 0, Instant::now());
+                            }
+                            if failures.1 >= MAX_HANDOFF_FAILURES || Instant::now() < failures.2 {
+                                continue;
+                            }
+                            if hand_off(&app, &shared, &updater, &version) {
+                                failures.1 += 1;
+                                failures.2 = Instant::now() + handoff_backoff(failures.1);
+                            }
                         }
                     }
                 }
@@ -800,12 +862,19 @@ impl HandoffWatcher {
     }
 }
 
+/// After `failures` failed handoffs, how long until the next try: 1, 2, 4 … minutes, capped.
+fn handoff_backoff(failures: u32) -> Duration {
+    Duration::from_secs(60 * 2_u64.saturating_pow(failures.saturating_sub(1)).min(30))
+}
+
+/// Applies the staged core update. On success this process exits; returns `true` when the
+/// install could not start (to back off), `false` when it was called off because the gate closed.
 fn hand_off(
     app: &AppHandle,
     shared: &Arc<LiveShared>,
     updater: &DesktopUpdaterState,
     version: &str,
-) {
+) -> bool {
     let started = Instant::now();
     tracing::info!(event = "live_update.handoff_preparing", version);
     shared.update(app, |status| {
@@ -831,7 +900,7 @@ fn hand_off(
             status.waiting_for = Some(reason.to_owned());
         });
         let _ = app.emit_to("main", HANDOFF_EVENT, Option::<String>::None);
-        return;
+        return false;
     }
     let record = HandoffRecord {
         from_version: shared.status().shell_version,
@@ -862,7 +931,9 @@ fn hand_off(
             status.last_error = Some(error.to_string());
         });
         let _ = app.emit_to("main", HANDOFF_EVENT, Option::<String>::None);
+        return true;
     }
+    false
 }
 
 fn handoff_file(app: &AppHandle) -> Option<PathBuf> {
@@ -1146,6 +1217,14 @@ mod tests {
             ),
             "https://kalcoded.com/releases/updater/stable/0.1.9+1900/live/KalCode_0.1.9_build1900_ui.kui"
         );
+    }
+
+    #[test]
+    fn a_failing_handoff_backs_off_and_caps() {
+        assert_eq!(handoff_backoff(1), Duration::from_secs(60));
+        assert_eq!(handoff_backoff(2), Duration::from_secs(120));
+        assert_eq!(handoff_backoff(3), Duration::from_secs(240));
+        assert_eq!(handoff_backoff(40), Duration::from_secs(30 * 60));
     }
 
     #[test]

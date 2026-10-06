@@ -5,9 +5,9 @@ use std::io::Cursor;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use kalcode_updater::live::{
-    ActiveUi, LiveDescriptor, LiveStore, ShellContract, StartupRecovery, StartupUi, UiArtifact,
-    UpdateClass, classify, encode_bundle, expanded_len, unpack_bundle, verify_envelope,
-    verify_unpacked,
+    ActiveUi, LiveDescriptor, LiveStore, ShellContract, StartupRecovery, StartupTrust, StartupUi,
+    UiArtifact, UpdateClass, classify, encode_bundle, expanded_len, seal_bundle, unpack_bundle,
+    verify_envelope, verify_sealed, verify_unpacked,
 };
 use kalcode_updater::{UpdateChannel, UpdateTarget};
 use minisign::{KeyPair, sign};
@@ -242,6 +242,11 @@ fn bundle_paths_cannot_escape_their_directory() {
         "a/../../b.js",
         "a\\b.js",
         "kalcode-ui.json",
+        "kalcode-ui.kui",
+        "CON.js",
+        "assets/nul",
+        "Lpt1.txt",
+        "trailing.",
     ] {
         let files: Vec<(&str, &[u8])> =
             vec![("index.html", b"x".as_slice()), (bad, b"y".as_slice())];
@@ -260,24 +265,78 @@ fn bundle_paths_cannot_escape_their_directory() {
     assert!(unpack_bundle(&bundle, &descriptor, &dir.path().join("c")).is_err());
 }
 
-fn staged(store: &LiveStore, version: &str, native: &str, marker: &'static [u8]) -> ActiveUi {
+/// A throwaway updater key: signs descriptors like the release tooling does.
+struct Signer {
+    pk: minisign::PublicKey,
+    sk: minisign::SecretKey,
+    public_key: String,
+}
+
+fn signer() -> Signer {
+    let KeyPair { pk, sk } = KeyPair::generate_unencrypted_keypair().unwrap();
+    let public_key = STANDARD.encode(pk.to_box().unwrap().into_string());
+    Signer { pk, sk, public_key }
+}
+
+fn sealed_envelope(signer: &Signer, descriptor: &LiveDescriptor) -> Vec<u8> {
+    let bytes = serde_json::to_vec(descriptor).unwrap();
+    let signature = sign(
+        Some(&signer.pk),
+        &signer.sk,
+        Cursor::new(&bytes),
+        Some(comment(&descriptor.version, "KalCode_x64-live.json").as_str()),
+        None,
+    )
+    .unwrap()
+    .into_string();
+    serde_json::to_vec(&serde_json::json!({
+        "schemaVersion": 1,
+        "descriptor": STANDARD.encode(&bytes),
+        "signature": STANDARD.encode(signature),
+    }))
+    .unwrap()
+}
+
+fn staged(
+    store: &LiveStore,
+    signer: &Signer,
+    version: &str,
+    native: &str,
+    marker: &'static [u8],
+) -> ActiveUi {
     let files: Vec<(&str, &[u8])> = vec![("index.html", marker)];
     let bundle = encode_bundle(&files);
     let descriptor = descriptor_for(version, native, &bundle, 1);
     let dir = LiveStore::staging_dir_name(&descriptor);
     let manifest = unpack_bundle(&bundle, &descriptor, &store.bundle_dir(&dir)).unwrap();
+    seal_bundle(
+        &store.bundle_dir(&dir),
+        &sealed_envelope(signer, &descriptor),
+        &bundle,
+    )
+    .unwrap();
     ActiveUi {
         version: version.to_owned(),
         dir,
         bundle_sha256: manifest.bundle_sha256,
         native_fingerprint: native.to_owned(),
+        channel: UpdateChannel::Stable,
         unhealthy_boots: 0,
         healthy: false,
     }
 }
 
-fn served(store: &LiveStore) -> Option<String> {
-    match store.startup(Some(NATIVE_A), "0.1.9+1873").0 {
+fn trust<'a>(signer: &'a Signer, native: &'a str, version: &'a str) -> StartupTrust<'a> {
+    StartupTrust {
+        native_fingerprint: Some(native),
+        version,
+        public_key: Some(&signer.public_key),
+        target: UpdateTarget::WindowsX86_64,
+    }
+}
+
+fn served(store: &LiveStore, signer: &Signer) -> Option<String> {
+    match store.startup(&trust(signer, NATIVE_A, "0.1.9+1873")).0 {
         StartupUi::Embedded => None,
         StartupUi::Live(ui, _) => Some(ui.version),
     }
@@ -285,24 +344,25 @@ fn served(store: &LiveStore) -> Option<String> {
 
 #[test]
 fn an_activated_ui_survives_restart_once_healthy_and_older_bundles_are_cleaned() {
+    let signer = signer();
     let root = tempfile::tempdir().unwrap();
     let store = LiveStore::new(root.path());
     assert_eq!(
-        served(&store),
+        served(&store, &signer),
         None,
         "no live UI yet: the embedded UI is served"
     );
 
-    let first = staged(&store, "0.1.9+1880", NATIVE_A, b"first");
+    let first = staged(&store, &signer, "0.1.9+1880", NATIVE_A, b"first");
     store.activate(first.clone()).unwrap();
     assert!(store.mark_healthy(&first.bundle_sha256).unwrap());
-    assert_eq!(served(&store).as_deref(), Some("0.1.9+1880"));
+    assert_eq!(served(&store, &signer).as_deref(), Some("0.1.9+1880"));
     store.mark_healthy(&first.bundle_sha256).unwrap();
 
-    let second = staged(&store, "0.1.9+1890", NATIVE_A, b"second");
+    let second = staged(&store, &signer, "0.1.9+1890", NATIVE_A, b"second");
     store.activate(second.clone()).unwrap();
     store.mark_healthy(&second.bundle_sha256).unwrap();
-    let third = staged(&store, "0.1.9+1895", NATIVE_A, b"third");
+    let third = staged(&store, &signer, "0.1.9+1895", NATIVE_A, b"third");
     store.activate(third.clone()).unwrap();
     store.mark_healthy(&third.bundle_sha256).unwrap();
 
@@ -317,18 +377,19 @@ fn an_activated_ui_survives_restart_once_healthy_and_older_bundles_are_cleaned()
 
 #[test]
 fn a_ui_that_never_reports_ready_rolls_back_without_a_crash_loop() {
+    let signer = signer();
     let root = tempfile::tempdir().unwrap();
     let store = LiveStore::new(root.path());
-    let good = staged(&store, "0.1.9+1880", NATIVE_A, b"good");
+    let good = staged(&store, &signer, "0.1.9+1880", NATIVE_A, b"good");
     store.activate(good.clone()).unwrap();
     store.mark_healthy(&good.bundle_sha256).unwrap();
 
-    let broken = staged(&store, "0.1.9+1890", NATIVE_A, b"broken");
+    let broken = staged(&store, &signer, "0.1.9+1890", NATIVE_A, b"broken");
     store.activate(broken.clone()).unwrap();
     // The live reload counted one boot; it never reported ready. One more start is allowed...
-    assert_eq!(served(&store).as_deref(), Some("0.1.9+1890"));
+    assert_eq!(served(&store, &signer).as_deref(), Some("0.1.9+1890"));
     // ...then the next start rejects it and goes back to the last healthy UI.
-    let (ui, recovery) = store.startup(Some(NATIVE_A), "0.1.9+1873");
+    let (ui, recovery) = store.startup(&trust(&signer, NATIVE_A, "0.1.9+1873"));
     assert_eq!(recovery, StartupRecovery::RolledBack);
     assert!(matches!(ui, StartupUi::Live(ref ui, _) if ui.version == "0.1.9+1880"));
     assert!(
@@ -339,12 +400,13 @@ fn a_ui_that_never_reports_ready_rolls_back_without_a_crash_loop() {
 
 #[test]
 fn an_in_session_failure_rolls_back_to_the_previous_ui() {
+    let signer = signer();
     let root = tempfile::tempdir().unwrap();
     let store = LiveStore::new(root.path());
-    let good = staged(&store, "0.1.9+1880", NATIVE_A, b"good");
+    let good = staged(&store, &signer, "0.1.9+1880", NATIVE_A, b"good");
     store.activate(good.clone()).unwrap();
     store.mark_healthy(&good.bundle_sha256).unwrap();
-    let broken = staged(&store, "0.1.9+1890", NATIVE_A, b"broken");
+    let broken = staged(&store, &signer, "0.1.9+1890", NATIVE_A, b"broken");
     store.activate(broken.clone()).unwrap();
 
     let after = store.roll_back().unwrap();
@@ -354,30 +416,31 @@ fn an_in_session_failure_rolls_back_to_the_previous_ui() {
     // With nothing healthy behind it, rollback returns to the embedded UI.
     let empty = tempfile::tempdir().unwrap();
     let store = LiveStore::new(empty.path());
-    let only = staged(&store, "0.1.9+1890", NATIVE_A, b"only");
+    let only = staged(&store, &signer, "0.1.9+1890", NATIVE_A, b"only");
     store.activate(only).unwrap();
     assert_eq!(store.roll_back().unwrap(), None);
-    assert_eq!(served(&store), None);
+    assert_eq!(served(&store, &signer), None);
 }
 
 #[test]
 fn an_installed_shell_supersedes_live_uis_built_for_the_old_one() {
+    let signer = signer();
     let root = tempfile::tempdir().unwrap();
     let store = LiveStore::new(root.path());
-    let ui = staged(&store, "0.1.9+1880", NATIVE_A, b"live");
+    let ui = staged(&store, &signer, "0.1.9+1880", NATIVE_A, b"live");
     store.activate(ui.clone()).unwrap();
     store.mark_healthy(&ui.bundle_sha256).unwrap();
 
     // The installer applied a new native build: its fingerprint differs.
-    let (chosen, recovery) = store.startup(Some(NATIVE_B), "0.1.9+1900");
+    let (chosen, recovery) = store.startup(&trust(&signer, NATIVE_B, "0.1.9+1900"));
     assert_eq!(chosen, StartupUi::Embedded);
     assert_eq!(recovery, StartupRecovery::Superseded);
     assert_eq!(store.current(), None);
 
     // Or the installer applied the very build the live UI came from.
-    let ui = staged(&store, "0.1.9+1880", NATIVE_A, b"live2");
+    let ui = staged(&store, &signer, "0.1.9+1880", NATIVE_A, b"live2");
     store.activate(ui.clone()).unwrap();
-    let (chosen, _) = store.startup(Some(NATIVE_A), "0.1.9+1880");
+    let (chosen, _) = store.startup(&trust(&signer, NATIVE_A, "0.1.9+1880"));
     assert_eq!(chosen, StartupUi::Embedded, "the shell's own UI is as new");
     assert!(
         std::fs::read_dir(store.ui_root()).unwrap().next().is_none(),
@@ -387,19 +450,21 @@ fn an_installed_shell_supersedes_live_uis_built_for_the_old_one() {
 
 #[test]
 fn a_damaged_bundle_on_disk_falls_back_to_the_embedded_ui() {
+    let signer = signer();
     let root = tempfile::tempdir().unwrap();
     let store = LiveStore::new(root.path());
-    let ui = staged(&store, "0.1.9+1880", NATIVE_A, b"live");
+    let ui = staged(&store, &signer, "0.1.9+1880", NATIVE_A, b"live");
     store.activate(ui.clone()).unwrap();
     store.mark_healthy(&ui.bundle_sha256).unwrap();
     std::fs::write(store.bundle_dir(&ui.dir).join("index.html"), b"tampered").unwrap();
-    let (chosen, recovery) = store.startup(Some(NATIVE_A), "0.1.9+1873");
+    let (chosen, recovery) = store.startup(&trust(&signer, NATIVE_A, "0.1.9+1873"));
     assert_eq!(chosen, StartupUi::Embedded);
     assert_eq!(recovery, StartupRecovery::Damaged);
 }
 
 #[test]
 fn interrupted_staging_is_removed_at_startup() {
+    let signer = signer();
     let root = tempfile::tempdir().unwrap();
     let store = LiveStore::new(root.path());
     std::fs::create_dir_all(store.ui_root().join("0.1.9_b1890-half")).unwrap();
@@ -408,16 +473,17 @@ fn interrupted_staging_is_removed_at_startup() {
         b"x",
     )
     .unwrap();
-    let _ = store.startup(Some(NATIVE_A), "0.1.9+1873");
+    let _ = store.startup(&trust(&signer, NATIVE_A, "0.1.9+1873"));
     assert!(!store.ui_root().join("0.1.9_b1890-half").exists());
 }
 
 #[test]
 fn a_damaged_state_file_is_treated_as_no_live_ui() {
+    let signer = signer();
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("active.json"), b"{not json").unwrap();
     let store = LiveStore::new(root.path());
-    assert_eq!(served(&store), None);
+    assert_eq!(served(&store, &signer), None);
 }
 
 /// The release tooling (`tooling/release/live-update.mjs`) packs bundles in Node; this proves the
@@ -452,4 +518,84 @@ fn a_bundle_packed_by_the_release_tooling_unpacks_in_the_client() {
         std::fs::read(dir.path().join("ui").join("assets").join("index-AbC1.js")).unwrap(),
         b"console.log(\"node bundle\")"
     );
+}
+
+#[test]
+fn a_kept_bundle_is_re_proved_against_the_updater_key_at_every_start() {
+    let signer = signer();
+    let root = tempfile::tempdir().unwrap();
+    let store = LiveStore::new(root.path());
+    let ui = staged(&store, &signer, "0.1.9+1880", NATIVE_A, b"live");
+    store.activate(ui.clone()).unwrap();
+    store.mark_healthy(&ui.bundle_sha256).unwrap();
+    let dir = store.bundle_dir(&ui.dir);
+    let check = |key: &str| {
+        verify_sealed(
+            &dir,
+            key,
+            "0.1.9+1880",
+            UpdateTarget::WindowsX86_64,
+            UpdateChannel::Stable,
+        )
+    };
+    check(&signer.public_key).unwrap();
+    // Another key (a forged envelope written next to the bundle) is refused.
+    assert!(check(&self::signer().public_key).is_err());
+
+    // Rewriting a file and its manifest hash together is caught: the manifest must equal the
+    // signed archive's own index.
+    let manifest_path = dir.join("kalcode-ui.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+    std::fs::write(dir.join("index.html"), b"evil").unwrap();
+    manifest["files"][0]["sha256"] = hex::encode(Sha256::digest(b"evil")).into();
+    manifest["files"][0]["size"] = 4.into();
+    std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    verify_unpacked(&dir).unwrap();
+    let (chosen, recovery) = store.startup(&trust(&signer, NATIVE_A, "0.1.9+1873"));
+    assert_eq!(chosen, StartupUi::Embedded);
+    assert_eq!(recovery, StartupRecovery::Damaged);
+}
+
+#[test]
+fn without_the_updater_key_no_live_ui_is_served() {
+    let signer = signer();
+    let root = tempfile::tempdir().unwrap();
+    let store = LiveStore::new(root.path());
+    let ui = staged(&store, &signer, "0.1.9+1880", NATIVE_A, b"live");
+    store.activate(ui).unwrap();
+    let trust = StartupTrust {
+        public_key: None,
+        ..trust(&signer, NATIVE_A, "0.1.9+1873")
+    };
+    assert_eq!(store.startup(&trust).0, StartupUi::Embedded);
+}
+
+#[test]
+fn a_staged_build_held_aside_by_a_replacement_check_can_be_put_back_only_by_that_check() {
+    use kalcode_updater::{Candidate, FeedMetadata, UpdateMachine, UpdatePhase};
+    let candidate = Candidate {
+        version: "0.1.9+1900".to_owned(),
+        notes: None,
+        metadata: FeedMetadata {
+            schema_version: 2,
+            channel: UpdateChannel::Stable,
+            target: UpdateTarget::WindowsX86_64,
+            format: kalcode_updater::ArtifactFormat::Nsis,
+            size: 10,
+            sha256: "a".repeat(64),
+            commit: COMMIT.to_owned(),
+        },
+    };
+    let mut machine = UpdateMachine::new(UpdateChannel::Stable, "0.1.9+1873");
+    let token = machine.begin_check().unwrap();
+    machine.restore_ready(token, candidate.clone()).unwrap();
+    assert_eq!(machine.status().phase, UpdatePhase::Ready);
+    assert_eq!(
+        machine.status().available_version.as_deref(),
+        Some("0.1.9+1900")
+    );
+    // A newer operation replaced this one: the stale token can't restore anything.
+    let _newer = machine.begin_check().unwrap();
+    assert!(machine.restore_ready(token, candidate).is_err());
 }

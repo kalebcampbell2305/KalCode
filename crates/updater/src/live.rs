@@ -48,6 +48,10 @@ pub const MAX_UNHEALTHY_BOOTS: u8 = 2;
 const ACTIVE_FILE: &str = "active.json";
 const REJECTED_FILE: &str = "rejected.json";
 const BUNDLE_MANIFEST_FILE: &str = "kalcode-ui.json";
+/// The signed envelope and the original archive, kept beside an unpacked bundle so every start
+/// re-proves the bundle against the updater key instead of trusting local files.
+const SEALED_ENVELOPE_FILE: &str = "kalcode-ui.envelope.json";
+const SEALED_ARCHIVE_FILE: &str = "kalcode-ui.kui";
 const MAX_REJECTED: usize = 32;
 
 /// How a newer build applies to the running KalCode.
@@ -274,7 +278,17 @@ pub struct BundleManifest {
     pub files: Vec<UiFile>,
 }
 
-/// Paths are `/`-separated, relative, and made of plain names only.
+/// Windows device names, which no file may use whatever its extension.
+fn is_reserved_windows_name(part: &str) -> bool {
+    let stem = part.split('.').next().unwrap_or(part).to_ascii_lowercase();
+    matches!(stem.as_str(), "con" | "prn" | "aux" | "nul")
+        || ((stem.starts_with("com") || stem.starts_with("lpt"))
+            && stem.len() == 4
+            && stem.as_bytes()[3].is_ascii_digit())
+}
+
+/// Paths are `/`-separated, relative, made of plain names only, valid on Windows, and never one
+/// of the store's own files.
 fn is_safe_bundle_path(path: &str) -> bool {
     !path.is_empty()
         && path.len() <= 256
@@ -283,11 +297,13 @@ fn is_safe_bundle_path(path: &str) -> bool {
             !part.is_empty()
                 && part != "."
                 && part != ".."
+                && !part.ends_with('.')
+                && !is_reserved_windows_name(part)
                 && part.bytes().all(|byte| {
                     byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'@' | b'+')
                 })
         })
-        && path != BUNDLE_MANIFEST_FILE
+        && !path.starts_with("kalcode-ui.")
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -399,8 +415,51 @@ fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     file.sync_all()
 }
 
-/// Reads a bundle's manifest and proves every file is present with its signed hash. Used before
-/// a bundle is served again after a restart.
+/// Keeps the signed envelope and the original archive beside an unpacked bundle, for
+/// [`verify_sealed`].
+pub fn seal_bundle(dir: &Path, envelope: &[u8], archive: &[u8]) -> Result<(), UpdateError> {
+    write_synced(&dir.join(SEALED_ENVELOPE_FILE), envelope)
+        .and_then(|()| write_synced(&dir.join(SEALED_ARCHIVE_FILE), archive))
+        .map_err(|_| store_unavailable())
+}
+
+/// Re-proves an unpacked bundle from scratch: the kept envelope's signature against the updater
+/// key (bound to `version`, `target` and `channel`), the archive against the signed size and
+/// hash, the manifest against the archive's own index, and every file on disk against it. Used
+/// before a live UI is served again after a restart, so nothing local is trusted on its own.
+pub fn verify_sealed(
+    dir: &Path,
+    public_key: &str,
+    version: &str,
+    target: UpdateTarget,
+    channel: UpdateChannel,
+) -> Result<BundleManifest, UpdateError> {
+    let envelope = read_bounded(&dir.join(SEALED_ENVELOPE_FILE), MAX_LIVE_ENVELOPE_BYTES)
+        .ok_or_else(bundle_invalid)?;
+    let descriptor = verify_envelope(&envelope, public_key, version, target, channel)?;
+    let archive = read_bounded(&dir.join(SEALED_ARCHIVE_FILE), MAX_UI_BUNDLE_BYTES)
+        .ok_or_else(bundle_invalid)?;
+    if archive.len() as u64 != descriptor.ui.size || sha256_hex(&archive) != descriptor.ui.sha256 {
+        return Err(bundle_invalid());
+    }
+    let mut expanded = Vec::new();
+    GzDecoder::new(archive.as_slice())
+        .take(descriptor.ui.expanded_size + 1)
+        .read_to_end(&mut expanded)
+        .map_err(|_| bundle_invalid())?;
+    let (index, _) = parse_bundle(&expanded)?;
+    let manifest = verify_unpacked(dir)?;
+    if manifest.files != index.files
+        || manifest.bundle_sha256 != descriptor.ui.sha256
+        || manifest.native_fingerprint != descriptor.shell.native_fingerprint
+        || manifest.version != descriptor.version
+    {
+        return Err(bundle_invalid());
+    }
+    Ok(manifest)
+}
+
+/// Reads a bundle's manifest and proves every file is present with the manifest's hash.
 pub fn verify_unpacked(dir: &Path) -> Result<BundleManifest, UpdateError> {
     let manifest = read_bounded(&dir.join(BUNDLE_MANIFEST_FILE), MAX_UI_INDEX_BYTES as u64)
         .and_then(|bytes| serde_json::from_slice::<BundleManifest>(&bytes).ok())
@@ -433,6 +492,8 @@ pub struct ActiveUi {
     pub dir: String,
     pub bundle_sha256: String,
     pub native_fingerprint: String,
+    /// The channel the descriptor was signed for, to re-verify it at startup.
+    pub channel: UpdateChannel,
     /// Consecutive starts of this UI without a ready report. At [`MAX_UNHEALTHY_BOOTS`] the next
     /// startup rejects it.
     pub unhealthy_boots: u8,
@@ -475,12 +536,32 @@ pub enum StartupRecovery {
 /// directory per unpacked bundle under `<root>/ui/`.
 pub struct LiveStore {
     root: PathBuf,
+    /// Held across every read-modify-write of the state files, which several threads update
+    /// (the update check, the UI's ready report, the health watchdog).
+    lock: std::sync::Mutex<()>,
+}
+
+/// What [`LiveStore::startup`] needs to choose and re-verify a kept bundle.
+pub struct StartupTrust<'a> {
+    pub native_fingerprint: Option<&'a str>,
+    pub version: &'a str,
+    pub public_key: Option<&'a str>,
+    pub target: UpdateTarget,
 }
 
 impl LiveStore {
     #[must_use]
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            lock: std::sync::Mutex::new(()),
+        }
+    }
+
+    fn locked(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     #[must_use]
@@ -531,6 +612,11 @@ impl LiveStore {
 
     /// Records a bundle that failed its health check so it is never activated again.
     pub fn reject(&self, bundle_sha256: &str) -> Result<(), UpdateError> {
+        let _guard = self.locked();
+        self.reject_locked(bundle_sha256)
+    }
+
+    fn reject_locked(&self, bundle_sha256: &str) -> Result<(), UpdateError> {
         let mut rejected = self.rejected();
         if !rejected.iter().any(|known| known == bundle_sha256) {
             rejected.push(bundle_sha256.to_owned());
@@ -561,11 +647,10 @@ impl LiveStore {
     /// - a live UI whose files fail verification is dropped.
     ///
     /// The chosen live UI's boot is counted before it is served; [`Self::mark_healthy`] clears it.
-    pub fn startup(
-        &self,
-        running_native_fingerprint: Option<&str>,
-        running_version: &str,
-    ) -> (StartupUi, StartupRecovery) {
+    pub fn startup(&self, trust: &StartupTrust<'_>) -> (StartupUi, StartupRecovery) {
+        let _guard = self.locked();
+        let running_native_fingerprint = trust.native_fingerprint;
+        let running_version = trust.version;
         let mut record = self.load();
         let mut recovery = StartupRecovery::None;
         let running = Version::parse(running_version).ok();
@@ -584,12 +669,23 @@ impl LiveStore {
         if let Some(current) = record.current.clone()
             && current.unhealthy_boots >= MAX_UNHEALTHY_BOOTS
         {
-            let _ = self.reject(&current.bundle_sha256);
+            let _ = self.reject_locked(&current.bundle_sha256);
             record.current = record.previous.take().filter(|ui| ui.healthy && usable(ui));
             recovery = StartupRecovery::RolledBack;
         }
         let chosen = match record.current.clone() {
-            Some(current) => match verify_unpacked(&self.bundle_dir(&current.dir)) {
+            Some(current) => match trust.public_key.map_or_else(
+                || Err(bundle_invalid()),
+                |key| {
+                    verify_sealed(
+                        &self.bundle_dir(&current.dir),
+                        key,
+                        &current.version,
+                        trust.target,
+                        current.channel,
+                    )
+                },
+            ) {
                 Ok(manifest) if manifest.bundle_sha256 == current.bundle_sha256 => {
                     let mut counted = current.clone();
                     counted.unhealthy_boots = counted.unhealthy_boots.saturating_add(1);
@@ -605,13 +701,15 @@ impl LiveStore {
             None => StartupUi::Embedded,
         };
         let _ = self.save(&record);
-        self.collect_garbage(&record);
+        // Startup is the one moment no staging can be in flight, so interrupted ones go too.
+        self.collect_garbage(&record, true);
         (chosen, recovery)
     }
 
     /// Makes `ui` the active UI in one atomic write, keeping the current healthy UI for
     /// rollback. The boot counter starts at one: the reload that follows must report ready.
     pub fn activate(&self, ui: ActiveUi) -> Result<(), UpdateError> {
+        let _guard = self.locked();
         let mut record = self.load();
         let previous = record.current.take().filter(|current| current.healthy);
         record.previous = previous.or(record.previous.take());
@@ -620,18 +718,20 @@ impl LiveStore {
             healthy: false,
             ..ui
         });
-        self.save(&record)
+        self.save(&record)?;
+        self.collect_garbage(&record, false);
+        Ok(())
     }
 
     /// The active UI loaded and reported ready.
     pub fn mark_healthy(&self, bundle_sha256: &str) -> Result<bool, UpdateError> {
+        let _guard = self.locked();
         let mut record = self.load();
         match record.current.as_mut() {
             Some(current) if current.bundle_sha256 == bundle_sha256 => {
                 current.healthy = true;
                 current.unhealthy_boots = 0;
                 self.save(&record)?;
-                self.collect_garbage(&record);
                 Ok(true)
             }
             _ => Ok(false),
@@ -641,18 +741,28 @@ impl LiveStore {
     /// The active UI failed while running: reject it and fall back to the previous healthy live
     /// UI, or to the embedded one. Returns what is active afterwards.
     pub fn roll_back(&self) -> Result<Option<ActiveUi>, UpdateError> {
+        let _guard = self.locked();
         let mut record = self.load();
         if let Some(current) = record.current.take() {
-            self.reject(&current.bundle_sha256)?;
+            self.reject_locked(&current.bundle_sha256)?;
         }
         record.current = record.previous.take();
         self.save(&record)?;
         Ok(record.current)
     }
 
-    /// Removes staged bundles that are neither current nor kept for rollback, and interrupted
-    /// stagings.
-    fn collect_garbage(&self, record: &ActiveRecord) {
+    /// Whether the current live UI reported ready since it last started.
+    #[must_use]
+    pub fn current_is_ready(&self) -> bool {
+        let _guard = self.locked();
+        self.load()
+            .current
+            .is_some_and(|ui| ui.healthy && ui.unhealthy_boots == 0)
+    }
+
+    /// Removes bundles that are neither current nor kept for rollback. Interrupted stagings
+    /// (`.staging-*`) are removed only when `stagings` says none can be in flight.
+    fn collect_garbage(&self, record: &ActiveRecord, stagings: bool) {
         let keep: Vec<&str> = [record.current.as_ref(), record.previous.as_ref()]
             .into_iter()
             .flatten()
@@ -664,6 +774,9 @@ impl LiveStore {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let Some(name) = name.to_str() else { continue };
+            if !stagings && name.starts_with(".staging-") {
+                continue;
+            }
             if !keep.contains(&name) {
                 let _ = fs::remove_dir_all(entry.path());
             }
@@ -672,16 +785,22 @@ impl LiveStore {
 
     /// Removes every live UI: the installed shell now carries a newer UI itself.
     pub fn clear(&self) -> Result<(), UpdateError> {
+        let _guard = self.locked();
         let record = ActiveRecord::default();
         self.save(&record)?;
-        self.collect_garbage(&record);
+        self.collect_garbage(&record, false);
         Ok(())
     }
 }
 
 fn atomic_write(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), UpdateError> {
     fs::create_dir_all(dir).map_err(|_| store_unavailable())?;
-    let temp = dir.join(format!("{name}.{}.tmp", std::process::id()));
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let temp = dir.join(format!(
+        "{name}.{}-{}.tmp",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     write_synced(&temp, bytes).map_err(|_| store_unavailable())?;
     fs::rename(&temp, dir.join(name)).map_err(|_| {
         let _ = fs::remove_file(&temp);
