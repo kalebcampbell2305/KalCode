@@ -1,5 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
 import { goTo } from "./nav.ts";
 
 const storageKey = "kalcode:favorites:v1";
@@ -8,14 +8,28 @@ async function openPalette(page: Page) {
   return page.getByRole("dialog", { name: "Command palette" });
 }
 
+/**
+ * Types a command's name and waits until the palette has answered that text: the Session Locator
+ * replied, local results finished refreshing and the named command is selected. Until then late
+ * results grow the list and push the footer down, so a click aimed at the footer's pin can land on
+ * a list row instead; cmdk selects whatever row the pointer crosses, and the pin then follows that
+ * row instead of the command.
+ */
+async function searchCommand(palette: Locator, name: string) {
+  await palette.getByRole("combobox").fill(name);
+  await expect(palette.getByText(/^Sessions and places · \d+ match/)).toBeVisible();
+  await expect(palette.locator("footer")).toContainText("Search across your workspace");
+  await expect(palette.getByRole("option", { name, exact: true })).toHaveAttribute("aria-selected", "true");
+}
+
 test("global pins persist, reorder by keyboard, and open a command without executing it", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("#main")).toHaveAttribute("data-surface", "dashboard");
   let palette = await openPalette(page);
-  await palette.getByRole("combobox").fill("New agent");
+  await searchCommand(palette, "New agent");
   await palette.getByRole("button", { name: "Pin globally: New agent", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "New agent", exact: true })).toHaveCount(0);
-  await palette.getByRole("combobox").fill("Browser");
+  await searchCommand(palette, "Browser");
   await palette.getByRole("button", { name: "Pin globally: Browser", exact: true }).click();
   await page.keyboard.press("Escape");
   const pins = page.getByRole("list", { name: "Global pins" });
@@ -75,7 +89,7 @@ test("favorites follow the active workspace while global pins remain", async ({ 
   await page.goto("/?scenario=rail");
   await expect(page.getByRole("button", { name: "Workspace kalcode", exact: true })).toBeVisible();
   const palette = await openPalette(page);
-  await palette.getByRole("combobox").fill("Browser");
+  await searchCommand(palette, "Browser");
   await palette.getByRole("button", { name: "Add Favorite: Browser", exact: true }).click();
   await page.keyboard.press("Escape");
   await expect(
