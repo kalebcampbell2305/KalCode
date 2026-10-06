@@ -5,7 +5,7 @@
   margin: 10px 16px;
   padding: 14px 16px;
   border: 1px solid var(--color-border-lit);
-  border-radius: 12px;
+  border-radius: var(--radius-card);
   background: linear-gradient(110deg, var(--color-accent-soft), var(--color-surface-1));
   box-shadow: inset 2px 0 var(--color-accent);
   flex-shrink: 0;
