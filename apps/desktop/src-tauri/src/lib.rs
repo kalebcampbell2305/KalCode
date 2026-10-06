@@ -56,6 +56,7 @@ mod provider_usage_commands;
 mod resource_commands;
 mod runtime_shutdown;
 mod session_resolver;
+mod squad_commands;
 mod terminal_image_commands;
 mod thread_commands;
 mod update_preparation;
@@ -798,6 +799,7 @@ pub fn run(removed_overrides: Vec<String>) {
                 kalvoice_commands::kalvoice_latency,
                 kalvoice_commands::kalvoice_latency_record,
                 provider_auth_commands::provider_codex_account_refresh,
+                provider_auth_commands::provider_account_models,
                 provider_auth_commands::provider_codex_login_start,
                 provider_auth_commands::provider_codex_login_wait,
                 provider_auth_commands::provider_codex_login_cancel,
@@ -905,6 +907,14 @@ pub fn run(removed_overrides: Vec<String>) {
                 doctor_commands::doctor_ignore,
                 doctor_commands::doctor_ignored,
                 doctor_commands::doctor_fix_log,
+                squad_commands::squads_snapshot,
+                squad_commands::squads_save,
+                squad_commands::squads_delete,
+                squad_commands::recipe_save,
+                squad_commands::recipe_delete,
+                squad_commands::squads_launch,
+                squad_commands::recipe_launch,
+                squad_commands::squads_reassign_manager,
                 operations_commands::operations_snapshot,
                 operations_commands::operations_detail,
                 operations_commands::operations_history,

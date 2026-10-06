@@ -30,6 +30,7 @@ pub mod provider_accounts;
 pub mod refs;
 pub mod resources;
 pub mod sessions;
+pub mod squads;
 pub mod threads;
 pub mod timeline;
 pub mod trust;

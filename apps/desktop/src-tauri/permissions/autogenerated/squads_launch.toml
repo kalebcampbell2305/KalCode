@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-squads-launch"
+description = "Enables the squads_launch command without any pre-configured scope."
+commands.allow = ["squads_launch"]
+
+[[permission]]
+identifier = "deny-squads-launch"
+description = "Denies the squads_launch command without any pre-configured scope."
+commands.deny = ["squads_launch"]

@@ -8,13 +8,27 @@ KalCode hosts supported provider CLIs in real terminals. Provider-native authent
 | Native file, edit, search, shell and Git tools | Native CLI | Native CLI | Native CLI | Native CLI |
 | Account persistence | Native managed profile | Native managed profile | Native managed profile | Native OS-user sign-in |
 | Concurrent isolated accounts | Managed profiles | Managed profiles | Managed profiles | Not verified; one native account |
-| Model choices | Provider model configuration | Runtime catalog | Native model configuration | Runtime `agent models`; no static list |
+| Model choices | Provider model configuration | Exact-account app-server `model/list`, including model-specific effort | Native model configuration | Runtime `agent models`; no static list |
 | Turn status | Authenticated hooks | Authenticated observing hooks (verified 0.160.x; session-scoped, never deciding) plus completion notifications; other lines completion notifications only | Process-only status (no per-session hook mechanism without writing or hiding user settings) | Authenticated plugin hooks, with limited fallback |
 | Usage | Canonical provider-reported source | Canonical provider-reported source | Unavailable | Unavailable |
 | User settings and integrations | Native configuration | Native configuration | Native configuration | Native configuration plus additive observer plugin |
 | Unified Memory | Shared workspace service and native prompt context | Shared workspace service and task context | Shared workspace service and task context | Shared workspace service and native startup/prompt context |
 
 This table describes integration mechanisms, not certification of every upstream extension or model. Provider policy can disable a native feature; KalCode must show the real limitation and must not fabricate status or availability.
+
+## Squad and queued-agent launches
+
+Squads, Recipes and agent Operations use the same provider-pane adapter as Code's
+New agent action. Each launched member has a real PTY and canonical coding session;
+the selected account, exact model, supported effort, native configuration and
+worktree flow through that adapter. KalVoice calls the same Squad launch command.
+No provider-specific Squad executor or headless replacement limits native tools.
+
+Provider adapters determine interactive support and effort mapping. A provider
+without the requested capability produces an actionable member-level failure;
+independent members continue. Deterministic native tests prove orchestration and
+terminal identity without claiming that a paid upstream request was exercised.
+See [Squads](../SQUADS.md) for dependencies, recovery and ownership behavior.
 
 ## Parity rule and verification
 
