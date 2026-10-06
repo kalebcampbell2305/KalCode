@@ -22,6 +22,26 @@ function containsAsciiControlCharacter(value: string): boolean {
   return false;
 }
 
+const HOST_PORT_ADDRESS = /^([^/:?#@\s]+):\d{1,5}(?:[/?#]|$)/u;
+// `javascript:0` and friends stay schemes; everything else shaped like host:port is an address.
+const PRIVILEGED_SCHEMES = new Set(["about", "blob", "data", "file", "javascript", "vbscript"]);
+
+/** Loopback and private-network hosts serve plain-HTTP dev servers, so they open over http. */
+function isLocalHost(host: string): boolean {
+  const lower = host.toLowerCase();
+  if (lower === "localhost" || lower.endsWith(".localhost")) return true;
+  const parts = lower.split(".");
+  if (parts.length !== 4 || !parts.every((part) => /^\d{1,3}$/u.test(part) && Number(part) <= 255)) return false;
+  const [first, second] = parts.map(Number) as [number, number, number, number];
+  return (
+    first === 127 ||
+    first === 10 ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 168) ||
+    lower === "0.0.0.0"
+  );
+}
+
 /**
  * Turns an address-bar value into a credential-free http(s) URL. Privileged schemes never
  * reach the native webview. Native applies the same policy again at the trust boundary.
@@ -34,9 +54,12 @@ export function normalizeBrowserAddress(input: string): string {
   if (!value || value.length > MAX_BROWSER_URL_CHARS) throw new Error("Enter a valid web address.");
 
   const lower = value.toLowerCase();
+  const hostPort = HOST_PORT_ADDRESS.exec(value)?.[1];
   let candidate: string;
   if (lower.startsWith("http://") || lower.startsWith("https://")) {
     candidate = value;
+  } else if (hostPort !== undefined && !PRIVILEGED_SCHEMES.has(hostPort.toLowerCase())) {
+    candidate = `${isLocalHost(hostPort) ? "http" : "https"}://${value}`;
   } else if (value.includes("://") || /^[a-z][a-z0-9+.-]*:/iu.test(value)) {
     // The localhost/IPv6 forms below are handled before treating a colon as a scheme.
     if (/^(localhost|127\.0\.0\.1)(?::\d+)?(?:[/]|$)/iu.test(value) || /^\[::1\](?::\d+)?(?:[/]|$)/iu.test(value)) {
@@ -72,6 +95,8 @@ export function persistableBrowserUrl(input: string): string {
   const url = new URL(normalizeBrowserAddress(input));
   url.search = "";
   url.hash = "";
+  // WHATWG URLs keep a stray `%` verbatim, but persisted layouts accept only `%XX` escapes.
+  url.pathname = url.pathname.replace(/%(?![0-9A-Fa-f]{2})/gu, "%25");
   return url.toString();
 }
 

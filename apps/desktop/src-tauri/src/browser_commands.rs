@@ -1401,8 +1401,18 @@ pub fn browser_action(
         .get_mut(&browser_id)
         .ok_or_else(|| unavailable("browser_not_found", "That browser pane is not open."))?;
     require_record_page(record, page_lease)?;
-    record.loading = !matches!(action, BrowserAction::Stop);
+    record.loading = loading_after_action(action, record.loading);
     Ok(BrowserState::from_record(&browser_id, record))
+}
+
+/// History steps leave `loading` alone: a real cross-document step raises it through
+/// `on_navigation`, and a no-op or same-document step fires no event that would clear it.
+fn loading_after_action(action: BrowserAction, loading: bool) -> bool {
+    match action {
+        BrowserAction::Reload => true,
+        BrowserAction::Stop => false,
+        BrowserAction::Back | BrowserAction::Forward => loading,
+    }
 }
 
 #[tauri::command]
@@ -2343,5 +2353,18 @@ mod tests {
             .collect();
         assert_eq!(calls.len(), 1, "unguarded child URL reads: {calls:?}");
         assert!(calls[0].contains("native_browser_url(NATIVE_URL_QUERY_IS_SAFE"));
+    }
+
+    #[test]
+    fn browser_history_steps_never_strand_the_pane_loading() {
+        for loading in [false, true] {
+            assert!(loading_after_action(BrowserAction::Reload, loading));
+            assert!(!loading_after_action(BrowserAction::Stop, loading));
+            assert_eq!(loading_after_action(BrowserAction::Back, loading), loading);
+            assert_eq!(
+                loading_after_action(BrowserAction::Forward, loading),
+                loading
+            );
+        }
     }
 }
