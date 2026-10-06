@@ -35,6 +35,8 @@ const SNAPSHOT_FINAL_LIMIT: i64 = 200;
 const MAX_HISTORY_PAGE: u32 = 200;
 pub const ACTIVITY_MOMENT_LIMIT: u32 = 5_000;
 pub const OPERATION_CANCELLING_ACTION: &str = "Stopping safely";
+/// Shown when a requested cancellation could not be proven finished before KalCode stopped.
+pub const UNSETTLED_CANCELLATION_REASON: &str = "KalCode could not confirm this member stopped. Inspect its pane, then cancel it again or Run now.";
 
 const OPERATION_COLUMNS: &str = "
     o.id AS operation_id,
@@ -605,13 +607,13 @@ impl OperationsStore {
         validate_id(id)?;
         let spec = normalize_squad_member_spec(spec)?;
         self.write(|tx| {
+            require_revision(tx, revision)?;
             if spec.kind == OperationKind::Agent
                 && spec.prompt.is_none()
                 && !is_squad_member(tx, id)?
             {
                 return Err(prompt_required());
             }
-            require_revision(tx, revision)?;
             let status = operation_status(tx, id)?;
             if !is_pending(status) {
                 return Err(invalid_state(
@@ -1646,13 +1648,31 @@ impl OperationsStore {
                     recovery_message(recovered.status),
                 )?;
             }
+            // A cancellation that was requested but never settled (the process stopped first)
+            // must not keep a "Stopping safely" label forever. Return it to an actionable hold.
+            let stuck = {
+                let mut stmt = tx.prepare(
+                    "SELECT id FROM operations
+                     WHERE status IN ('queued', 'blocked', 'paused') AND current_action = ?1",
+                )?;
+                stmt.query_map([OPERATION_CANCELLING_ACTION], |row| row.get::<_, String>(0))?
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+            };
+            for id in &stuck {
+                tx.execute(
+                    "UPDATE operations SET status = 'paused', current_action = NULL,
+                        attention_reason = ?2 WHERE id = ?1",
+                    params![id, UNSETTLED_CANCELLATION_REASON],
+                )?;
+                append_moment(tx, id, "paused", UNSETTLED_CANCELLATION_REASON)?;
+            }
             tx.execute(
                 "UPDATE operations_state SET paused = 1 WHERE singleton = 1",
                 [],
             )?;
             let blocked_changed = refresh_blocked(tx)?;
             auto_order(tx)?;
-            if !active.is_empty() || !was_paused || blocked_changed {
+            if !active.is_empty() || !stuck.is_empty() || !was_paused || blocked_changed {
                 bump_revision(tx)?;
             }
             Ok(active.len())

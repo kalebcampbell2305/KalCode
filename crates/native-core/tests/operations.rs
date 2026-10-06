@@ -1192,6 +1192,33 @@ fn prepared_agent_allows_task_edits_but_rejects_execution_identity_changes() {
 }
 
 #[test]
+fn recovery_returns_an_unsettled_cancellation_to_an_actionable_hold() {
+    let data = tempfile::tempdir().expect("data");
+    let project = tempfile::tempdir().expect("project");
+    let core = open(data.path());
+    let workspace_id = workspace(&core, project.path());
+    let store = OperationsStore::new(core);
+    let operation = store
+        .enqueue(spec(&workspace_id, "Cancel never settled"))
+        .expect("enqueue");
+    store
+        .request_dispatch_cancel(&operation.id)
+        .expect("request cancellation");
+    // The process stops before the dispatcher settles the cancellation.
+    store.recover().expect("recover");
+    let recovered = store.get(&operation.id).expect("recovered");
+    assert_eq!(recovered.status, OperationStatus::Paused);
+    assert!(
+        recovered.current_action.is_none(),
+        "no stuck Stopping safely label"
+    );
+    assert_eq!(
+        recovered.attention_reason.as_deref(),
+        Some(kalcode_core::operations::UNSETTLED_CANCELLATION_REASON)
+    );
+}
+
+#[test]
 fn dispatch_cancellation_is_pending_until_cleanup_then_clears_attention() {
     let data = tempfile::tempdir().expect("data");
     let project = tempfile::tempdir().expect("project");
@@ -1907,6 +1934,14 @@ fn execution_shape_is_validated_before_persistence_and_binding() {
     let mut taskless_edit = queued.spec.clone();
     taskless_edit.prompt = None;
     let revision = store.snapshot().expect("snapshot").0;
+    // As on main, a stale edit reports the stale revision before any content error.
+    assert_eq!(
+        store
+            .update(&queued.id, taskless_edit.clone(), revision - 1)
+            .expect_err("stale taskless edit")
+            .code,
+        "stale_operations_revision"
+    );
     assert_eq!(
         store
             .update(&queued.id, taskless_edit, revision)
