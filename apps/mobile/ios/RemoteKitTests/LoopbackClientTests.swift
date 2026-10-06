@@ -226,6 +226,26 @@ final class LoopbackClientTests: XCTestCase {
         XCTAssertEqual(client.status, .unpaired)
     }
 
+    func testFailedRePairKeepsTheCurrentPairing() async throws {
+        let host = try LoopbackHost()
+        host.script = { _, s in
+            _ = try await s.expect("hello")
+            try s.host(loopbackSnapshot(rev: 1, agents: 2))
+            _ = try await s.expect("never")
+        }
+        let client = makeClient()
+        try await client.pair(with: host.pairingPayload())
+        try await until("online") { client.status == .online }
+        let other = try LoopbackHost()
+        other.reject = "pairing_expired"
+        do { try await client.pair(with: other.pairingPayload()); XCTFail("expected rejection") }
+        catch { XCTAssertEqual(error as? HandshakeRejection, .pairingExpired) }
+        XCTAssertEqual(client.status, .online, "the live session was never interrupted")
+        XCTAssertEqual(client.workstation?.deviceId, "dev_1")
+        XCTAssertEqual(client.fleet.agents.count, 2)
+        client.unpair()
+    }
+
     func testRevokedOnReconnectHandshakeShowsRemoved() async throws {
         let host = try LoopbackHost()
         host.script = { _, s in

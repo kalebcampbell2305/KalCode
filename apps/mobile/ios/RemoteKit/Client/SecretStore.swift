@@ -90,6 +90,10 @@ public final class PairingStore {
         return key
     }
 
+    public func save(deviceKey: Curve25519.KeyAgreement.PrivateKey) throws {
+        try store.write(Self.deviceKeyKey, deviceKey.rawRepresentation)
+    }
+
     public func workstation() -> PairedWorkstation? {
         guard let data = store.read(Self.workstationKey) else { return nil }
         return try? JSONDecoder().decode(PairedWorkstation.self, from: data)

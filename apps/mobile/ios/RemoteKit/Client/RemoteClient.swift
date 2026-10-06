@@ -136,28 +136,20 @@ public final class RemoteClient {
 
     /// Validates a scanned/pasted link and performs the first handshake with the pairing code.
     public func pair(with payload: PairingPayload) async throws {
-        stopLoop()
         guard let pk = payload.publicKey, let workstationKey = try? Curve25519.KeyAgreement.PublicKey(rawRepresentation: pk) else {
             throw PairingLinkError.invalidKey
         }
         guard !payload.isExpired(now: env.now()) else { throw PairingLinkError.expired }
-        // A fresh identity for every pairing: a previously revoked key is never reused.
-        pairing.clear()
-        let deviceKey = try pairing.deviceKey()
+        // A fresh identity for every pairing (a revoked key stays revoked). It is only persisted
+        // once the workstation accepted it, so a failed attempt never disturbs a current pairing.
+        let deviceKey = Curve25519.KeyAgreement.PrivateKey()
         let credentials = SecureSession.Credentials(deviceKey: deviceKey, workstationKey: workstationKey, hello: hello(pair: payload.code))
-        let endpoints = payload.addrs.compactMap(HostPort.init)
-        let session: SecureSession
+        let session = try await SecureSession.connectFirst(to: payload.addrs.compactMap(HostPort.init), credentials: credentials)
         do {
-            session = try await SecureSession.connectFirst(to: endpoints, credentials: credentials)
-        } catch {
-            pairing.clear()
-            throw error
-        }
-        do {
+            // The desktop commits the pairing only after the encrypted hello.
             try session.send(.hello)
         } catch {
             session.close()
-            pairing.clear()
             throw error
         }
         let record = PairedWorkstation(
@@ -169,10 +161,26 @@ public final class RemoteClient {
             pairedAt: env.now(),
             host: session.reply.host
         )
-        try pairing.save(record)
+        stopLoop()
+        failPending()
+        failQueue(with: .notConnected)
+        pairing.clear()
+        do {
+            try pairing.save(deviceKey: deviceKey)
+            try pairing.save(record)
+        } catch {
+            session.close()
+            pairing.clear()
+            workstation = nil
+            fleet.reset()
+            status = .unpaired
+            throw error
+        }
         workstation = record
         removedWorkstationName = nil
         fleet.reset()
+        lastUpdate = nil
+        disconnectedSince = nil
         status = .connecting
         launchLoop(initial: session, helloSent: true)
     }
