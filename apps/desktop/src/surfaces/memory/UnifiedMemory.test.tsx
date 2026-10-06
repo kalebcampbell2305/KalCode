@@ -35,6 +35,18 @@ const memory = (id: string, title: string): MemoryRecord => ({
   updatedAt: "2026-10-01T12:00:00Z",
 });
 
+/** Captures the 5 s background refresh; other intervals (waitFor's polling) still run. */
+function captureRefresh() {
+  const refresh: { current?: () => void } = {};
+  const real = window.setInterval.bind(window);
+  vi.spyOn(window, "setInterval").mockImplementation(((handler: TimerHandler, ms?: number) => {
+    if (ms !== 5000) return real(handler, ms);
+    refresh.current = handler as () => void;
+    return 1;
+  }) as typeof window.setInterval);
+  return refresh;
+}
+
 beforeEach(() => {
   runtime.client = new KalCodeClient(createMemoryTransport("code", { detectDelayMs: 0 }));
   workspaces.active = { id: "project-a", name: "Project A" } as Workspace;
@@ -71,11 +83,7 @@ describe("Unified Memory", () => {
   });
 
   it("refreshes incoming knowledge while preserving an in-progress edit", async () => {
-    let refresh: (() => void) | undefined;
-    vi.spyOn(window, "setInterval").mockImplementation((handler) => {
-      refresh = handler as () => void;
-      return 1 as unknown as ReturnType<typeof window.setInterval>;
-    });
+    const refresh = captureRefresh();
     const search = vi
       .spyOn(runtime.client, "listUnifiedMemory")
       .mockResolvedValue([memory("one", "Dashboard ownership")]);
@@ -83,13 +91,50 @@ describe("Unified Memory", () => {
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /Dashboard ownership/ }));
     const loadedCalls = search.mock.calls.length;
-    act(() => refresh?.());
+    act(() => refresh.current?.());
     await waitFor(() => expect(search.mock.calls.length).toBeGreaterThan(loadedCalls));
     await user.click(screen.getByRole("button", { name: "Edit" }));
     const editingCalls = search.mock.calls.length;
-    act(() => refresh?.());
+    act(() => refresh.current?.());
     expect(search).toHaveBeenCalledTimes(editingCalls);
     expect(screen.getByRole("textbox", { name: "Knowledge" })).toHaveValue("The dashboard owns the project shell.");
+  });
+
+  it("refreshes in the background without clearing an error or disabling controls", async () => {
+    const refresh = captureRefresh();
+    const record = memory("one", "Dashboard ownership");
+    let finish: ((records: MemoryRecord[]) => void) | undefined;
+    const search = vi
+      .spyOn(runtime.client, "listUnifiedMemory")
+      .mockResolvedValueOnce([record])
+      .mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      );
+    vi.spyOn(runtime.client, "reviewUnifiedMemory").mockRejectedValue({
+      category: "filesystem",
+      code: "memory_source_missing",
+      message: "The linked file could not be verified.",
+      retryable: true,
+    });
+    render(<UnifiedMemory />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /Dashboard ownership/ }));
+    await user.click(screen.getByRole("button", { name: "Mark reviewed" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("The linked file could not be verified.");
+
+    act(() => refresh.current?.());
+    await waitFor(() => expect(search).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("alert")).toHaveTextContent("The linked file could not be verified.");
+    expect(screen.queryByText("Searching…")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remember something" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Mark reviewed" })).toBeEnabled();
+
+    await act(async () => finish?.([{ ...record }]));
+    expect(screen.getByRole("alert")).toHaveTextContent("The linked file could not be verified.");
+    expect(screen.getByRole("button", { name: /Dashboard ownership/ })).toBeInTheDocument();
   });
 
   it("explains a native plan denial and offers the existing plans flow", async () => {
