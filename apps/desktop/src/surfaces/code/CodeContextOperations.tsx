@@ -269,13 +269,17 @@ export function CodeContextOperations({ client, visible = true }: { client: Oper
       </header>
 
       <section className={styles.signal} aria-label="Workspace execution summary">
+        {/* Tone edges on inert elements, not ::before (see CodeContextOperations.module.css). */}
         <span data-tone="working">
+          <span className={styles.signalEdge} aria-hidden="true" />
           <strong>{running}</strong> running
         </span>
         <span data-tone="service">
+          <span className={styles.signalEdge} aria-hidden="true" />
           <strong>{services.filter((service) => service.status === "running").length}</strong> services
         </span>
         <span data-tone={failed > 0 ? "failed" : "quiet"}>
+          <span className={styles.signalEdge} aria-hidden="true" />
           <strong>{failed}</strong> failed
         </span>
         <small>Observed {timeLabel(state.observedAt ?? snapshot.observedAt)}</small>

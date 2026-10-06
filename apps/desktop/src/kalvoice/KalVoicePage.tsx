@@ -268,9 +268,16 @@ export function KalVoicePage() {
 
       <Section id="kalvoice-privacy" title="Privacy">
         <ul className={styles.privacy}>
-          <li>Audio is held in memory on this computer, recognized here, and discarded right after.</li>
-          <li>Nothing you say is recorded, stored or uploaded. Activity shows ids and counts, never your words.</li>
           <li>
+            <span className={styles.privacyMark} aria-hidden="true" />
+            Audio is held in memory on this computer, recognized here, and discarded right after.
+          </li>
+          <li>
+            <span className={styles.privacyMark} aria-hidden="true" />
+            Nothing you say is recorded, stored or uploaded. Activity shows ids and counts, never your words.
+          </li>
+          <li>
+            <span className={styles.privacyMark} aria-hidden="true" />
             Command interpretation runs on this computer. Coding tasks you send to a provider use that provider's
             account and permissions.
           </li>

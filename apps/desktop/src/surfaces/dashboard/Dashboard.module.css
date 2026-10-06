@@ -163,9 +163,10 @@
   box-shadow: var(--shadow-panel), var(--glow-waiting);
 }
 
-/* The amber energy edge on the left of an urgent line. */
-.needsYou[data-urgent]::before {
-  content: "";
+/* The amber energy edge on the left of an urgent line: an aria-hidden element rendered only while
+   urgent (first in the line, Dashboard.tsx), not ::before: axe's colour-contrast check reports
+   "incomplete" for the line's text under an absolute pseudo-element with a background. */
+.needsYou[data-urgent] > .urgentEdge {
   position: absolute;
   top: 0;
   bottom: 0;

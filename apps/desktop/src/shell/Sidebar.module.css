@@ -128,8 +128,10 @@
   color: var(--color-accent-text);
 }
 
-.button[aria-current="page"]::before {
-  content: "";
+/* The current page's lit bar: an aria-hidden element rendered only on the current item (first in
+   the button, Sidebar.tsx), not ::before: axe's colour-contrast check reports "incomplete" for the
+   label under an absolute pseudo-element with a background. */
+.button[aria-current="page"] > .currentBar {
   position: absolute;
   left: calc(-1 * var(--space-2));
   top: 22%;

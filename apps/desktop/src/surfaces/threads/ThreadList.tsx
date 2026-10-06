@@ -130,6 +130,8 @@ export function ThreadList({
                       aria-current={selected ? "true" : undefined}
                       onClick={() => onSelect(thread.id)}
                     >
+                      {/* The selected rail on an inert element, not ::before (see ThreadList.module.css). */}
+                      {selected ? <span className={styles.selectedRail} aria-hidden="true" /> : null}
                       <span className={styles.nameRow}>
                         <span className={styles.name}>
                           {thread.unreadMessages > 0 ? (
