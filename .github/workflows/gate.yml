@@ -42,7 +42,9 @@ jobs:
     name: Gate (Windows)
     # Never run code from a fork on our machines.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    # Owner policy: validate on the main 64 GB Windows PC, never the second PC.
+    # The build PC's pool runs the native half (Rust, desktop frontend/UI, native E2E); the second
+    # Windows PC runs the JS/web half in the "Gate (Windows, PC2)" job below (owner, 2026-10-05: split
+    # tests across both PCs so neither pins its CPU). Both jobs test the same event SHA.
     runs-on: [self-hosted, Windows, kalcode-gate, kalcode-main-pc]
     timeout-minutes: 195
     steps:
@@ -72,7 +74,15 @@ jobs:
                 ($_.labels -contains 'kalcode-gate') -and ($_.labels -contains 'kalcode-main-pc') -and
                 ($_.steps | Where-Object { $_.name -eq 'Gate' -and $_.conclusion -eq 'success' })
               }
-              if ($green) {
+              # A split gate also needs the second PC's job green on the same SHA; a legacy run has none.
+              $pc2 = @($jobs | Where-Object { $_.name -eq 'Gate (Windows, PC2)' })
+              $pc2Green = $pc2.Count -eq 0 -or @($pc2 | Where-Object {
+                $_.conclusion -eq 'success' -and $_.head_sha -eq $env:GITHUB_SHA -and $_.runner_name -eq 'kalcode-win-gate-2' -and
+                ($_.labels -contains 'self-hosted') -and ($_.labels -contains 'Windows') -and ($_.labels -contains 'kalcode-gate-pc2') -and
+                -not ($_.labels -contains 'kalcode-main-pc') -and
+                ($_.steps | Where-Object { $_.name -eq 'Gate' -and $_.conclusion -eq 'success' })
+              }).Count -eq 1
+              if ($green -and $pc2Green) {
                 Write-Output "Gate (Windows) already passed for $env:GITHUB_SHA on $($run.head_branch): $($run.html_url)"
                 # ASCII: Windows PowerShell's utf8 writes a BOM into an empty file, which corrupts the key.
                 Add-Content -Path $env:GITHUB_OUTPUT -Encoding ascii -Value 'reused=true'
@@ -148,9 +158,13 @@ jobs:
           $json = node tooling/release/ship.mjs gate --base $base --list --json
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $plan = ($json | Out-String | ConvertFrom-Json).plan
-          $ids = @($plan | Where-Object { $_.state -eq 'selected' } | ForEach-Object { $_.id })
+          $selected = @($plan | Where-Object { $_.state -eq 'selected' } | ForEach-Object { $_.id })
+          # This machine's share of the plan (tooling/release/lifecycle/gate-split.mjs); the second PC runs the rest.
+          $only = (node tooling/release/lifecycle/gate-split.mjs main ($selected -join ',') | Out-String).Trim()
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $ids = @($only -split ',' | Where-Object { $_ })
           @(
-            "KALCODE_GATE_BASE=$base", "KALCODE_GATE_HEAVY=$($ids -contains 'rust' -or $ids -contains 'desktop-native-e2e')", "KALCODE_GATE_SLOT=$slot",
+            "KALCODE_GATE_BASE=$base", "KALCODE_GATE_ONLY=$only", "KALCODE_GATE_HEAVY=$($ids -contains 'rust' -or $ids -contains 'desktop-native-e2e')", "KALCODE_GATE_SLOT=$slot",
             "KALCODE_E2E_PORT=$($ports.E2ePort)", "KALCODE_E2E_MAIL_PORT=$($ports.MailPort)",
             "KALCODE_E2E_INSPECTOR_PORT=$($ports.InspectorPort)", "KALCODE_UI_TEST_PORT=$($ports.UiPort)",
             "KALCODE_E2E_CDP_PORT=$($ports.CdpPort)",
@@ -160,7 +174,7 @@ jobs:
           "python=$(([string]($ids -contains 'tooling-unit' -or $ids -contains 'desktop-native-e2e')).ToLower())" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding ascii
           "native=$(([string]($ids -contains 'desktop-native-e2e')).ToLower())" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding ascii
           "browsers=$(([string](@($ids | Where-Object { $_ -in @('desktop-ui','desktop-native-e2e','website-e2e','website-checkout-e2e') }).Count -gt 0)).ToLower())" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding ascii
-          Write-Host "Exact candidate $head; base $base; selected checks: $($ids -join ', ')"
+          Write-Host "Exact candidate $head; base $base; selected checks: $($selected -join ', '); on this PC: $($ids -join ', ')"
       - name: Admit optional gate work
         if: steps.reuse.outputs.reused != 'true'
         id: admission
@@ -204,6 +218,7 @@ jobs:
           $head = (git rev-parse HEAD | Out-String).Trim()
           if ($LASTEXITCODE -or $head -ne $env:GITHUB_SHA) { throw "Checkout does not match the immutable event SHA" }
           (Get-Process -Id $PID).PriorityClass = 'BelowNormal'
+          if (-not $env:KALCODE_GATE_ONLY) { Write-Host 'gate: nothing selected for the build PC (the second PC runs the rest)'; exit 0 }
           $token = $null
           try {
             if ($env:KALCODE_GATE_HEAVY -eq 'True') {
@@ -227,7 +242,7 @@ jobs:
                 Start-Sleep -Seconds 15
               }
             }
-            node tooling/release/ship.mjs gate --base $env:KALCODE_GATE_BASE --jobs $env:KALCODE_GATE_JOBS --keep-going
+            node tooling/release/ship.mjs gate --base $env:KALCODE_GATE_BASE --only $env:KALCODE_GATE_ONLY --jobs $env:KALCODE_GATE_JOBS --keep-going
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
           } finally {
             if ($null -ne $token) { $token.Dispose() }
@@ -259,6 +274,180 @@ jobs:
         run: |
           if (Test-Path -LiteralPath '.github/scripts/gate-workspace-hygiene.ps1') { .github/scripts/gate-workspace-hygiene.ps1 -Phase Stop }
 
+
+  pc2:
+    name: Gate (Windows, PC2)
+    # Never run code from a fork on our machines.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # The second Windows PC runs the self-contained JS/web half of the same exact candidate while the
+    # build PC's pool runs the native half (owner, 2026-10-05). Its runner is kalcode-win-gate-2.
+    runs-on: [self-hosted, Windows, kalcode-gate-pc2]
+    timeout-minutes: 120
+    steps:
+      # A merge-train landing fast-forwards main to a candidate this job already gated. Re-gating the
+      # identical commit would only occupy the gate runner, so reuse that evidence. Runs before checkout:
+      # no code under test sees the token.
+      - name: Reuse the merge-train gate of this exact commit
+        id: reuse
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' }
+          $api = "$env:GITHUB_API_URL/repos/$env:GITHUB_REPOSITORY/actions"
+          try {
+            $runs = (Invoke-RestMethod -Headers $headers -Uri "$api/workflows/gate.yml/runs?head_sha=$env:GITHUB_SHA&per_page=20").workflow_runs
+            foreach ($run in $runs) {
+              if ($run.id -eq [long]$env:GITHUB_RUN_ID -or $run.head_sha -ne $env:GITHUB_SHA -or $run.event -ne 'push' -or
+                  $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.path -ne '.github/workflows/gate.yml' -or $run.head_branch -notmatch '^merge-train/[0-9a-f]{12}-[0-9a-f]{8}$') { continue }
+              $jobs = (Invoke-RestMethod -Headers $headers -Uri "$api/runs/$($run.id)/jobs?filter=latest&per_page=100").jobs
+              # The same evidence the train lands on: a main-PC pool worker whose Gate step itself ran and passed.
+              $green = $jobs | Where-Object {
+                $_.name -eq 'Gate (Windows)' -and $_.conclusion -eq 'success' -and $_.head_sha -eq $env:GITHUB_SHA -and
+                $_.runner_name -match '^kalcode-win-gate(-w[1-5])?$' -and
+                ($_.labels -contains 'self-hosted') -and ($_.labels -contains 'Windows') -and
+                ($_.labels -contains 'kalcode-gate') -and ($_.labels -contains 'kalcode-main-pc') -and
+                ($_.steps | Where-Object { $_.name -eq 'Gate' -and $_.conclusion -eq 'success' })
+              }
+              # A split gate also needs the second PC's job green on the same SHA; a legacy run has none.
+              $pc2 = @($jobs | Where-Object { $_.name -eq 'Gate (Windows, PC2)' })
+              $pc2Green = $pc2.Count -eq 0 -or @($pc2 | Where-Object {
+                $_.conclusion -eq 'success' -and $_.head_sha -eq $env:GITHUB_SHA -and $_.runner_name -eq 'kalcode-win-gate-2' -and
+                ($_.labels -contains 'self-hosted') -and ($_.labels -contains 'Windows') -and ($_.labels -contains 'kalcode-gate-pc2') -and
+                -not ($_.labels -contains 'kalcode-main-pc') -and
+                ($_.steps | Where-Object { $_.name -eq 'Gate' -and $_.conclusion -eq 'success' })
+              }).Count -eq 1
+              if ($green -and $pc2Green) {
+                Write-Output "Gate (Windows) already passed for $env:GITHUB_SHA on $($run.head_branch): $($run.html_url)"
+                # ASCII: Windows PowerShell's utf8 writes a BOM into an empty file, which corrupts the key.
+                Add-Content -Path $env:GITHUB_OUTPUT -Encoding ascii -Value 'reused=true'
+                exit 0
+              }
+            }
+          } catch {
+            Write-Output "::warning::Could not look up merge-train gate evidence ($($_.Exception.Message)); gating."
+          }
+      # A cancelled or killed earlier job can leave test binaries/rustc running under this worker's
+      # _work directory, holding DLLs in the warm target (gate 37362947496 then failed in checkout).
+      # Inline because the repository is not checked out yet; same rule as
+      # .github/scripts/gate-workspace-hygiene.ps1 -Phase Stop. Own-account processes only.
+      - name: Stop this worker's orphaned processes
+        if: steps.reuse.outputs.reused != 'true'
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $root = ([IO.Path]::GetFullPath((Split-Path -Parent $env:RUNNER_WORKSPACE))).TrimEnd('\') + '\'
+          if ($root -notmatch '\\_work\\$') { throw "Refusing to clean outside a runner _work directory: $root" }
+          $all = @(Get-CimInstance Win32_Process); $byId = @{}; foreach ($p in $all) { $byId[[int]$p.ProcessId] = $p }
+          $keep = @{}; $c = $byId[[int]$PID]; for ($i = 0; $i -lt 16 -and $null -ne $c; $i++) { $keep[[int]$c.ProcessId] = $true; $c = $byId[[int]$c.ParentProcessId] }
+          foreach ($p in $all) {
+            if ($keep.ContainsKey([int]$p.ProcessId) -or $p.Name -match '^(Runner\.(Worker|Listener)|RunnerService)\.exe$' -or -not $p.ExecutablePath) { continue }
+            $cmd = [string]$p.CommandLine
+            if ($p.ExecutablePath.StartsWith($root, [StringComparison]::OrdinalIgnoreCase) -or ($cmd -and $cmd.IndexOf($root.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase) -ge 0)) {
+              Write-Output "Stopping orphan $($p.ProcessId) $($p.Name)"; & taskkill.exe /T /F /PID $p.ProcessId 2>&1 | Out-Null
+            }
+          }
+          exit 0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: steps.reuse.outputs.reused != 'true'
+        with:
+          fetch-depth: 0
+          # Leave no GitHub token in the checkout for the code under test.
+          persist-credentials: false
+          # The default clean (git clean -ffdx) wipes the worker's warm Cargo target and fails on files a
+          # leftover process holds; the next step resets to the exact SHA and cleans everything else.
+          clean: false
+      - name: Reset to the exact event SHA, keeping warm caches
+        if: steps.reuse.outputs.reused != 'true'
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: .github/scripts/gate-workspace-hygiene.ps1 -Phase Reset
+      - name: Plan change-based gate
+        if: steps.reuse.outputs.reused != 'true'
+        id: plan
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || (github.event_name == 'push' && github.event.before) || 'origin/main~1' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # No build-PC pool hooks here: the second PC has one gate slot and its own fixed ports (pool base + 200).
+          if ($env:RUNNER_NAME -ne 'kalcode-win-gate-2') { throw 'Unknown second-PC gate worker' }
+          $head = (git rev-parse HEAD | Out-String).Trim()
+          if ($LASTEXITCODE -or $head -ne $env:GITHUB_SHA) { throw 'Checkout does not match the immutable event SHA' }
+          $base = $env:BASE
+          if ($env:GITHUB_REF -like 'refs/heads/merge-train/*') {
+            if ($env:GITHUB_EVENT_NAME -ne 'push' -or $env:GITHUB_REF -notmatch '^refs/heads/merge-train/[0-9a-f]{12}-[0-9a-f]{8}$') {
+              throw 'Merge-train evidence requires an exact candidate branch push'
+            }
+            $base = (git log -1 --format='%(trailers:key=Merge-Train-Base,valueonly)' HEAD | Out-String).Trim()
+            if ($LASTEXITCODE -or $base -notmatch '^[0-9a-f]{40}$' -or $base -eq $head) {
+              throw 'Merge-train candidate has no distinct immutable Merge-Train-Base trailer'
+            }
+          }
+          $base = (git rev-parse --verify "$base^{commit}" | Out-String).Trim()
+          if ($LASTEXITCODE -or $base -notmatch '^[0-9a-f]{40}$') { throw 'Cannot resolve immutable gate base' }
+          git merge-base --is-ancestor $base HEAD
+          if ($LASTEXITCODE) { throw 'Gate base is not an ancestor of the candidate' }
+          $json = node tooling/release/ship.mjs gate --base $base --list --json
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $plan = ($json | Out-String | ConvertFrom-Json).plan
+          $selected = @($plan | Where-Object { $_.state -eq 'selected' } | ForEach-Object { $_.id })
+          # This machine's share of the plan (tooling/release/lifecycle/gate-split.mjs); the build PC runs the rest.
+          $only = (node tooling/release/lifecycle/gate-split.mjs pc2 ($selected -join ',') | Out-String).Trim()
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $ids = @($only -split ',' | Where-Object { $_ })
+          @(
+            "KALCODE_GATE_BASE=$base", "KALCODE_GATE_ONLY=$only",
+            'KALCODE_E2E_PORT=4691', 'KALCODE_E2E_MAIL_PORT=4692', 'KALCODE_E2E_INSPECTOR_PORT=9701',
+            'KALCODE_UI_TEST_PORT=1791', 'KALCODE_E2E_CDP_PORT=39333'
+          ) | Add-Content -Path $env:GITHUB_ENV -Encoding ascii
+          "python=$(([string]($ids -contains 'tooling-unit')).ToLower())" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding ascii
+          "browsers=$(([string](@($ids | Where-Object { $_ -in @('website-e2e','website-checkout-e2e') }).Count -gt 0)).ToLower())" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding ascii
+          Write-Host "Exact candidate $head; base $base; selected checks: $($selected -join ', '); on this PC: $($ids -join ', ')"
+      - name: Install
+        if: steps.reuse.outputs.reused != 'true'
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          pnpm install --frozen-lockfile
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Install selected browser runtime
+        if: steps.reuse.outputs.reused != 'true' && (steps.plan.outputs.browsers == 'true')
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          pnpm --filter @kalcode/website exec playwright install chromium
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      # tooling-unit runs the desktop package proof's real SQLite comparison through `python`.
+      - name: Prepare portable Python
+        id: python
+        if: steps.reuse.outputs.reused != 'true' && (steps.plan.outputs.python == 'true')
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: .github/scripts/prepare-desktop-python.ps1
+      - name: Gate
+        if: steps.reuse.outputs.reused != 'true'
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $head = (git rev-parse HEAD | Out-String).Trim()
+          if ($LASTEXITCODE -or $head -ne $env:GITHUB_SHA) { throw "Checkout does not match the immutable event SHA" }
+          (Get-Process -Id $PID).PriorityClass = 'BelowNormal'
+          if (-not $env:KALCODE_GATE_ONLY) { Write-Host 'gate: nothing selected for the second PC (the build PC runs the rest)'; exit 0 }
+          node tooling/release/ship.mjs gate --base $env:KALCODE_GATE_BASE --only $env:KALCODE_GATE_ONLY --jobs $env:KALCODE_GATE_JOBS --keep-going
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Remove this run's portable Python
+        if: steps.reuse.outputs.reused != 'true' && (always() && steps.python.outcome != 'skipped' && steps.python.outcome != '')
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: .github/scripts/prepare-desktop-python.ps1 -Cleanup
+      - name: Preserve exact candidate evidence
+        if: steps.reuse.outputs.reused != 'true' && (always())
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gate-evidence-pc2-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/gate-evidence.json
+          if-no-files-found: ignore
+      # Nothing this job started may outlive it.
+      - name: Stop processes this job left behind
+        if: always()
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          if (Test-Path -LiteralPath '.github/scripts/gate-workspace-hygiene.ps1') { .github/scripts/gate-workspace-hygiene.ps1 -Phase Stop }
   macos:
     name: Gate (macOS, Rust)
     # Enabled once the Mac gate runner exists (repository variable KALCODE_MAC_GATE=true).
