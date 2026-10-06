@@ -78,6 +78,9 @@ pub enum FeatureId {
     HostKeyVerification,
     SafeRestore,
     AutomationKillSwitch,
+    /// KalCode Remote: a paired phone or tablet mirrors and drives this workstation
+    /// (`docs/REMOTE_PROTOCOL.md`).
+    Remote,
 }
 
 /// The lowest plan a feature is on (ADVANCED.md §14a decision 1). `Safety` features are on every
@@ -98,7 +101,7 @@ pub enum FeaturePlacement {
 }
 
 impl FeatureId {
-    pub const ALL: [FeatureId; 34] = [
+    pub const ALL: [FeatureId; 35] = [
         Self::ProviderHealth,
         Self::ProviderProfiles,
         Self::ContextDrop,
@@ -133,6 +136,7 @@ impl FeatureId {
         Self::HostKeyVerification,
         Self::SafeRestore,
         Self::AutomationKillSwitch,
+        Self::Remote,
     ];
 
     /// Plan placement (ADVANCED.md §14a decision 1; placements the decision does not name are
@@ -175,6 +179,7 @@ impl FeatureId {
             | Self::DiffIntelligence
             | Self::ProviderHandoff
             | Self::RemoteWorkspaces
+            | Self::Remote
             | Self::Missions => Max,
             Self::Scheduler | Self::Automations => Max2x,
         }
@@ -217,6 +222,7 @@ impl FeatureId {
             Self::HostKeyVerification => "host_key_verification",
             Self::SafeRestore => "safe_restore",
             Self::AutomationKillSwitch => "automation_kill_switch",
+            Self::Remote => "remote",
         }
     }
 }

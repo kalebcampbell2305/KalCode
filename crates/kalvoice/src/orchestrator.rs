@@ -1048,6 +1048,49 @@ impl Orchestrator {
         }))
     }
 
+    /// Runs one already-typed intent, for callers that never speak or type a sentence (KalCode
+    /// Remote's agent actions). It takes the same path as a parsed command after its target is
+    /// bound: the request-id claim and replay, the executor's safety check, then execution.
+    /// Like every local command it is never metered against the cloud allowance. `req.text` is
+    /// not parsed. A replayed id returns the recorded outcome and never acts twice.
+    pub fn handle_intent(
+        &self,
+        req: CommandRequest,
+        intent: KalVoiceIntent,
+    ) -> Result<KalVoiceResponse> {
+        if !is_valid_id(&req.request_id) {
+            return Err(KalError::validation(
+                "invalid_request_id",
+                "KalVoice received an invalid request id.",
+            ));
+        }
+        if req.workspace_id.as_deref().is_some_and(|w| !is_valid_id(w))
+            || req.thread_id.as_deref().is_some_and(|t| !is_valid_id(t))
+        {
+            return Err(KalError::validation(
+                "invalid_target",
+                "That workspace or thread id is invalid.",
+            ));
+        }
+        let trace = LatencyTrace::default();
+        let mut run = match self.begin_run(&req, &|_| {}, &trace)? {
+            Ok(run) => run,
+            Err(replayed) => return Ok(replayed),
+        };
+        run.intent = Some(intent.kind_name().to_owned());
+        self.emit(vec![
+            run.event(EventPayload::KalVoiceRequestStarted {
+                request_id: req.request_id.clone(),
+                input: req.input,
+            }),
+            run.event(EventPayload::KalVoiceCommandRecognized {
+                request_id: req.request_id.clone(),
+                intent: intent.kind_name().to_owned(),
+            }),
+        ]);
+        run.command(intent, Vec::new())
+    }
+
     /// Handles a request with the immutable push-to-talk destination captured on key-down.
     /// Typed requests carry no destination. Keeping this native fact beside routing prevents a
     /// renderer bug or spoofed `thread_id` from turning "send that" into Enter in a raw shell.

@@ -1108,7 +1108,7 @@ impl OperationsState {
         )
     }
 
-    fn snapshot(&self) -> Result<OperationsSnapshot> {
+    pub(crate) fn snapshot(&self) -> Result<OperationsSnapshot> {
         let (events, truncated) = self.events()?;
         let (revision, paused, items) = self.rows(&events)?;
         let (operation_moments, moments_truncated) =
@@ -1227,7 +1227,7 @@ impl OperationsState {
         })
     }
 
-    fn detail(&self, id: &str) -> Result<OperationDetail> {
+    pub(crate) fn detail(&self, id: &str) -> Result<OperationDetail> {
         let mut after_seq = None;
         let mut before_seq = None;
         let mut stored_detail = None;

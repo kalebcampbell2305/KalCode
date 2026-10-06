@@ -50,6 +50,7 @@ export const FEATURE_PLACEMENT = {
   host_key_verification: "safety",
   safe_restore: "safety",
   automation_kill_switch: "safety",
+  remote: "max",
 } as const satisfies Record<FeatureId, FeaturePlacement>;
 
 export const PRODUCT_FEATURES = Object.keys(FEATURE_PLACEMENT) as FeatureId[];
