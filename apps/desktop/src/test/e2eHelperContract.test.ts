@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import helperInventory from "../../scripts/e2e-helpers.json";
 import {
+  closeBrowserBounded,
   isolatedWebviewEnvironment,
   OwnedApplicationRegistry,
   ownedChildIsTerminal,
@@ -178,6 +179,42 @@ describe("native E2E helper inventory", () => {
       expect(body.indexOf("settleOwnedWebview("), exit).toBeGreaterThan(-1);
       expect(body.indexOf("settleOwnedWebview("), exit).toBeLessThan(body.indexOf("closeBrowserBounded("));
     }
+  });
+
+  it("treats the CDP close as done once the dead endpoint's connection reports disconnected", async () => {
+    // Gates 37529315873 / 37520284094: after the app and its WebView2 tree exited, close() was still
+    // awaiting Playwright's own artifacts-folder removal while the browser was already disconnected.
+    let connected = true;
+    let onDisconnected: (() => void) | undefined;
+    const slowCleanup = {
+      close: () => {
+        setTimeout(() => {
+          connected = false;
+          onDisconnected?.();
+        }, 10);
+        return new Promise<void>(() => {});
+      },
+      isConnected: () => connected,
+      once: (_event: "disconnected", listener: () => void) => {
+        onDisconnected = listener;
+        return slowCleanup;
+      },
+    };
+    await expect(closeBrowserBounded(slowCleanup as never)).resolves.toBeUndefined();
+
+    const alreadyDisconnected = {
+      close: () => new Promise<void>(() => {}),
+      isConnected: () => false,
+      once: () => alreadyDisconnected,
+    };
+    await expect(closeBrowserBounded(alreadyDisconnected as never)).resolves.toBeUndefined();
+
+    const failing = {
+      close: () => Promise.reject(new Error("synthetic close failure")),
+      isConnected: () => true,
+      once: () => failing,
+    };
+    await expect(closeBrowserBounded(failing as never)).rejects.toThrow("synthetic close failure");
   });
 
   it("treats an already signaled owned child as terminal", () => {
