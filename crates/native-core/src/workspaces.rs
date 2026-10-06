@@ -215,7 +215,11 @@ impl TerminalRegistry {
             return (TerminalStatus::Running, None);
         };
         // Mirrors `on_terminal_exit`: a deliberately stopped operation is recorded as ended by
-        // the app, any other exit as exited.
+        // the app, a user Stop as exited without a code (the kill's code is not the shell's
+        // failure), any other exit as exited with its code.
+        if lock(&self.user_stopping).get(id) == Some(&generation) {
+            return (TerminalStatus::Exited, None);
+        }
         let stopped = lock(&self.operation_stopping).get(id) == Some(&generation);
         let status = if stopped {
             TerminalStatus::EndedByApp
@@ -1367,10 +1371,13 @@ impl Core {
                         } else {
                             "exited"
                         };
+                        // A user Stop ends the shell with the kill's code (1 on Windows, a
+                        // signal code on Unix), which is not the shell's own failure.
+                        let recorded_code = (!user_stopped).then_some(exit_code);
                         tx.execute(
                             "UPDATE terminals SET ended_at = ?1, exit_code = ?2, end_reason = ?3
                              WHERE id = ?4",
-                            params![now_rfc3339(), exit_code, end_reason, id],
+                            params![now_rfc3339(), recorded_code, end_reason, id],
                         )?;
                         let event = if exit.success || operation_stopped || user_stopped {
                             EventPayload::ShellCompleted {

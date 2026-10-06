@@ -161,6 +161,8 @@ fn terminal_context_actions_preserve_output_and_target_only_the_selected_tab() {
     }
     let stopped = core.stop_terminal(&terminal.id).expect("stop");
     assert_eq!(stopped.status, TerminalStatus::Exited);
+    // The kill's code (1 on Windows, a signal code on Unix) is not a shell failure.
+    assert_eq!(stopped.exit_code, None);
     assert_eq!(stopped.title, "Build logs");
     assert_eq!(core.terminals(&workspace.id).expect("tabs").len(), 2);
     assert_eq!(
@@ -180,6 +182,10 @@ fn terminal_context_actions_preserve_output_and_target_only_the_selected_tab() {
     assert!(wait_until(Duration::from_secs(5), || {
         events.lock().expect("events").iter().any(|event| matches!(&event.event, EventPayload::ShellCompleted { terminal_id, closed_by_user: false, .. } if terminal_id == &terminal.id))
     }));
+    let recorded = core.terminal(&terminal.id).expect("recorded stop");
+    assert_eq!(recorded.status, TerminalStatus::Exited);
+    assert!(recorded.ended_at.is_some());
+    assert_eq!(recorded.exit_code, None);
     let restarted = core
         .restart_terminal(&terminal.id, size())
         .expect("restart");
