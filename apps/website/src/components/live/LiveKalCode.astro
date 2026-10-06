@@ -9,6 +9,7 @@ import liveCss from "../../styles/live.css?url";
 import memoryCss from "../../styles/live-memory.css?url";
 import liveCanvasCss from "../../styles/live-canvas.css?url";
 import contextCss from "../../styles/live-context.css?url";
+import spaceNavCss from "../../styles/live-space.css?url";
 import { LIVE_ICON_PATHS } from "../../lib/live/icons";
 import { initialState } from "../../lib/live/model";
 import { iconSprite, renderApp } from "../../lib/live/render";
@@ -23,6 +24,7 @@ const html = renderApp(initialState(), cfg);
 <link rel="stylesheet" href={memoryCss} />
 <link rel="stylesheet" href={liveCanvasCss} />
 <link rel="stylesheet" href={contextCss} />
+<link rel="stylesheet" href={spaceNavCss} />
 <div
   class="live"
   data-live

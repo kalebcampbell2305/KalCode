@@ -680,7 +680,7 @@ export function mountLiveDemo(root: HTMLElement): LiveDemo {
     }
     if (event.key === "F8" && !event.repeat) {
       event.preventDefault();
-      speak("Open Dashboard");
+      speak("Open Activity");
     }
   });
 

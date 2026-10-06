@@ -54,7 +54,7 @@ export const TOUR: readonly TourStep[] = [
   {
     kicker: "Agent Fleet",
     title: "Every coding agent, at a glance",
-    body: "The Dashboard's Agent Fleet shows every agent in one state model: working, waiting, needs you, done. Click a card to jump straight to its terminal.",
+    body: "Activity's Agent Fleet shows every agent in one state model: working, waiting, needs you, done. Click a card to jump straight to its terminal.",
     target: "fleet",
     setup: ["menus-close", "go:dashboard"],
   },

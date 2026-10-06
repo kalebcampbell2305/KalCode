@@ -1,0 +1,39 @@
+/*
+ * The site's share of the KalCode space design system (AGENTS.md "Permanent futuristic space
+ * design system"), from the same @kalcode/ui tokens as the app, so kalcoded.com, the demo and the
+ * app are one universe. One fixed, static layer behind every page: the far star plane and the
+ * restrained nebula, at the page's level (Base.astro sets [data-space]). World pages are
+ * cinematic; docs and legal pages are quiet. Light theme keeps the wash only and high contrast
+ * removes it (tokens.css); nothing animates, so idle pages do no per-frame work.
+ */
+body::before,
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+
+body::before {
+  background: var(--atmosphere-stars-far) 140px 60px / var(--atmosphere-stars-far-size);
+  opacity: var(--space-standard-stars);
+}
+
+body::after {
+  background: var(--atmosphere-nebula);
+  opacity: var(--space-standard-nebula);
+}
+
+body[data-space="quiet"]::before {
+  opacity: var(--space-quiet-stars);
+}
+body[data-space="quiet"]::after {
+  opacity: var(--space-quiet-nebula);
+}
+body[data-space="cinematic"]::before {
+  opacity: var(--space-cinematic-stars);
+}
+body[data-space="cinematic"]::after {
+  opacity: var(--space-cinematic-nebula);
+}

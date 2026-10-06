@@ -224,7 +224,10 @@ describe("the live demo's sample workspace", () => {
   it("answers KalVoice commands by acting on the workspace", () => {
     const state = initialState();
     expect(runVoice(state, "Open four Codex terminals")).toBe("Opened 4 Codex terminals in Code.");
-    expect(runVoice(state, "Open Dashboard")).toBe("Opened Dashboard.");
+    expect(runVoice(state, "Open Activity")).toBe("Opened Activity.");
+    expect(state.surface).toBe("dashboard");
+    go(state, "code");
+    expect(runVoice(state, "Open Dashboard")).toBe("Opened Activity.");
     expect(state.surface).toBe("dashboard");
   });
 });
