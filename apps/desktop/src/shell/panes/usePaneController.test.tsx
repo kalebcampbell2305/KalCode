@@ -882,3 +882,41 @@ it("requests one close for all tabs and preserves work opened while the decision
   act(() => requestClose.mock.calls[0]?.[1]());
   expect(findLeaf(result.current.layout, "pane")?.tabs).toEqual([terminal("new")]);
 });
+
+it("a failed layout load never saves the default over the saved layout, and retries", async () => {
+  vi.useFakeTimers();
+  const fallback: PaneLayout = {
+    schemaVersion: 1,
+    root: makeLeaf([terminal("default")], "d"),
+    dock: [],
+    maximizedPaneId: null,
+  };
+  const saved: PaneLayout = {
+    schemaVersion: 1,
+    root: makeLeaf([terminal("saved")], "s"),
+    dock: [],
+    maximizedPaneId: null,
+  };
+  const store = {
+    load: vi.fn<() => Promise<PaneLayout | null>>().mockRejectedValue(new Error("runtime_not_ready")),
+    save: vi.fn().mockResolvedValue(undefined),
+  };
+  const { result } = renderHook(() =>
+    usePaneController({ scope: "load-fails", store, initial: () => fallback, titleOf: () => "Terminal" }),
+  );
+  await act(() => vi.advanceTimersByTimeAsync(0));
+  expect(result.current.ready).toBe(true);
+  expect(result.current.layout).toEqual(fallback);
+  await act(() => vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS * 2));
+  expect(store.save).not.toHaveBeenCalled();
+
+  store.load.mockResolvedValue(saved);
+  await act(() => vi.advanceTimersByTimeAsync(LOAD_RETRY_MS * 4));
+  expect(result.current.layout).toEqual(saved);
+  await act(() => vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS * 2));
+  expect(store.save).not.toHaveBeenCalled();
+
+  act(() => result.current.split("s", "horizontal", terminal("edit")));
+  await act(() => vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS * 2));
+  expect(store.save).toHaveBeenCalledExactlyOnceWith(result.current.layout);
+});
