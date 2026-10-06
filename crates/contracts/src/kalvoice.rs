@@ -237,6 +237,16 @@ pub enum KalVoiceIntent {
         groups: Vec<ProviderPaneRequest>,
         workspace_id: Option<String>,
     },
+    /// Launch one saved Squad by exact id or unique name in the current workspace. Resolution
+    /// and execution use the canonical Squad store; KalVoice keeps no member or launch state.
+    LaunchSquad {
+        query: String,
+    },
+    /// Launch one saved Recipe by exact id or unique name in the current workspace. Recipes
+    /// reach the same canonical Squad launch path as the UI.
+    LaunchRecipe {
+        query: String,
+    },
     /// Applies an exact model and effort to the immediately preceding launch group. The
     /// orchestrator supplies generation-bound thread instances from transient follow-up memory;
     /// the executor refuses stale, active, used, or mixed-provider groups before changing any.
@@ -415,6 +425,8 @@ impl KalVoiceIntent {
             Self::CreateTerminal { .. } => "create_terminal",
             Self::CreateThreads { .. } => "create_threads",
             Self::CreateProviderPanes { .. } => "create_provider_panes",
+            Self::LaunchSquad { .. } => "launch_squad",
+            Self::LaunchRecipe { .. } => "launch_recipe",
             Self::ConfigureRecentLaunch { .. } => "configure_recent_launch",
             Self::ControlPane { .. } => "control_pane",
             Self::ControlBrowser { .. } => "control_browser",
@@ -610,6 +622,12 @@ mod tests {
                 model: None,
                 effort: None,
                 assignments: Vec::new(),
+            },
+            KalVoiceIntent::LaunchSquad {
+                query: "Release Train".into(),
+            },
+            KalVoiceIntent::LaunchRecipe {
+                query: "Release Verification".into(),
             },
             KalVoiceIntent::SubmitFocused,
             KalVoiceIntent::ClearFocused,

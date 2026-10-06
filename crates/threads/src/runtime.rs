@@ -230,9 +230,19 @@ struct LiveState {
     turn_failed: bool,
     /// The user interrupted or paused the current turn: its failed completion is not a failure.
     halted: bool,
+    /// A task has reached the provider and has not yet produced its terminal turn event. This
+    /// prevents Operations from injecting a withheld Squad task into a pane the user started
+    /// using while its dependencies were unresolved.
+    turn_in_flight: bool,
     /// Who asked for the current session: the Operations scheduler's launches are background
     /// work and yield first; a person's Resume or message makes it theirs again.
     origin: LaunchOrigin,
+    /// A Squad pane is live and visible, but its first task is withheld until Operations proves
+    /// every declared dependency succeeded. Provider idle events cannot hide this state.
+    dependency_wait: bool,
+    /// The person wrote directly to a prepared interactive pane. The scheduler cannot reclaim it
+    /// until the provider reports that turn complete (or the person stops it).
+    prepared_user_turn: bool,
 }
 
 /// A message on its way to the provider.
@@ -244,6 +254,9 @@ struct TurnInput {
     /// Delivering the recorded text later is the same message (no ephemeral context attached),
     /// so it may be kept as the thread's undelivered message.
     redeliverable: bool,
+    /// This is a dependency-gated Operations task for an already-live pane. A definite refusal
+    /// keeps that native terminal alive and returns the Operation to an explicit attention hold.
+    prepared_operation: bool,
 }
 
 impl TurnInput {
@@ -252,6 +265,7 @@ impl TurnInput {
             payload: text.clone(),
             record: Some(text),
             redeliverable: true,
+            prepared_operation: false,
         }
     }
 
@@ -260,6 +274,19 @@ impl TurnInput {
             payload: text,
             record: None,
             redeliverable: true,
+            prepared_operation: false,
+        }
+    }
+
+    /// A scheduler-owned prepared task is persisted for audit, but a refusal before the first
+    /// byte is still a terminal Operation attempt. Ordinary Resume must never replay it outside
+    /// that Operation; only explicit Run now may authorize a new attempt.
+    fn prepared(text: String) -> Self {
+        Self {
+            payload: text.clone(),
+            record: Some(text),
+            redeliverable: false,
+            prepared_operation: true,
         }
     }
 }
@@ -1192,14 +1219,26 @@ impl ThreadRuntime {
         request: CreateThread,
         review_id: Option<&str>,
     ) -> Result<ThreadSummary> {
-        validate::thread_id(operation_id)?;
-        self.create_reviewed_with_id(
+        self.create_reviewed_for_operation_with_origin(
+            operation_id,
             request,
             review_id,
-            Some(operation_id),
-            None,
             LaunchOrigin::Background,
         )
+    }
+
+    /// Operations launch with an explicit admission origin. User-started Squads use `User`, so
+    /// normal CPU load never becomes an artificial coding-agent concurrency limit; scheduled
+    /// Operations retain `Background` and yield to interactive work.
+    pub fn create_reviewed_for_operation_with_origin(
+        &self,
+        operation_id: &str,
+        request: CreateThread,
+        review_id: Option<&str>,
+        origin: LaunchOrigin,
+    ) -> Result<ThreadSummary> {
+        validate::thread_id(operation_id)?;
+        self.create_reviewed_with_id(request, review_id, Some(operation_id), None, origin)
     }
 
     /// Creates a reviewed thread with a caller-chosen id whose session runs in `cwd` (an
@@ -1216,13 +1255,31 @@ impl ThreadRuntime {
         review_id: Option<&str>,
         prepare: impl FnOnce() -> Result<PathBuf>,
     ) -> Result<ThreadSummary> {
+        self.create_reviewed_in_with_origin(
+            thread_id,
+            request,
+            review_id,
+            LaunchOrigin::User,
+            prepare,
+        )
+    }
+
+    /// [`Self::create_reviewed_in`] with explicit Resource Governor admission origin.
+    pub fn create_reviewed_in_with_origin(
+        &self,
+        thread_id: &str,
+        request: CreateThread,
+        review_id: Option<&str>,
+        origin: LaunchOrigin,
+        prepare: impl FnOnce() -> Result<PathBuf>,
+    ) -> Result<ThreadSummary> {
         validate::thread_id(thread_id)?;
         self.create_reviewed_with_id(
             request,
             review_id,
             Some(thread_id),
             Some(Box::new(prepare)),
-            LaunchOrigin::User,
+            origin,
         )
     }
 
@@ -1286,7 +1343,7 @@ impl ThreadRuntime {
     /// Creates a thread whose session starts without a task; it waits (`idle`) for input. Coding
     /// agents (provider panes) start this way with their clean provider display name.
     pub fn create_idle(&self, request: CreateIdleThread) -> Result<ThreadSummary> {
-        self.create_idle_inner(request, None, None)
+        self.create_idle_inner(request, None, None, LaunchOrigin::User)
     }
 
     /// [`Self::create_idle`] with a caller-chosen thread id (a provider pane marks its id
@@ -1297,7 +1354,19 @@ impl ThreadRuntime {
         request: CreateIdleThread,
     ) -> Result<ThreadSummary> {
         validate::thread_id(thread_id)?;
-        self.create_idle_inner(request, Some(thread_id), None)
+        self.create_idle_inner(request, Some(thread_id), None, LaunchOrigin::User)
+    }
+
+    /// Creates a taskless Operations coding agent with its exact reserved id and admission
+    /// origin. It starts a real provider process and waits ready for input without a fake turn.
+    pub fn create_idle_with_id_for_origin(
+        &self,
+        thread_id: &str,
+        request: CreateIdleThread,
+        origin: LaunchOrigin,
+    ) -> Result<ThreadSummary> {
+        validate::thread_id(thread_id)?;
+        self.create_idle_inner(request, Some(thread_id), None, origin)
     }
 
     /// Fresh live session in a native-resolved directory (never resumes a source session).
@@ -1307,8 +1376,24 @@ impl ThreadRuntime {
         request: CreateIdleThread,
         cwd: PathBuf,
     ) -> Result<ThreadSummary> {
+        self.create_idle_with_id_in_directory_for_origin(
+            thread_id,
+            request,
+            cwd,
+            LaunchOrigin::User,
+        )
+    }
+
+    /// [`Self::create_idle_with_id_in_directory`] with explicit Resource Governor admission.
+    pub fn create_idle_with_id_in_directory_for_origin(
+        &self,
+        thread_id: &str,
+        request: CreateIdleThread,
+        cwd: PathBuf,
+        origin: LaunchOrigin,
+    ) -> Result<ThreadSummary> {
         validate::thread_id(thread_id)?;
-        self.create_idle_inner(request, Some(thread_id), Some(cwd))
+        self.create_idle_inner(request, Some(thread_id), Some(cwd), origin)
     }
 
     fn create_idle_inner(
@@ -1316,6 +1401,7 @@ impl ThreadRuntime {
         request: CreateIdleThread,
         thread_id: Option<&str>,
         cwd: Option<PathBuf>,
+        origin: LaunchOrigin,
     ) -> Result<ThreadSummary> {
         let name = match request.name.as_deref().filter(|n| !n.trim().is_empty()) {
             Some(name) => validate::name(name)?,
@@ -1352,7 +1438,7 @@ impl ThreadRuntime {
                     "default"
                 },
                 cwd: cwd.map(|path| Box::new(move || Ok(path)) as PrepareFolder<'_>),
-                origin: LaunchOrigin::User,
+                origin,
             },
             None,
             thread_id,
@@ -1413,6 +1499,139 @@ impl ThreadRuntime {
 
     pub fn send(&self, thread_id: &str, text: &str) -> Result<ThreadSummary> {
         self.send_reviewed(thread_id, text, None)
+    }
+
+    /// Marks an already-created provider pane as waiting for its Operations dependencies. The
+    /// provider process stays live and interactive, while its initial task remains unsent.
+    pub fn wait_for_dependency(&self, thread_id: &str, detail: &str) -> Result<ThreadSummary> {
+        validate::thread_id(thread_id)?;
+        let live = self
+            .inner
+            .existing_live(thread_id)
+            .ok_or_else(not_running)?;
+        let mut state = live.lock();
+        let row = self.inner.row(thread_id)?;
+        if row.status.is_terminal() {
+            return Err(not_running());
+        }
+        if state.session.is_none() || state.waiting.is_some() {
+            return Err(not_running());
+        }
+        if state.turn_in_flight || state.prepared_user_turn || !state.pending.is_empty() {
+            return Err(KalError::validation(
+                "operation_prepared_thread_busy",
+                "This member's terminal is already working. Finish or stop that turn, then run the Squad member again.",
+            ));
+        }
+        if state.dependency_wait
+            && row.status == ThreadStatus::WaitingForDependency
+            && row.current_activity.as_deref() == Some(detail)
+        {
+            drop(state);
+            return Ok(self.inner.summary_from_row(row));
+        }
+        state.dependency_wait = true;
+        self.inner
+            .transition(&live.ctx, ThreadStatus::WaitingForDependency, Some(detail))?;
+        drop(state);
+        self.inner.summary(thread_id)
+    }
+
+    /// Releases a prepared Squad pane after its dependencies succeed. No prompt is sent here;
+    /// Operations performs that separately so claim/send/bind failure remains recoverable.
+    pub fn dependency_ready(&self, thread_id: &str) -> Result<ThreadSummary> {
+        validate::thread_id(thread_id)?;
+        self.inner.row(thread_id)?;
+        let live = self
+            .inner
+            .existing_live(thread_id)
+            .ok_or_else(not_running)?;
+        let mut state = live.lock();
+        if state.session.is_none() || state.waiting.is_some() {
+            return Err(not_running());
+        }
+        if !state.dependency_wait
+            || state.turn_in_flight
+            || state.prepared_user_turn
+            || !state.pending.is_empty()
+        {
+            return Err(KalError::validation(
+                "operation_prepared_thread_changed",
+                "This member's terminal was used before its Squad task started. Finish or stop that turn, then run the member again.",
+            ));
+        }
+        state.dependency_wait = false;
+        self.inner
+            .transition(&live.ctx, ThreadStatus::Idle, Some(READY_ACTIVITY))?;
+        drop(state);
+        self.inner.summary(thread_id)
+    }
+
+    /// Relinquishes a dependency-prepared pane before a person's raw PTY bytes are written. This
+    /// durable transition prevents a later scheduler tick from stealing an interactive turn.
+    pub fn claim_prepared_pane_by_user(&self, thread_id: &str) -> Result<bool> {
+        validate::thread_id(thread_id)?;
+        let Some(live) = self.inner.existing_live(thread_id) else {
+            return Ok(false);
+        };
+        let mut state = live.lock();
+        if !state.dependency_wait {
+            return Ok(false);
+        }
+        if state.session.is_none() || state.waiting.is_some() {
+            return Err(not_running());
+        }
+        state.dependency_wait = false;
+        state.prepared_user_turn = true;
+        self.inner.transition(
+            &live.ctx,
+            ThreadStatus::Idle,
+            Some("Terminal used directly; Squad task remains held"),
+        )?;
+        Ok(true)
+    }
+
+    /// Explicit Operations Run now may reclaim an idle pane the person previously used. Merely
+    /// finishing or exiting that direct turn never clears the flag: the scheduler must first
+    /// surface a durable hold, and only a new user action can re-arm the Squad task.
+    pub fn rearm_prepared_pane(&self, thread_id: &str) -> Result<bool> {
+        validate::thread_id(thread_id)?;
+        let Some(live) = self.inner.existing_live(thread_id) else {
+            return Ok(false);
+        };
+        let mut state = live.lock();
+        if !state.prepared_user_turn {
+            return Ok(false);
+        }
+        let row = self.inner.row(thread_id)?;
+        if state.turn_in_flight
+            || !state.pending.is_empty()
+            || !matches!(
+                row.status,
+                ThreadStatus::Idle
+                    | ThreadStatus::Completed
+                    | ThreadStatus::Failed
+                    | ThreadStatus::Interrupted
+                    | ThreadStatus::Offline
+            )
+        {
+            return Err(KalError::validation(
+                "operation_prepared_thread_busy",
+                "This member's terminal is still working. Finish or stop that turn, then run the Squad member again.",
+            ));
+        }
+        state.prepared_user_turn = false;
+        Ok(true)
+    }
+
+    /// Delivers the first task to a dependency-prepared pane. The dependency flag and provider
+    /// send share the per-thread lock, so a concurrent user turn wins cleanly instead of having
+    /// the Operations task injected into it.
+    pub fn send_prepared_operation(&self, thread_id: &str, text: &str) -> Result<ThreadSummary> {
+        let admitted = self.admit_thread_prompt(thread_id, text, None)?;
+        self.inner
+            .send_prepared_operation(thread_id, admitted.prompt)?;
+        self.inner.summary(thread_id)
     }
 
     /// Sends after consuming an exact owner confirmation when the prompt warned.
@@ -2720,6 +2939,7 @@ impl Inner {
         state.session = Some(session.clone());
         state.turn_failed = false;
         state.halted = false;
+        state.turn_in_flight = false;
         if let Err(error) = self.spawn_worker(live.clone(), generation, receiver) {
             let _ = session.terminate();
             state.session = None;
@@ -3122,7 +3342,7 @@ impl Inner {
                 })?;
             }
             AgentEvent::Status { status, detail } => {
-                if !provider_settable(status) || state.waiting.is_some() {
+                if !provider_settable(status) || state.waiting.is_some() || state.dependency_wait {
                     // A held turn owns the status until it is admitted (a late idle from the
                     // previous turn must not hide the wait).
                     tracing::debug!(event = "thread.status_ignored", thread_id = %id, status = ?status);
@@ -3336,6 +3556,7 @@ impl Inner {
                 // An idle thread whose last turn failed says so, so status and error agree.
                 self.flush_buffers(ctx, state)?;
                 let interrupted = state.halted;
+                state.turn_in_flight = false;
                 state.turn_failed = !ok && !interrupted;
                 self.core.emit(ctx.event(
                     EventSource::Provider,
@@ -3707,6 +3928,7 @@ impl Inner {
         state.generation += 1;
         state.tools.clear();
         state.resume_status = None;
+        state.turn_in_flight = false;
         let id = ctx.thread_id.as_str();
         // Do not publish a terminal thread state while an approval for that thread can still be
         // resolved. This external gate call remains outside the database transaction and after
@@ -3839,6 +4061,7 @@ impl Inner {
             payload: provider_payload,
             record: Some(persisted_text),
             redeliverable,
+            prepared_operation: false,
         };
         self.deliver_locked(live, state, input, None)
     }
@@ -3874,6 +4097,10 @@ impl Inner {
             }
             Ok(())
         };
+        // Own the turn before stdin/provider delivery. A very fast adapter may enqueue
+        // TurnCompleted before `send` returns; the event worker waits for this same lock and then
+        // clears the flag in the correct order.
+        state.turn_in_flight = true;
         match session.send(AgentInput::Text {
             text: input.payload.clone(),
         }) {
@@ -3893,11 +4120,38 @@ impl Inner {
                 Ok(())
             }
             Err(ProviderError::ResourcesHeld(hold)) => {
+                state.turn_in_flight = false;
                 mark_undelivered(&recorded)?;
                 self.wait_for_resources(live, state, hold, WaitFor::Turn { input }, recheck)
             }
             Err(error) => {
+                state.turn_in_flight = false;
                 tracing::warn!(event = "thread.send_failed", thread_id = %ctx.thread_id, error = %error);
+                if input.prepared_operation
+                    && matches!(
+                        error,
+                        ProviderError::Refused { .. } | ProviderError::Unsupported
+                    )
+                {
+                    // This is a definite pre-write refusal (native setup/permission/provider
+                    // prompt), so killing the real terminal would remove the very UI the person
+                    // needs to resolve it. Preserve the pane and require Operations Run now to
+                    // authorize another attempt; ordinary Resume has no undelivered task to send.
+                    state.dependency_wait = true;
+                    self.transition(
+                        ctx,
+                        ThreadStatus::WaitingForDependency,
+                        Some("Provider needs attention; Squad task remains held"),
+                    )?;
+                    let (_, message) = describe_provider_error(
+                        &error,
+                        self.row(&ctx.thread_id)?.provider_name.as_str(),
+                    );
+                    return Err(KalError::validation(
+                        "operation_prepared_provider_not_ready",
+                        message,
+                    ));
+                }
                 if never_delivered(&error) {
                     mark_undelivered(&recorded)?;
                 }
@@ -3955,6 +4209,9 @@ impl Inner {
             &row_prompt_target(&row),
             &persisted_prompt.text,
         )?;
+        // A person may always use a prepared terminal. Doing so relinquishes the scheduler's
+        // right to inject its withheld first task until the member is explicitly armed again.
+        state.dependency_wait = false;
         // Only a person's message (`thread_send` or a previewed context send) reaches here; the
         // Operations scheduler only creates its threads. Whatever started the session,
         // the person is asking now, so this and later turns are theirs (owner rule: CPU load
@@ -3966,6 +4223,32 @@ impl Inner {
             }
         }
         self.send_locked_with_payload(&live, &mut state, persisted_prompt.text, provider_payload)
+    }
+
+    fn send_prepared_operation(&self, thread_id: &str, prompt: AdmittedPrompt) -> Result<()> {
+        let live = self.existing_live(thread_id).ok_or_else(not_running)?;
+        let mut state = live.lock();
+        let row = self.row(thread_id)?;
+        if row.archived_at.is_some() {
+            return Err(archived());
+        }
+        if state.session.is_none() || state.waiting.is_some() {
+            return Err(not_running());
+        }
+        if !state.dependency_wait
+            || state.turn_in_flight
+            || state.prepared_user_turn
+            || !state.pending.is_empty()
+        {
+            return Err(KalError::validation(
+                "operation_prepared_thread_changed",
+                "This member's terminal was used before its Squad task started. Finish or stop that turn, then run the member again.",
+            ));
+        }
+        self.prompt_gate
+            .verify(prompt.admission, &row_prompt_target(&row), &prompt.text)?;
+        state.dependency_wait = false;
+        self.deliver_locked(&live, &mut state, TurnInput::prepared(prompt.text), None)
     }
 
     /// Interrupt (→ idle) or pause (→ paused) the current turn, keeping the session.
@@ -4012,6 +4295,7 @@ impl Inner {
         state.resume_status = None;
         state.halted = true;
         state.turn_failed = false;
+        state.turn_in_flight = false;
         self.flush_buffers(&live.ctx, &mut state)?;
         let now = now_rfc3339();
         let ctx = &live.ctx;
@@ -4728,6 +5012,131 @@ mod tests {
              Providers, then resume this thread."
         );
         assert!(!message.contains("terminal"), "{message}");
+    }
+
+    #[test]
+    fn dependency_wait_is_idempotent_and_direct_terminal_use_cannot_be_reclaimed() {
+        let temp = tempfile::tempdir().expect("temp");
+        let project = tempfile::tempdir().expect("project");
+        let core = Arc::new(
+            Core::open(kalcode_core::CoreConfig {
+                paths: kalcode_core::Paths::new(temp.path()),
+                app_version: "0.0.0-test".into(),
+                channel: kalcode_core::flags::BuildChannel::Development,
+            })
+            .expect("core"),
+        );
+        let workspace = core.open_workspace(project.path()).expect("workspace");
+        let thread_id = new_id();
+        core.transact(|tx| {
+            tx.execute(
+                "INSERT INTO threads (
+                   id, name, provider_id, provider_name, workspace_id, workspace_name, cwd,
+                   permission_mode, status, created_at, last_activity_at
+                 ) VALUES (?1, 'Prepared member', 'codex', 'Codex', ?2, 'Fixture', ?3,
+                   'bypass', 'idle', '2026-10-05T12:00:00.000Z', '2026-10-05T12:00:00.000Z')",
+                rusqlite::params![
+                    thread_id,
+                    workspace.id,
+                    project.path().to_string_lossy().as_ref()
+                ],
+            )?;
+            Ok(((), Vec::new()))
+        })
+        .expect("thread row");
+        let runtime = ThreadRuntime::new(
+            Arc::clone(&core),
+            Arc::new(ProviderRegistry::new()),
+            Arc::new(crate::registry::NoWorkspaces),
+            Arc::new(kalcode_contracts::permissions::AskUnlessReadGate),
+        )
+        .expect("runtime");
+        // Startup recovery correctly marks the persisted but sessionless fixture Offline. This
+        // test then attaches its synthetic live session, so restore the matching ready row first.
+        core.transact(|tx| {
+            tx.execute(
+                "UPDATE threads SET status = 'idle', current_activity = NULL WHERE id = ?1",
+                [&thread_id],
+            )?;
+            Ok(((), Vec::new()))
+        })
+        .expect("restore live fixture row");
+        let row = runtime.inner.row(&thread_id).expect("row");
+        let live = Arc::new(LiveThread {
+            ctx: Ctx::from_row(&row),
+            state: Mutex::new(LiveState {
+                session: Some(Arc::new(NoopSession)),
+                ..LiveState::default()
+            }),
+        });
+        runtime
+            .inner
+            .live
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(thread_id.clone(), Arc::clone(&live));
+
+        let first = runtime
+            .wait_for_dependency(&thread_id, "Waiting for dependencies")
+            .expect("first wait");
+        let events_after_first = core
+            .query_events(&kalcode_contracts::events::EventQuery {
+                types: vec!["thread.status_changed".into()],
+                ..Default::default()
+            })
+            .expect("events")
+            .events
+            .len();
+        let second = runtime
+            .wait_for_dependency(&thread_id, "Waiting for dependencies")
+            .expect("idempotent wait");
+        assert_eq!(second.last_activity_at, first.last_activity_at);
+        assert_eq!(
+            core.query_events(&kalcode_contracts::events::EventQuery {
+                types: vec!["thread.status_changed".into()],
+                ..Default::default()
+            })
+            .expect("events")
+            .events
+            .len(),
+            events_after_first
+        );
+        assert!(
+            runtime
+                .messages(&thread_id, 10, None)
+                .expect("messages")
+                .is_empty()
+        );
+
+        assert!(
+            runtime
+                .claim_prepared_pane_by_user(&thread_id)
+                .expect("user takes pane")
+        );
+        // A very short direct provider turn can complete before the scheduler's next tick. Its
+        // completion must not silently return the pane to orchestration.
+        {
+            let mut state = live.lock();
+            runtime
+                .inner
+                .apply_event(&live, &mut state, AgentEvent::TurnCompleted { ok: true })
+                .expect("direct turn completes");
+        }
+        assert_eq!(
+            runtime
+                .wait_for_dependency(&thread_id, "Waiting for dependencies")
+                .expect_err("completed direct terminal use cannot be reclaimed")
+                .code,
+            "operation_prepared_thread_busy"
+        );
+        assert!(
+            runtime
+                .rearm_prepared_pane(&thread_id)
+                .expect("explicit Run now rearms the pane")
+        );
+        runtime
+            .wait_for_dependency(&thread_id, "Waiting for dependencies")
+            .expect("explicitly rearmed pane can wait again");
     }
 
     #[test]

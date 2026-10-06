@@ -127,6 +127,8 @@ describe("Operations voice scene resolver", () => {
     ["take me to Operations", "runs"],
     ["open runs", "runs"],
     ["show the queue", "queue"],
+    ["show squads", "squads"],
+    ["open teams", "squads"],
     ["open services", "services"],
     ["show environments", "environments"],
     ["open activity", "activity"],

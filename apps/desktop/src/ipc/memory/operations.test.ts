@@ -239,6 +239,109 @@ describe("Operations memory runtime", () => {
     );
   });
 
+  it("keeps squad agents in the canonical Operations collection while their runtime binds", () => {
+    const { memory } = setup(true);
+    const id = "00000000-0000-4000-8000-00000000a011";
+    memory.agents.create(id, {
+      name: "Implementation lead",
+      workspaceId: workspace.id,
+      kind: "agent",
+      command: null,
+      prompt: "Implement the updater reliability pass",
+      providerId: "codex",
+      providerAccountId: "0192f3c4-0000-7000-8000-000000000201",
+      model: "gpt-5.6-sol",
+      effort: "xhigh",
+      dependencies: [],
+      priority: 8,
+      lane: "next",
+      environment: "local",
+      urls: [],
+      envKeys: [],
+    });
+    memory.agents.bind(id, {
+      threadId: "00000000-0000-4000-8000-00000000b011",
+      terminalId: "00000000-0000-4000-8000-00000000b011",
+      branch: "kal/updater-reliability-b011",
+      accountLabel: "Personal",
+    });
+
+    expect(memory.agents.exact([id])).toEqual([
+      expect.objectContaining({
+        id,
+        source: "operations",
+        status: "running",
+        threadId: "00000000-0000-4000-8000-00000000b011",
+        terminalId: "00000000-0000-4000-8000-00000000b011",
+        startedAt: expect.any(String),
+      }),
+    ]);
+    expect(memory.controls.snapshot().items.map((item) => item.id)).toEqual([id]);
+  });
+
+  it("requires a prompt for ordinary agent tasks but lets a Squad member be a taskless terminal", () => {
+    const { memory, invoke } = setup(true);
+    const agent = {
+      name: "Ordinary agent",
+      workspaceId: workspace.id,
+      kind: "agent" as const,
+      command: null,
+      prompt: null,
+      providerId: "codex",
+      providerAccountId: "0192f3c4-0000-7000-8000-000000000201",
+      model: "gpt-5.6-sol",
+      effort: "high",
+      dependencies: [],
+      priority: 0,
+      lane: "next" as const,
+      environment: "local" as const,
+      urls: [],
+      envKeys: [],
+    };
+    expect(() => invoke("operations_enqueue", { spec: agent })).toThrow();
+
+    const member = "00000000-0000-4000-8000-00000000a031";
+    memory.agents.create(member, { ...agent, name: "Terminal member" });
+    const { revision } = invoke("operations_snapshot") as OperationsSnapshot;
+    expect(invoke("operations_update", { id: member, revision, spec: { ...agent, name: "Renamed member" } })).toEqual(
+      expect.objectContaining({ id: member, spec: expect.objectContaining({ prompt: null }) }),
+    );
+  });
+
+  it("pauses only an unavailable squad member and keeps its actionable reason", () => {
+    const { memory } = setup(true);
+    const available = "00000000-0000-4000-8000-00000000a021";
+    const unavailable = "00000000-0000-4000-8000-00000000a022";
+    const base = {
+      workspaceId: workspace.id,
+      kind: "agent" as const,
+      command: null,
+      prompt: null,
+      providerId: "codex",
+      providerAccountId: "0192f3c4-0000-7000-8000-000000000201",
+      model: "gpt-5.6-sol",
+      effort: "high",
+      dependencies: [],
+      priority: 5,
+      lane: "next" as const,
+      environment: "local" as const,
+      urls: [],
+      envKeys: [],
+    };
+    memory.agents.create(available, { ...base, name: "Lead" });
+    memory.agents.create(unavailable, { ...base, name: "Reviewer" });
+    memory.agents.hold(unavailable, "Codex Work is signed out. Reconnect it, then resume this member.");
+
+    expect(memory.agents.exact([available, unavailable])).toEqual([
+      expect.objectContaining({ id: available, status: "queued", currentAction: null }),
+      expect.objectContaining({
+        id: unavailable,
+        status: "paused",
+        currentAction: "Codex Work is signed out. Reconnect it, then resume this member.",
+      }),
+    ]);
+  });
+
   it("pages only started history with opaque run cursors", () => {
     const { invoke } = setup();
     const first = invoke("operations_history", { before: null }) as OperationHistoryPage;

@@ -7,7 +7,7 @@ export type NavigationTarget =
   | { kind: "provider"; tab: "setup" | "accounts" | "health"; sectionId?: string }
   | {
       kind: "operations";
-      tab: "runs" | "queue" | "services" | "environments" | "activity";
+      tab: "runs" | "queue" | "squads" | "services" | "environments" | "activity";
       runId?: string;
       filterWorkspaceId?: string;
     }

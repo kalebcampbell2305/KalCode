@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::io::Write as _;
 use std::sync::mpsc::{self, Receiver, Sender};
 
-use kalcode_contracts::agent::{AgentEvent, AgentSession};
+use kalcode_contracts::agent::{AgentEvent, AgentInput, AgentSession, ProviderError};
 use kalcode_contracts::ids::new_id;
 
 use super::*;
@@ -179,6 +179,19 @@ impl Rig {
         };
         assert_eq!(
             self.shared.handle(record),
+            kalcode_hook_bridge::HookReply::Ack
+        );
+    }
+
+    fn start_codex_session(&self) {
+        assert_eq!(self.shared.provider_id, "codex");
+        assert_eq!(
+            self.shared.handle(kalcode_hook_bridge::HookRecord {
+                event: Some(kalcode_hook_bridge::HookEvent::SessionStart),
+                provider_session_id: Some(self.provider_session_id.clone()),
+                source: Some("startup".into()),
+                ..kalcode_hook_bridge::HookRecord::default()
+            }),
             kalcode_hook_bridge::HookReply::Ack
         );
     }
@@ -598,6 +611,130 @@ fn claude_and_completed_codex_receive_one_bracketed_handoff() {
             Err(HandoffDeliveryError::ReadyBusy)
         );
     }
+}
+
+#[test]
+fn prepared_claude_and_fresh_codex_agent_sessions_send_each_task_once() {
+    let _recursive_test_process_slot = recursive_test_process_slot();
+    for provider_id in ["claude-code", "codex"] {
+        let rig = Rig::new_for(provider_id);
+        let delivered = rig.observer_for(HANDOFF_OUTPUT);
+        if provider_id == "codex" {
+            rig.start_codex_session();
+        } else {
+            rig.establish_ready_boundary();
+        }
+        let session = InteractiveSession {
+            shared: rig.shared.clone(),
+        };
+
+        session
+            .send(AgentInput::Text {
+                text: HANDOFF_TEXT.into(),
+            })
+            .unwrap_or_else(|error| panic!("{provider_id} task delivery failed: {error}"));
+        delivered
+            .recv_timeout(WAIT)
+            .unwrap_or_else(|_| panic!("{provider_id} did not receive the prepared task"));
+
+        assert!(matches!(
+            session.send(AgentInput::Text {
+                text: HANDOFF_TEXT.into(),
+            }),
+            Err(ProviderError::Refused { ref code, .. }) if code == "provider_input_not_ready"
+        ));
+        assert!(
+            delivered.recv_timeout(Duration::from_millis(150)).is_err(),
+            "{provider_id} received the prepared task twice"
+        );
+    }
+}
+
+#[test]
+fn prepared_agent_session_refuses_provider_prompts_and_unsupported_gemini_without_writing() {
+    let _recursive_test_process_slot = recursive_test_process_slot();
+    let claude = Rig::new_for("claude-code");
+    let claude_delivery = claude.observer_for(HANDOFF_OUTPUT);
+    claude.establish_ready_boundary();
+    claude.shared.handle(kalcode_hook_bridge::HookRecord {
+        event: Some(kalcode_hook_bridge::HookEvent::Notification),
+        notification_type: Some("permission_prompt".into()),
+        ..kalcode_hook_bridge::HookRecord::default()
+    });
+    let session = InteractiveSession {
+        shared: claude.shared.clone(),
+    };
+    assert!(matches!(
+        session.send(AgentInput::Text {
+            text: HANDOFF_TEXT.into(),
+        }),
+        Err(ProviderError::Refused { ref code, .. }) if code == "provider_input_not_ready"
+    ));
+    assert!(
+        claude_delivery
+            .recv_timeout(Duration::from_millis(150))
+            .is_err(),
+        "a provider prompt received automated task input"
+    );
+
+    let gemini = Rig::new_for("gemini-cli");
+    let gemini_delivery = gemini.observer_for(HANDOFF_OUTPUT);
+    let session = InteractiveSession {
+        shared: gemini.shared.clone(),
+    };
+    assert!(matches!(
+        session.send(AgentInput::Text {
+            text: HANDOFF_TEXT.into(),
+        }),
+        Err(ProviderError::Unsupported)
+    ));
+    assert!(
+        gemini_delivery
+            .recv_timeout(Duration::from_millis(150))
+            .is_err(),
+        "Gemini received an unsupported automated task"
+    );
+}
+
+#[test]
+fn delayed_codex_startup_never_overrides_local_input_or_a_stale_session() {
+    let _recursive_test_process_slot = recursive_test_process_slot();
+    let typed = Rig::new_for("codex");
+    typed
+        .panes
+        .write(&typed.thread_id, b"local draft")
+        .expect("local Codex draft");
+    typed.start_codex_session();
+    assert_eq!(
+        typed.shared.handoff_readiness(),
+        Err(HandoffDeliveryError::Unverified),
+        "a delayed startup hook cannot erase local typeahead"
+    );
+
+    let submitted = Rig::new_for("codex");
+    submitted
+        .panes
+        .write(&submitted.thread_id, b"local task\r")
+        .expect("local Codex submit");
+    submitted.start_codex_session();
+    assert_eq!(
+        submitted.shared.handoff_readiness(),
+        Err(HandoffDeliveryError::ReadyBusy),
+        "a delayed startup hook cannot make an in-flight turn ready"
+    );
+
+    let stale = Rig::new_for("codex");
+    stale.shared.handle(kalcode_hook_bridge::HookRecord {
+        event: Some(kalcode_hook_bridge::HookEvent::SessionStart),
+        provider_session_id: Some(new_id()),
+        source: Some("startup".into()),
+        ..kalcode_hook_bridge::HookRecord::default()
+    });
+    assert_eq!(
+        stale.shared.handoff_readiness(),
+        Err(HandoffDeliveryError::Unverified),
+        "a different Codex session cannot establish readiness"
+    );
 }
 
 #[test]
