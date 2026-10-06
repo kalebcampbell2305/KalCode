@@ -296,8 +296,10 @@ fn make_authority(
     ComponentFloorAuthority::new(store, trusted_root(temp), track()).expect("authority")
 }
 
+/// Lock-wait hang guard for tests that expect the lock to be granted, including concurrent
+/// authorities that serialize behind it. The lock-timeout test passes its own short deadline.
 fn deadline() -> Instant {
-    Instant::now() + Duration::from_secs(2)
+    Instant::now() + Duration::from_secs(30)
 }
 
 #[test]

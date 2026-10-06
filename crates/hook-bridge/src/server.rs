@@ -686,6 +686,9 @@ mod shutdown_tests {
 
     use super::*;
 
+    /// Hang guard for joining a released or panicked listener thread: never a latency assertion.
+    const HANG_GUARD: Duration = Duration::from_secs(30);
+
     #[test]
     fn timeout_retains_listener_ownership_for_a_later_retry() {
         let (release, held) = mpsc::channel();
@@ -698,7 +701,7 @@ mod shutdown_tests {
             Err(BridgeShutdownError::TimedOut)
         );
         release.send(()).expect("release");
-        assert_eq!(listener.wait(Duration::from_secs(1)), Ok(()));
+        assert_eq!(listener.wait(HANG_GUARD), Ok(()));
         assert_eq!(listener.wait(Duration::ZERO), Ok(()));
     }
 
@@ -707,7 +710,7 @@ mod shutdown_tests {
         let listener = ListenerThread::new(std::thread::spawn(|| panic!("listener failed")));
 
         assert_eq!(
-            listener.wait(Duration::from_secs(1)),
+            listener.wait(HANG_GUARD),
             Err(BridgeShutdownError::ListenerPanicked)
         );
         assert_eq!(

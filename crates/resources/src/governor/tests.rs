@@ -13,6 +13,10 @@ use crate::model::{PressureLevel, Reading, ResourceKind};
 use crate::probe::{Counters, ProbePlan, RawCpu, RawMemory, RawSample};
 use kalcode_contracts::agent::ProviderId;
 
+/// Hang guard for probe handshakes, the immediate first sample and joins after release: never a
+/// latency assertion (cadence and promptness tests keep their own bounds).
+const HANG_GUARD: Duration = Duration::from_secs(30);
+
 /// Root pids and workspace count of each plan the probe received.
 type PlanLog = Arc<Mutex<Vec<(Vec<u32>, usize)>>>;
 
@@ -115,9 +119,7 @@ fn bounded_shutdown_retains_blocked_sampler_for_retry() {
     });
     let mut handle =
         Governor::start_with(config(), probe, Arc::new(SystemClock::default())).unwrap();
-    entered_rx
-        .recv_timeout(Duration::from_secs(5))
-        .expect("probe started");
+    entered_rx.recv_timeout(HANG_GUARD).expect("probe started");
     let started = Instant::now();
     let stopped = handle.shutdown_checked(Duration::from_millis(20));
     // Always release the fixture before assertions so failures cannot hang Drop.
@@ -131,7 +133,7 @@ fn bounded_shutdown_retains_blocked_sampler_for_retry() {
         handle.thread.is_some(),
         "retain join ownership after timeout"
     );
-    assert!(handle.shutdown_checked(Duration::from_secs(5)));
+    assert!(handle.shutdown_checked(HANG_GUARD));
     assert!(handle.thread.is_none());
     assert_eq!(handle.status(), GovernorStatus::Stopped);
     assert!(handle.shutdown_checked(Duration::ZERO));
@@ -158,7 +160,7 @@ fn callers_never_wait_for_a_slow_probe() {
         sample(10.0)
     });
     let handle = Governor::start_with(config(), probe, Arc::new(SystemClock::default())).unwrap();
-    wait_until("probe running", Duration::from_secs(5), || {
+    wait_until("probe running", HANG_GUARD, || {
         calls.load(Ordering::SeqCst) >= 1
     });
     let started = Instant::now();
@@ -189,7 +191,7 @@ fn callers_never_wait_for_a_slow_probe() {
 fn activity_change_wakes_an_idle_sampler() {
     let (probe, _) = probe(|_, _| sample(10.0));
     let handle = Governor::start_with(config(), probe, Arc::new(SystemClock::default())).unwrap();
-    wait_until("first sample", Duration::from_secs(5), || seq(&handle) == 1);
+    wait_until("first sample", HANG_GUARD, || seq(&handle) == 1);
     let started = Instant::now();
     handle.set_activity(Activity {
         active_tasks: 1,
@@ -217,14 +219,14 @@ fn mode_change_resamples_at_once_and_notifies_subscribers() {
         if call == 1 {
             entered_tx.send(()).expect("first probe entered");
             release_rx
-                .recv_timeout(Duration::from_secs(5))
+                .recv_timeout(HANG_GUARD)
                 .expect("release first probe");
         }
         sample(72.0)
     });
     let handle = Governor::start_with(config(), probe, Arc::new(SystemClock::default())).unwrap();
     let mut release = ProbeRelease(Some(release_tx));
-    let entered = entered_rx.recv_timeout(Duration::from_secs(5));
+    let entered = entered_rx.recv_timeout(HANG_GUARD);
     // Subscribe while the first probe is held so its first publication cannot
     // race ahead of this future-only stream.
     let updates = handle.subscribe(64);
@@ -234,7 +236,7 @@ fn mode_change_resamples_at_once_and_notifies_subscribers() {
         released.is_ok(),
         "first probe was not released: {released:?}"
     );
-    wait_until("first sample", Duration::from_secs(5), || seq(&handle) == 1);
+    wait_until("first sample", HANG_GUARD, || seq(&handle) == 1);
     handle.set_mode(ResourceMode::Conservative).unwrap();
     assert_eq!(
         handle.limits().kind,
@@ -361,7 +363,7 @@ fn a_transient_panic_recovers() {
 fn shutdown_is_prompt_during_an_idle_wait() {
     let (probe, _) = probe(|_, _| sample(10.0));
     let handle = Governor::start_with(config(), probe, Arc::new(SystemClock::default())).unwrap();
-    wait_until("first sample", Duration::from_secs(5), || seq(&handle) == 1);
+    wait_until("first sample", HANG_GUARD, || seq(&handle) == 1);
     let started = Instant::now();
     handle.shutdown();
     assert!(
@@ -379,7 +381,7 @@ fn lagging_subscribers_lose_updates_and_history_stays_bounded() {
         if call == 1 {
             entered_tx.send(()).expect("first probe entered");
             release_rx
-                .recv_timeout(Duration::from_secs(5))
+                .recv_timeout(HANG_GUARD)
                 .expect("release first probe");
         }
         sample(10.0)
@@ -391,7 +393,7 @@ fn lagging_subscribers_lose_updates_and_history_stays_bounded() {
     };
     let handle = Governor::start_with(config, probe, clock).unwrap();
     let mut release = ProbeRelease(Some(release_tx));
-    let entered = entered_rx.recv_timeout(Duration::from_secs(5));
+    let entered = entered_rx.recv_timeout(HANG_GUARD);
     let never_read = handle.subscribe(1);
     let dropped = handle.subscribe(4);
     drop(dropped);
@@ -451,7 +453,7 @@ fn tracked_processes_and_workspaces_reach_the_probe() {
 fn proposals_are_only_explanations() {
     let (probe, _) = probe(|_, _| sample(99.0));
     let handle = Governor::start_with(config(), probe, Arc::new(SystemClock::default())).unwrap();
-    wait_until("first sample", Duration::from_secs(5), || seq(&handle) == 1);
+    wait_until("first sample", HANG_GUARD, || seq(&handle) == 1);
     let proposals = handle.proposals(&RunningWork {
         agents: 3,
         ..Default::default()

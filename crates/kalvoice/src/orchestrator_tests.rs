@@ -311,6 +311,10 @@ impl LocalInterpreter for FakeLocalInterpreter {
     }
 }
 
+/// Hang guard for test-only handshakes and for drains after the interpreter is released: never a
+/// latency assertion (those use `local_timeout_answer_budget` or their own short windows).
+const HANG_GUARD: Duration = Duration::from_secs(30);
+
 /// How long a timed-out local interpretation may take to answer: the product's timeout and settle
 /// window, plus scheduling slack for a loaded gate machine running the workspace's tests in parallel.
 /// A request that waited for a non-cooperative interpreter instead would block until released.
@@ -1059,7 +1063,7 @@ fn local_interpretation_times_out_discards_late_output_and_can_retry() {
     let timed_out = h.orchestrator.handle(request.clone()).expect("handle");
     let elapsed = started.elapsed();
     finished_rx
-        .recv_timeout(Duration::from_secs(1))
+        .recv_timeout(HANG_GUARD)
         .expect("late interpreter returned");
 
     assert!(
@@ -1138,7 +1142,7 @@ fn noncooperative_timeout_retains_custody_until_bounded_drain_settles() {
     assert!(h.executor.executed.lock().expect("lock").is_empty());
 
     release_tx.send(()).expect("release first");
-    assert!(orchestrator.drain_local_interpretation(Duration::from_secs(1)));
+    assert!(orchestrator.drain_local_interpretation(HANG_GUARD));
     let retry = orchestrator
         .handle(request("plan the retry"))
         .expect("retry");
@@ -1169,7 +1173,7 @@ fn noncooperative_timeout_does_not_renew_settle_budget_after_a_late_wake() {
             if timeout_resume_rx
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
-                .recv_timeout(Duration::from_secs(5))
+                .recv_timeout(HANG_GUARD)
                 .is_err()
             {
                 observer_timed_out.store(true, Ordering::SeqCst);
@@ -1201,10 +1205,10 @@ fn noncooperative_timeout_does_not_renew_settle_budget_after_a_late_wake() {
     };
 
     entered_rx
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(HANG_GUARD)
         .expect("interpreter entered");
     let primary_deadline = timeout_entered_rx
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(HANG_GUARD)
         .expect("primary timeout branch entered");
     let timeout_started = primary_deadline
         .checked_sub(LOCAL_INTERPRETATION_TIMEOUT)
@@ -1236,7 +1240,7 @@ fn noncooperative_timeout_does_not_renew_settle_budget_after_a_late_wake() {
     let no_execution_before_release = h.executor.executed.lock().expect("lock").is_empty();
 
     cleanup.release_interpreter();
-    let drained = orchestrator.drain_local_interpretation(Duration::from_secs(1));
+    let drained = orchestrator.drain_local_interpretation(HANG_GUARD);
     let retry = orchestrator
         .handle(request("plan the retry"))
         .expect("retry");
@@ -1332,7 +1336,7 @@ fn shutdown_stays_false_until_a_noncooperative_operation_actually_settles() {
 
     assert!(!orchestrator.shutdown_local_interpretation(Duration::from_millis(50)));
     release_tx.send(()).expect("release interpreter");
-    assert!(orchestrator.shutdown_local_interpretation(Duration::from_secs(1)));
+    assert!(orchestrator.shutdown_local_interpretation(HANG_GUARD));
     let cancelled = request_thread.join().expect("request thread");
     assert!(
         matches!(
