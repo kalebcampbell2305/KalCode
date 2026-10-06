@@ -324,11 +324,12 @@ export async function launch(dataDir: string, env: Record<string, string> = {}):
     // The document is initialized while KalCode still shows a startup screen ("Starting your
     // workspace" while local services open). Under gate load that took 4-10 s, and specs then gave
     // the shell's first heading only the default 5 s. Return once no startup screen is busy.
-    await page
-      .waitForFunction(`!(${startupScreenShowing.toString()})(document)`, undefined, { timeout: 60_000 })
-      .catch(() => {
-        throw new Error(`${EXE} stayed on a busy startup screen for 60 seconds`);
-      });
+    // A function, not a string predicate: the app's CSP forbids eval.
+    const settleDeadline = Date.now() + 60_000;
+    while (!(await page.evaluate(startupScreenSettled as () => boolean))) {
+      if (Date.now() >= settleDeadline) throw new Error(`${EXE} stayed on a busy startup screen for 60 seconds`);
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+    }
     return owned as Running;
   } catch (error) {
     await cleanupOwnedApplication(owned)
@@ -339,13 +340,13 @@ export async function launch(dataDir: string, env: Record<string, string> = {}):
 }
 
 /**
- * Whether KalCode is still on one of its transitional startup screens: the boot mark, "Restoring
- * your session" or "Starting your workspace". Each is a busy status; once it settles the app shows
- * the shell, sign-in, or an error a spec can assert on. Self-contained: it runs in the page.
+ * Whether KalCode has left its transitional startup screens: the boot mark, "Restoring your
+ * session" and "Starting your workspace". Each is a busy status; once it settles the app shows the
+ * shell, sign-in, or an error a spec can assert on. Self-contained: it runs in the page.
  */
-export function startupScreenShowing(doc: Document): boolean {
-  if (doc.querySelector(".boot-screen")) return true;
-  return Array.from(doc.querySelectorAll('[role="status"][aria-busy="true"]')).some(
+export function startupScreenSettled(doc: Document = document): boolean {
+  if (doc.querySelector(".boot-screen")) return false;
+  return !Array.from(doc.querySelectorAll('[role="status"][aria-busy="true"]')).some(
     (status) => status.querySelector("#account-runtime-title, #account-title") !== null,
   );
 }

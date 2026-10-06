@@ -9,7 +9,7 @@ import {
   ownedChildIsTerminal,
   settleOwnedApplications,
   settleOwnedWebview,
-  startupScreenShowing,
+  startupScreenSettled,
   waitForExit,
 } from "../../tests/e2e/harness.ts";
 
@@ -192,16 +192,16 @@ describe("native E2E helper inventory", () => {
     // Native load runs: "Starting your workspace" stayed 4-10 s after the document initialized,
     // and specs gave the Activity heading only the default 5 s.
     const page = (html: string) => new DOMParser().parseFromString(`<body>${html}</body>`, "text/html");
-    expect(startupScreenShowing(page('<div class="boot-screen" role="status" aria-busy="true"></div>'))).toBe(true);
+    expect(!startupScreenSettled(page('<div class="boot-screen" role="status" aria-busy="true"></div>'))).toBe(true);
     expect(
-      startupScreenShowing(
+      !startupScreenSettled(
         page(
           '<main><div role="status" aria-busy="true"><h1 id="account-runtime-title">Starting your workspace</h1></div></main>',
         ),
       ),
     ).toBe(true);
     expect(
-      startupScreenShowing(
+      !startupScreenSettled(
         page(
           '<main><div role="status" aria-busy="true"><h1 id="account-title">Restoring your session</h1></div></main>',
         ),
@@ -209,19 +209,19 @@ describe("native E2E helper inventory", () => {
     ).toBe(true);
     // A failed start is not busy: the spec sees its error instead of waiting.
     expect(
-      startupScreenShowing(
+      !startupScreenSettled(
         page(
           '<main><div role="status"><h1 id="account-runtime-title">Starting your workspace</h1><p role="alert">x</p></div></main>',
         ),
       ),
     ).toBe(false);
-    expect(startupScreenShowing(page('<main><h1 id="account-title">Sign in to KalCode</h1></main>'))).toBe(false);
+    expect(!startupScreenSettled(page('<main><h1 id="account-title">Sign in to KalCode</h1></main>'))).toBe(false);
     expect(
-      startupScreenShowing(
+      !startupScreenSettled(
         page('<div data-app-shell=""><div role="status" aria-busy="true">Loading</div><h1>Activity</h1></div>'),
       ),
     ).toBe(false);
-    expect(harnessSource.indexOf("startupScreenShowing.toString()")).toBeGreaterThan(
+    expect(harnessSource.indexOf("page.evaluate(startupScreenSettled")).toBeGreaterThan(
       harnessSource.indexOf("owned.page = page"),
     );
   });
