@@ -21,6 +21,11 @@ const SIGNING_KEYS = [
   "publisherIdentityBound",
   "timestamped",
 ];
+// Installed clients reject a feed whose notes exceed 10,000 UTF-8 bytes (`parse_feed` in
+// apps/desktop/src-tauri/src/updater_commands.rs counts `str::len`). Count bytes, not UTF-16 code
+// units: "—" is one JS character but three bytes, so a JS length check let through notes that make
+// every installed client report "The update feed is invalid".
+const MAX_NOTES_UTF8_BYTES = 10_000;
 const MINISIGN_PUBLIC_KEY_BYTES = 42;
 const MINISIGN_SIGNATURE_BYTES = 74;
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
@@ -51,6 +56,10 @@ const QA_AUTOMATED_CHECKS = Object.freeze(["install", "cleanInstall", "launch", 
 const AUTOMATED_TRIAL_METHOD = "automated-update-from-live-v1";
 export const QA_DATA_PATHS = Object.freeze(["crates/native-core/migrations/", "crates/timeline/migrations/"]);
 export const QA_UPDATER_PATHS = Object.freeze(["crates/updater/", "apps/desktop/src-tauri/src/updater"]);
+
+function notesFitClients(notes) {
+  return Buffer.byteLength(notes, "utf8") <= MAX_NOTES_UTF8_BYTES;
+}
 
 function fail(message) {
   throw new Error(`updater manifest blocked: ${message}`);
@@ -461,7 +470,7 @@ async function createWindowsManifest(
     problems.push(...qaProblems);
     if (problems.length > 0) fail(problems.join("; "));
   } else if (qaProblems.length > 0) fail(qaProblems.join("; "));
-  if (typeof notes !== "string" || notes.trim().length === 0 || notes.length > 10_000) {
+  if (typeof notes !== "string" || notes.trim().length === 0 || !notesFitClients(notes)) {
     fail("release notes are required and must be concise");
   }
   if (typeof publishedAt !== "string" || Number.isNaN(Date.parse(publishedAt))) fail("publish date is invalid");
@@ -535,7 +544,7 @@ export async function createPlatformUpdaterManifest({
   )
     fail("platform artifacts must contain distinct supported targets");
   if (!CHANNELS.has(requestedChannel)) fail("release channel must be stable, beta, or dev");
-  if (typeof notes !== "string" || !notes.trim() || notes.length > 10_000)
+  if (typeof notes !== "string" || !notes.trim() || !notesFitClients(notes))
     fail("release notes are required and must be concise");
   if (typeof publishedAt !== "string" || Number.isNaN(Date.parse(publishedAt))) fail("publish date is invalid");
   const version = artifacts[0].build?.version;
