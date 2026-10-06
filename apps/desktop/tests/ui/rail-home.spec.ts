@@ -83,6 +83,9 @@ test.describe("workspace rail", () => {
     await expect(item(page, /^Folder surface Git status, waiting for you/)).toBeVisible();
     // A folder group and a missing folder, said plainly.
     await expect(item(page, /^Folder Client work, 2 workspaces$/)).toBeVisible();
+    // billing-service has one failed and one stopped thread: a failure is not a question, so the
+    // rail counts neither as needing you (the Fleet's Needs you, native `rail::needs_you`).
+    await expect(item(page, /^billing-service/)).toHaveAccessibleName("billing-service, 2 threads");
     await expect(item(page, /^old-prototype, folder missing$/)).toBeVisible();
     // A collapsed workspace hides its threads.
     await expect(item(page, /^mobile-app/)).toHaveAttribute("aria-expanded", "false");
@@ -276,14 +279,22 @@ test.describe("home", () => {
     await open(page, "home");
     await goHome(page);
     await expect(page.getByRole("heading", { level: 1 })).toContainText("Kaleb");
-    await expect(page.getByText("3 threads need you · 3 working · 1 finished since your last visit")).toBeVisible();
+    // In the shared agent state: Needs you is the approval (Rate limiter) and the reply (Folder
+    // surface Git status), never the failed Checkout webhooks; working is the tool run, the edit and
+    // the test run (Authentication Refactor, Workspace rail persistence, Session Locator ranking).
+    await expect(page.getByText("2 threads need you · 3 working · 1 finished since your last visit")).toBeVisible();
     const needs = page.getByRole("list", { name: "Needs you" });
-    await expect(needs.getByRole("button")).toHaveCount(3);
+    await expect(needs.getByRole("button")).toHaveCount(2);
     await expect(needs).toContainText("Rate limiter for login");
     await expect(needs).toContainText("Permission required");
+    await expect(needs).toContainText("Folder surface Git status");
+    await expect(needs).not.toContainText("Checkout webhooks");
     await expect(page.getByRole("list", { name: "Running now" }).getByRole("button")).toHaveCount(3);
     await expect(page.getByRole("list", { name: "Finished since your last visit" })).toContainText("Greeting rotation");
-    await expect(page.getByRole("list", { name: "Pick up where you left off" })).toContainText("Invoice PDF layout");
+    const resume = page.getByRole("list", { name: "Pick up where you left off" });
+    await expect(resume).toContainText("Invoice PDF layout");
+    // The failed thread is still offered where it can be handled: resumed.
+    await expect(resume).toContainText("Checkout webhooks");
     const workspaces = page.getByRole("list", { name: "Recent workspaces" });
     await expect(workspaces.getByRole("button", { name: "Continue in docs-site" })).toBeVisible();
     // Pinned workspaces (kalcode, atlas-api) live in the pinned section, not again under Recent (#235).
