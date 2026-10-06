@@ -219,7 +219,13 @@ pub fn resolve(workspace: &Workspace, base: Option<&Path>, raw: &str) -> PathInf
         } else {
             "The path resolves outside the workspace.".to_owned()
         });
-        info.credentials = looks_like_credentials(trimmed);
+        // Judge the location the path really names too: a harmless-looking name inside the
+        // workspace can be a link to `~/.aws/credentials`.
+        info.credentials = looks_like_credentials(trimmed)
+            || [&lexical, &kernel]
+                .into_iter()
+                .flatten()
+                .any(|p| looks_like_credentials(&p.to_string_lossy()));
         return info;
     }
     let Some(real) = kernel else {
@@ -474,8 +480,10 @@ pub fn looks_like_credentials(path: &str) -> bool {
     };
     let is_env =
         name == ".env" || (name.starts_with(".env.") && !ENV_TEMPLATES.contains(&name.as_str()));
+    // A credential folder counts whether it is a parent or the folder named itself
+    // (`grep -r "" ~/.aws`, `tar czf - ~/.ssh`).
     is_env
-        || components[..components.len() - 1]
+        || components
             .iter()
             .any(|c| CREDENTIAL_DIRS.contains(&c.as_str()))
         || CREDENTIAL_FILES.contains(&name.as_str())
@@ -832,6 +840,11 @@ mod tests {
         assert!(resolve(&workspace, None, "config/.env.production").credentials);
         assert!(!resolve(&workspace, None, ".env.example").credentials);
         assert!(resolve(&workspace, None, "certs/server.pem").credentials);
+        // A credential folder named by itself, not only a file inside it.
+        for folder in ["~/.ssh", "/home/x/.aws", r"C:\Users\x\.docker", "~/.kube/"] {
+            assert!(resolve(&workspace, None, folder).credentials, "{folder}");
+        }
+        assert!(!resolve(&workspace, None, "src/sshd_notes").credentials);
         assert!(resolve(&workspace, None, ".git/hooks/pre-commit").git_internal);
         assert!(resolve(&workspace, None, "sub/.GIT/config").git_internal);
         assert!(!resolve(&workspace, None, "src/a.txt").git_internal);

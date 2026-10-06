@@ -47,6 +47,18 @@ export function assertCandidateWorkflow(source) {
       "candidate gate workflow must trigger merge-train pushes on the main Windows PC and gate its recorded base",
     );
   }
+  // A split gate's second-PC half must gate the same recorded base on the second PC's runner.
+  const pc2 = workflow.match(/^ {2}pc2:\n([\s\S]*?)(?=^ {2}[a-zA-Z][\w-]*:|$(?![\s\S]))/m)?.[1];
+  if (
+    pc2 !== undefined &&
+    (!/ {4}runs-on: \[self-hosted, Windows, kalcode-gate-pc2\]\n/.test(pc2) ||
+      !pc2.includes("name: Gate\n") ||
+      !pc2.includes("trailers:key=Merge-Train-Base,valueonly"))
+  ) {
+    throw new Error(
+      "candidate gate workflow: its second-PC half must run on kalcode-gate-pc2 and gate the same recorded base",
+    );
+  }
 }
 
 export const GATE_JOB = "Gate (Windows)";
@@ -72,7 +84,13 @@ export function makeGit(repo, { env = {}, timeoutMs = 120_000 } = {}) {
       const child = spawn(
         "git",
         ["-C", repo, "-c", "core.quotepath=off", "-c", "gc.auto=0", "-c", "maintenance.auto=false", ...args],
-        { env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...env }, windowsHide: true, timeout: timeoutMs },
+        {
+          env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...env },
+          windowsHide: true,
+          timeout: timeoutMs,
+          // Only a command given input gets a stdin pipe.
+          stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+        },
       );
       let stdout = "";
       let stderr = "";
@@ -88,7 +106,13 @@ export function makeGit(repo, { env = {}, timeoutMs = 120_000 } = {}) {
           reject(new GitError(`git ${args.join(" ")}: ${stderr.trim().split("\n")[0] || `exit ${code}`}`));
         } else resolvePromise({ code, stdout, stderr });
       });
-      child.stdin.end(input ?? "");
+      if (input !== undefined) {
+        // A git that exits (or is killed at timeoutMs) before reading its input closes the pipe: the
+        // write then fails with EPIPE/EOF. Its exit code above is the result; an unhandled stream error
+        // would instead crash the coordinator (gate 37410227962, a slow second PC).
+        child.stdin.on("error", () => {});
+        child.stdin.end(input);
+      }
     });
 }
 

@@ -35,6 +35,9 @@ const MAX_LIVE_RESPONSE_BYTES: u64 = 1024 * 1024;
 struct LiveEntry {
     identity: AccountIdentity,
     attempted: Instant,
+    /// Wall-clock time of the last live attempt, comparable with a passive reading's
+    /// `checked_at` so a failed live read never hides a newer passive reading.
+    attempted_at: time::OffsetDateTime,
     succeeded: bool,
     usage: Option<ProviderAccountUsage>,
 }
@@ -154,25 +157,45 @@ pub fn provider_account_usage(
             let entry = entries
                 .get(&account.id)
                 .filter(|entry| identities.get(&account.id) == Some(&entry.identity));
-            if let Some(entry) = entry.filter(|entry| !entry.succeeded) {
-                return unavailable(
-                    account,
-                    entry
-                        .usage
-                        .as_ref()
-                        .and_then(|usage| usage.plan.clone())
-                        .or(passive.plan),
-                );
-            }
-            let live = entry
-                .and_then(|entry| entry.usage.as_ref())
-                .filter(|_| account.authentication_state != AuthState::NotAuthenticated);
-            match live {
-                Some(live) if live.checked_at.is_none() || newer(live, &passive) => live.clone(),
-                _ => passive,
-            }
+            select_usage(account, entry, passive)
         })
         .collect())
+}
+
+/// Picks what to show for one account from its passive reading and its last live attempt.
+/// A failed live attempt shows "unavailable" only until a passive reading taken after that
+/// attempt arrives; a newer real reading always wins.
+fn select_usage(
+    account: &ProviderAccount,
+    entry: Option<&LiveEntry>,
+    passive: ProviderAccountUsage,
+) -> ProviderAccountUsage {
+    if let Some(entry) = entry.filter(|entry| !entry.succeeded) {
+        let passive_after_attempt = passive.status == ProviderUsageStatus::Available
+            && passive
+                .checked_at
+                .as_deref()
+                .and_then(parse)
+                .is_some_and(|checked| checked > entry.attempted_at);
+        if passive_after_attempt {
+            return passive;
+        }
+        return unavailable(
+            account,
+            entry
+                .usage
+                .as_ref()
+                .and_then(|usage| usage.plan.clone())
+                .or(passive.plan),
+        );
+    }
+    let live = entry
+        .and_then(|entry| entry.usage.as_ref())
+        .filter(|_| account.authentication_state != AuthState::NotAuthenticated);
+    match live {
+        Some(live) if live.checked_at.is_none() || newer(live, &passive) => live.clone(),
+        _ => passive,
+    }
 }
 
 /// Live-reads, in parallel, every account whose reading is older than `LIVE_INTERVAL` and whose
@@ -224,10 +247,12 @@ fn refresh_live(
                 let entry = entries.entry(account.id.clone()).or_insert(LiveEntry {
                     identity: expected_identity.clone(),
                     attempted: Instant::now(),
+                    attempted_at: time::OffsetDateTime::now_utc(),
                     succeeded: false,
                     usage: None,
                 });
                 entry.attempted = Instant::now();
+                entry.attempted_at = time::OffsetDateTime::now_utc();
                 Some((*account, expected_identity.clone(), request))
             })
             .collect()
@@ -362,6 +387,7 @@ mod tests {
         let replacement = LiveEntry {
             identity: after.clone(),
             attempted: Instant::now(),
+            attempted_at: time::OffsetDateTime::now_utc(),
             succeeded: true,
             usage: None,
         };
@@ -375,5 +401,53 @@ mod tests {
         assert!(unavailable.windows.is_empty());
         assert_eq!(unavailable.plan.as_deref(), Some("Pro"));
         assert_eq!(account.authentication_state, AuthState::Authenticated);
+    }
+
+    #[test]
+    fn newer_passive_reading_replaces_a_failed_live_read() {
+        let account = ProviderAccount {
+            id: "0192f3c4-0000-7000-8000-000000000202".to_owned(),
+            provider_id: ProviderId::new("claude"),
+            display_name: "Claude B".to_owned(),
+            provider_reported_identity: Some("person@example.test".to_owned()),
+            authentication_state: AuthState::Authenticated,
+            is_default: true,
+            created_at: "2026-10-04T00:00:00Z".to_owned(),
+            last_used_at: None,
+            last_checked_at: None,
+            last_error_code: None,
+            archived_at: None,
+        };
+        let failed_at = parse("2026-10-05T12:00:00Z").expect("time");
+        let failed = LiveEntry {
+            identity: AccountIdentity {
+                provider: "claude".to_owned(),
+                reported: account.provider_reported_identity.clone(),
+                authentication: AuthState::Authenticated,
+                credential_revision: None,
+            },
+            attempted: Instant::now(),
+            attempted_at: failed_at,
+            succeeded: false,
+            usage: Some(unavailable(&account, Some("Max".to_owned()))),
+        };
+        let passive_at = |checked_at: &str| ProviderAccountUsage {
+            account_id: account.id.clone(),
+            status: ProviderUsageStatus::Available,
+            plan: Some("Max".to_owned()),
+            windows: Vec::new(),
+            checked_at: Some(checked_at.to_owned()),
+            reason: None,
+        };
+
+        let newer = passive_at("2026-10-05T12:00:30Z");
+        let shown = select_usage(&account, Some(&failed), newer.clone());
+        assert_eq!(shown.status, ProviderUsageStatus::Available);
+        assert_eq!(shown.checked_at, newer.checked_at);
+
+        let older = passive_at("2026-10-05T11:59:00Z");
+        let shown = select_usage(&account, Some(&failed), older);
+        assert_eq!(shown.status, ProviderUsageStatus::Unavailable);
+        assert_eq!(shown.plan.as_deref(), Some("Max"));
     }
 }

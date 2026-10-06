@@ -9,12 +9,22 @@ import {
   createGitHubProvider,
   gateStateFrom,
   MAIN_PC_GATE_RUNNER,
+  NATIVE_GATE_JOB,
+  PC2_GATE_JOB,
   parseGateLog,
   parseSlug,
   queueFromGraphql,
 } from "./github.mjs";
 import { releaseKitCommand } from "./on-landed.mjs";
-import { assertCandidateWorkflow, candidateBranch, createTrain, parseArgs, QUEUE_LABEL, withLock } from "./train.mjs";
+import {
+  assertCandidateWorkflow,
+  candidateBranch,
+  createTrain,
+  makeGit,
+  parseArgs,
+  QUEUE_LABEL,
+  withLock,
+} from "./train.mjs";
 
 const temps = [];
 after(() => {
@@ -871,6 +881,77 @@ describe("merge train pieces", () => {
     assert.equal(check(run, { ...job, conclusion: "cancelled" }), "stale");
   });
 
+  test("a split gate lands only when both PCs' jobs passed for the exact candidate", () => {
+    // Owner, 2026-10-05: tests run partly on the build PC's pool and partly on the second Windows PC.
+    const sha = "a".repeat(40);
+    const branch = "merge-train/aaaaaaaaaaaa-12345678";
+    const run = {
+      id: 1,
+      html_url: "u",
+      head_sha: sha,
+      head_branch: branch,
+      event: "push",
+      path: ".github/workflows/gate.yml",
+    };
+    const executed = [{ name: "Gate", status: "completed", conclusion: "success" }];
+    const main = {
+      name: "Gate (Windows)",
+      status: "completed",
+      conclusion: "success",
+      head_sha: sha,
+      runner_name: "kalcode-win-gate-w3",
+      labels: ["self-hosted", "Windows", "kalcode-gate", "kalcode-main-pc"],
+      steps: executed,
+    };
+    const pc2 = {
+      name: PC2_GATE_JOB,
+      status: "completed",
+      conclusion: "success",
+      head_sha: sha,
+      runner_name: "kalcode-win-gate-2",
+      labels: ["self-hosted", "Windows", "X64", "kalcode-gate-pc2"],
+      steps: executed,
+    };
+    const state = (...jobs) => gateStateFrom([run], jobs, sha, branch).state;
+    assert.equal(state(main, pc2), "success", "both halves green");
+    assert.equal(state(main), "success", "a legacy single-job run keeps single-job evidence");
+    assert.equal(state(main, { ...pc2, conclusion: "failure" }), "failure", "a red second-PC half refuses");
+    assert.equal(state({ ...main, conclusion: "failure" }, pc2), "failure", "a red build-PC half refuses");
+    assert.equal(state(main, { ...pc2, status: "queued", conclusion: null }), "pending", "a missing result waits");
+    assert.equal(state(main, { ...pc2, status: "in_progress", conclusion: null }), "pending");
+    assert.equal(state(main, pc2, { ...pc2 }), "stale", "two second-PC jobs are ambiguous");
+    assert.equal(state(main, { ...pc2, head_sha: "b".repeat(40) }), "stale", "another commit is not evidence");
+    assert.equal(state(main, { ...pc2, runner_name: "kalcode-win-gate-w1" }), "stale", "only the second PC's runner");
+    assert.equal(
+      state(main, { ...pc2, labels: ["self-hosted", "Windows", "kalcode-gate-pc2", "kalcode-main-pc"] }),
+      "stale",
+    );
+    assert.equal(state(main, { ...pc2, labels: ["self-hosted", "Windows", "kalcode-gate"] }), "stale");
+    assert.equal(
+      state(main, { ...pc2, steps: [{ name: "Gate", status: "completed", conclusion: "skipped" }] }),
+      "stale",
+    );
+    assert.equal(state(main, { ...pc2, conclusion: "cancelled" }), "stale");
+    assert.equal(state({ ...pc2, name: "Gate (Windows)" }), "stale", "the second PC never satisfies the build-PC half");
+    // The build PC's two-job half: its native job must be green on a pool worker too.
+    const native = { ...main, name: NATIVE_GATE_JOB, runner_name: "kalcode-win-gate-w4" };
+    assert.equal(state(main, native, pc2), "success", "all three jobs green");
+    assert.equal(state(main, { ...native, conclusion: "failure" }, pc2), "failure", "a red native job refuses");
+    assert.equal(state(main, { ...native, status: "in_progress", conclusion: null }, pc2), "pending");
+    assert.equal(state(main, native, native, pc2), "stale", "two native jobs are ambiguous");
+    assert.equal(state(main, { ...native, runner_name: "kalcode-win-gate-2" }, pc2), "stale", "only a pool worker");
+    assert.equal(state(main, { ...native, head_sha: "b".repeat(40) }, pc2), "stale");
+    assert.equal(
+      state(main, { ...native, steps: [{ name: "Gate", status: "completed", conclusion: "skipped" }] }, pc2),
+      "stale",
+    );
+    assert.equal(state(native, pc2), "pending", "the native job never satisfies the main job");
+    assert.equal(
+      state({ ...main, conclusion: "failure" }, native, { ...pc2, status: "queued", conclusion: null }),
+      "failure",
+    );
+  });
+
   test("the canonical registry includes exactly the original worker and five additional slots", () => {
     for (const name of ["kalcode-win-gate", ...[1, 2, 3, 4, 5].map((slot) => `kalcode-win-gate-w${slot}`)])
       assert.ok(MAIN_PC_GATE_RUNNER.test(name), name);
@@ -991,11 +1072,36 @@ describe("merge train pieces", () => {
     assert.match(workflow, /Assert-GateWorkerHost/);
     assert.ok(workflow.includes("'^kalcode-win-gate(-w[1-5])?$'"));
     assert.match(workflow, /Runner name does not match its configured slot/);
-    assert.match(workflow, /--base \$env:KALCODE_GATE_BASE --jobs \$env:KALCODE_GATE_JOBS --keep-going/);
+    assert.match(
+      workflow,
+      /--base \$env:KALCODE_GATE_BASE --only \$env:KALCODE_GATE_ONLY --jobs \$env:KALCODE_GATE_JOBS --keep-going/,
+    );
+    // The split: the second PC's half gates the same exact candidate and recorded base.
+    assert.match(workflow, /name: Gate \(Windows, PC2\)/);
+    assert.match(workflow, /runs-on: \[self-hosted, Windows, kalcode-gate-pc2\]\n/);
+    // The build PC's share runs as two matrix jobs (main, native), each gating its half of the split.
+    assert.match(workflow, /half: \[main, native\]/);
+    assert.match(workflow, /gate-split\.mjs \$env:GATE_HALF/);
+    assert.match(workflow, /gate-split\.mjs pc2/);
     assert.match(workflow, /github\.event\.pull_request\.base\.sha/);
     assert.match(workflow, /%\(trailers:key=Merge-Train-Base,valueonly\)/);
     assert.match(workflow, /--keep-going/);
   });
+});
+
+test("a git that exits before reading its input is reported by its exit code, never a pipe crash", async () => {
+  // gate 37410227962: on a slow machine a git child closed its stdin before the write landed and the
+  // unhandled EPIPE failed the run. `git --version` never reads stdin; 8 MiB cannot fit a pipe buffer.
+  const repo = mkdtempSync(join(tmpdir(), "kc-train-stdin-"));
+  temps.push(repo);
+  const git = makeGit(repo);
+  const unread = await git(["--version"], { allowFail: true, input: "x".repeat(8 * 1024 * 1024) });
+  assert.equal(unread.code, 0);
+  assert.match(unread.stdout, /^git version /);
+  sh(repo, ["init", "-q"]);
+  const hashed = await git(["hash-object", "--stdin"], { input: "kalcode\n" });
+  assert.equal(hashed.stdout.trim(), sh(repo, ["hash-object", "--stdin"], "kalcode\n"), "input still reaches git");
+  assert.equal((await git(["rev-parse", "--is-inside-work-tree"])).stdout.trim(), "true", "no input: no stdin pipe");
 });
 
 test("PR-specific landing is refused even with a valid queued PR", async () => {
@@ -1016,6 +1122,10 @@ test("bootstrap refuses pushing a candidate with no usable main-PC push workflow
     workflow.replace('"merge-train/**"', '"unrelated/**"'),
     workflow.replace(/Windows, kalcode-gate(?:, kalcode-main-pc)?\]/, "Windows, kalcode-gate-2]"),
     workflow.replace("trailers:key=Merge-Train-Base,valueonly", "wrong-base"),
+    workflow.replace(
+      "runs-on: [self-hosted, Windows, kalcode-gate-pc2]",
+      "runs-on: [self-hosted, Windows, kalcode-gate-2]",
+    ),
   ]) {
     const env = setup();
     openPr(env, 1, { ".github/workflows/gate.yml": invalid });

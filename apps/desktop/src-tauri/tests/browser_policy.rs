@@ -15,6 +15,18 @@ fn normalizes_development_and_public_addresses() {
             " HTTPS://EXAMPLE.COM/a?b=c#d ",
             "https://example.com/a?b=c#d",
         ),
+        ("example.com:8080", "https://example.com:8080/"),
+        ("myapp.test:3000/x", "https://myapp.test:3000/x"),
+        (
+            "host.docker.internal:8080",
+            "https://host.docker.internal:8080/",
+        ),
+        ("dev.localhost:5173", "http://dev.localhost:5173/"),
+        ("0.0.0.0:3000", "http://0.0.0.0:3000/"),
+        ("192.168.1.5:5173", "http://192.168.1.5:5173/"),
+        ("10.0.0.2:8000/app?x=1", "http://10.0.0.2:8000/app?x=1"),
+        ("172.20.0.3:80", "http://172.20.0.3/"),
+        ("172.32.0.3:8080", "https://172.32.0.3:8080/"),
     ] {
         assert_eq!(normalize_browser_url(input).unwrap().as_str(), expected);
     }
@@ -29,6 +41,9 @@ fn rejects_privileged_or_ambiguous_addresses() {
         "data:text/html,hello",
         "blob:https://example.com/id",
         "about:blank",
+        "javascript:0",
+        "about:1",
+        "example.com:99999",
         "https://user:password@example.com",
         "https://example.com/line\nbreak",
         "http://",

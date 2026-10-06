@@ -1337,11 +1337,16 @@ mod tests {
         _recursive_test_process_slot: std::sync::MutexGuard<'static, ()>,
     }
 
+    // The first request's deadline also covers starting the fake app-server, which re-runs this
+    // test executable; under a loaded gate that start alone overran 1-2 s (gate 37393478801). No
+    // fake scenario leaves a request unanswered, so the production deadline only bounds a hang.
+    const TEST_REQUEST_TIMEOUT: Duration = DEFAULT_REQUEST_TIMEOUT;
+
     fn fixture(scenario: &str) -> Fixture {
         fixture_with_timeouts(
             scenario,
             AuthTimeouts {
-                request: Duration::from_secs(2),
+                request: TEST_REQUEST_TIMEOUT,
                 login: Duration::from_secs(2),
                 terminate_grace: Duration::from_millis(50),
             },
@@ -1690,7 +1695,7 @@ mod tests {
         let fixture = fixture_with_timeouts(
             "login_wait_for_cancel",
             AuthTimeouts {
-                request: Duration::from_secs(1),
+                request: TEST_REQUEST_TIMEOUT,
                 login: Duration::from_millis(75),
                 terminate_grace: Duration::from_millis(25),
             },

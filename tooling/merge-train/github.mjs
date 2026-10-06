@@ -71,22 +71,66 @@ export function isMainPcJob(job, sha) {
   );
 }
 
-export function gateStateFrom(runs, jobs, sha, branch) {
-  const run = runs[0];
-  if (!run || !isCandidateRun(run, sha, branch)) return { state: "missing" };
-  const matching = jobs.filter((j) => j.name === GATE_JOB);
+/** The second Windows PC's half of a split gate (owner, 2026-10-05: tests split across both PCs). */
+export const PC2_GATE_JOB = "Gate (Windows, PC2)";
+export const PC2_GATE_RUNNER = "kalcode-win-gate-2";
+
+export function isPc2Job(job, sha) {
+  const labels = job.labels ?? [];
+  return (
+    job.head_sha === sha &&
+    job.runner_name === PC2_GATE_RUNNER &&
+    labels.includes("self-hosted") &&
+    labels.includes("Windows") &&
+    labels.includes("kalcode-gate-pc2") &&
+    !labels.includes("kalcode-main-pc")
+  );
+}
+
+/** The build PC's second job of a split gate: rust, native E2E and the pool-only Cargo tools. */
+export const NATIVE_GATE_JOB = "Gate (Windows, native)";
+
+/** One job's verdict: its own completed, trusted, executed Gate step decides it. */
+function jobState(matching, run, sha, trusted) {
   if (!matching.length) return { state: "pending", url: run.html_url };
   if (matching.length !== 1) return { state: "stale", url: run.html_url };
   const job = matching[0];
   const url = job.html_url ?? run.html_url;
   if (job.status !== "completed") return { state: "pending", url };
-  if (!isMainPcJob(job, sha)) return { state: "stale", url };
+  if (!trusted(job, sha)) return { state: "stale", url };
   if (job.conclusion === "success") {
     const gate = job.steps?.find((step) => step.name === "Gate");
     return { state: gate?.status === "completed" && gate.conclusion === "success" ? "success" : "stale", url };
   }
   if (job.conclusion === "failure" || job.conclusion === "timed_out") return { state: "failure", url };
   return { state: "stale", url, conclusion: job.conclusion };
+}
+
+/**
+ * The candidate is green only when every part of its gate is: the build-PC job always, and the build PC's
+ * native job and the second-PC job whenever the run has them (a workflow without a split keeps its
+ * single-job evidence).
+ */
+export function gateStateFrom(runs, jobs, sha, branch) {
+  const run = runs[0];
+  if (!run || !isCandidateRun(run, sha, branch)) return { state: "missing" };
+  const parts = [
+    jobState(
+      jobs.filter((j) => j.name === GATE_JOB),
+      run,
+      sha,
+      isMainPcJob,
+    ),
+  ];
+  const nativeJobs = jobs.filter((j) => j.name === NATIVE_GATE_JOB);
+  if (nativeJobs.length) parts.push(jobState(nativeJobs, run, sha, isMainPcJob));
+  const pc2Jobs = jobs.filter((j) => j.name === PC2_GATE_JOB);
+  if (pc2Jobs.length) parts.push(jobState(pc2Jobs, run, sha, isPc2Job));
+  for (const state of ["failure", "pending", "stale"]) {
+    const part = parts.find((p) => p.state === state);
+    if (part) return part;
+  }
+  return parts[0];
 }
 
 /**

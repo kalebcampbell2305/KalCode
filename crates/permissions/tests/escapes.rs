@@ -498,6 +498,47 @@ fn symlink_and_junction_escapes_are_outside() {
     assert!(ambiguous.outside, "{ambiguous:?}");
 }
 
+#[test]
+fn links_to_credential_folders_are_credentials() {
+    let (dir, ws) = ws();
+    let ssh = dir.path().join("home").join(".ssh");
+    std::fs::create_dir_all(&ssh).expect("mkdir");
+    std::fs::write(ssh.join("config"), "Host x").expect("write");
+    let link = dir.path().join("ws").join("src").join("notes");
+    assert!(
+        make_dir_link(&link, &ssh),
+        "could not create a directory link or junction"
+    );
+    // The names look harmless; the location they resolve to is a credential store.
+    for path in ["src/notes", "src/notes/config"] {
+        let info = paths::resolve(&ws, None, path);
+        assert!(info.outside && info.credentials, "{path}: {info:?}");
+    }
+    let facts = classify_command("cat src/notes/config", &[], "", &ws);
+    assert!(
+        facts.scopes.contains(&S::CredentialsAccess),
+        "{:?}",
+        facts.scopes
+    );
+}
+
+#[test]
+fn naming_a_credential_folder_is_credentials_access() {
+    let (_dir, ws) = ws();
+    for text in [
+        r#"grep -r "" ~/.aws"#,
+        "tar czf - ~/.ssh",
+        "cp -r ~/.ssh ./keys",
+    ] {
+        let facts = classify_command(text, &[], "", &ws);
+        assert!(
+            facts.scopes.contains(&S::CredentialsAccess),
+            "{text}: {:?}",
+            facts.scopes
+        );
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn dangling_symlinks_are_outside() {
