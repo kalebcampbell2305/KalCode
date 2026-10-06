@@ -280,3 +280,52 @@ public struct RunDetail: Decodable, Equatable, Sendable {
     public var logs: JSONValue?
     public var tests: JSONValue?
 }
+
+// MARK: - Typed views of the open-shaped fields (as the Rust host sends them)
+
+public struct WorktreeInfo: Equatable, Sendable {
+    public var path: String?
+    public var branch: String?
+    public var baseBranch: String?
+
+    public init?(_ value: JSONValue?) {
+        guard let o = value?.objectValue else { return nil }
+        path = o["path"]?.stringValue; branch = o["branch"]?.stringValue; baseBranch = o["baseBranch"]?.stringValue
+    }
+}
+
+public struct LogEntry: Identifiable, Equatable, Sendable {
+    public var id: String
+    public var kind: String
+    public var text: String
+    public var at: Date?
+
+    public init(_ value: JSONValue, index: Int) {
+        let o = value.objectValue ?? [:]
+        id = o["id"]?.stringValue ?? "entry-\(index)"
+        kind = o["kind"]?.stringValue ?? o["role"]?.stringValue ?? "output"
+        text = o["text"]?.stringValue ?? value.stringValue ?? ""
+        at = o["at"]?.stringValue.flatMap(RFC3339.parse)
+    }
+}
+
+public extension AgentLogPage {
+    var typedEntries: [LogEntry] { entries.enumerated().map { LogEntry($1, index: $0) } }
+}
+
+public struct TestResult: Identifiable, Equatable, Sendable {
+    public var id: String { name }
+    public var name: String
+    public var status: String
+    public var durationMs: Int?
+}
+
+public extension RunDetail {
+    var logLines: [String] { logs?.arrayValue?.compactMap { $0.stringValue ?? $0["text"]?.stringValue } ?? [] }
+    var testResults: [TestResult] {
+        tests?.arrayValue?.compactMap { t in
+            guard let name = t["name"]?.stringValue else { return nil }
+            return TestResult(name: name, status: t["status"]?.stringValue ?? "unknown", durationMs: t["durationMs"]?.numberValue.map { Int($0) })
+        } ?? []
+    }
+}
