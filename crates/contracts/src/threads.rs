@@ -8,6 +8,10 @@ use crate::agent::{ModelInfo, PermissionMapping, ProviderId};
 use crate::permissions::PermissionMode;
 use crate::workspace_ui::{DashboardChip, DisplayQualifier, DisplayStatus};
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// Normalized thread states (directive §7.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -299,6 +303,17 @@ pub struct ThreadSummary {
     /// provider session id is stored). `false`: resume starts a fresh provider session.
     #[serde(default)]
     pub resumable: bool,
+    /// This interactive coding-agent pane was interrupted because KalCode exited and is safe to
+    /// offer through startup recovery. The desktop stamps this only after it has established the
+    /// durable `interactive_pty` identity; core thread summaries default to `false`.
+    #[serde(default)]
+    #[ts(optional)]
+    pub restart_recoverable: Option<bool>,
+    /// A user turn is durably recorded but has not reached the provider. Recovery surfaces use
+    /// this boolean to require an explicit choice before sending it; message text is never
+    /// included in the summary.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub resume_has_pending_input: bool,
     /// The Custom permission profile a Custom-mode thread uses (`threads.permission_profile_id`).
     #[serde(default)]
     pub permission_profile_id: Option<String>,
@@ -637,11 +652,27 @@ mod tests {
             "createdAt": "", "lastActivityAt": "", "pendingApprovals": 0, "unreadMessages": 0,
             "filesChanged": null, "branch": null, "error": null
         });
-        let summary: ThreadSummary = serde_json::from_value(json).expect("decode");
+        let mut summary: ThreadSummary = serde_json::from_value(json).expect("decode");
         assert_eq!(summary.archived_at, None);
         assert_eq!(summary.provider_account_id, None);
         assert_eq!(summary.effort, None);
         assert!(!summary.resumable);
+        assert_eq!(summary.restart_recoverable, None);
+        assert!(!summary.resume_has_pending_input);
+        assert!(
+            serde_json::to_value(&summary)
+                .expect("encode default")
+                .get("resumeHasPendingInput")
+                .is_none(),
+            "default false stays wire-compatible with older summaries"
+        );
+        summary.resume_has_pending_input = true;
+        assert_eq!(
+            serde_json::to_value(&summary)
+                .expect("encode pending input")
+                .get("resumeHasPendingInput"),
+            Some(&serde_json::Value::Bool(true))
+        );
         assert_eq!(summary.permission_profile_id, None);
         assert_eq!(summary.runtime_kind, None);
         let input: ThreadCreateInput = serde_json::from_value(serde_json::json!({

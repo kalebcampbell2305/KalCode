@@ -28,7 +28,7 @@ import { useOptionalAccount } from "../../account/AccountProvider.tsx";
 import { planTier } from "../../ipc/account.ts";
 import { type OperationsApi, OperationsClient } from "../../ipc/operations.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
-import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
+import { useWorkspaces, useWorkspaceVisible } from "../../runtime/WorkspaceProvider.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
 import { registerPaneWidget } from "../../shell/panes/contentRegistry.ts";
 import { useOpenInPane } from "../../shell/panes/useOpenInPane.ts";
@@ -135,8 +135,13 @@ export function CodeContextOperations({ client, visible = true }: { client: Oper
   const openInPane = useOpenInPane();
   const tier = planTier(useOptionalAccount()?.snapshot);
   const [tab, setTab] = useState<ContextTab>(() => takeRequestedTab() ?? "runs");
+  // Visited workspaces stay mounted while hidden; a request belongs to the one on screen.
+  const workspaceVisible = useWorkspaceVisible();
+  const workspaceVisibleRef = useRef(workspaceVisible);
+  workspaceVisibleRef.current = workspaceVisible;
   useEffect(() => {
     const listener = (requested: ContextTab) => {
+      if (!workspaceVisibleRef.current) return;
       requestedTab = null;
       setTab(requested);
     };
@@ -269,13 +274,17 @@ export function CodeContextOperations({ client, visible = true }: { client: Oper
       </header>
 
       <section className={styles.signal} aria-label="Workspace execution summary">
+        {/* Tone edges on inert elements, not ::before (see CodeContextOperations.module.css). */}
         <span data-tone="working">
+          <span className={styles.signalEdge} aria-hidden="true" />
           <strong>{running}</strong> running
         </span>
         <span data-tone="service">
+          <span className={styles.signalEdge} aria-hidden="true" />
           <strong>{services.filter((service) => service.status === "running").length}</strong> services
         </span>
         <span data-tone={failed > 0 ? "failed" : "quiet"}>
+          <span className={styles.signalEdge} aria-hidden="true" />
           <strong>{failed}</strong> failed
         </span>
         <small>Observed {timeLabel(state.observedAt ?? snapshot.observedAt)}</small>

@@ -23,6 +23,7 @@ import {
   isReportedPercent,
   LOW_USAGE_PERCENT,
   resetsIn,
+  usagePercent,
   useAccountUsage,
   weeklyWindow,
 } from "./accountUsage.ts";
@@ -417,7 +418,9 @@ function AccountFacts({
   quota: AccountUsageState;
 }) {
   const now = Date.now();
-  const known = (quota.status === "fresh" || quota.status === "stale") && quota.windows.length > 0;
+  const known =
+    (quota.status === "fresh" || quota.status === "stale") &&
+    quota.windows.some((window) => isReportedPercent(window.remainingPercent));
   const signIn = accountSignIn(account);
   return (
     <dl className={styles.facts}>
@@ -452,12 +455,14 @@ function AccountFacts({
         {known ? (
           <dd>
             <ul className={styles.windowList}>
-              {quota.windows.map((window) => (
-                <li key={window.id} data-tone={window.remainingPercent < LOW_USAGE_PERCENT ? "low" : undefined}>
-                  {window.label} · {Math.max(0, Math.min(100, Math.round(window.remainingPercent)))}% left
-                  {resetsIn(window.resetsAt, now) ? ` · ${resetsIn(window.resetsAt, now)?.toLowerCase()}` : ""}
-                </li>
-              ))}
+              {quota.windows
+                .filter((window) => isReportedPercent(window.remainingPercent))
+                .map((window) => (
+                  <li key={window.id} data-tone={window.remainingPercent < LOW_USAGE_PERCENT ? "low" : undefined}>
+                    {window.label} · {usagePercent(window.remainingPercent)}% left
+                    {resetsIn(window.resetsAt, now) ? ` · ${resetsIn(window.resetsAt, now)?.toLowerCase()}` : ""}
+                  </li>
+                ))}
             </ul>
           </dd>
         ) : (

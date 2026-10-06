@@ -1,5 +1,9 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
+import { lowerLocalPriority } from "../../tooling/local-priority.mjs";
+
+// Local test runs (vitest sets VITEST) yield the CPU to the gate; the dev server keeps its priority.
+if (process.env.VITEST) lowerLocalPriority();
 
 /**
  * The app runs with Object.prototype frozen (`freezePrototype` in tauri.conf.json). xterm.js

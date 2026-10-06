@@ -102,6 +102,7 @@ describe("ApprovalPrompt", () => {
     render(<ApprovalPrompt request={expired} onDecide={vi.fn()} />);
     expect(screen.queryAllByRole("button")).toHaveLength(0);
     expect(screen.getByText("Expired: the thread stopped")).toBeInTheDocument();
+    expect(statusText(request({ status: "expired", expireReason: null }))).toBe("Expired: its approval window passed");
     expect(statusText(request({ status: "approved", resolvedDecision: "approve_for_thread" }))).toBe(
       "Allowed for this thread",
     );

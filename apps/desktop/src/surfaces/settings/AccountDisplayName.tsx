@@ -3,14 +3,14 @@ import { Check } from "lucide-react";
 import { type FormEvent, type KeyboardEvent, useEffect, useId, useRef, useState } from "react";
 import type { AccountUiError } from "../../account/accountState.ts";
 import { accountDisplayNameProblem, emailName, kalcodeIdentity } from "../../account/displayName.ts";
-import type { PublicAccount } from "../../ipc/account.ts";
+import { DISPLAY_NAME_MAX, type PublicAccount } from "../../ipc/account.ts";
 import styles from "./AccountDisplayName.module.css";
 
 /** What happened, and the most useful next step. */
 export function displayNameErrorMessage(error: AccountUiError): string {
   switch (error.code) {
     case "invalid_display_name":
-      return "That name can't be used. Use 1–64 characters, without control or invisible characters.";
+      return `That name can't be used. Use at most ${DISPLAY_NAME_MAX} characters, without control or invisible characters.`;
     case "rate_limited":
       return "Your name wasn't changed: too many changes in a row. Wait a moment, then select Save again.";
     case "authentication_required":

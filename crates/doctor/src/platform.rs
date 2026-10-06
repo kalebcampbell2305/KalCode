@@ -34,10 +34,34 @@ pub fn os_summary() -> (String, String, Option<u64>) {
         None => info.os_type().to_string(),
     };
     let version = info.version().to_string();
-    // Windows versions read "10.0.26200": the third part is the build.
-    let build = version
+    let build = build_number(&version, cfg!(windows));
+    (name, version, build)
+}
+
+/// Windows versions read "10.0.26200": the third part is the build. Elsewhere the third part is
+/// a patch level (macOS "15.1.0"), not a build number.
+fn build_number(version: &str, windows: bool) -> Option<u64> {
+    if !windows {
+        return None;
+    }
+    version
         .split('.')
         .nth(2)
-        .and_then(|b| b.parse::<u64>().ok());
-    (name, version, build)
+        .and_then(|b| b.parse::<u64>().ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_number;
+
+    #[test]
+    fn only_windows_versions_carry_a_build_number() {
+        assert_eq!(build_number("10.0.26200", true), Some(26200));
+        assert_eq!(
+            build_number("15.1.0", false),
+            None,
+            "macOS 15.1.0 is not build 0"
+        );
+        assert_eq!(build_number("6.8.12", false), None);
+    }
 }

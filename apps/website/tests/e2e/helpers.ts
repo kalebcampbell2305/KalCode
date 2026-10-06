@@ -68,7 +68,6 @@ export function renderedDescription(
   return page.description;
 }
 
-const PERSIST_DIR = process.env.KALCODE_E2E_PERSIST ?? ".wrangler/e2e-state";
 /** The local mail sink (tests/e2e/mail-sink.mjs); same default as playwright.config.ts. */
 export const MAIL_SINK = `http://127.0.0.1:${Number(process.env.KALCODE_E2E_MAIL_PORT ?? Number(process.env.KALCODE_E2E_PORT ?? 8788) + 1)}`;
 
@@ -95,30 +94,58 @@ export async function useClientIp(page: Page, ip = uniqueIp()): Promise<string> 
   return ip;
 }
 
-/** Runs SQL against the local E2E D1 database (the same one `wrangler dev` serves). */
-export function d1Local<T>(sql: string): T[] {
-  // Run wrangler's JS entry with node directly: no shell, so the SQL argument is passed intact.
-  const output = execFileSync(
-    process.execPath,
-    [
-      resolve(APP_ROOT, "node_modules/wrangler/bin/wrangler.js"),
-      "d1",
-      "execute",
-      "kalcode-web",
-      "--local",
-      "--persist-to",
-      PERSIST_DIR,
-      "--json",
-      "--command",
-      sql,
-    ],
-    { cwd: APP_ROOT, encoding: "utf8", windowsHide: true },
-  );
-  const parsed = JSON.parse(output.slice(output.indexOf("["))) as { results: T[] }[];
-  return parsed[0]?.results ?? [];
-}
+/** The E2E Worker (`wrangler dev`); same default port as playwright.config.ts. */
+const E2E_ORIGIN = `http://127.0.0.1:${Number(process.env.KALCODE_E2E_PORT ?? 8788)}`;
+/** Wrangler's Local Explorer API: queries D1 inside the running `wrangler dev` itself. */
+const D1_EXPLORER = `${E2E_ORIGIN}/cdn-cgi/local/explorer/api/d1/database`;
 
-const sqlString = (value: string) => `'${value.replace(/'/g, "''")}'`;
+// Runs in a child node so d1Local stays synchronous for the specs. Reads {url, sql, params} on
+// stdin, finds the DB binding's database, runs the statement and prints its rows as objects.
+const D1_QUERY_SCRIPT = `
+const input = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
+(async () => {
+  const call = async (url, init) => {
+    const response = await fetch(url, init);
+    const body = await response.json().catch(() => null);
+    if (!response.ok || !body?.success) throw new Error(url + " answered " + response.status + " " + JSON.stringify(body?.errors ?? body));
+    return body.result;
+  };
+  const databases = await call(input.url);
+  const db = databases.find((d) => d.name === "DB") ?? (databases.length === 1 ? databases[0] : undefined);
+  if (!db) throw new Error("no DB binding in " + JSON.stringify(databases));
+  const [result] = await call(input.url + "/" + db.uuid + "/raw", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sql: input.sql, params: input.params }),
+  });
+  const { columns = [], rows = [] } = result?.results ?? {};
+  process.stdout.write(JSON.stringify(rows.map((row) => Object.fromEntries(columns.map((c, i) => [c, row[i]])))));
+})().catch((error) => {
+  process.stderr.write(String(error?.stack ?? error));
+  process.exit(1);
+});
+`;
+
+/**
+ * Runs one SQL statement with bound parameters against the local E2E D1 database, inside the
+ * running `wrangler dev` through Wrangler's Local Explorer API, and returns its rows.
+ *
+ * It deliberately never opens the database from a second process. `wrangler d1 execute --local`
+ * starts another Miniflare on the same SQLite file: two of those at once fail with "internal
+ * error", each call takes seconds, and the Worker's own D1 does not wait for a lock another process
+ * holds, so a request that writes while such a call (or any outside write) is in progress answers
+ * 500 ("Something went wrong") or 503 ("We can't send more emails today"). Going through the
+ * server, the statement is serialised with the Worker's own queries. The explorer binds string
+ * parameters only (it answers 400 for anything else), so numbers go in as text or in the SQL.
+ */
+export function d1Local<T>(sql: string, ...params: string[]): T[] {
+  const output = execFileSync(process.execPath, ["-e", D1_QUERY_SCRIPT], {
+    input: JSON.stringify({ url: D1_EXPLORER, sql, params }),
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  return JSON.parse(output) as T[];
+}
 
 export interface EarlyAccessRow {
   email: string;
@@ -130,7 +157,8 @@ export interface EarlyAccessRow {
 /** Reads rows from the local E2E D1 database. */
 export function queryEarlyAccess(email: string): EarlyAccessRow[] {
   return d1Local<EarlyAccessRow>(
-    `SELECT email, source, consent_version, status FROM early_access WHERE email = ${sqlString(email)}`,
+    "SELECT email, source, consent_version, status FROM early_access WHERE email = ?",
+    email,
   );
 }
 
@@ -138,7 +166,8 @@ export function queryEarlyAccess(email: string): EarlyAccessRow[] {
 export function countLinks(email: string): number {
   const [row] = d1Local<{ n: number }>(
     "SELECT COUNT(*) AS n FROM early_access_tokens WHERE early_access_id IN " +
-      `(SELECT id FROM early_access WHERE email = ${sqlString(email)})`,
+      "(SELECT id FROM early_access WHERE email = ?)",
+    email,
   );
   return row?.n ?? 0;
 }
@@ -147,7 +176,31 @@ export function countLinks(email: string): number {
 export function expireLinks(email: string): void {
   d1Local(
     "UPDATE early_access_tokens SET expires_at = '2000-01-01T00:00:00.000Z' WHERE early_access_id IN " +
-      `(SELECT id FROM early_access WHERE email = ${sqlString(email)})`,
+      "(SELECT id FROM early_access WHERE email = ?)",
+    email,
+  );
+}
+
+/**
+ * Gives back the marketing emails earlier tests used from the site's daily email budget once more
+ * than half of it is spent. The budget is enforced in D1 (migrations/0005: at most 60 marketing
+ * emails per UTC day), so in a persisted E2E database every run spends from the same day's
+ * allowance, and a repeated or parallel run would see "We can't send more emails today" instead
+ * of the flow under test. Only finished sends are dropped (a send in flight in another worker
+ * keeps its claim) and the day's counter is recomputed from the rows that remain: two short
+ * writes, made only when needed.
+ */
+export function resetEmailBudget(): void {
+  const [used] = d1Local<{ n: number }>(
+    "SELECT COUNT(*) AS n FROM marketing_email_dispatches WHERE claimed_day = ? AND state != 'rejected'",
+    new Date().toISOString().slice(0, 10),
+  );
+  if ((used?.n ?? 0) <= 30) return;
+  d1Local("DELETE FROM marketing_email_dispatches WHERE state != 'claimed'");
+  d1Local(
+    "UPDATE email_send_budget SET sent = " +
+      "(SELECT COUNT(*) FROM marketing_email_dispatches m WHERE m.claimed_day = email_send_budget.day AND m.state != 'rejected') + " +
+      "(SELECT COUNT(*) FROM account_email_dispatches a WHERE a.claimed_day = email_send_budget.day AND a.state != 'rejected')",
   );
 }
 
@@ -166,9 +219,14 @@ export async function mailTo(request: APIRequestContext, email: string): Promise
   return (await response.json()) as CapturedEmail[];
 }
 
-/** Makes the next `count` sends fail as if the provider answered 500 (0 clears it). */
-export async function failNextEmails(request: APIRequestContext, count: number): Promise<void> {
-  await request.post(`${MAIL_SINK}/fail`, { data: { count } });
+/**
+ * Makes the next `count` sends to `email` fail as if the provider answered 500 (0 clears it).
+ * Scoped to one address: the sink serves every test, and with more than one worker an unscoped
+ * failure is taken by whichever send comes next, failing another test and sparing this one.
+ */
+export async function failNextEmails(request: APIRequestContext, email: string, count: number): Promise<void> {
+  const response = await request.post(`${MAIL_SINK}/fail`, { data: { count, to: email } });
+  if (!response.ok()) throw new Error(`mail sink /fail answered ${response.status()}`);
 }
 
 /** The path and query of the first link in `text` to `pagePath` (e.g. /early-access/confirm?token=…). */

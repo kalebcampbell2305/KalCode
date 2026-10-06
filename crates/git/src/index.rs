@@ -64,7 +64,14 @@ impl std::fmt::Debug for FileIndex {
 
 /// The walker every workspace listing uses (index, listings, checkpoints): Git's ignore rules,
 /// hidden files included, `.git` never entered, links never followed.
+///
+/// Inside a repository, ignore files apply up to that repository's top level only, as in Git: a
+/// workspace that is its own repository inside another one (a home folder kept in Git with a
+/// `*` `.gitignore`) never inherits the outer repository's rules. The walker only stops at a
+/// repository boundary when it knows Git is in play (`require_git`), so that is set whenever
+/// `dir` is in a repository; outside one, `.gitignore` files still apply.
 pub(crate) fn walker(dir: &Path, max_depth: Option<usize>) -> WalkBuilder {
+    let in_repository = dir.ancestors().any(|folder| folder.join(".git").exists());
     let mut builder = WalkBuilder::new(dir);
     builder
         .hidden(false)
@@ -73,7 +80,7 @@ pub(crate) fn walker(dir: &Path, max_depth: Option<usize>) -> WalkBuilder {
         .git_ignore(true)
         .git_global(true)
         .git_exclude(true)
-        .require_git(false)
+        .require_git(in_repository)
         .follow_links(false)
         .max_depth(max_depth)
         .filter_entry(|entry| !is_git_dir(entry.file_name()));

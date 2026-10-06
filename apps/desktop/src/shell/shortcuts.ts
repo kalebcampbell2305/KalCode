@@ -46,6 +46,9 @@ export function isRailToggleShortcut(
   return hasPrimaryModifier(event, platform) && event.shiftKey && !event.altKey && event.key.toLowerCase() === "b";
 }
 
+/** Marks an element whose Alt+Arrow keys reorder it, so global Back/Forward leaves them alone. */
+export const KEYBOARD_REORDER_ATTRIBUTE = "data-keyboard-reorder";
+
 interface ShortcutHandlers {
   openPalette: () => void;
   toggleSidebar: () => void;
@@ -69,6 +72,13 @@ export function useShortcuts(handlers: ShortcutHandlers) {
       } else if (shortcut === "toggle-sidebar") {
         event.preventDefault();
         latest.current.toggleSidebar();
+      } else if (
+        (shortcut === "back" || shortcut === "forward") &&
+        event.target instanceof Element &&
+        event.target.closest(`[${KEYBOARD_REORDER_ATTRIBUTE}]`)
+      ) {
+        // The focused item reorders with Alt+Arrow (favorites); it must not also navigate.
+        return;
       } else if (shortcut === "back" || shortcut === "forward" || shortcut === "open-settings") {
         const handler = shortcut === "open-settings" ? latest.current.openSettings : latest.current[shortcut];
         if (handler) {

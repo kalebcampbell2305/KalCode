@@ -1770,6 +1770,113 @@ fn utility_claim_is_exact_short_lived_and_non_replayable() {
 }
 
 #[test]
+fn lapsed_doctor_and_utility_requests_stop_being_pending() {
+    let h = Harness::new();
+    let doctor = doctor_action(&h);
+    let doctor_request = h
+        .service
+        .request_for_origin(doctor.clone())
+        .expect("Doctor request")
+        .approval
+        .expect("approval");
+    let utility = utility_dns_action();
+    let utility_request = h
+        .service
+        .request_for_origin(utility.clone())
+        .expect("Utility request")
+        .approval
+        .expect("approval");
+    // A provider-thread request has no fixed lifetime and is never swept by age.
+    let thread_request = open(&h, command("npm test"));
+
+    // Inside the window nothing lapses.
+    h.advance(kalcode_permissions::DOCTOR_APPROVAL_TTL_MS);
+    assert_eq!(h.service.expire_lapsed_requests().expect("sweep"), 0);
+    assert_eq!(
+        h.service
+            .list_approvals(Some(ApprovalStatus::Pending))
+            .expect("list")
+            .len(),
+        3
+    );
+
+    // Past the window, listing expires them first: they are not pending anymore.
+    h.advance(1);
+    let pending = h
+        .service
+        .list_approvals(Some(ApprovalStatus::Pending))
+        .expect("list");
+    assert_eq!(
+        pending.iter().map(|v| v.id.as_str()).collect::<Vec<_>>(),
+        vec![thread_request.id.as_str()]
+    );
+    let all = h.service.list_approvals(None).expect("list");
+    for id in [&doctor_request.id, &utility_request.id] {
+        let view = all.iter().find(|v| &v.id == id).expect("still recorded");
+        assert_eq!(view.status, ApprovalStatus::Expired);
+        assert_eq!(view.expire_reason, None);
+        assert_eq!(view.resolved_decision, None);
+    }
+    let expired_events = h
+        .event_types()
+        .iter()
+        .filter(|kind| kind.as_str() == "approval.expired")
+        .count();
+    assert_eq!(
+        expired_events, 2,
+        "each lapse refreshes the Approvals panel"
+    );
+    assert_eq!(h.service.expire_lapsed_requests().expect("sweep"), 0);
+
+    // A late answer is refused, and the claim-time checks still refuse too.
+    assert_eq!(
+        h.service
+            .decide(&utility_request.id, D::ApproveOnce, Actor::User)
+            .expect_err("late approval")
+            .code,
+        "approval_expired"
+    );
+    assert_eq!(
+        h.service
+            .claim_utility_approval(&utility_request.id, &utility, 1)
+            .expect_err("expired claim")
+            .code,
+        "approval_expired"
+    );
+    assert_eq!(
+        h.service
+            .verify_doctor_approval(&doctor_request.id, &doctor)
+            .expect_err("expired Doctor approval")
+            .code,
+        "approval_expired"
+    );
+}
+
+#[test]
+fn a_late_answer_expires_a_lapsed_request_even_without_a_sweep() {
+    let h = Harness::new();
+    let utility = utility_dns_action();
+    let request = h
+        .service
+        .request_for_origin(utility)
+        .expect("Utility request")
+        .approval
+        .expect("approval");
+    h.advance(kalcode_permissions::UTILITY_APPROVAL_TTL_MS + 1);
+    let error = h
+        .service
+        .decide(&request.id, D::ApproveOnce, Actor::User)
+        .expect_err("late approval");
+    assert_eq!(error.code, "approval_expired");
+    let stored = h
+        .core
+        .read(|conn| store::get_approval(conn, &request.id))
+        .expect("read")
+        .expect("row");
+    assert_eq!(stored.view.status, ApprovalStatus::Expired);
+}
+
+#[test]
 fn utility_claim_refuses_pending_denied_swapped_and_invalid_runtime_authority() {
     let h = Harness::new();
     let pending_action = utility_dns_action();

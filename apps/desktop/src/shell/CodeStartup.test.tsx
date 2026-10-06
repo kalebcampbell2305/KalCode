@@ -4,6 +4,14 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CodeStartup } from "./CodeStartup.tsx";
 import { NavigationProvider, useNavigation } from "./navigation.tsx";
+import { navigationHistoryStorageKey } from "./navigationHistory.ts";
+
+const ACCOUNT_ID = "startup-test-account";
+const HISTORY_KEY = navigationHistoryStorageKey(ACCOUNT_ID);
+
+vi.mock("../account/AccountProvider.tsx", () => ({
+  useOptionalAccount: () => ({ snapshot: { account: { id: ACCOUNT_ID } } }),
+}));
 
 const workspaces = vi.hoisted(() => ({
   current: {
@@ -11,7 +19,6 @@ const workspaces = vi.hoisted(() => ({
     active: null as { id: string } | null,
   },
 }));
-
 vi.mock("../runtime/WorkspaceProvider.tsx", () => ({ useWorkspaces: () => workspaces.current }));
 
 const flags = [
@@ -22,15 +29,19 @@ const flags = [
 const features = [{ id: "workspace_home", state: "available", visible: true }] as FeatureFlag[];
 
 function NavigationProbe() {
-  const { current, navigate } = useNavigation();
+  const { current, navigate, back, history } = useNavigation();
   return (
     <>
       <output aria-label="Current destination">{current}</output>
+      <output aria-label="Navigation history">{history.map((entry) => entry.destination).join(",")}</output>
       <button type="button" onClick={() => navigate("home")}>
         Home
       </button>
       <button type="button" onClick={() => navigate("settings")}>
         Settings
+      </button>
+      <button type="button" onClick={() => void back()}>
+        Back
       </button>
     </>
   );
@@ -60,10 +71,43 @@ function settle(
 }
 
 beforeEach(() => {
+  localStorage.clear();
   workspaces.current = { state: "loading", active: null };
 });
 
+function seedHistory(destinations: readonly ("home" | "code" | "settings")[]) {
+  localStorage.setItem(
+    HISTORY_KEY,
+    JSON.stringify({
+      version: 1,
+      entries: destinations.map((destination, id) => ({ id, destination })),
+      index: destinations.length - 1,
+      nextId: destinations.length,
+    }),
+  );
+}
+
 describe("Code startup", () => {
+  it("commits Activity as a real manual startup visit so Back returns to the previous session", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem(`kalcode:desk-restore:v1:${ACCOUNT_ID}`, "manual");
+    seedHistory(["home", "settings"]);
+    const view = mount();
+    settle(view, "ready", { id: "workspace" });
+    expect(screen.getByRole("status", { name: "Current destination" })).toHaveTextContent("home");
+    expect(screen.getByRole("status", { name: "Navigation history" })).toHaveTextContent(/^home,settings,home$/);
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    expect(screen.getByRole("status", { name: "Current destination" })).toHaveTextContent("settings");
+  });
+  it("reuses a persisted Code location during automatic restore without a transient Activity visit", () => {
+    seedHistory(["home", "code"]);
+    const view = mount();
+
+    settle(view, "ready", { id: "workspace" });
+
+    expect(screen.getByRole("status", { name: "Current destination" })).toHaveTextContent("code");
+    expect(screen.getByRole("status", { name: "Navigation history" })).toHaveTextContent(/^home,code$/);
+  });
   it("opens Code after the initial active workspace is restored", () => {
     const view = mount();
     expect(screen.getByRole("status", { name: "Current destination" })).toHaveTextContent("home");
@@ -74,11 +118,13 @@ describe("Code startup", () => {
   });
 
   it("keeps the onboarding destination when no workspace was restored", () => {
+    seedHistory(["home", "settings"]);
     const view = mount();
 
     settle(view, "ready", null);
 
     expect(screen.getByRole("status", { name: "Current destination" })).toHaveTextContent("home");
+    expect(screen.getByRole("status", { name: "Navigation history" })).toHaveTextContent(/^home,settings,home$/);
   });
 
   it("keeps the existing Dashboard start when Home is unavailable and no workspace was restored", () => {
@@ -90,11 +136,13 @@ describe("Code startup", () => {
   });
 
   it("keeps the onboarding destination when the initial restore fails", () => {
+    seedHistory(["home", "settings"]);
     const view = mount();
 
     settle(view, "error", null);
 
     expect(screen.getByRole("status", { name: "Current destination" })).toHaveTextContent("home");
+    expect(screen.getByRole("status", { name: "Navigation history" })).toHaveTextContent(/^home,settings,home$/);
   });
 
   it("never overrides navigation performed while the workspace restore is pending", async () => {
@@ -105,6 +153,7 @@ describe("Code startup", () => {
     settle(view, "ready", { id: "workspace" });
 
     expect(screen.getByRole("status", { name: "Current destination" })).toHaveTextContent("settings");
+    expect(screen.getByRole("status", { name: "Navigation history" })).toHaveTextContent(/^home,settings$/);
   });
 
   it("treats navigation to the already-current destination as user intent", async () => {

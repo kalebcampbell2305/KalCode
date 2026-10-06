@@ -73,13 +73,14 @@ export function isMainPcJob(job, sha) {
 
 /** The second Windows PC's half of a split gate (owner, 2026-10-05: tests split across both PCs). */
 export const PC2_GATE_JOB = "Gate (Windows, PC2)";
-export const PC2_GATE_RUNNER = "kalcode-win-gate-2";
+/** The second PC's gate runners (owner, 2026-10-06: a second runner there), each its own account and checkout. */
+export const PC2_GATE_RUNNERS = Object.freeze(["kalcode-win-gate-2", "kalcode-win-gate-2b"]);
 
 export function isPc2Job(job, sha) {
   const labels = job.labels ?? [];
   return (
     job.head_sha === sha &&
-    job.runner_name === PC2_GATE_RUNNER &&
+    PC2_GATE_RUNNERS.includes(job.runner_name) &&
     labels.includes("self-hosted") &&
     labels.includes("Windows") &&
     labels.includes("kalcode-gate-pc2") &&

@@ -18,6 +18,9 @@ use kalcode_hook_bridge::{DEADLINE_ENV, Endpoint, HookEvent, HookRecord, HookRep
 
 const HELPER: &str = env!("CARGO_BIN_EXE_kalcode-hook");
 
+/// Hang guard for test-only waits (handler start, uncontended connects): never a latency assertion.
+const HANG_GUARD: Duration = Duration::from_secs(30);
+
 /// Answers with a fixed reply and remembers what it saw.
 struct Fixed {
     reply: HookReply,
@@ -42,7 +45,7 @@ struct Gated {
 
 impl Gated {
     fn wait_started(&self, count: usize) {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + HANG_GUARD;
         let mut state = self.state.lock().expect("lock");
         while state.started < count {
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -304,7 +307,7 @@ fn raw_request(
 }
 
 fn connect(server: &BridgeServer) -> Box<dyn Stream> {
-    client::connect(server.endpoint(), Instant::now() + Duration::from_secs(3)).expect("connect")
+    client::connect(server.endpoint(), Instant::now() + HANG_GUARD).expect("connect")
 }
 
 fn record_body() -> String {
@@ -604,7 +607,7 @@ fn handler_lifetime_limit_is_per_registration() {
             &first_session,
             &first_key,
             &first_record,
-            Instant::now() + Duration::from_secs(3),
+            Instant::now() + HANG_GUARD,
         )
     });
     handler.wait_started(1);
@@ -619,7 +622,7 @@ fn handler_lifetime_limit_is_per_registration() {
             reg.session_id(),
             &key,
             &record,
-            Instant::now() + Duration::from_secs(3),
+            Instant::now() + HANG_GUARD,
         ),
         Ok(HookReply::Ack)
     ));
@@ -868,7 +871,7 @@ fn timed_out_handlers_keep_their_concurrency_permit_until_they_exit() {
             &first_session,
             &first_key,
             &first_record,
-            Instant::now() + Duration::from_secs(3),
+            Instant::now() + HANG_GUARD,
         )
     });
     handler.wait_started(1);
@@ -1000,7 +1003,7 @@ fn a_busy_observing_session_forces_no_prompt() {
             &first_session,
             &first_key,
             &first_record,
-            Instant::now() + Duration::from_secs(3),
+            Instant::now() + HANG_GUARD,
         )
     });
     handler.wait_started(1);
@@ -1009,7 +1012,7 @@ fn a_busy_observing_session_forces_no_prompt() {
         reg.session_id(),
         &key,
         &record,
-        Instant::now() + Duration::from_secs(3),
+        Instant::now() + HANG_GUARD,
     )
     .expect("second exchange");
     assert_eq!(second, HookReply::NoDecision);

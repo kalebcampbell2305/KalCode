@@ -689,9 +689,10 @@ impl Harness {
     }
 }
 
-/// Polls `condition` until it holds (events are applied on worker threads).
+/// Polls `condition` until it holds (events are applied on worker threads). The deadline is a hang
+/// guard for a loaded machine, never a latency assertion.
 pub fn wait_until(what: &str, condition: impl Fn() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(30);
     while Instant::now() < deadline {
         if condition() {
             return;

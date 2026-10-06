@@ -15,7 +15,7 @@ async function openCode(page: Page) {
   await expect(page.getByRole("heading", { name: "kalcode-site", exact: true })).toBeVisible();
 }
 
-test("Cancel preserves unsent input; Keep Running is explicit and can be reopened", async ({ page }, testInfo) => {
+test("Cancel preserves unsent input; Stop and Close ends the owned shell", async ({ page }, testInfo) => {
   await openCode(page);
   const tab = page.getByRole("tab", { name: /^PowerShell 7$/ });
   await tab.click();
@@ -33,10 +33,11 @@ test("Cancel preserves unsent input; Keep Running is explicit and can be reopene
   await expect(page.locator(".xterm-rows:visible")).toContainText("echo keep this unsent");
   await tab.locator("[data-tab-close]").click();
   await expect(page.getByRole("alertdialog")).toHaveCount(1);
-  await dialog.getByRole("button", { name: "Keep Running", exact: true }).click();
+  await expect(dialog.getByRole("button", { name: "Keep Running", exact: true })).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Stop and Close", exact: true }).click();
   await expect(tab).toHaveCount(0);
-  expect(await running(page)).toBe(before);
-  await expect(page.getByRole("button", { name: /in background/ })).toBeVisible();
+  await expect.poll(() => running(page)).toBe(before - 1);
+  await expect(page.getByRole("button", { name: /in background/ })).toHaveCount(0);
 });
 
 test("one decision closes all active tabs in a pane", async ({ page }) => {

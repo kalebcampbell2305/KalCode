@@ -1701,6 +1701,8 @@ mod tests {
             error: None,
             archived_at: None,
             resumable: false,
+            restart_recoverable: None,
+            resume_has_pending_input: false,
             permission_profile_id: None,
             runtime_kind: Some(ThreadRuntimeKind::InteractivePty),
             terminal_id: None,

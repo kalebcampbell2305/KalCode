@@ -921,7 +921,13 @@ describe("merge train pieces", () => {
     assert.equal(state(main, { ...pc2, status: "in_progress", conclusion: null }), "pending");
     assert.equal(state(main, pc2, { ...pc2 }), "stale", "two second-PC jobs are ambiguous");
     assert.equal(state(main, { ...pc2, head_sha: "b".repeat(40) }), "stale", "another commit is not evidence");
-    assert.equal(state(main, { ...pc2, runner_name: "kalcode-win-gate-w1" }), "stale", "only the second PC's runner");
+    assert.equal(state(main, { ...pc2, runner_name: "kalcode-win-gate-w1" }), "stale", "only the second PC's runners");
+    assert.equal(
+      state(main, { ...pc2, runner_name: "kalcode-win-gate-2b" }),
+      "success",
+      "its second runner is trusted",
+    );
+    assert.equal(state(main, { ...pc2, runner_name: "kalcode-win-gate-2c" }), "stale", "no other name is");
     assert.equal(
       state(main, { ...pc2, labels: ["self-hosted", "Windows", "kalcode-gate-pc2", "kalcode-main-pc"] }),
       "stale",

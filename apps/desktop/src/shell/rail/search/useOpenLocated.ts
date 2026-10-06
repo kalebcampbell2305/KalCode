@@ -44,7 +44,10 @@ export function useOpenLocated() {
         const target = await client.locatorOpen(kind, entityId, via);
         if (!isCurrent()) return false;
         const { intents, openInPane } = live.current;
-        if (target.threadId) {
+        if (target.threadId && target.terminalId && target.workspaceId) {
+          // A thread with a terminal is a coding agent: the canonical agent focus, as everywhere else.
+          await intents.focus({ kind: "agent", agentId: target.threadId, workspaceId: target.workspaceId });
+        } else if (target.threadId) {
           await intents.focus({ kind: "thread", threadId: target.threadId, workspaceId: target.workspaceId });
         } else if (target.terminalId && target.workspaceId) {
           const result = await openInPane(

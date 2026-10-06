@@ -466,6 +466,87 @@ mod tests {
         listener_flow(&before_v10, false);
     }
 
+    /// The thread runtime lowers its pending count on its own event thread, so the center can
+    /// see an answered approval while the count still includes it.
+    struct StalePending;
+
+    impl Lookup for StalePending {
+        fn thread(&self, thread_id: &str) -> Option<ThreadInfo> {
+            Some(ThreadInfo {
+                name: format!("Thread {thread_id}"),
+                pending_approvals: 1,
+                ..ThreadInfo::default()
+            })
+        }
+    }
+
+    #[test]
+    fn a_permission_notice_settles_when_the_count_lags_the_answer() {
+        use kalcode_contracts::permissions::ApprovalDecision;
+        let dir = tempfile::tempdir().expect("dir");
+        let core = core(dir.path(), &with_notifications());
+        let center = NotificationCenter::open(core).expect("center");
+        let envelope = |seq, event| EventEnvelope {
+            id: format!("e{seq}"),
+            seq,
+            version: 1,
+            occurred_at: String::new(),
+            source: EventSource::Core,
+            correlation: Correlation::default(),
+            event,
+        };
+        let raised = center
+            .handle(
+                &envelope(
+                    1,
+                    EventPayload::ApprovalRequested {
+                        request_id: "r".into(),
+                        thread_id: "t".into(),
+                        scopes: Vec::new(),
+                        summary: "Run npm test".into(),
+                    },
+                ),
+                &StalePending,
+            )
+            .expect("handle")
+            .expect("raised");
+        assert_eq!(raised.kind, NotificationKind::PermissionRequired);
+        center
+            .handle(
+                &envelope(
+                    2,
+                    EventPayload::ApprovalApproved {
+                        request_id: "r".into(),
+                        thread_id: "t".into(),
+                        decision: ApprovalDecision::ApproveOnce,
+                    },
+                ),
+                &StalePending,
+            )
+            .expect("handle");
+        // The runtime then records the answer and resumes the thread.
+        center
+            .handle(
+                &envelope(
+                    3,
+                    EventPayload::ThreadStatusChanged {
+                        thread_id: "t".into(),
+                        from: ThreadStatus::WaitingForPermission,
+                        to: ThreadStatus::Active,
+                        detail: None,
+                    },
+                ),
+                &StalePending,
+            )
+            .expect("handle");
+        let page = center.list(false, 10, None).expect("list");
+        assert_eq!(
+            page.unread_count, 0,
+            "the answered request's notice is read"
+        );
+        assert!(page.notifications[0].read_at.is_some());
+    }
+
     #[test]
     fn sqlite_notifications_survive_a_restart() {
         let dir = tempfile::tempdir().expect("dir");

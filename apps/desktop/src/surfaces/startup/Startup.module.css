@@ -29,9 +29,10 @@
     var(--shadow-xl);
 }
 
-/* A lit hairline along the card's top edge. */
-.panel::before {
-  content: "";
+/* A lit hairline along the card's top edge. An aria-hidden element (first in the panel,
+   NoRuntime.tsx and StartupError.tsx), not ::before: axe's colour-contrast check reports
+   "incomplete" for any text under an absolute pseudo-element with a background. */
+.panelEdge {
   position: absolute;
   top: -1px;
   left: 10%;

@@ -67,12 +67,14 @@
   background: var(--color-surface-1);
 }
 
-.signal > span::before {
+/* Each cell's tone edge: an aria-hidden element (first in the cell, CodeContextOperations.tsx),
+   not ::before: axe's colour-contrast check reports "incomplete" for the cell's text under an
+   absolute pseudo-element with a background. */
+.signal > span > .signalEdge {
   position: absolute;
   inset: 0 0 auto;
   height: 1px;
   background: linear-gradient(90deg, var(--signal-tone), transparent 88%);
-  content: "";
 }
 
 .signal > span[data-tone="working"] {

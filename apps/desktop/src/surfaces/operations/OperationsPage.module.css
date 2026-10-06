@@ -137,13 +137,16 @@
   box-shadow: var(--shadow-panel);
 }
 
-.metric::before {
+/* The tile's tone bar (top) and status light (top right) are aria-hidden elements, first and last
+   in the tile (OperationsPage.tsx), like the ::before/::after they replace; so are the detail
+   header's seam and the timeline's rail. axe's colour-contrast check reports "incomplete" for any
+   text under an absolute pseudo-element with a background. */
+.metric > .metricBar {
   position: absolute;
   inset: 0 0 auto;
   height: 2px;
   background: linear-gradient(90deg, var(--metric-tone), transparent 85%);
   opacity: 0.5;
-  content: "";
 }
 
 .metric[data-tone="working"] {
@@ -159,13 +162,13 @@
   --metric-tone: var(--status-failed);
 }
 
-.metric[data-live]::before,
-.failedMetric::before {
+.metric[data-live] > .metricBar,
+.failedMetric > .metricBar {
   opacity: 1;
 }
 
 /* The tile's status light (top right): lit and haloed while its count is live. */
-.metric::after {
+.metric > .metricLight {
   position: absolute;
   top: var(--space-2-5);
   right: var(--space-3);
@@ -174,14 +177,13 @@
   border-radius: var(--radius-full);
   background: var(--metric-tone);
   opacity: 0.35;
-  content: "";
   transition:
     opacity var(--dur-base) var(--ease-out),
     box-shadow var(--dur-base) var(--ease-out);
 }
 
-.metric[data-live]::after,
-.failedMetric::after {
+.metric[data-live] > .metricLight,
+.failedMetric > .metricLight {
   opacity: 1;
   box-shadow:
     0 0 0 3px color-mix(in srgb, var(--metric-tone) 18%, transparent),
@@ -1123,8 +1125,8 @@
     radial-gradient(32rem 10rem at 0% 0%, color-mix(in srgb, var(--detail-tone) 14%, transparent), transparent 70%),
     var(--panel-sheen), var(--color-surface-2);
 }
-/* A lit seam under the header in the run's tone. */
-.detailHeader::after {
+/* A lit seam under the header in the run's tone (last in the header). */
+.detailHeader > .detailSeam {
   position: absolute;
   right: 0;
   bottom: -1px;
@@ -1132,7 +1134,6 @@
   height: 1px;
   background: linear-gradient(90deg, var(--detail-tone), transparent 70%);
   opacity: 0.7;
-  content: "";
 }
 .detailHeader[data-tone="working"] {
   --detail-tone: var(--status-working);
@@ -1281,15 +1282,18 @@
 .timeline li:last-child {
   padding-bottom: 0;
 }
-/* The rail between one moment and the next. */
-.timeline li:not(:last-child)::before {
+/* The rail between one moment and the next (a <div>, first in the moment, so the dot's
+   `li > span` rule never reaches it; none under the last moment). */
+.timeline li > .timelineRail {
   position: absolute;
   top: 1rem;
   bottom: 0.125rem;
   left: calc(0.375rem - 0.5px);
   width: 1px;
   background: linear-gradient(180deg, color-mix(in srgb, var(--moment-tone) 60%, transparent), var(--color-border));
-  content: "";
+}
+.timeline li:last-child > .timelineRail {
+  display: none;
 }
 .timeline li > span {
   width: 0.625rem;

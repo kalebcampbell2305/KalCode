@@ -65,7 +65,12 @@ describe("pane labels", () => {
     expect(paneStatus(agent("waiting_for_permission"))).toMatchObject({ label: "NEEDS YOU", tone: "waiting" });
     expect(paneStatus(agent("running_command"))).toMatchObject({ label: "WORKING", tone: "working" });
     expect(paneStatus(agent("testing"))).toMatchObject({ label: "TESTING", tone: "working" });
-    expect(paneStatus(agent("interrupted"))).toMatchObject({ label: "STOPPED", qualifier: "resumable" });
+    expect(paneStatus(agent("interrupted", { resumable: true }))).toMatchObject({
+      label: "STOPPED",
+      qualifier: "resumable",
+    });
+    expect(paneStatus(agent("interrupted", { resumable: false }))).toMatchObject({ qualifier: "historical" });
+    expect(endedSummary("interrupted", "Codex", null, null, false)).toBe("Ended · saved in history");
     expect(paneStatus(agent("waiting_for_dependency"))).toMatchObject({ label: "WAITING" });
     expect(paneStatus(agent("idle", { currentActivity: READY_ACTIVITY })).label).toBe("READY");
     expect(paneStatus(agent("idle", { pendingApprovals: 1 })).label).toBe("NEEDS YOU");
@@ -365,6 +370,39 @@ describe("in-memory provider panes", () => {
     expect((await channel.info(copy.id))?.instanceId).not.toBe(original?.instanceId);
     await new KalCodeClient(transport).stopThread(copy.id);
     expect(await channel.info(source.id)).toMatchObject({ running: true, instanceId: original?.instanceId });
+  });
+  it("fresh recovery carries task context but uses the explicitly chosen launch configuration", async () => {
+    const { transport, channel, workspace } = await setup();
+    const source = await channel.create({
+      workspaceId: workspace.id,
+      providerId: "codex",
+      permissionMode: "plan",
+      name: "Review changes",
+    });
+    await new KalCodeClient(transport).stopThread(source.id);
+    const next = await channel.create({
+      contextSourceThreadId: source.id,
+      workspaceId: workspace.id,
+      providerId: "claude-code",
+      permissionMode: "approve",
+    });
+    expect(next.id).not.toBe(source.id);
+    expect(next).toMatchObject({
+      name: source.name,
+      workspaceId: source.workspaceId,
+      providerId: "claude-code",
+      permissionMode: "approve",
+    });
+    expect((await new KalCodeClient(transport).getThread(source.id)).status).toBe("interrupted");
+    await expect(
+      channel.create({
+        sourceThreadId: source.id,
+        contextSourceThreadId: source.id,
+        workspaceId: workspace.id,
+        permissionMode: "plan",
+      }),
+    ).rejects.toMatchObject({ code: "pane_context_source_conflict" });
+    await new KalCodeClient(transport).stopThread(next.id);
   });
   it("creates a pane thread, streams output and drives status through the thread runtime", async () => {
     const { transport, channel, workspace } = await setup();

@@ -574,6 +574,7 @@ export function createThreadsMemory(
       );
     }
     t.providerSessionId = t.providerSessionId ?? `session-${t.summary.id.slice(0, 8)}`;
+    t.summary = { ...t.summary, resumable: provider?.supportsResume === true };
     if (firstInput) send(t, firstInput);
     else setStatus(t, "idle");
   };
@@ -686,7 +687,7 @@ export function createThreadsMemory(
     t.live = false;
     flush(t);
     cancelTools(t);
-    t.summary = { ...t.summary, pendingApprovals: 0 };
+    t.summary = { ...t.summary, pendingApprovals: 0, restartRecoverable: false };
     setStatus(t, "interrupted", activity);
   };
 
@@ -937,8 +938,10 @@ export function createThreadsMemory(
     },
     // Agent Fleet: a fresh worktree is clean, level with main and merges cleanly; the agent's
     // edits show as uncommitted changes (the memory runtime doesn't commit).
-    thread_worktree_states: (args) => {
+    // Like native, the arguments arrive wrapped in `args` (`ThreadWorktreeStatesArgs`).
+    thread_worktree_states: (wrapped) => {
       requireCore();
+      const args = (wrapped.args ?? {}) as Record<string, unknown>;
       const ids = Array.isArray(args.threadIds) ? (args.threadIds as unknown[]) : [];
       if (ids.length > 64 || ids.some((id) => typeof id !== "string" || !UUID.test(id)))
         invalid("invalid_thread_ids", "Those thread references aren't valid.");
@@ -948,8 +951,9 @@ export function createThreadsMemory(
       });
     },
     // Like native: KalCode commits the isolated agent's changes on its branch, never while it works.
-    thread_worktree_commit: (args) => {
+    thread_worktree_commit: (wrapped) => {
       requireCore();
+      const args = (wrapped.args ?? {}) as Record<string, unknown>;
       const t = get(args);
       const message = typeof args.message === "string" ? args.message.trim() : "";
       if (!message || message.length > 2000) invalid("invalid_commit_message", "Write a commit message first.");
@@ -981,6 +985,7 @@ export function createThreadsMemory(
       if (!t.live) {
         if (TERMINAL.has(t.summary.status))
           invalid("thread_not_running", "This thread isn't running. Resume it to continue.");
+        t.summary = { ...t.summary, restartRecoverable: false };
         setStatus(t, "interrupted", "Stopped by you");
         return summary(t);
       }
@@ -993,6 +998,10 @@ export function createThreadsMemory(
     thread_resume: (args) => {
       const t = get(args);
       if (t.archived) invalid("thread_archived", "This thread is archived.");
+      if (args.allowPendingInput !== undefined && typeof args.allowPendingInput !== "boolean") {
+        error("internal", "ipc_rejected", "KalCode couldn't complete that request.");
+      }
+      const allowPendingInput = args.allowPendingInput !== false;
       const text = args.text == null || String(args.text).trim() === "" ? null : validPrompt(args.text);
       if (text) admitPrompt(threadTarget(t), text, args.promptReviewId);
       else if (args.promptReviewId != null) {
@@ -1002,8 +1011,15 @@ export function createThreadsMemory(
           "A prompt confirmation cannot be used when no prompt is being sent.",
         );
       }
+      if (!allowPendingInput && t.summary.resumeHasPendingInput === true) {
+        invalid(
+          "thread_resume_has_pending_input",
+          "This session has a queued task that was not sent. Choose Resume queued task to send it.",
+        );
+      }
       if (t.live) {
         if (t.summary.status !== "paused") invalid("thread_already_running", "This thread is already running.");
+        t.summary = { ...t.summary, resumeHasPendingInput: false };
         setStatus(t, "idle");
         if (text) send(t, text);
         return summary(t);
@@ -1015,6 +1031,7 @@ export function createThreadsMemory(
           "provider_unavailable",
           `${t.summary.providerName} isn't connected to KalCode. Connect it in Providers, then try again.`,
         );
+      t.summary = { ...t.summary, resumeHasPendingInput: false };
       setStatus(t, "starting", "Resuming");
       startSession(t, provider.supportsResume ? t.providerSessionId : null, text);
       return summary(t);
@@ -1246,6 +1263,7 @@ export function createThreadsMemory(
       t.paneStop = onStop;
       t.live = true;
       t.providerSessionId = `session-${t.summary.id.slice(0, 8)}`;
+      t.summary = { ...t.summary, resumable: plan.provider.supportsResume };
       emit({ type: "thread.started", payload: { threadId: t.summary.id } }, corr(t));
       return summary(t);
     },

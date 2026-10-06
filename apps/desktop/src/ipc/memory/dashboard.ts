@@ -869,7 +869,9 @@ export function createDashboardFixtures(scenario: DashboardScenario, emit: Emit,
   };
 
   const handlers: DashboardHandlers = {
-    thread_worktree_commit: (args) => {
+    // Like native, the arguments arrive wrapped in `args` (`ThreadWorktreeCommitArgs`).
+    thread_worktree_commit: (wrapped) => {
+      const args = (wrapped.args ?? {}) as Record<string, unknown>;
       const thread = requireThread(args);
       const facts = worktreeFacts.get(thread.id);
       if (!facts || !thread.worktreeId || !thread.branch)
@@ -903,7 +905,8 @@ export function createDashboardFixtures(scenario: DashboardScenario, emit: Emit,
         observedAt: new Date().toISOString(),
       };
     },
-    thread_worktree_states: read((args) => {
+    thread_worktree_states: read((wrapped) => {
+      const args = (wrapped.args ?? {}) as Record<string, unknown>;
       const ids = Array.isArray(args.threadIds) ? (args.threadIds as string[]) : [];
       return ids.flatMap((id) => {
         const thread = threads.get(id);

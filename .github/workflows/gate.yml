@@ -111,7 +111,7 @@ jobs:
               # A split gate also needs the second PC's job green on the same SHA; a legacy run has none.
               $pc2 = @($jobs | Where-Object { $_.name -eq 'Gate (Windows, PC2)' })
               $pc2Green = $pc2.Count -eq 0 -or @($pc2 | Where-Object {
-                $_.conclusion -eq 'success' -and $_.head_sha -eq $env:GITHUB_SHA -and $_.runner_name -eq 'kalcode-win-gate-2' -and
+                $_.conclusion -eq 'success' -and $_.head_sha -eq $env:GITHUB_SHA -and $_.runner_name -in @('kalcode-win-gate-2', 'kalcode-win-gate-2b') -and
                 ($_.labels -contains 'self-hosted') -and ($_.labels -contains 'Windows') -and ($_.labels -contains 'kalcode-gate-pc2') -and
                 -not ($_.labels -contains 'kalcode-main-pc') -and
                 ($_.steps | Where-Object { $_.name -eq 'Gate' -and $_.conclusion -eq 'success' })
@@ -328,7 +328,8 @@ jobs:
     # Never run code from a fork on our machines.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     # The second Windows PC runs the self-contained JS/web half of the same exact candidate while the
-    # build PC's pool runs the native half (owner, 2026-10-05). Its runner is kalcode-win-gate-2.
+    # build PC's pool runs the native half (owner, 2026-10-05). Its runners are kalcode-win-gate-2 and
+    # kalcode-win-gate-2b (owner, 2026-10-06), each with its own account, checkout and port block.
     runs-on: [self-hosted, Windows, kalcode-gate-pc2]
     timeout-minutes: 120
     steps:
@@ -385,7 +386,7 @@ jobs:
               # A split gate also needs the second PC's job green on the same SHA; a legacy run has none.
               $pc2 = @($jobs | Where-Object { $_.name -eq 'Gate (Windows, PC2)' })
               $pc2Green = $pc2.Count -eq 0 -or @($pc2 | Where-Object {
-                $_.conclusion -eq 'success' -and $_.head_sha -eq $env:GITHUB_SHA -and $_.runner_name -eq 'kalcode-win-gate-2' -and
+                $_.conclusion -eq 'success' -and $_.head_sha -eq $env:GITHUB_SHA -and $_.runner_name -in @('kalcode-win-gate-2', 'kalcode-win-gate-2b') -and
                 ($_.labels -contains 'self-hosted') -and ($_.labels -contains 'Windows') -and ($_.labels -contains 'kalcode-gate-pc2') -and
                 -not ($_.labels -contains 'kalcode-main-pc') -and
                 ($_.steps | Where-Object { $_.name -eq 'Gate' -and $_.conclusion -eq 'success' })
@@ -450,8 +451,10 @@ jobs:
           BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || (github.event_name == 'push' && github.event.before) || 'origin/main~1' }}
         run: |
           $ErrorActionPreference = 'Stop'
-          # No build-PC pool hooks here: the second PC has one gate slot and its own fixed ports (pool base + 200).
-          if ($env:RUNNER_NAME -ne 'kalcode-win-gate-2') { throw 'Unknown second-PC gate worker' }
+          # No build-PC pool hooks here. The second PC has two gate runners; each gets its own fixed port block
+          # (pool base + 200, plus 20 for the second runner) so both can gate at once.
+          $pc2Slot = switch ($env:RUNNER_NAME) { 'kalcode-win-gate-2' { 0 } 'kalcode-win-gate-2b' { 1 } default { throw 'Unknown second-PC gate worker' } }
+          $portOffset = 20 * $pc2Slot
           $head = (git rev-parse HEAD | Out-String).Trim()
           if ($LASTEXITCODE -or $head -ne $env:GITHUB_SHA) { throw 'Checkout does not match the immutable event SHA' }
           $base = $env:BASE
@@ -478,8 +481,9 @@ jobs:
           $ids = @($only -split ',' | Where-Object { $_ })
           @(
             "KALCODE_GATE_BASE=$base", "KALCODE_GATE_ONLY=$only",
-            'KALCODE_E2E_PORT=4691', 'KALCODE_E2E_MAIL_PORT=4692', 'KALCODE_E2E_INSPECTOR_PORT=9701',
-            'KALCODE_UI_TEST_PORT=1791', 'KALCODE_E2E_CDP_PORT=39333'
+            "KALCODE_E2E_PORT=$(4691 + $portOffset)", "KALCODE_E2E_MAIL_PORT=$(4692 + $portOffset)",
+            "KALCODE_E2E_INSPECTOR_PORT=$(9701 + $portOffset)", "KALCODE_UI_TEST_PORT=$(1791 + $portOffset)",
+            "KALCODE_E2E_CDP_PORT=$(39333 + $portOffset)"
           ) | Add-Content -Path $env:GITHUB_ENV -Encoding ascii
           "python=$(([string]($ids -contains 'tooling-unit')).ToLower())" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding ascii
           "browsers=$(([string](@($ids | Where-Object { $_ -in @('website-e2e','website-checkout-e2e') }).Count -gt 0)).ToLower())" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding ascii
@@ -510,8 +514,16 @@ jobs:
           if ($LASTEXITCODE -or $head -ne $env:GITHUB_SHA) { throw "Checkout does not match the immutable event SHA" }
           (Get-Process -Id $PID).PriorityClass = 'BelowNormal'
           if (-not $env:KALCODE_GATE_ONLY) { Write-Host 'gate: nothing selected for the second PC (the build PC runs the rest)'; exit 0 }
-          node tooling/release/ship.mjs gate --base $env:KALCODE_GATE_BASE --only $env:KALCODE_GATE_ONLY --jobs $env:KALCODE_GATE_JOBS --keep-going
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          # Shared with this PC's other gate runner; never alongside its Windows update proof, which has priority.
+          . .github/scripts/pc2-machine-lock.ps1
+          $lock = Enter-Pc2MachineLock -Mode Shared -TimeoutMinutes 60
+          try {
+            node tooling/release/ship.mjs gate --base $env:KALCODE_GATE_BASE --only $env:KALCODE_GATE_ONLY --jobs $env:KALCODE_GATE_JOBS --keep-going
+            $code = $LASTEXITCODE
+          } finally {
+            Exit-Pc2MachineLock $lock
+          }
+          if ($code) { exit $code }
       - name: Remove this run's portable Python
         if: steps.reuse.outputs.reused != 'true' && (always() && steps.python.outcome != 'skipped' && steps.python.outcome != '')
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"

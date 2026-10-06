@@ -18,6 +18,7 @@ use sha2::{Digest, Sha256};
 use url::Url;
 
 pub mod mac_swap;
+pub mod macho;
 
 pub const MAX_UPDATE_BYTES: u64 = 512 * 1024 * 1024;
 /// Authoritative updater JSON is intentionally tiny. Bound reads before allocating so a damaged

@@ -259,6 +259,10 @@ pub struct RailThread {
     pub id: String,
     pub name: String,
     pub status: ThreadStatus,
+    /// Whether the provider can resume its own historical conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub resumable: Option<bool>,
     pub last_activity_at: String,
     pub pending_approvals: u32,
 }
@@ -404,6 +408,10 @@ pub struct RecentWorkItem {
     pub provider_name: Option<String>,
     /// Threads only.
     pub status: Option<ThreadStatus>,
+    /// Threads only; `None` for file and workspace items.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub resumable: Option<bool>,
     pub last_activity_at: String,
 }
 
@@ -446,3 +454,35 @@ pub struct HomeSummary {
 
 /// `recent_work` answer.
 pub type RecentWorkPage = Page<RecentWorkItem>;
+
+#[cfg(test)]
+mod compatibility_tests {
+    use super::{RailThread, RecentWorkItem};
+
+    #[test]
+    fn older_view_payloads_default_missing_resume_facts() {
+        let rail: RailThread = serde_json::from_value(serde_json::json!({
+            "id": "t",
+            "name": "Historical",
+            "status": "interrupted",
+            "lastActivityAt": "2026-10-05T12:00:00Z",
+            "pendingApprovals": 0
+        }))
+        .expect("older rail payload");
+        assert_eq!(rail.resumable, None);
+
+        let recent: RecentWorkItem = serde_json::from_value(serde_json::json!({
+            "kind": "thread",
+            "id": "t",
+            "title": "Historical",
+            "workspaceId": "w",
+            "workspaceName": "KalCode",
+            "providerId": "codex",
+            "providerName": "Codex",
+            "status": "interrupted",
+            "lastActivityAt": "2026-10-05T12:00:00Z"
+        }))
+        .expect("older recent-work payload");
+        assert_eq!(recent.resumable, None);
+    }
+}

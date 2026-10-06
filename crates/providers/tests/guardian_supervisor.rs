@@ -19,6 +19,10 @@ use kalcode_providers::version::Version;
 use kalcode_pty::{ProgramSpec, PtySession, TerminalSize};
 use uuid::Uuid;
 
+/// Hang guard for reaping, probes and handshakes on a loaded machine: never a latency assertion. It
+/// stays below the 60 s fixture sleeps, so a provider the drain failed to end is still caught.
+const HANG_GUARD: Duration = Duration::from_secs(30);
+
 fn profile(
     profile_generation: ProfileGeneration,
 ) -> Result<ProfileIdentity, Box<dyn std::error::Error>> {
@@ -117,7 +121,7 @@ fn typed_supervisor_seals_prepared_admission_and_returns_clean_only_after_extern
     assert_eq!(proof.desktop_generation(), runtime.desktop_generation());
     assert!(
         provider
-            .wait_timeout(Duration::from_secs(2))
+            .wait_timeout(HANG_GUARD)
             .expect("provider status")
             .is_some(),
         "provider exited before clean proof"
@@ -166,7 +170,7 @@ fn conpty_root_is_atomically_admitted_to_the_external_guardian_job() {
 
     guardian.seal().expect("seal");
     guardian.drain().expect("external clean proof");
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let deadline = std::time::Instant::now() + HANG_GUARD;
     while pty.exit_info().is_none() && std::time::Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -190,7 +194,7 @@ fn production_detection_probe_uses_the_internal_guardian_namespace() {
             ("PATHEXT".into(), ".EXE".into()),
         ],
         windows: true,
-        probe_timeout: Some(Duration::from_secs(5)),
+        probe_timeout: Some(HANG_GUARD),
         system_root: None,
     };
     let spec = DetectionSpec {
@@ -370,7 +374,7 @@ fn replacement_helper_waits_for_prior_helper_drain_after_desktop_loss() {
     drop(input);
     assert!(prior.wait().expect("prior helper exit").success());
     let second = started_rx
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(HANG_GUARD)
         .expect("replacement unblocked after prior drain")
         .expect("replacement guardian runtime");
     replacement.join().expect("replacement launcher");
