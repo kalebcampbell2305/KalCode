@@ -41,6 +41,17 @@ const paneText = (page: Page) => pane(page).locator("[data-pane-terminal] .xterm
 
 const launcher = (page: Page) => page.getByRole("dialog", { name: "New agent" });
 
+/**
+ * An approval also opens the Agents rail beside Code (the agent now needs the person), which
+ * narrows the canvas and moves the pane's approval overlay. Wait for the rail to list this agent
+ * under Needs you before answering, so the click lands on the answer the person sees rather than
+ * on a button that slides away between pointer down and up.
+ */
+const railNeedsYou = (page: Page) =>
+  page
+    .getByRole("complementary", { name: "Agents" })
+    .getByRole("button", { name: /, Needs you, Claude Code in pane-site\. Open agent$/ });
+
 async function newPane(page: Page) {
   await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
   await page
@@ -195,14 +206,17 @@ test.describe("provider panes", () => {
     // The one approval UI, with only the answers the engine allows (a push can't be granted).
     const answers = overlay.getByRole("button", { name: /^(Deny|Approve once|Allow for thread|Allow for workspace)$/ });
     await expect(answers).toHaveText(["Deny", "Approve once"]);
+    await expect(railNeedsYou(page)).toBeVisible();
     await overlay.getByRole("button", { name: "Approve once" }).click();
     await expect(paneText(page)).toContainText("RAN Bash");
     await expect(status(page)).toHaveText(/^(READY|IDLE)$/);
     await expect(overlay).toBeHidden();
+    await expect(railNeedsYou(page)).toHaveCount(0);
 
     await typeInPane(page, "run npm install lodash");
     await expect(overlay).toBeVisible();
     await expect(overlay.getByRole("button", { name: "Allow for thread" })).toBeVisible();
+    await expect(railNeedsYou(page)).toBeVisible();
     await overlay.getByRole("button", { name: "Deny" }).click();
     await expect(paneText(page)).toContainText("BLOCKED BY HOOK");
     await expect(status(page)).toHaveText(/^(READY|IDLE)$/);
