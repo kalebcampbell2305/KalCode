@@ -674,7 +674,7 @@ export function UtilityDock({ api, openScratchTerminal }: UtilityDockProps) {
                 <p className={styles.meta}>Source: {portSource ?? "probing"}</p>
                 <div className={styles.portGrid}>
                   {ports.map((port) => (
-                    <article key={`${port.protocol}-${port.localAddress}-${port.port}`}>
+                    <article key={`${port.protocol}-${port.localAddress}-${port.port}-${port.pid ?? "?"}`}>
                       <strong>{port.port}</strong>
                       <span>{port.protocol.toUpperCase()}</span>
                       <p>{port.processName ?? "Unresolved owner"}</p>

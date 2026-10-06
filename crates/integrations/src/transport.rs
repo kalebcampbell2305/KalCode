@@ -281,6 +281,8 @@ impl Transport {
         let mut response = self
             .client
             .post(self.endpoint.clone())
+            // Some providers (GitHub) answer form-encoded unless JSON is asked for explicitly.
+            .header(reqwest::header::ACCEPT, "application/json")
             .form(&[
                 ("grant_type", "authorization_code"),
                 ("client_id", client_id),
@@ -541,3 +543,7 @@ mod tests {
         thread.join().unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "transport_oauth_tests.rs"]
+mod oauth_tests;

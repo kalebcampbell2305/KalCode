@@ -551,8 +551,11 @@ impl HttpSession {
         Ok(())
     }
 
+    /// Records `entry`, replacing the row it already has: every redirect hop of one request
+    /// updates the same history entry (one id, one row).
     fn record(&self, entry: HttpHistoryEntry) {
         let mut history = self.history.lock().unwrap_or_else(PoisonError::into_inner);
+        history.retain(|existing| existing.id != entry.id);
         history.push_front(entry);
         history.truncate(HISTORY_LIMIT);
     }
@@ -1042,3 +1045,7 @@ fn describe_body(body: Vec<u8>, content_type: Option<&str>) -> (String, HttpBody
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "history_tests.rs"]
+mod history_tests;

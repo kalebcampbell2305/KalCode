@@ -5,12 +5,12 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use kalcode_contracts::ids::new_id;
 
 use super::{CheckDef, CheckOutput, FindingExt, bytes, count, def, finding};
-use crate::context::{RunContext, VolumeRole, display, volume};
+use crate::context::{Budget, RunContext, VolumeRole, display, volume};
 use crate::types::{DoctorArea, FindingSeverity};
 
 /// Free space below which KalCode's data volume is a warning / critical.
@@ -114,19 +114,12 @@ fn database(ctx: &RunContext) -> CheckOutput {
     let conn = ctx.core.reader();
     let handle = conn.get_interrupt_handle();
     let done = Arc::new(AtomicBool::new(false));
-    let watchdog = {
-        let done = Arc::clone(&done);
-        let budget = ctx.budget.clone();
-        std::thread::spawn(move || {
-            while !done.load(Ordering::SeqCst) {
-                if budget.should_stop() {
-                    handle.interrupt();
-                    return;
-                }
-                std::thread::sleep(Duration::from_millis(50));
-            }
-        })
-    };
+    let watchdog = spawn_watchdog(
+        ctx.budget.clone(),
+        ctx.budget.deadline(),
+        Arc::clone(&done),
+        move || handle.interrupt(),
+    );
     let result: Result<Vec<String>, rusqlite::Error> = (|| {
         let mut stmt = conn.prepare("PRAGMA quick_check(20)")?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
@@ -160,6 +153,27 @@ fn database(ctx: &RunContext) -> CheckOutput {
         }
         Err(e) => CheckOutput::could_not_check(format!("SQLite couldn't run the check ({e}).")),
     }
+}
+
+/// Calls `interrupt` once the run is cancelled or `deadline` passes, unless `done` is set first.
+/// The check's deadline is thread-local ([`Budget::deadline`]), so it is read on the check's own
+/// thread and passed in: read on the watchdog thread it would always be "now + the default" and
+/// a check that ran out of time would never be interrupted.
+fn spawn_watchdog(
+    budget: Budget,
+    deadline: Instant,
+    done: Arc<AtomicBool>,
+    interrupt: impl FnOnce() + Send + 'static,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        while !done.load(Ordering::SeqCst) {
+            if budget.is_cancelled() || Instant::now() >= deadline {
+                interrupt();
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    })
 }
 
 /// The migrations the database recorded against the ones this build knows.
@@ -374,5 +388,49 @@ fn webview(ctx: &RunContext) -> CheckOutput {
         ),
         Some(_) => CheckOutput::passed(format!("Version {version}")),
         None => CheckOutput::could_not_check(format!("Unrecognised version \"{version}\".")),
+    }
+}
+
+#[cfg(test)]
+mod watchdog_tests {
+    use super::*;
+
+    #[test]
+    fn the_watchdog_interrupts_a_check_that_runs_past_its_own_deadline() {
+        let budget = Budget::new(Duration::from_secs(60));
+        let _check = budget.enter_check(Duration::from_millis(20));
+        let fired = Arc::new(AtomicBool::new(false));
+        let watchdog = {
+            let fired = Arc::clone(&fired);
+            spawn_watchdog(
+                budget.clone(),
+                budget.deadline(),
+                Arc::new(AtomicBool::new(false)),
+                move || fired.store(true, Ordering::SeqCst),
+            )
+        };
+        // Bounded: the watchdog must stop on its own well before the run's 60 s default.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !watchdog.is_finished() {
+            assert!(Instant::now() < deadline, "the watchdog ignored the check deadline");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        watchdog.join().unwrap();
+        assert!(fired.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn the_watchdog_leaves_a_finished_check_alone() {
+        let budget = Budget::new(Duration::from_secs(60));
+        let done = Arc::new(AtomicBool::new(true));
+        let fired = Arc::new(AtomicBool::new(false));
+        let watchdog = {
+            let fired = Arc::clone(&fired);
+            spawn_watchdog(budget.clone(), Instant::now(), done, move || {
+                fired.store(true, Ordering::SeqCst);
+            })
+        };
+        watchdog.join().unwrap();
+        assert!(!fired.load(Ordering::SeqCst));
     }
 }
