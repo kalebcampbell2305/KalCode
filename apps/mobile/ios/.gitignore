@@ -3,3 +3,5 @@ DerivedData/
 *.xcresult
 xcuserdata/
 *.xcuserstate
+._*
+.DS_Store

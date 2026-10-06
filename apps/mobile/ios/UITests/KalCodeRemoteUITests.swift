@@ -446,6 +446,7 @@ final class LiveTourTests: DevhostTestCase {
     }
 
     func testLiveTour() throws {
+        if UIDevice.current.userInterfaceIdiom == .pad { XCUIDevice.shared.orientation = .landscapeLeft }
         // Pairing
         let link = try pairingLink()
         var app = XCUIApplication()
