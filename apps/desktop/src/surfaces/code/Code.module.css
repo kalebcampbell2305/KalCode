@@ -361,9 +361,19 @@
   background: var(--status-done);
 }
 
-/* The canvas narrows (rails open, small windows): labels fold into icons, never a second row. */
-@container code (max-width: 38rem) {
+/* The canvas narrows (rails open, small windows): labels fold into icons, never a second row.
+   The tiers follow the toolbar's real width (about 49rem with every label), so its buttons never
+   run past the edge: the workspace name ellipsizes instead. With the agents rail open at
+   1280-1440 px the canvas is 44-54rem wide. */
+@container code (max-width: 60rem) {
   .collapsibleLabel {
+    display: none;
+  }
+}
+
+@container code (max-width: 46rem) {
+  .agentLabel,
+  .groupDivider {
     display: none;
   }
 }
@@ -376,11 +386,6 @@
 }
 
 @container code (max-width: 28rem) {
-  .agentLabel,
-  .groupDivider {
-    display: none;
-  }
-
   .header {
     gap: var(--space-2);
   }

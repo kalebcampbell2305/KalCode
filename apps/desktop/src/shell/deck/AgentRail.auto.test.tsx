@@ -58,6 +58,20 @@ it("stays a strip while no agent runs, and opens when the first one starts", () 
   expect(collapsed()).toBeInTheDocument();
 });
 
+it("stays a strip while a just-launched agent is only starting", () => {
+  mocks.threads = [];
+  const view = render(tree());
+  mocks.threads = [thread({ name: "Launching", status: "starting", runtimeKind: "interactive_pty" })];
+  view.rerender(tree());
+  // The rail reserves only its strip: no open rail squeezes Code for a launch's brief "Starting".
+  expect(collapsed()).toBeInTheDocument();
+  expect(collapsed()).not.toHaveAttribute("data-open");
+
+  mocks.threads = [thread({ name: "Launching", status: "idle", runtimeKind: "interactive_pty" })];
+  view.rerender(tree());
+  expect(collapsed()).toBeInTheDocument();
+});
+
 it("opens when something needs the person", () => {
   mocks.threads = [thread({ name: "Ask", status: "waiting_for_user", runtimeKind: "interactive_pty" })];
   render(tree());

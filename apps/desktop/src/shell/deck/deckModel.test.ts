@@ -1,4 +1,4 @@
-import type { OperationEnvironment } from "@kalcode/protocol";
+import type { OperationEnvironment, ThreadStatus } from "@kalcode/protocol";
 import { describe, expect, it } from "vitest";
 import { thread } from "../../surfaces/dashboard/data/testing.ts";
 import {
@@ -9,6 +9,7 @@ import {
   needsChipTarget,
   needsYouCount,
   primaryEnvironment,
+  railWantsOpen,
   runningAgentCount,
   shortElapsed,
 } from "./deckModel.ts";
@@ -159,5 +160,33 @@ describe("time", () => {
     expect(ago(minutesAgo(0), NOW)).toBe("just now");
     expect(ago(minutesAgo(40), NOW)).toBe("40m ago");
     expect(ago(null, NOW)).toBe("");
+  });
+});
+
+describe("railWantsOpen", () => {
+  const open = (...statuses: ThreadStatus[]) =>
+    railWantsOpen(
+      agentSections(
+        statuses.map((status, i) => thread({ name: `a${i}`, status })),
+        NOW,
+      ),
+    );
+
+  it("stays closed with no agents, or only resting and finished ones", () => {
+    expect(open()).toBe(false);
+    expect(open("idle", "paused", "completed", "failed")).toBe(false);
+  });
+
+  it("stays closed for a launch that is only starting (the rail no longer flashes open on launch)", () => {
+    expect(open("starting")).toBe(false);
+    expect(open("starting", "idle")).toBe(false);
+  });
+
+  it("opens once an agent works, waits on something, or needs the person", () => {
+    expect(open("starting", "thinking")).toBe(true);
+    expect(open("testing")).toBe(true);
+    expect(open("waiting_for_dependency")).toBe(true);
+    expect(open("waiting_for_user")).toBe(true);
+    expect(railWantsOpen(agentSections([thread({ status: "starting", pendingApprovals: 1 })], NOW))).toBe(true);
   });
 });
