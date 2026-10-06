@@ -396,3 +396,25 @@ test("the build PC's gate runs as two matrix jobs that never cancel each other",
     "distinct artifact per job",
   );
 });
+
+test("every gate job keeps bounded Playwright failure evidence, on failure only", () => {
+  for (const [job, jobSteps, prefix] of [
+    ["windows", steps, "$" + "{{ matrix.half == 'native' && 'native-' || '' }}"],
+    ["pc2", pc2Steps, "pc2-"],
+  ]) {
+    const names = jobSteps.map((step) => step.match(/^name: (.+)$/m)?.[1] ?? "");
+    const measure = jobSteps[names.indexOf("Measure Playwright failure evidence")];
+    const upload = jobSteps[names.indexOf("Preserve Playwright failure evidence")];
+    assert.ok(measure && upload, job);
+    assert.ok(names.indexOf("Gate") < names.indexOf("Measure Playwright failure evidence"), `${job}: after the gate`);
+    assert.ok(measure.includes("if: steps.reuse.outputs.reused != 'true' && failure()"), `${job}: failure only`);
+    assert.ok(script(measure).includes("$limit = 200MB"), `${job}: bounded`);
+    assert.ok(
+      upload.includes("failure() && steps.playwright_evidence.outputs.keep == 'true'"),
+      `${job}: only within the bound`,
+    );
+    assert.ok(upload.includes(`name: gate-playwright-${prefix}`), `${job}: distinct artifact per job`);
+    assert.ok(upload.includes("apps/desktop/test-results/"));
+    assert.match(upload, /retention-days: 7/);
+  }
+});
