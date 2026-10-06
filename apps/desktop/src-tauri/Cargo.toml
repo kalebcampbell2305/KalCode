@@ -36,6 +36,11 @@ kalcode-pty = { path = "../../../crates/pty" }
 kalcode-providers = { path = "../../../crates/providers" }
 kalcode-secure-store = { path = "../../../crates/secure-store" }
 kalcode-entitlements = { path = "../../../crates/entitlements" }
+# KalCode Remote host (docs/REMOTE_PROTOCOL.md): protocol crate, the pairing QR code (SVG) and
+# the workstation's interface addresses and machine name.
+kalcode-remote = { path = "../../../crates/remote" }
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+sysinfo = { version = "0.37.2", default-features = false, features = ["system", "network"] }
 base64 = "=0.22.1"
 png = "=0.18.1"
 getrandom = "=0.3.4"

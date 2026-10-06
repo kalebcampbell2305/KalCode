@@ -18,6 +18,7 @@ import { IntegrationSettings } from "../integrations/IntegrationSettings.tsx";
 import { PermissionsSettings } from "../permissions/index.ts";
 import { ResourceGovernorSettingsGate } from "../resources/ResourceGovernorSettingsGate.tsx";
 import { ProfileSettings } from "./ProfileSettings.tsx";
+import { RemoteSettingsGate } from "./RemoteSettings.tsx";
 import { SettingsAccount } from "./SettingsAccount.tsx";
 import styles from "./SettingsPage.module.css";
 import { useSettingsNavigation } from "./settingsIntent.ts";
@@ -49,6 +50,7 @@ export function SettingsPage() {
             <SettingsAccount />
             <Appearance />
             <KalVoiceSettings />
+            <RemoteSettingsGate />
             <div id="resources" data-settings-section>
               <ResourceGovernorSettingsGate />
             </div>
@@ -74,6 +76,7 @@ const SECTIONS: readonly { id: string; label: string }[] = [
   { id: "kalcode-account", label: "Account" },
   { id: "appearance", label: "Appearance" },
   { id: "kalvoice", label: "KalVoice" },
+  { id: "remote", label: "Remote" },
   { id: "permissions", label: "Permissions" },
   { id: "updates", label: "Updates" },
   { id: "diagnostics", label: "Diagnostics" },

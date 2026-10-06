@@ -21,6 +21,7 @@ export type AccountMemoryScenario =
   | "ready"
   | "ready_pro"
   | "ready_max"
+  | "ready_owner"
   | "expired"
   | "offline_grace";
 type HandlerResult = AccountSnapshot | AccountOpenResult | AccountUsageSnapshot | RuntimeStatus | null;
@@ -101,6 +102,8 @@ function initialSnapshot(scenario: AccountMemoryScenario): AccountSnapshot {
       return ready("pro");
     case "ready_max":
       return ready("max");
+    case "ready_owner":
+      return ready("owner");
     case "offline_grace":
       return offlineGrace();
   }

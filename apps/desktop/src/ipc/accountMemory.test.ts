@@ -51,6 +51,7 @@ describe("deterministic account memory adapter", () => {
       "ready",
       "ready_pro",
       "ready_max",
+      "ready_owner",
       "expired",
       "offline_grace",
     ] as const) {

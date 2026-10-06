@@ -186,6 +186,85 @@ fn unavailable_cloud_meter_cannot_block_or_duplicate_a_local_command() {
     assert_eq!(h.executor.executed.lock().expect("effects").len(), 1);
 }
 
+#[test]
+fn typed_intents_share_the_check_and_replay_and_are_never_metered() {
+    let h = harness();
+    // An exhausted cloud allowance: a typed (Remote) intent still runs, and never calls it.
+    let meter = account_meter(&h, "account-a", 0, false);
+    let orchestrator =
+        Orchestrator::new_accounted(h.core.clone(), meter.clone(), h.executor.clone());
+    let intent = KalVoiceIntent::StopThreads {
+        scope: ThreadScope::Thread {
+            thread_id: "0192f3c4-0000-7000-8000-00000000000b".into(),
+        },
+        expected_count: Some(1),
+    };
+    let req = request("this text is never parsed");
+    let first = orchestrator
+        .handle_intent(req.clone(), intent.clone())
+        .expect("first");
+    assert_eq!(
+        first.outcome,
+        KalVoiceOutcome::Completed {
+            summary: "Done: Stop 1 active threads".into()
+        }
+    );
+    assert!(!first.counted);
+    assert_eq!(first.intent.as_deref(), Some("stop_threads"));
+    let again = orchestrator
+        .handle_intent(req, intent.clone())
+        .expect("retry");
+    assert_eq!(
+        again.outcome,
+        KalVoiceOutcome::Completed {
+            summary: "KalVoice already completed this request.".into()
+        }
+    );
+    assert_eq!(
+        h.executor.executed.lock().expect("effects").as_slice(),
+        std::slice::from_ref(&intent)
+    );
+    assert!(h.executor.checked.lock().expect("checks").contains(&intent));
+    assert_eq!(meter.calls.load(Ordering::SeqCst), 0);
+
+    // A refused safety check never executes.
+    let refusing = harness_with(
+        Tier::Free,
+        FakeExecutor {
+            unavailable: true,
+            ..FakeExecutor::default()
+        },
+        Arc::new(NoProviders),
+    );
+    let refused = refusing
+        .orchestrator
+        .handle_intent(request(""), intent)
+        .expect("refused");
+    assert!(matches!(
+        refused.outcome,
+        KalVoiceOutcome::Failed { ref code, .. } if code == "threads_unavailable"
+    ));
+    assert!(
+        refusing
+            .executor
+            .executed
+            .lock()
+            .expect("effects")
+            .is_empty()
+    );
+    assert!(
+        h.orchestrator
+            .handle_intent(
+                CommandRequest {
+                    request_id: "not-an-id".into(),
+                    ..request("")
+                },
+                KalVoiceIntent::CloseIdleAgents { provider_id: None },
+            )
+            .is_err()
+    );
+}
+
 #[derive(Default)]
 struct FakeExecutor {
     checked: Mutex<Vec<KalVoiceIntent>>,

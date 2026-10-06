@@ -66,6 +66,7 @@ import { createPanesMemory, type PaneControls } from "./memory/panes.ts";
 import { createPermissionMemory, type PermissionMemory } from "./memory/permissions.ts";
 import { createProviderAccountsMemory } from "./memory/providerAccounts.ts";
 import { createRailMemory } from "./memory/rail.ts";
+import { createRemoteMemory } from "./memory/remote.ts";
 import { sessionResolveHandler } from "./memory/sessionResolve.ts";
 import { createThreadsMemory } from "./memory/threads.ts";
 import { createUnifiedMemory } from "./memory/unifiedMemory.ts";
@@ -90,6 +91,7 @@ export type MemoryScenario =
   | "account-ready"
   | "account-ready-pro"
   | "account-ready-max"
+  | "account-ready-owner"
   | "account-expired"
   | "account-offline-grace"
   | "approvals"
@@ -128,6 +130,7 @@ const AVAILABLE_FEATURES: ReadonlySet<string> = new Set([
   "provider_profiles",
   "notification_center",
   "account_sign_in",
+  "remote",
 ]);
 
 /** Latest schema version (mirrors crates/native-core/src/db.rs). */
@@ -433,20 +436,23 @@ export function createMemoryTransport(
   });
   const providerAccounts = createProviderAccountsMemory(requireCore, scenario === "provider-accounts-empty");
   const updater = createUpdaterMemory(info.version);
+  const remote = createRemoteMemory();
   const accountScenario: AccountMemoryScenario =
     scenario === "account-ready-pro"
       ? "ready_pro"
       : scenario === "account-ready-max"
         ? "ready_max"
-        : scenario === "account-fresh"
-          ? "fresh"
-          : scenario === "account-unactivated"
-            ? "unactivated"
-            : scenario === "account-expired"
-              ? "expired"
-              : scenario === "account-offline-grace"
-                ? "offline_grace"
-                : "ready";
+        : scenario === "account-ready-owner"
+          ? "ready_owner"
+          : scenario === "account-fresh"
+            ? "fresh"
+            : scenario === "account-unactivated"
+              ? "unactivated"
+              : scenario === "account-expired"
+                ? "expired"
+                : scenario === "account-offline-grace"
+                  ? "offline_grace"
+                  : "ready";
   const account = createAccountMemory(accountScenario);
 
   const ensureDetected = async () => {
@@ -549,6 +555,7 @@ export function createMemoryTransport(
     ...health.handlers,
     ...providerAccounts.handlers,
     ...updater.handlers,
+    ...remote.handlers,
     ...account.handlers,
     ...operations.handlers,
     // The related-process scan Code reads for terminal status (KalTidy's scan): one shell per live
@@ -907,6 +914,7 @@ function readScenario(): MemoryScenario {
     value === "account-ready" ||
     value === "account-ready-pro" ||
     value === "account-ready-max" ||
+    value === "account-ready-owner" ||
     value === "account-expired" ||
     value === "account-offline-grace" ||
     value === "approvals" ||
