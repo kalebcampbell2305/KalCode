@@ -271,6 +271,8 @@ pub(crate) struct Shared {
     channel: AtomicU8,
     stopping: AtomicBool,
     ended: AtomicBool,
+    /// When the process ended: the pane registry keeps the most recently ended panes.
+    ended_at: Mutex<Option<std::time::Instant>>,
     exit_code: Mutex<Option<i64>>,
     limits: SessionLimits,
     expiry: Option<Arc<dyn ApprovalExpiry>>,
@@ -314,6 +316,7 @@ impl Shared {
             channel: AtomicU8::new(CHANNEL_WAITING),
             stopping: AtomicBool::new(false),
             ended: AtomicBool::new(false),
+            ended_at: Mutex::new(None),
             exit_code: Mutex::new(None),
             limits: parts.limits,
             expiry: parts.expiry,
@@ -643,6 +646,11 @@ impl Shared {
         }
     }
 
+    /// When the provider process ended, or `None` while it runs.
+    pub(crate) fn ended_at(&self) -> Option<std::time::Instant> {
+        *lock(&self.ended_at)
+    }
+
     pub(crate) fn info(&self) -> PaneInfo {
         let channel = self.channel_state();
         PaneInfo {
@@ -702,6 +710,7 @@ impl Shared {
                 return;
             }
             self.ended.store(true, Ordering::SeqCst);
+            *lock(&self.ended_at) = Some(std::time::Instant::now());
             self.channel.store(CHANNEL_ENDED, Ordering::SeqCst);
             // Held calls end with a denial (their helpers are gone with the process anyway).
             lock(&self.pending).clear();

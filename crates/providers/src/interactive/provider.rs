@@ -113,16 +113,18 @@ impl PaneRegistry {
     pub(crate) fn insert(&self, thread_id: &str, shared: Arc<Shared>) {
         let mut panes = lock(&self.panes);
         panes.insert(thread_id.to_owned(), shared);
-        let ended: Vec<String> = panes
+        // Only ended panes count toward the replay cap (running agents never evict them), and
+        // the ones that ended longest ago go first.
+        let mut ended: Vec<(std::time::Instant, String)> = panes
             .iter()
-            .filter(|(_, s)| !s.info().running)
-            .map(|(id, _)| id.clone())
+            .filter_map(|(id, s)| s.ended_at().map(|at| (at, id.clone())))
             .collect();
-        for id in ended
-            .into_iter()
-            .take(panes.len().saturating_sub(MAX_ENDED_PANES))
-        {
-            panes.remove(&id);
+        let excess = ended.len().saturating_sub(MAX_ENDED_PANES);
+        if excess > 0 {
+            ended.sort_unstable();
+            for (_, id) in ended.into_iter().take(excess) {
+                panes.remove(&id);
+            }
         }
     }
 
@@ -886,5 +888,73 @@ mod bypass_dialog_tests {
             std::fs::read(broken.path().join("settings.json")).expect("read"),
             b"{not json"
         );
+    }
+}
+
+#[cfg(test)]
+mod registry_tests {
+    #![allow(clippy::expect_used)]
+
+    use super::*;
+    use crate::claude::actions::ActionContext;
+    use kalcode_contracts::agent::AgentEvent;
+    use kalcode_contracts::ids::new_id;
+
+    fn pane(registry: &PaneRegistry) -> (String, Arc<Shared>) {
+        let thread_id = new_id();
+        let shared = Shared::new(SessionParts {
+            ctx: ActionContext {
+                thread_id: thread_id.clone(),
+                workspace_id: new_id(),
+                working_directory: String::new(),
+            },
+            provider_id: ProviderId::CLAUDE_CODE.into(),
+            routing: DecisionRouting::ProviderPrompt,
+            sink: Box::new(|_: AgentEvent| {}),
+            provider_session_id: new_id(),
+            limits: SessionLimits::default(),
+            expiry: None,
+            titles: None,
+        });
+        registry.insert(&thread_id, shared.clone());
+        (thread_id, shared)
+    }
+
+    #[test]
+    fn running_panes_never_evict_the_ended_panes_kept_for_replay() {
+        let registry = PaneRegistry::new();
+        let ended: Vec<String> = (0..3)
+            .map(|_| {
+                let (id, shared) = pane(&registry);
+                shared.on_exit(0, false);
+                id
+            })
+            .collect();
+        // Many agents still running: well under the ended cap, so no ended pane may go.
+        let _running: Vec<_> = (0..MAX_ENDED_PANES + 4).map(|_| pane(&registry)).collect();
+        for id in &ended {
+            assert!(registry.contains(id), "an ended pane lost its replay");
+        }
+    }
+
+    #[test]
+    fn only_the_longest_ended_panes_are_evicted_past_the_cap() {
+        let registry = PaneRegistry::new();
+        let ended: Vec<String> = (0..MAX_ENDED_PANES + 3)
+            .map(|_| {
+                let (id, shared) = pane(&registry);
+                shared.on_exit(0, false);
+                std::thread::sleep(Duration::from_millis(2));
+                id
+            })
+            .collect();
+        let (running, _shared) = pane(&registry);
+        assert!(registry.contains(&running));
+        for id in &ended[..3] {
+            assert!(!registry.contains(id), "the oldest ended panes go first");
+        }
+        for id in &ended[3..] {
+            assert!(registry.contains(id), "a recently ended pane was evicted");
+        }
     }
 }
