@@ -137,6 +137,7 @@ fun VoiceScreen() {
     val scope = rememberCoroutineScope()
     val status by client.status.collectAsStateWithLifecycle()
     val reduced = LocalReducedMotion.current
+    val wsName = client.workstation.collectAsStateWithLifecycle().value?.name ?: "your workstation"
     var typed by rememberSaveable { mutableStateOf("") }
     var listening by remember { mutableStateOf(false) }
     var partial by remember { mutableStateOf("") }
@@ -234,7 +235,7 @@ fun VoiceScreen() {
                         )
                         Spacer(Modifier.height(6.dp))
                         Text(
-                            partial.ifBlank { speechNote ?: "Ask for status, steer an agent, approve, launch or tidy up — the same commands as KalVoice on ${client.workstation.value?.name ?: "your workstation"}." },
+                            partial.ifBlank { speechNote ?: "Ask for status, steer an agent, approve, launch or tidy up — the same commands as KalVoice on $wsName." },
                             style = MaterialTheme.typography.bodyMedium,
                             color = if (speechNote != null && partial.isBlank()) Kc.WaitingText else Kc.Nebula,
                             textAlign = TextAlign.Center,

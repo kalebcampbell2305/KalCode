@@ -1,8 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="graphite">#FF08090C</color>
-    <color name="hull">#FF0F1115</color>
-    <color name="constellation">#FF4C8DFF</color>
-    <color name="icon_background_top">#FF0E1E3A</color>
-    <color name="icon_background_bottom">#FF060B16</color>
 </resources>

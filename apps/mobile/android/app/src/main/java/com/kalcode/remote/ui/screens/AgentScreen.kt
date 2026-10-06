@@ -134,6 +134,7 @@ fun AgentScreen(agentId: String, onBack: () -> Unit, onOpenDiff: () -> Unit, onO
     val fleet by client.fleet.collectAsStateWithLifecycle()
     val status by client.status.collectAsStateWithLifecycle()
     val queue by client.queue.collectAsStateWithLifecycle()
+    val wsName = client.workstation.collectAsStateWithLifecycle().value?.name ?: "your workstation"
     val agent = fleet.agent(agentId)
     val online = status == ConnectionStatus.Online
     var detail by remember(agentId) { mutableStateOf<AgentDetail?>(null) }
@@ -244,7 +245,7 @@ fun AgentScreen(agentId: String, onBack: () -> Unit, onOpenDiff: () -> Unit, onO
                 val d = detail
                 when {
                     d == null && !online -> item("wait") {
-                        Text("Output loads when ${client.workstation.value?.name ?: "your workstation"} is connected.", style = MaterialTheme.typography.bodyMedium, color = Kc.Nebula)
+                        Text("Output loads when $wsName is connected.", style = MaterialTheme.typography.bodyMedium, color = Kc.Nebula)
                     }
                     d == null && loadError != null -> item("err") { Notice(loadError!!, Tone.Failed, icon = Icons.Outlined.ErrorOutline) }
                     d == null -> item("loading") {

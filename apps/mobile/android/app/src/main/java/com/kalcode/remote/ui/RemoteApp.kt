@@ -205,7 +205,8 @@ private fun ReplacePairingDialog(link: String, current: String, onDone: () -> Un
     val messages = LocalMessages.current
     val scope = rememberCoroutineScope()
     val payload = remember(link) { runCatching { PairingLink.parse(link) } }
-    val same = payload.getOrNull()?.wid != null && payload.getOrNull()?.wid == client.workstation.value?.wid
+    val currentWid by client.workstation.collectAsStateWithLifecycle()
+    val same = payload.getOrNull()?.wid != null && payload.getOrNull()?.wid == currentWid?.wid
     AlertDialog(
         onDismissRequest = onDone,
         containerColor = Kc.Overlay,
@@ -283,7 +284,7 @@ private fun MainShell(app: KalCodeRemoteApp, nav: Navigator) {
         val width = maxWidth
         val height = maxHeight
         val rail = width >= 600.dp
-        val twoPane = width >= 720.dp
+        val twoPane = width >= 840.dp // Material "expanded": list + detail side by side
         CompositionLocalProvider(LocalLayout provides Layout(twoPane, rail)) {
             if (rail) {
                 Row(Modifier.fillMaxSize()) {
@@ -603,7 +604,7 @@ private fun KcRail(nav: Navigator, compact: Boolean) {
                 selected = nav.tab == tab,
                 onClick = { nav.select(tab) },
                 icon = { TabIcon(tab, fleet) },
-                label = { Text(tab.title, style = MaterialTheme.typography.labelMedium.copy(fontSize = androidx.compose.ui.unit.TextUnit(11.5f, androidx.compose.ui.unit.TextUnitType.Sp)), maxLines = 1, softWrap = false) },
+                label = { Text(tab.title, style = MaterialTheme.typography.labelMedium.copy(fontSize = androidx.compose.ui.unit.TextUnit(11.5f, androidx.compose.ui.unit.TextUnitType.Sp)), maxLines = 2, textAlign = androidx.compose.ui.text.style.TextAlign.Center, modifier = Modifier.widthIn(max = 76.dp)) },
                 colors = NavigationRailItemDefaults.colors(
                     selectedIconColor = Kc.Starlight,
                     selectedTextColor = Kc.Starlight,
@@ -628,9 +629,5 @@ private fun TabIcon(tab: Tab, fleet: FleetState) {
         Icon(tab.icon, contentDescription = if (needs > 0) "${tab.title}, $needs need you" else tab.title)
     }
 }
-
-/** Screen header used by detail screens: back button, title, and status-bar inset. */
-@Composable
-fun headerInsets(): Modifier = Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
 
 fun Modifier.headingSemantics(): Modifier = semantics { heading() }
