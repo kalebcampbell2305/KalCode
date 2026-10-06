@@ -259,6 +259,8 @@ export type { PromptWarning } from "./PromptWarning.ts";
 export type { ProviderAccount } from "./ProviderAccount.ts";
 export type { ProviderAccountBinding } from "./ProviderAccountBinding.ts";
 export type { ProviderAccountBindingKind } from "./ProviderAccountBindingKind.ts";
+export type { ProviderAccountModel } from "./ProviderAccountModel.ts";
+export type { ProviderAccountModelCatalog } from "./ProviderAccountModelCatalog.ts";
 export type { ProviderAccountScopes } from "./ProviderAccountScopes.ts";
 export type { ProviderAccountUsage } from "./ProviderAccountUsage.ts";
 export type { ProviderCapabilities } from "./ProviderCapabilities.ts";

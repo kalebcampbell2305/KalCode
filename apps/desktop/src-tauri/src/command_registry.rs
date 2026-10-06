@@ -127,6 +127,7 @@ pub(crate) const COMMANDS: &[&str] = &[
     "provider_account_unbind",
     "provider_account_bindings_list",
     "provider_account_usage",
+    "provider_account_models",
     "provider_codex_account_refresh",
     "provider_codex_login_start",
     "provider_codex_login_wait",

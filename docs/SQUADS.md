@@ -5,6 +5,12 @@ Squads save a reusable team of real coding agents. Open **Code → Squads** or
 its selected provider account, exact model and supported effort. Roles, launch
 tasks, ownership paths, dependencies and manager relationships are optional.
 
+The Squad editor and New Agent launcher share account-scoped model discovery.
+Codex models come from its native app-server catalog, including each model's
+supported effort levels. A saved exact selection remains visible if a refresh is
+unavailable; background metadata never silently replaces it. Model discovery is
+bounded independently of coding-agent execution.
+
 Available members open the same native coding terminals used by Code and Agent
 Fleet, including members whose tasks depend on other work. Those terminals show
 Waiting while their canonical Operations remain queued; no launch prompt is sent

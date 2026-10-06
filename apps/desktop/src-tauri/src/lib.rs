@@ -799,6 +799,7 @@ pub fn run(removed_overrides: Vec<String>) {
                 kalvoice_commands::kalvoice_latency,
                 kalvoice_commands::kalvoice_latency_record,
                 provider_auth_commands::provider_codex_account_refresh,
+                provider_auth_commands::provider_account_models,
                 provider_auth_commands::provider_codex_login_start,
                 provider_auth_commands::provider_codex_login_wait,
                 provider_auth_commands::provider_codex_login_cancel,

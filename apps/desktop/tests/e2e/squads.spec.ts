@@ -9,7 +9,7 @@ import type {
   OperationsSnapshot,
   PaneInfo,
   ProviderAccount,
-  ProviderStatus,
+  ProviderAccountModelCatalog,
   SquadDefinition,
   SquadLaunch,
   SquadMemberDefinition,
@@ -78,8 +78,30 @@ function fakeSessionLaunches(bin: string): FakeLaunch[] {
     .map((line) => JSON.parse(line) as FakeLaunch)
     .filter(({ exe, args }) => {
       const name = exe.toLowerCase();
-      return (name === "claude.exe" && args.includes("--settings")) || (name === "codex.exe" && args.includes("-C"));
+      return (
+        (name === "claude.exe" && args.includes("--settings")) ||
+        (name === "codex.exe" && args.includes("-C") && !args.includes("app-server"))
+      );
     });
+}
+
+function argumentAfter(args: readonly string[], flag: string): string | undefined {
+  const index = args.indexOf(flag);
+  return index >= 0 ? args[index + 1] : undefined;
+}
+
+function launchForMember(launches: readonly FakeLaunch[], member: SquadMemberDefinition, threadId: string): FakeLaunch {
+  const expectedExe = member.providerId === "claude-code" ? "claude.exe" : "codex.exe";
+  const matches = launches.filter(({ exe, args }) => {
+    if (exe.toLowerCase() !== expectedExe) return false;
+    return member.providerId === "claude-code"
+      ? argumentAfter(args, "--session-id") === threadId
+      : args.some((argument) => argument.includes(threadId));
+  });
+  expect(matches, `one native ${member.providerId} process owns canonical thread ${threadId}`).toHaveLength(1);
+  const found = matches[0];
+  if (!found) throw new Error(`The native launch for ${threadId} was missing`);
+  return found;
 }
 
 function countOccurrences(text: string | null, marker: string): number {
@@ -160,7 +182,6 @@ async function openProject(page: Page, projectName: string): Promise<Workspace> 
 
 async function fixtureSelection(page: Page, workspace: Workspace): Promise<FixtureSelection> {
   await waitForProviderAdmission(page);
-  const statuses = await invoke<ProviderStatus[]>(page, "providers_detect");
   const listedAccounts = await invoke<ProviderAccount[]>(page, "provider_accounts_list");
   const selection = {} as FixtureSelection["accounts"];
   const models = {} as FixtureSelection["models"];
@@ -171,15 +192,24 @@ async function fixtureSelection(page: Page, workspace: Workspace): Promise<Fixtu
         candidate.archivedAt === null &&
         candidate.authenticationState === "authenticated",
     );
-    const status = statuses.find((candidate) => candidate.id === providerId);
-    const model =
-      status?.capabilities.models.find((candidate) => candidate.isDefault) ?? status?.capabilities.models[0];
     expect(account, `the signed fixture exposes one authenticated ${providerId} account`).toBeTruthy();
-    expect(model, `the detected ${providerId} capability exposes an exact model`).toBeTruthy();
-    if (!account || !model) throw new Error(`The ${providerId} fixture selection was unavailable`);
+    if (!account) throw new Error(`The ${providerId} fixture account was unavailable`);
+    const catalog = await invoke<ProviderAccountModelCatalog>(page, "provider_account_models", {
+      accountId: account.id,
+    });
+    expect(catalog).toMatchObject({ accountId: account.id, providerId });
+    const model = catalog.models.find((candidate) => candidate.isDefault) ?? catalog.models[0];
+    expect(model, `the selected ${providerId} account exposes an exact model`).toBeTruthy();
+    if (!model) throw new Error(`The ${providerId} account model catalog was empty`);
+    expect(model.supportedEfforts).toContain("high");
+    if (providerId === "codex") {
+      expect(catalog.models.map(({ id }) => id)).toEqual(["codex-test-exact-a", "codex-test-exact-b"]);
+      expect(catalog.models[1]?.supportedEfforts).toEqual(["medium", "xhigh"]);
+    }
     selection[providerId] = account;
     models[providerId] = model.id;
   }
+  expect(models.codex).toBe("codex-test-exact-a");
   return { accounts: selection, models, workspace };
 }
 
@@ -365,6 +395,16 @@ test("a saved mixed-provider Squad gives every available member a real pane whil
     expect(
       initialSnapshot.operations.filter(({ id }) => first.members.some((member) => member.operationId === id)),
     ).toHaveLength(definition.members.length);
+    for (const launched of first.members) {
+      const declared = definition.members.find(({ key }) => key === launched.key);
+      if (!declared) throw new Error(`Missing saved definition for ${launched.key}`);
+      expect(operation(initialSnapshot, launched.operationId).spec).toMatchObject({
+        providerId: declared.providerId,
+        providerAccountId: declared.providerAccountId,
+        model: declared.model,
+        effort: declared.effort,
+      });
+    }
     expect(operation(initialSnapshot, unavailable.operationId)).toMatchObject({
       status: "blocked",
       threadId: null,
@@ -445,7 +485,20 @@ test("a saved mixed-provider Squad gives every available member a real pane whil
     await expect(page.locator(`[data-provider-pane="${readyId}"] [data-pane-status]`)).toContainText(/READY|IDLE/);
     await expect.poll(() => processesMatching(bin).length, { timeout: 30_000 }).toBe(liveIds.length);
     await expect.poll(() => fakeSessionLaunches(bin).length, { timeout: 30_000 }).toBe(sessionIds.length);
-    expect(fakeSessionLaunches(bin).every(({ args }) => !args.includes("--resume") && args[0] !== "resume")).toBe(true);
+    const nativeLaunches = fakeSessionLaunches(bin);
+    expect(nativeLaunches.every(({ args }) => !args.includes("--resume") && args[0] !== "resume")).toBe(true);
+    for (const launched of sessionMembers) {
+      const declared = definition.members.find(({ key }) => key === launched.key);
+      if (!declared) throw new Error(`Missing native launch definition for ${launched.key}`);
+      const nativeLaunch = launchForMember(nativeLaunches, declared, launched.operationId);
+      if (declared.providerId === "claude-code") {
+        expect(argumentAfter(nativeLaunch.args, "--model")).toBe(declared.model);
+        expect(argumentAfter(nativeLaunch.args, "--effort")).toBe(declared.effort);
+      } else {
+        expect(argumentAfter(nativeLaunch.args, "-m")).toBe(declared.model);
+        expect(nativeLaunch.args).toContain(`model_reasoning_effort='${declared.effort}'`);
+      }
+    }
 
     await page.screenshot({ path: test.info().outputPath("squad-live-and-waiting-panes.png") });
     await page

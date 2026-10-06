@@ -52,7 +52,7 @@ import { focusOperationsTarget } from "../../kalvoice/sceneOperations.ts";
 import { useOptionalUiIntents } from "../../runtime/uiIntents.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
 import { HandOffDialog } from "../code/HandOffDialog.tsx";
-import { AGENT_EFFORTS, effortLabel } from "../code/panes/agentLaunch.ts";
+import { effortForModel, effortLabel, effortsForModel, type ModelEffortInfo } from "../code/panes/agentLaunch.ts";
 import type { PaneProviderId } from "../code/panes/paneChannel.ts";
 import { providerIdentity } from "../code/panes/paneLabels.ts";
 import { useLaunchAgent } from "../code/useLaunchAgent.ts";
@@ -62,6 +62,8 @@ import { useAgentOverlaps } from "../dashboard/fleet/useAgentOverlaps.ts";
 import { AgentOutcome } from "../dashboard/outcome/AgentOutcome.tsx";
 import { accountName, accountSessionState, sortAccounts } from "../providers/accountIdentity.ts";
 import { LaunchSignIn } from "../providers/LaunchAccountPicker.tsx";
+import { useOptionalProviderAccountSessions } from "../providers/ProviderAccountSessions.tsx";
+import type { ProviderAccountState } from "../providers/providerAccountState.ts";
 import { launchTruth, memberDisplay, ownershipCollisions, type SquadLaunchTruth } from "./model.ts";
 import styles from "./SquadsPanel.module.css";
 
@@ -148,6 +150,8 @@ function definitionError(
   definition: SquadDefinition,
   accounts: readonly ProviderAccount[],
   accountCatalogUnavailable: boolean,
+  providers: readonly ProviderOption[],
+  accountModelStates: ReadonlyMap<string, ProviderAccountState> | null,
 ): string | null {
   if (!definition.name.trim()) return "Name the squad.";
   if (definition.members.length === 0) return "Add at least one real coding agent.";
@@ -174,11 +178,46 @@ function definitionError(
   if (definition.members.some((member) => member.managerKey && !keys.has(member.managerKey))) {
     return "A manager points to a member that is no longer in this squad.";
   }
+  for (const member of definition.members) {
+    const provider = providers.find((candidate) => candidate.id === member.providerId);
+    const models = modelsForAccount(provider, member.providerAccountId, accountModelStates);
+    if (member.model && models && !models.some((model) => model.id === member.model)) {
+      return `${member.name}'s exact model is unavailable for the selected account. Choose an available model or Provider default.`;
+    }
+    const model = selectedModel(models, member.model);
+    if (
+      member.effort &&
+      model &&
+      !effortsForModel(member.providerId as PaneProviderId, model).includes(member.effort)
+    ) {
+      return `${member.name}'s ${effortLabel(member.effort)} effort is unavailable for ${model.displayName}. Choose a supported effort.`;
+    }
+  }
   return null;
 }
 
 function providerName(providerId: string): string {
   return providerIdentity(providerId as PaneProviderId).name;
+}
+
+function modelsForAccount(
+  provider: ProviderOption | undefined,
+  accountId: string,
+  states: ReadonlyMap<string, ProviderAccountState> | null,
+): readonly ModelEffortInfo[] | null {
+  const accountModels = states?.get(accountId)?.models ?? null;
+  if (accountModels?.status === "available") return accountModels.items;
+  if (accountModels?.status === "checking" && accountModels.items.length > 0) return accountModels.items;
+  if (accountModels?.status === "unavailable") return null;
+  return provider?.models.length ? provider.models : null;
+}
+
+function selectedModel(models: readonly ModelEffortInfo[] | null, modelId: string): ModelEffortInfo | null {
+  return (
+    models?.find((model) => model.id === modelId) ??
+    (!modelId ? models?.find((model) => model.isDefault) : null) ??
+    null
+  );
 }
 
 function launchDate(value: string): string {
@@ -240,6 +279,7 @@ export function SquadsPanel({
 }: SquadsPanelProps) {
   const toast = useToast();
   const account = useOptionalAccount();
+  const providerSessions = useOptionalProviderAccountSessions();
   const navigation = useNavigation();
   const codingAgents = useCodingAgents();
   const uiIntents = useOptionalUiIntents();
@@ -328,6 +368,9 @@ export function SquadsPanel({
     };
   }, [load, providerAccounts, reloadAccounts]);
 
+  const accountModelStates = providerSessions?.states ?? null;
+  const discoverAccountModels = providerSessions?.discoverModels;
+
   const live = snapshot?.operations.some((operation) =>
     ["queued", "starting", "running", "paused", "blocked"].includes(operation.status),
   );
@@ -382,7 +425,7 @@ export function SquadsPanel({
       event.preventDefault();
       if (!editor || saving) return;
       const next = normalized(editor);
-      const problem = definitionError(next, accounts, Boolean(catalogError));
+      const problem = definitionError(next, accounts, Boolean(catalogError), providers, accountModelStates);
       if (problem) {
         setFormError(problem);
         return;
@@ -400,7 +443,7 @@ export function SquadsPanel({
         setSaving(false);
       }
     },
-    [accounts, catalogError, client, editor, load, saving, toast],
+    [accountModelStates, accounts, catalogError, client, editor, load, providers, saving, toast],
   );
 
   const runLaunch = useCallback(
@@ -816,6 +859,7 @@ export function SquadsPanel({
           value={editor}
           providers={providers}
           accounts={accounts}
+          accountModelStates={accountModelStates}
           hierarchyVisible={hierarchyVisible}
           catalogError={catalogError}
           catalogLoading={catalogLoading}
@@ -824,6 +868,10 @@ export function SquadsPanel({
           onHierarchy={setHierarchyVisible}
           onReloadAccounts={reloadAccounts}
           onAccountConnected={rememberAccount}
+          onDiscoverModels={(accountId) => {
+            const models = accountModelStates?.get(accountId)?.models;
+            if (!models || models.status === "unavailable") void discoverAccountModels?.(accountId);
+          }}
           onChange={(next) => {
             editorTouched.current = true;
             setEditor(next);
@@ -1346,6 +1394,7 @@ function SquadEditor({
   value,
   providers,
   accounts,
+  accountModelStates,
   hierarchyVisible,
   catalogLoading,
   catalogError,
@@ -1354,6 +1403,7 @@ function SquadEditor({
   onHierarchy,
   onReloadAccounts,
   onAccountConnected,
+  onDiscoverModels,
   onChange,
   onCancel,
   onSubmit,
@@ -1362,6 +1412,7 @@ function SquadEditor({
   value: SquadDefinition;
   providers: readonly ProviderOption[];
   accounts: readonly ProviderAccount[];
+  accountModelStates: ReadonlyMap<string, ProviderAccountState> | null;
   hierarchyVisible: boolean;
   catalogLoading: boolean;
   catalogError: string | null;
@@ -1370,6 +1421,7 @@ function SquadEditor({
   onHierarchy(value: boolean): void;
   onReloadAccounts(): Promise<unknown>;
   onAccountConnected(account: ProviderAccount): void;
+  onDiscoverModels(accountId: string): void;
   onChange(value: SquadDefinition): void;
   onCancel(): void;
   onSubmit(event: FormEvent): void;
@@ -1474,8 +1526,26 @@ function SquadEditor({
                 const providerAccounts = accounts.filter(
                   (candidate) => candidate.providerId === member.providerId && candidate.archivedAt === null,
                 );
-                const efforts = AGENT_EFFORTS[member.providerId as PaneProviderId] ?? [];
                 const selectedAccount = providerAccounts.find((candidate) => candidate.id === member.providerAccountId);
+                const accountModels = accountModelStates?.get(member.providerAccountId)?.models ?? null;
+                const availableModels = modelsForAccount(provider, member.providerAccountId, accountModelStates);
+                const model = selectedModel(availableModels, member.model);
+                const efforts = effortsForModel(member.providerId as PaneProviderId, model);
+                const modelUnavailable = Boolean(member.model && accountModels?.status === "available" && !model);
+                const effortUnavailable = Boolean(
+                  member.effort && accountModels?.status === "available" && model && !efforts.includes(member.effort),
+                );
+                const modelHint =
+                  accountModels?.status === "checking"
+                    ? `Checking exact models for ${selectedAccount ? accountName(selectedAccount) : "this account"}…`
+                    : accountModels?.status === "unavailable"
+                      ? (accountModels.reason ?? "Exact models are unavailable; provider default remains available.")
+                      : modelUnavailable
+                        ? "This exact model is unavailable for the selected account. Choose an available model or Provider default."
+                        : undefined;
+                const effortHint = effortUnavailable
+                  ? `This effort is unavailable for ${model?.displayName ?? "the selected model"}. Choose a supported effort.`
+                  : undefined;
                 const persistedAccountUnavailable = Boolean(catalogError && member.providerAccountId.trim());
                 return (
                   <fieldset key={member.key} className={styles.memberEditor}>
@@ -1571,12 +1641,25 @@ function SquadEditor({
                           id={`${member.key}-account`}
                           value={member.providerAccountId}
                           disabled={providerAccounts.length === 0}
-                          onChange={(event) =>
-                            updateMember(member.key, (current) => ({
-                              ...current,
-                              providerAccountId: event.target.value,
-                            }))
-                          }
+                          onChange={(event) => {
+                            const providerAccountId = event.target.value;
+                            onDiscoverModels(providerAccountId);
+                            updateMember(member.key, (current) => {
+                              const nextModels = accountModelStates?.get(providerAccountId)?.models;
+                              const nextModel =
+                                nextModels?.status === "available"
+                                  ? selectedModel(nextModels.items, current.model)
+                                  : null;
+                              return {
+                                ...current,
+                                providerAccountId,
+                                effort:
+                                  nextModels?.status === "available" && nextModel
+                                    ? effortForModel(current.providerId as PaneProviderId, nextModel, current.effort)
+                                    : current.effort,
+                              };
+                            });
+                          }}
                         >
                           {providerAccounts.length === 0 ? <option value="">No account connected</option> : null}
                           {member.providerAccountId &&
@@ -1629,26 +1712,36 @@ function SquadEditor({
                           />
                         ) : null}
                       </Field>
-                      <Field htmlFor={`${member.key}-model`} label="Model">
+                      <Field htmlFor={`${member.key}-model`} label="Model" hint={modelHint}>
                         <Select
                           id={`${member.key}-model`}
                           value={member.model}
-                          onChange={(event) =>
-                            updateMember(member.key, (current) => ({ ...current, model: event.target.value }))
-                          }
+                          aria-busy={accountModels?.status === "checking" || undefined}
+                          onFocus={() => onDiscoverModels(member.providerAccountId)}
+                          onChange={(event) => {
+                            const modelId = event.target.value;
+                            const nextModel = selectedModel(availableModels, modelId);
+                            updateMember(member.key, (current) => ({
+                              ...current,
+                              model: modelId,
+                              effort: modelId
+                                ? effortForModel(current.providerId as PaneProviderId, nextModel, undefined)
+                                : "",
+                            }));
+                          }}
                         >
                           <option value="">Provider default</option>
-                          {provider?.models.map((model) => (
+                          {availableModels?.map((model) => (
                             <option key={model.id} value={model.id}>
                               {model.displayName}
                             </option>
                           ))}
-                          {member.model && !provider?.models.some((model) => model.id === member.model) ? (
+                          {member.model && !availableModels?.some((model) => model.id === member.model) ? (
                             <option value={member.model}>{member.model}</option>
                           ) : null}
                         </Select>
                       </Field>
-                      <Field htmlFor={`${member.key}-effort`} label="Effort">
+                      <Field htmlFor={`${member.key}-effort`} label="Effort" hint={effortHint}>
                         <Select
                           id={`${member.key}-effort`}
                           value={member.effort}

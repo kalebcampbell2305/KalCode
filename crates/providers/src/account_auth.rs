@@ -3,7 +3,7 @@
 //! The implementation intentionally treats the provider app-server as the only source of
 //! account truth. It never reads or copies provider credential files.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -22,6 +22,14 @@ use crate::process::{OutputLine, ProcessSpec, SupervisedChild, recv_until};
 
 const MAX_IGNORED_MESSAGES: usize = 64;
 const MAX_AUTH_LINE_BYTES: usize = 128 * 1024;
+const MODEL_PAGE_SIZE: u32 = 100;
+const MAX_MODEL_PAGES: usize = 20;
+const MAX_MODELS: usize = 1_000;
+const MAX_MODEL_ID_BYTES: usize = 512;
+const MAX_MODEL_LABEL_BYTES: usize = 1_024;
+const MAX_MODEL_DESCRIPTION_BYTES: usize = 16 * 1024;
+const MAX_MODEL_CURSOR_BYTES: usize = 4 * 1024;
+const MAX_MODEL_EFFORTS: usize = 32;
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const DEFAULT_LOGIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const DEFAULT_TERMINATE_GRACE: Duration = Duration::from_millis(500);
@@ -59,6 +67,19 @@ impl CodexChatGptAccount {
 pub struct CodexAccountState {
     pub account: Option<CodexChatGptAccount>,
     pub requires_openai_auth: bool,
+}
+
+/// Exact account-scoped model metadata returned by Codex app-server `model/list`.
+/// `model` is the provider-native launch selector; `id` is catalog metadata and is validated but
+/// intentionally not substituted for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexAccountModel {
+    pub catalog_id: String,
+    pub model: String,
+    pub display_name: String,
+    pub is_default: bool,
+    pub default_reasoning_effort: String,
+    pub supported_reasoning_efforts: Vec<String>,
 }
 
 impl CodexAccountState {
@@ -147,6 +168,8 @@ pub enum CodexAccountAuthError {
     LoginFailed,
     #[error("Codex reported successful sign-in but did not confirm an account")]
     AccountNotConfirmed,
+    #[error("the managed Codex profile is not signed in")]
+    NotAuthenticated,
     #[error("Codex sign-in was canceled")]
     Canceled,
     #[error("KalCode could not record the provider account result")]
@@ -296,6 +319,35 @@ impl CodexAccountAuthManager {
         let mut session =
             self.connect_observer_with_lease(account_id, lease, vec![superseded, lifecycle])?;
         let mut result = session.read_account();
+        if let Err(cleanup) = session.finish() {
+            result = Err(cleanup);
+        }
+        if result != Err(CodexAccountAuthError::Canceled) && observe(&result).is_err() {
+            result = Err(CodexAccountAuthError::StateUpdateFailed);
+        }
+        result
+    }
+
+    /// Lists the exact models currently available to one managed account under the same
+    /// cancellable observer lease used for read-only account truth. No model turn is started.
+    pub fn list_models_with_observer_lease_observed<F>(
+        &self,
+        account_id: &str,
+        lease: ProfileLease,
+        superseded: Arc<AtomicBool>,
+        observe: F,
+    ) -> Result<Vec<CodexAccountModel>, CodexAccountAuthError>
+    where
+        F: Fn(
+            &Result<Vec<CodexAccountModel>, CodexAccountAuthError>,
+        ) -> Result<(), CodexAccountAuthError>,
+    {
+        let lifecycle = lease
+            .observer_cancellation()
+            .ok_or(CodexAccountAuthError::ProfileUnavailable)?;
+        let mut session =
+            self.connect_observer_with_lease(account_id, lease, vec![superseded, lifecycle])?;
+        let mut result = session.list_models();
         if let Err(cleanup) = session.finish() {
             result = Err(cleanup);
         }
@@ -877,10 +929,68 @@ impl RpcSession {
         decode_account_state(&response)
     }
 
+    fn list_models(&mut self) -> Result<Vec<CodexAccountModel>, CodexAccountAuthError> {
+        let mut models = Vec::new();
+        let mut cursor: Option<String> = None;
+        let mut seen_cursors = HashSet::new();
+        let mut seen_catalog_ids = HashSet::new();
+        let mut seen_models = HashSet::new();
+        let mut found_default = false;
+        // One total deadline covers account truth plus every page. A hostile or slow server cannot
+        // multiply the ordinary request timeout by the pagination bound.
+        let deadline = Instant::now() + self.request_timeout;
+        let account = self.request_until(
+            "account/read",
+            Some(json!({"refreshToken":false})),
+            deadline,
+        )?;
+        ensure_model_account_is_authenticated(&account)?;
+
+        for _ in 0..MAX_MODEL_PAGES {
+            let response = self.request_until(
+                "model/list",
+                Some(json!({
+                    "cursor": cursor.as_deref(),
+                    "includeHidden": false,
+                    "limit": MODEL_PAGE_SIZE,
+                })),
+                deadline,
+            )?;
+            let (page, next_cursor) = decode_model_page(&response)?;
+            if models.len().saturating_add(page.len()) > MAX_MODELS {
+                return Err(CodexAccountAuthError::InvalidResponse);
+            }
+            for model in page {
+                if !seen_catalog_ids.insert(model.catalog_id.clone())
+                    || !seen_models.insert(model.model.clone())
+                    || (model.is_default && std::mem::replace(&mut found_default, true))
+                {
+                    return Err(CodexAccountAuthError::InvalidResponse);
+                }
+                models.push(model);
+            }
+            match next_cursor {
+                None => return Ok(models),
+                Some(next) if seen_cursors.insert(next.clone()) => cursor = Some(next),
+                Some(_) => return Err(CodexAccountAuthError::InvalidResponse),
+            }
+        }
+        Err(CodexAccountAuthError::InvalidResponse)
+    }
+
     fn request(
         &mut self,
         method: &'static str,
         params: Option<Value>,
+    ) -> Result<Value, CodexAccountAuthError> {
+        self.request_until(method, params, Instant::now() + self.request_timeout)
+    }
+
+    fn request_until(
+        &mut self,
+        method: &'static str,
+        params: Option<Value>,
+        deadline: Instant,
     ) -> Result<Value, CodexAccountAuthError> {
         if self.is_canceled() {
             return Err(CodexAccountAuthError::Canceled);
@@ -892,7 +1002,6 @@ impl RpcSession {
             request["params"] = params;
         }
         self.send(request)?;
-        let deadline = Instant::now() + self.request_timeout;
         let mut ignored = 0usize;
         loop {
             if self.is_canceled() {
@@ -1069,6 +1178,102 @@ fn decode_account_state(value: &Value) -> Result<CodexAccountState, CodexAccount
     })
 }
 
+fn ensure_model_account_is_authenticated(value: &Value) -> Result<(), CodexAccountAuthError> {
+    value
+        .get("requiresOpenaiAuth")
+        .and_then(Value::as_bool)
+        .ok_or(CodexAccountAuthError::InvalidResponse)?;
+    match value.get("account") {
+        Some(Value::Object(account))
+            if account.get("type").and_then(Value::as_str) == Some("apiKey") =>
+        {
+            Ok(())
+        }
+        Some(Value::Object(account))
+            if account.get("type").and_then(Value::as_str) == Some("chatgpt") =>
+        {
+            decode_account_state(value).map(|_| ())
+        }
+        Some(Value::Null) => Err(CodexAccountAuthError::NotAuthenticated),
+        _ => Err(CodexAccountAuthError::InvalidResponse),
+    }
+}
+
+fn decode_model_page(
+    value: &Value,
+) -> Result<(Vec<CodexAccountModel>, Option<String>), CodexAccountAuthError> {
+    let data = value
+        .get("data")
+        .and_then(Value::as_array)
+        .ok_or(CodexAccountAuthError::InvalidResponse)?;
+    if data.len() > MODEL_PAGE_SIZE as usize {
+        return Err(CodexAccountAuthError::InvalidResponse);
+    }
+    let mut models = Vec::with_capacity(data.len());
+    for item in data {
+        // Both fields are required by the installed app-server schema. `model`, rather than the
+        // catalog's opaque `id`, is the exact value Codex persists and uses for turns.
+        let catalog_id = required_bounded_string(item, "id", MAX_MODEL_ID_BYTES)?;
+        let model = required_bounded_string(item, "model", MAX_MODEL_ID_BYTES)?;
+        let display_name = required_bounded_string(item, "displayName", MAX_MODEL_LABEL_BYTES)?;
+        let _description =
+            required_bounded_string(item, "description", MAX_MODEL_DESCRIPTION_BYTES)?;
+        let hidden = item
+            .get("hidden")
+            .and_then(Value::as_bool)
+            .ok_or(CodexAccountAuthError::InvalidResponse)?;
+        let is_default = item
+            .get("isDefault")
+            .and_then(Value::as_bool)
+            .ok_or(CodexAccountAuthError::InvalidResponse)?;
+        let default_reasoning_effort = required_bounded_string(item, "defaultReasoningEffort", 64)?;
+        let efforts = item
+            .get("supportedReasoningEfforts")
+            .and_then(Value::as_array)
+            .ok_or(CodexAccountAuthError::InvalidResponse)?;
+        if efforts.len() > MAX_MODEL_EFFORTS {
+            return Err(CodexAccountAuthError::InvalidResponse);
+        }
+        let mut supported_reasoning_efforts = Vec::with_capacity(efforts.len());
+        let mut seen_efforts = HashSet::new();
+        for effort in efforts {
+            let reasoning_effort = required_bounded_string(effort, "reasoningEffort", 64)?;
+            let _description = required_bounded_string(effort, "description", 4 * 1024)?;
+            if !seen_efforts.insert(reasoning_effort.clone()) {
+                return Err(CodexAccountAuthError::InvalidResponse);
+            }
+            supported_reasoning_efforts.push(reasoning_effort);
+        }
+        if hidden
+            || !supported_reasoning_efforts
+                .iter()
+                .any(|effort| effort == &default_reasoning_effort)
+        {
+            return Err(CodexAccountAuthError::InvalidResponse);
+        }
+        models.push(CodexAccountModel {
+            catalog_id,
+            model,
+            display_name,
+            is_default,
+            default_reasoning_effort,
+            supported_reasoning_efforts,
+        });
+    }
+    let next_cursor = match value.get("nextCursor") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(cursor))
+            if !cursor.is_empty()
+                && cursor.len() <= MAX_MODEL_CURSOR_BYTES
+                && !cursor.chars().any(char::is_control) =>
+        {
+            Some(cursor.clone())
+        }
+        _ => return Err(CodexAccountAuthError::InvalidResponse),
+    };
+    Ok((models, next_cursor))
+}
+
 fn required_bounded_string(
     value: &Value,
     field: &str,
@@ -1106,6 +1311,7 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 mod tests {
     use super::*;
     use crate::detect::DetectEnv;
+    use kalcode_contracts::agent::ProviderId;
     use serde_json::{Value, json};
     use std::ffi::OsString;
     use std::io::{BufRead, Write};
@@ -1234,6 +1440,92 @@ mod tests {
                 requires_openai_auth: true,
             }
         );
+    }
+
+    fn list_fixture_models(
+        fixture: &Fixture,
+        account_id: &str,
+    ) -> Result<Vec<CodexAccountModel>, CodexAccountAuthError> {
+        let repair = fixture
+            .profiles
+            .acquire_sign_in_lease(ProviderId::CODEX, account_id)
+            .expect("repair lease");
+        fixture
+            .manager
+            .repair_profile_config_with_lease(account_id, repair)
+            .expect("normalized observer config");
+        let lease = fixture
+            .profiles
+            .acquire_observer_lease(ProviderId::CODEX, account_id)
+            .expect("observer lease");
+        fixture.manager.list_models_with_observer_lease_observed(
+            account_id,
+            lease,
+            Arc::new(AtomicBool::new(false)),
+            |_| Ok(()),
+        )
+    }
+
+    #[test]
+    fn model_list_uses_account_truth_and_paginates_exact_native_values() {
+        let fixture = fixture("models_paginated");
+        let models = list_fixture_models(&fixture, ACCOUNT_ID).expect("model catalog");
+        assert_eq!(
+            models,
+            vec![
+                CodexAccountModel {
+                    catalog_id: "catalog-a".into(),
+                    model: "codex-test-exact-a".into(),
+                    display_name: "Exact A".into(),
+                    is_default: true,
+                    default_reasoning_effort: "high".into(),
+                    supported_reasoning_efforts: vec!["low".into(), "high".into()],
+                },
+                CodexAccountModel {
+                    catalog_id: "catalog-b".into(),
+                    model: "codex-test-exact-b".into(),
+                    display_name: "Exact B".into(),
+                    is_default: false,
+                    default_reasoning_effort: "medium".into(),
+                    supported_reasoning_efforts: vec!["medium".into(), "xhigh".into()],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn model_list_isolated_profiles_cannot_swap_account_catalogs() {
+        const OTHER_ACCOUNT_ID: &str = "f46fe6f7-0cd0-4d86-a88c-64a0b2148753";
+        let fixture = fixture("models_account_scoped");
+        let first = list_fixture_models(&fixture, ACCOUNT_ID).expect("first account");
+        let second = list_fixture_models(&fixture, OTHER_ACCOUNT_ID).expect("second account");
+        assert_eq!(first[0].model, format!("model-{ACCOUNT_ID}"));
+        assert_eq!(second[0].model, format!("model-{OTHER_ACCOUNT_ID}"));
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn model_list_rejects_signed_out_unavailable_and_malformed_responses() {
+        for (scenario, expected) in [
+            (
+                "models_not_authenticated",
+                CodexAccountAuthError::NotAuthenticated,
+            ),
+            ("models_unavailable", CodexAccountAuthError::InvalidResponse),
+            ("models_malformed", CodexAccountAuthError::InvalidResponse),
+            ("models_duplicate", CodexAccountAuthError::InvalidResponse),
+            (
+                "models_conflicting_defaults",
+                CodexAccountAuthError::InvalidResponse,
+            ),
+        ] {
+            let fixture = fixture(scenario);
+            assert_eq!(
+                list_fixture_models(&fixture, ACCOUNT_ID).expect_err(scenario),
+                expected,
+                "{scenario}"
+            );
+        }
     }
 
     #[test]
@@ -1730,6 +2022,12 @@ mod tests {
                     reads += 1;
                     let result = match scenario {
                         "read_connected" => account("person@example.test", "pro"),
+                        scenario
+                            if scenario.starts_with("models_")
+                                && scenario != "models_not_authenticated" =>
+                        {
+                            json!({"account":{"type":"apiKey"},"requiresOpenaiAuth":true})
+                        }
                         "login_stale_then_success" if reads > 1 => {
                             account("connected@example.test", "plus")
                         }
@@ -1737,6 +2035,70 @@ mod tests {
                         _ => json!({"account":null,"requiresOpenaiAuth":true}),
                     };
                     respond(&mut stdout, id, result);
+                }
+                "model/list" => {
+                    let cursor = request["params"]
+                        .get("cursor")
+                        .cloned()
+                        .unwrap_or(Value::Null);
+                    assert_eq!(request["params"]["includeHidden"], json!(false));
+                    assert_eq!(request["params"]["limit"], json!(MODEL_PAGE_SIZE));
+                    match scenario {
+                        "models_unavailable" => respond_error(&mut stdout, id),
+                        "models_malformed" => respond(
+                            &mut stdout,
+                            id,
+                            json!({"data":[{"id":"incomplete"}],"nextCursor":null}),
+                        ),
+                        "models_paginated" | "models_duplicate" | "models_conflicting_defaults" => {
+                            if cursor.is_null() {
+                                respond(
+                                    &mut stdout,
+                                    id,
+                                    json!({
+                                        "data":[model_value("catalog-a", "codex-test-exact-a", "Exact A", true, "high", &["low", "high"])],
+                                        "nextCursor":"page-2"
+                                    }),
+                                );
+                            } else {
+                                assert_eq!(cursor, json!("page-2"));
+                                let (catalog_id, model, is_default) = match scenario {
+                                    "models_duplicate" => {
+                                        ("catalog-b", "codex-test-exact-a", false)
+                                    }
+                                    "models_conflicting_defaults" => {
+                                        ("catalog-b", "codex-test-exact-b", true)
+                                    }
+                                    _ => ("catalog-b", "codex-test-exact-b", false),
+                                };
+                                respond(
+                                    &mut stdout,
+                                    id,
+                                    json!({
+                                        "data":[model_value(catalog_id, model, "Exact B", is_default, "medium", &["medium", "xhigh"])],
+                                        "nextCursor":null
+                                    }),
+                                );
+                            }
+                        }
+                        "models_account_scoped" => {
+                            assert!(cursor.is_null());
+                            let account_id = Path::new(&codex_home)
+                                .parent()
+                                .and_then(Path::file_name)
+                                .and_then(|value| value.to_str())
+                                .expect("account-scoped CODEX_HOME");
+                            respond(
+                                &mut stdout,
+                                id,
+                                json!({
+                                    "data":[model_value("account-model", &format!("model-{account_id}"), "Account model", true, "medium", &["medium"])],
+                                    "nextCursor":null
+                                }),
+                            );
+                        }
+                        _ => respond(&mut stdout, id, json!({"data":[],"nextCursor":null})),
+                    }
                 }
                 "account/login/start" => {
                     assert_eq!(request["params"], json!({"type":"chatgpt"}));
@@ -1799,8 +2161,41 @@ mod tests {
         })
     }
 
+    fn model_value(
+        id: &str,
+        model: &str,
+        display_name: &str,
+        is_default: bool,
+        default_effort: &str,
+        efforts: &[&str],
+    ) -> Value {
+        json!({
+            "id":id,
+            "model":model,
+            "displayName":display_name,
+            "description":format!("{display_name} description"),
+            "hidden":false,
+            "isDefault":is_default,
+            "defaultReasoningEffort":default_effort,
+            "supportedReasoningEfforts":efforts.iter().map(|effort| json!({
+                "reasoningEffort":effort,
+                "description":format!("{effort} effort"),
+            })).collect::<Vec<_>>(),
+        })
+    }
+
     fn respond(stdout: &mut impl Write, id: Option<Value>, result: Value) {
         writeln!(stdout, "{}", json!({"id":id,"result":result})).expect("response");
+        stdout.flush().expect("flush response");
+    }
+
+    fn respond_error(stdout: &mut impl Write, id: Option<Value>) {
+        writeln!(
+            stdout,
+            "{}",
+            json!({"id":id,"error":{"code":-32000,"message":"private provider failure"}})
+        )
+        .expect("response");
         stdout.flush().expect("flush response");
     }
 

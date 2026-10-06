@@ -58,6 +58,18 @@ pub fn normalize_effort(
         .ok_or("That provider doesn't support this effort level.")
 }
 
+/// Exact effort values the static provider adapter accepts, in native picker order. Dynamic
+/// account catalogs (such as Codex `model/list`) remain authoritative per model and do not use
+/// this fallback.
+pub fn supported_efforts(provider_id: &str) -> Vec<String> {
+    let values: &[&str] = match provider_id {
+        kalcode_contracts::agent::ProviderId::CLAUDE_CODE => crate::claude::argv::EFFORT_LEVELS,
+        kalcode_contracts::agent::ProviderId::CODEX => crate::codex::argv::EFFORT_LEVELS,
+        _ => &[],
+    };
+    values.iter().map(|value| (*value).to_owned()).collect()
+}
+
 #[cfg(test)]
 mod effort_tests {
     use super::normalize_effort;

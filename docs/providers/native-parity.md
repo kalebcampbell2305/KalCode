@@ -8,7 +8,7 @@ KalCode hosts supported provider CLIs in real terminals. Provider-native authent
 | Native file, edit, search, shell and Git tools | Native CLI | Native CLI | Native CLI | Native CLI |
 | Account persistence | Native managed profile | Native managed profile | Native managed profile | Native OS-user sign-in |
 | Concurrent isolated accounts | Managed profiles | Managed profiles | Managed profiles | Not verified; one native account |
-| Model choices | Provider model configuration | Runtime catalog | Native model configuration | Runtime `agent models`; no static list |
+| Model choices | Provider model configuration | Exact-account app-server `model/list`, including model-specific effort | Native model configuration | Runtime `agent models`; no static list |
 | Turn status | Authenticated hooks | Authenticated observing hooks (verified 0.160.x; session-scoped, never deciding) plus completion notifications; other lines completion notifications only | Process-only status (no per-session hook mechanism without writing or hiding user settings) | Authenticated plugin hooks, with limited fallback |
 | Usage | Canonical provider-reported source | Canonical provider-reported source | Unavailable | Unavailable |
 | User settings and integrations | Native configuration | Native configuration | Native configuration | Native configuration plus additive observer plugin |

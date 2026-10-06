@@ -8,6 +8,7 @@ import type {
   ProviderAccount,
   ProviderAccountBinding,
   ProviderAccountBindingKind,
+  ProviderAccountModel,
   ProviderAccountUsage,
   ProviderUsageWindow,
 } from "@kalcode/protocol";
@@ -143,6 +144,48 @@ function fixtureUsage(account: ProviderAccount, now: number): ProviderAccountUsa
           : [usageWindow("weekly", 8, 1440 + 6 * 60, now)];
   const plan = account.providerId === "claude-code" ? "Max 20x" : account.id === IDS.codexPersonal ? "Plus" : "Pro";
   return { ...base, status: "available", plan, windows, checkedAt, reason: null };
+}
+
+/** UI-test data only; production catalogs always come from the native provider adapter. */
+function fixtureModels(account: ProviderAccount): ProviderAccountModel[] {
+  if (account.providerId === "cursor") {
+    return cursorModelFixture.map((model) => ({
+      ...model,
+      defaultEffort: null,
+      supportedEfforts: [],
+    }));
+  }
+  if (account.providerId === "codex") {
+    return [
+      {
+        id: "codex-ui-test-exact",
+        displayName: "Codex exact model",
+        isDefault: true,
+        defaultEffort: "high",
+        supportedEfforts: ["low", "medium", "high", "xhigh"],
+      },
+    ];
+  }
+  if (account.providerId === "claude-code") {
+    return [
+      {
+        id: "default",
+        displayName: "Account default",
+        isDefault: true,
+        defaultEffort: null,
+        supportedEfforts: ["low", "medium", "high", "xhigh", "max"],
+      },
+    ];
+  }
+  return [
+    {
+      id: "auto",
+      displayName: "Auto (default)",
+      isDefault: true,
+      defaultEffort: null,
+      supportedEfforts: [],
+    },
+  ];
 }
 
 export interface ProviderAccountsMemory {
@@ -318,12 +361,28 @@ export function createProviderAccountsMemory(requireCore: () => void, empty = fa
           .filter((candidate) => candidate.archivedAt === null && (ids === null || ids.has(candidate.id)))
           .map((candidate) => fixtureUsage(candidate, now));
       },
+      provider_account_models: (args) => {
+        requireCore();
+        const current = active(args.accountId);
+        if (current.providerId === "codex" && current.authenticationState === "not_authenticated") {
+          fail(
+            "provider_account_not_authenticated",
+            "Connect this Codex account before loading its available models.",
+            "provider",
+          );
+        }
+        return {
+          accountId: current.id,
+          providerId: current.providerId,
+          models: fixtureModels(current),
+        };
+      },
       provider_account_bindings_list: (args) => {
         requireCore();
         const provider = args.providerId == null ? null : providerId(args.providerId);
         const kind = args.kind == null ? null : bindingKind(args.kind, true);
         const scope = args.scopeId == null ? null : accountId(args.scopeId);
-        const order = (binding: ProviderAccountBinding) => `${binding.providerId} ${binding.kind} ${binding.scopeId}`;
+        const order = (binding: ProviderAccountBinding) => `${binding.providerId}\0${binding.kind}\0${binding.scopeId}`;
         return [...bindings.values()]
           .filter(
             (binding) =>

@@ -45,6 +45,7 @@ import type {
   ProviderAccount,
   ProviderAccountBinding,
   ProviderAccountBindingKind,
+  ProviderAccountModelCatalog,
   ProviderAccountUsage,
   ProviderHealth,
   ProviderStatus,
@@ -164,6 +165,7 @@ const SHARED_READS: ReadonlySet<CommandName> = new Set<CommandName>([
   "permission_settings_get",
   "provider_account_bindings_list",
   "provider_account_usage",
+  "provider_account_models",
   "provider_accounts_list",
   "provider_health_list",
   "providers_list",
@@ -554,6 +556,11 @@ export class KalCodeClient {
    */
   providerAccountUsage(accountIds?: readonly string[]): Promise<ProviderAccountUsage[]> {
     return this.call("provider_account_usage", { accountIds: accountIds ? [...accountIds] : null });
+  }
+
+  /** Exact provider-native models and efforts available to one active account. */
+  providerAccountModels(accountId: string): Promise<ProviderAccountModelCatalog> {
+    return this.call("provider_account_models", { accountId });
   }
 
   refreshCursorAccount(accountId: string): Promise<CursorAccountState> {

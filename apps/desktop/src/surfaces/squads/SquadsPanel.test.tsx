@@ -8,7 +8,7 @@ import type {
   ThreadSummary,
 } from "@kalcode/protocol";
 import { ToastProvider } from "@kalcode/ui/components";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OperationsApi } from "../../ipc/operations.ts";
@@ -21,6 +21,8 @@ const seams = vi.hoisted(() => ({
   navigate: vi.fn(),
   agents: [] as ThreadSummary[],
   tier: "max",
+  accountStates: new Map<string, unknown>(),
+  discoverModels: vi.fn(async () => undefined),
 }));
 
 vi.mock("../../account/AccountProvider.tsx", () => ({
@@ -69,6 +71,12 @@ vi.mock("../providers/LaunchAccountPicker.tsx", () => ({
       {reconnect ? `Reconnect ${account?.displayName}` : `Add ${providerId} account`}
     </button>
   ),
+}));
+vi.mock("../providers/ProviderAccountSessions.tsx", () => ({
+  useOptionalProviderAccountSessions: () => ({
+    states: seams.accountStates,
+    discoverModels: seams.discoverModels,
+  }),
 }));
 vi.mock("../dashboard/data/DashboardData.tsx", () => ({
   useCodingAgents: () => ({ state: { status: "ready", data: seams.agents }, reload: vi.fn() }),
@@ -233,6 +241,26 @@ const options: ThreadOptions = {
   defaultPermissionMode: "approve",
 };
 
+function connectedAccount(
+  id: string,
+  providerId: ProviderAccount["providerId"] = "codex",
+  displayName = id,
+): ProviderAccount {
+  return {
+    id,
+    providerId,
+    displayName,
+    providerReportedIdentity: null,
+    authenticationState: "authenticated",
+    isDefault: id.endsWith("work"),
+    createdAt: "2026-10-05T12:00:00Z",
+    lastUsedAt: null,
+    lastCheckedAt: null,
+    lastErrorCode: null,
+    archivedAt: null,
+  };
+}
+
 function operations(): OperationsApi {
   return {
     snapshot: vi.fn(),
@@ -288,6 +316,8 @@ beforeEach(() => {
   seams.navigate.mockClear();
   seams.agents = [agent("thread-lead", "Lead")];
   seams.tier = "max";
+  seams.accountStates = new Map();
+  seams.discoverModels.mockClear();
 });
 
 describe("SquadsPanel", () => {
@@ -411,6 +441,189 @@ describe("SquadsPanel", () => {
         .getAllByLabelText("Account")
         .map((select) => (select as HTMLSelectElement).value),
     ).toEqual([account.id, account.id]);
+  });
+
+  it("uses the canonical account model catalog and resets an explicit model change to its declared effort", async () => {
+    const codex = connectedAccount("codex-work", "codex", "Personal");
+    const claude = connectedAccount("claude-work", "claude-code", "Work");
+    const codexProvider = options.providers[0];
+    if (!codexProvider) throw new Error("Missing Codex provider fixture");
+    const accountOptions: ThreadOptions = {
+      ...options,
+      providers: [
+        { ...codexProvider, models: [] },
+        { ...codexProvider, id: "claude-code", displayName: "Claude Code", models: [] },
+      ],
+    };
+    seams.accountStates = new Map([
+      [
+        codex.id,
+        {
+          models: {
+            status: "available",
+            reason: null,
+            items: [
+              {
+                id: "gpt-6.1-sol",
+                displayName: "Model A",
+                isDefault: true,
+                defaultEffort: "high",
+                supportedEfforts: ["high"],
+              },
+              {
+                id: "gpt-6.1-fast",
+                displayName: "Model B",
+                isDefault: false,
+                defaultEffort: "medium",
+                supportedEfforts: ["medium", "xhigh"],
+              },
+            ],
+          },
+        },
+      ],
+      [
+        claude.id,
+        {
+          models: {
+            status: "available",
+            reason: null,
+            items: [
+              {
+                id: "claude-opus-4-6",
+                displayName: "Opus",
+                isDefault: true,
+                defaultEffort: "high",
+                supportedEfforts: ["high"],
+              },
+            ],
+          },
+        },
+      ],
+    ]);
+    const client = squads();
+    const user = userEvent.setup();
+    view(
+      client,
+      operations(),
+      async () => [codex, claude],
+      async () => accountOptions,
+    );
+    await screen.findAllByRole("heading", { name: "Orion Release Crew" });
+    const library = document.querySelector<HTMLElement>(`[data-squad-id="${squad.id}"]`);
+    expect(library).not.toBeNull();
+    await user.click(within(library as HTMLElement).getByRole("button", { name: "Edit" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Orion Release Crew" });
+    const model = within(dialog).getAllByLabelText("Model")[0] as HTMLSelectElement;
+    const effort = within(dialog).getAllByLabelText("Effort")[0] as HTMLSelectElement;
+
+    expect(within(model).getByRole("option", { name: "Model B" })).toBeVisible();
+    expect(model).toHaveValue("gpt-6.1-sol");
+    expect(effort).toHaveValue("high");
+    await user.selectOptions(model, "");
+    expect(effort).toHaveValue("");
+    await user.selectOptions(model, "gpt-6.1-fast");
+    expect(effort).toHaveValue("medium");
+    expect(within(effort).queryByRole("option", { name: "High" })).toBeNull();
+    expect(within(effort).getByRole("option", { name: "Extra high" })).toBeVisible();
+    await user.click(within(dialog).getByRole("button", { name: "Save squad" }));
+
+    await waitFor(() =>
+      expect(client.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          members: expect.arrayContaining([
+            expect.objectContaining({ key: "lead", model: "gpt-6.1-fast", effort: "medium" }),
+          ]),
+        }),
+      ),
+    );
+    expect(seams.discoverModels).not.toHaveBeenCalled();
+  });
+
+  it("keeps an unavailable saved exact model visible and blocks silent replacement", async () => {
+    const codex = connectedAccount("codex-work", "codex", "Personal");
+    const claude = connectedAccount("claude-work", "claude-code", "Work");
+    seams.accountStates = new Map([
+      [
+        codex.id,
+        {
+          models: {
+            status: "available",
+            reason: null,
+            items: [
+              {
+                id: "current-model",
+                displayName: "Current model",
+                isDefault: true,
+                defaultEffort: "medium",
+                supportedEfforts: ["medium"],
+              },
+            ],
+          },
+        },
+      ],
+      [
+        claude.id,
+        {
+          models: {
+            status: "available",
+            reason: null,
+            items: [
+              {
+                id: "claude-opus-4-6",
+                displayName: "Opus",
+                isDefault: true,
+                defaultEffort: "high",
+                supportedEfforts: ["high"],
+              },
+            ],
+          },
+        },
+      ],
+    ]);
+    const client = squads();
+    const user = userEvent.setup();
+    view(client, operations(), async () => [codex, claude]);
+    await screen.findAllByRole("heading", { name: "Orion Release Crew" });
+    const library = document.querySelector<HTMLElement>(`[data-squad-id="${squad.id}"]`);
+    expect(library).not.toBeNull();
+    await user.click(within(library as HTMLElement).getByRole("button", { name: "Edit" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Orion Release Crew" });
+    const model = within(dialog).getAllByLabelText("Model")[0] as HTMLSelectElement;
+    expect(model).toHaveValue("gpt-6.1-sol");
+    expect(within(model).getByRole("option", { name: "gpt-6.1-sol" })).toBeVisible();
+    expect(within(dialog).getByText(/This exact model is unavailable/)).toBeVisible();
+    await user.click(within(dialog).getByRole("button", { name: "Save squad" }));
+    expect(client.save).not.toHaveBeenCalled();
+    expect(within(dialog).getByRole("alert")).toHaveTextContent(/Lead's exact model is unavailable/);
+  });
+
+  it("discovers models lazily for one focused member instead of probing a 100-account Squad", async () => {
+    const accounts = Array.from({ length: 100 }, (_, index) => connectedAccount(`codex-${index}`));
+    const template = squad.members[0];
+    if (!template) throw new Error("Missing Squad member fixture");
+    const members: SquadDefinition["members"] = accounts.map((account, index) => ({
+      ...template,
+      key: `member-${index}`,
+      name: `Member ${index}`,
+      providerAccountId: account.id,
+      model: "",
+      effort: "",
+      managerKey: null,
+    }));
+    const largeSquad: SquadDefinition = { id: "squad-hundred", name: "Hundred", goal: "", members };
+    const value: SquadsSnapshot = { squads: [largeSquad], recipes: [], launches: [], operations: [] };
+    const user = userEvent.setup();
+    view(squads(value), operations(), async () => accounts);
+    const card = await screen.findByText("Hundred");
+    const library = card.closest<HTMLElement>("[data-squad-id]");
+    expect(library).not.toBeNull();
+    await user.click(within(library as HTMLElement).getByRole("button", { name: "Edit" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Hundred" });
+    await waitFor(() => expect(within(dialog).getAllByLabelText("Account")).toHaveLength(100));
+
+    expect(seams.discoverModels).not.toHaveBeenCalled();
+    fireEvent.focus(within(dialog).getAllByLabelText("Model")[42] as HTMLElement);
+    expect(seams.discoverModels).toHaveBeenCalledExactlyOnceWith("codex-42");
   });
 
   it("keeps every create entry disabled when Squads are unavailable on the current plan", async () => {

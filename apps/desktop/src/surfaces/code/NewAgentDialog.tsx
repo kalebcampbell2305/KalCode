@@ -40,10 +40,11 @@ import { useOptionalProviderAccountSessions } from "../providers/ProviderAccount
 import { isBrowserAuthProvider } from "../providers/useProviderAccounts.ts";
 import styles from "./NewAgentDialog.module.css";
 import {
-  AGENT_EFFORTS,
   boundLaunchAccount,
   clampAgentCount,
+  effortForModel,
   effortLabel,
+  effortsForModel,
   type LaunchMemory,
   launchAccounts,
   launchLabel,
@@ -313,8 +314,11 @@ export function NewAgentDialog({
   }, [client, cursorAccountId, discoverModels, authenticationState]);
   const canonicalModels = sessions?.states.get(selectedAccountId)?.models;
   const currentCursorModels = sharedSessions
-    ? canonicalModels && canonicalModels.status !== "checking"
-      ? { models: canonicalModels.items, error: canonicalModels.reason }
+    ? canonicalModels && (canonicalModels.status !== "checking" || canonicalModels.items.length > 0)
+      ? {
+          models: canonicalModels.items,
+          error: canonicalModels.status === "unavailable" ? canonicalModels.reason : null,
+        }
       : null
     : cursorModels?.accountId === selectedAccountId
       ? cursorModels
@@ -328,41 +332,48 @@ export function NewAgentDialog({
         : (currentCursorModels?.models ?? null)
       : canonicalModels?.status === "available"
         ? canonicalModels.items
-        : canonicalModels?.status === "unavailable"
-          ? null
-          : (models?.get(providerId) ?? null);
+        : canonicalModels?.status === "checking"
+          ? canonicalModels.items.length > 0
+            ? canonicalModels.items
+            : null
+          : canonicalModels?.status === "unavailable"
+            ? null
+            : (models?.get(providerId) ?? null);
   const defaultModel = providerModels?.find((m) => m.isDefault) ?? null;
   const rawModel =
     config.providerId === providerId && config.model !== undefined ? config.model : (remembered?.model ?? "");
-  const model =
-    !rawModel || rawModel === defaultModel?.id
-      ? ""
-      : providerId !== "cursor" && providerModels && !providerModels.some((m) => m.id === rawModel)
-        ? ""
-        : rawModel;
+  const model = rawModel;
+  const exactModel = providerModels?.find((candidate) => candidate.id === model) ?? (!model ? defaultModel : null);
+  const unavailableModel = !!rawModel && !!providerModels && !exactModel;
+  const modelDiscoveryError =
+    canonicalModels?.status === "unavailable"
+      ? canonicalModels.reason
+      : providerId === "cursor"
+        ? (currentCursorModels?.error ?? null)
+        : null;
+  const modelPending = canonicalModels?.status === "checking" || (providerModels === null && !modelDiscoveryError);
   const modelOptions: { value: string; label: string }[] = [
-    { value: "", label: defaultModel?.displayName ?? "Default" },
+    { value: "", label: defaultModel ? `Provider default · ${defaultModel.displayName}` : "Provider default" },
     ...(providerModels
-      ? providerModels
-          .filter((m) => !m.isDefault)
-          .map((m) => ({
-            value: m.id,
-            label:
-              providerId === "cursor" && m.displayName !== m.id && !m.displayName.endsWith(`(${m.id})`)
-                ? `${m.displayName} (${m.id})`
-                : m.displayName,
-          }))
+      ? providerModels.map((m) => ({
+          value: m.id,
+          label:
+            providerId === "cursor" && m.displayName !== m.id && !m.displayName.endsWith(`(${m.id})`)
+              ? `${m.displayName} (${m.id})`
+              : `${m.displayName}${m.isDefault ? " · reported default" : ""}`,
+        }))
       : model
         ? [{ value: model, label: remembered?.modelName ?? model }]
         : []),
+    ...(unavailableModel ? [{ value: model, label: `Unavailable · ${remembered?.modelName ?? model}` }] : []),
   ];
-  const unavailableCursorModel =
-    providerId === "cursor" && !!rawModel && !!providerModels && !providerModels.some((m) => m.id === rawModel);
   const modelName = model ? (modelOptions.find((o) => o.value === model)?.label ?? model) : null;
-  const efforts = AGENT_EFFORTS[providerId];
-  const rawEffort =
-    config.providerId === providerId && config.effort !== undefined ? config.effort : (remembered?.effort ?? "");
-  const effort = efforts.includes(rawEffort) ? rawEffort : "";
+  const efforts = effortsForModel(providerId, exactModel);
+  const configuredEffort = config.providerId === providerId ? config.effort : undefined;
+  // Provider default remains provider-owned. Catalog arrival must never turn a remembered/default
+  // null into a concrete effort; the reported default is applied only after an explicit model pick.
+  const effort = configuredEffort !== undefined ? configuredEffort : (remembered?.effort ?? "");
+  const unavailableEffort = !!effort && !!providerModels && !!exactModel && !efforts.includes(effort);
   const count = fixedCount ?? clampAgentCount(Number(countText));
 
   const choose = (choice: Choice) => {
@@ -391,7 +402,8 @@ export function NewAgentDialog({
     !!selectedAccountId &&
     !!selectedSession?.usable &&
     !accountLoadError &&
-    !unavailableCursorModel;
+    !unavailableModel &&
+    !unavailableEffort;
 
   const launch = async (spec: AgentLaunchSpec, launchedModelName: string | null) => {
     if (submitting.current) return;
@@ -447,16 +459,29 @@ export function NewAgentDialog({
       ? launchAccounts(restoredAccounts ?? [], last.providerId).find((a) => a.id === last.accountId)
       : undefined;
   const recent = last && recentAccount ? { ...last, account: recentAccount } : null;
-  const recentModels =
-    recent?.providerId === "cursor"
-      ? cursorModels?.accountId === recent.accountId
-        ? cursorModels.models
-        : undefined
-      : recent
-        ? models?.get(recent.providerId)
-        : undefined;
-  const recentModel =
-    recent?.model && recentModels && !recentModels.some((m) => m.id === recent.model) ? null : (recent?.model ?? null);
+  const recentAccountModels = recent ? sessions?.states.get(recent.accountId)?.models : null;
+  const recentModels = recent
+    ? recentAccountModels?.status === "available"
+      ? recentAccountModels.items
+      : recentAccountModels?.status === "unavailable"
+        ? undefined
+        : recent.providerId === "cursor" && cursorModels?.accountId === recent.accountId
+          ? cursorModels.models
+          : models?.get(recent.providerId)
+    : undefined;
+  const recentModelUnavailable = Boolean(
+    recent?.model && recentAccountModels?.status === "available" && !recentModels?.some((m) => m.id === recent.model),
+  );
+  const recentModel = recentModelUnavailable ? null : (recent?.model ?? null);
+  const recentExactModel = recentModel
+    ? (recentModels?.find((candidate) => candidate.id === recentModel) ?? null)
+    : (recentModels?.find((candidate) => candidate.isDefault) ?? null);
+  const recentEffortUnavailable = Boolean(
+    recent?.effort &&
+      recentAccountModels?.status === "available" &&
+      recentExactModel &&
+      !effortsForModel(recent.providerId, recentExactModel).includes(recent.effort),
+  );
   const recentSession = recent ? sessionOf(recent.account) : null;
   const recentIsSelected =
     !!recent &&
@@ -467,8 +492,8 @@ export function NewAgentDialog({
     (fixedCount ?? recent.count) === count;
   const launchRecent = () => {
     if (!recent || busy || signingIn || !recentSession?.usable || accountLoadError) return;
-    if (recent.providerId === "cursor" && recent.model && !recentModels?.some((m) => m.id === recent.model)) {
-      choose({ providerId: "cursor", accountId: recent.accountId });
+    if (recentModelUnavailable || recentEffortUnavailable) {
+      choose({ providerId: recent.providerId, accountId: recent.accountId });
       return;
     }
     void launch(
@@ -477,7 +502,7 @@ export function NewAgentDialog({
         count: fixedCount ?? recent.count,
         providerAccountId: recent.accountId,
         model: recentModel,
-        effort: recent.effort && AGENT_EFFORTS[recent.providerId].includes(recent.effort) ? recent.effort : null,
+        effort: recent.effort,
       },
       recentModel ? (recentModels?.find((m) => m.id === recentModel)?.displayName ?? recent.modelName) : null,
     );
@@ -820,20 +845,32 @@ export function NewAgentDialog({
                   value={model}
                   options={modelOptions}
                   disabled={busy || signingIn || providerPending}
-                  pending={providerModels === null}
-                  onChange={(next) => setConfig((c) => ({ ...c, providerId, model: next }))}
+                  pending={modelPending}
+                  onChange={(next) => {
+                    const nextModel =
+                      providerModels?.find((candidate) => candidate.id === next) ?? (!next ? defaultModel : null);
+                    setConfig((current) => ({
+                      ...current,
+                      providerId,
+                      model: next,
+                      effort: next ? effortForModel(providerId, nextModel, undefined) : "",
+                    }));
+                  }}
                 />
-                {providerId === "cursor" && currentCursorModels?.error ? (
+                {modelDiscoveryError ? (
                   <p className={styles.signInText} role="status">
-                    {currentCursorModels.error} Use Cursor's native model picker in the terminal.
+                    {modelDiscoveryError} Provider default remains available.
                   </p>
                 ) : null}
-                {unavailableCursorModel ? (
+                {unavailableModel ? (
                   <p className={styles.error} role="alert">
-                    {currentCursorModels?.error
-                      ? "Model availability could not be verified"
-                      : "Model unavailable for this account"}
-                    : {rawModel}. Choose an available model or Default.
+                    Model unavailable for this account: {rawModel}. Choose an available model or Provider default.
+                  </p>
+                ) : null}
+                {unavailableEffort ? (
+                  <p className={styles.error} role="alert">
+                    {effortLabel(effort)} effort is unavailable for {exactModel?.displayName ?? "this model"}. Choose a
+                    supported effort.
                   </p>
                 ) : null}
                 {efforts.length > 0 ? (
@@ -843,6 +880,7 @@ export function NewAgentDialog({
                     options={[
                       { value: "", label: "Default" },
                       ...efforts.map((level) => ({ value: level, label: effortLabel(level) })),
+                      ...(unavailableEffort ? [{ value: effort, label: `Unavailable · ${effortLabel(effort)}` }] : []),
                     ]}
                     disabled={busy || signingIn || providerPending}
                     onChange={(next) => setConfig((c) => ({ ...c, providerId, effort: next }))}
@@ -1074,7 +1112,7 @@ function ChipGroup({
         {options.map((option, index) => (
           // biome-ignore lint/a11y/useSemanticElements: chip radios with roving focus; native radios can't take this styling.
           <button
-            key={option.value || "default"}
+            key={`choice:${option.value}`}
             ref={(node) => {
               if (node) refs.current.set(option.value, node);
               else refs.current.delete(option.value);

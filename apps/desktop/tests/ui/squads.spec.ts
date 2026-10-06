@@ -88,6 +88,15 @@ test("Squad editor responds immediately and stays clear for a large team at a na
   const editor = page.getByRole("dialog");
   await expect(editor.getByRole("button", { name: "Save squad" })).toBeEnabled();
 
+  // The picker reads the same account-scoped catalog as Code's New Agent launcher. Codex's
+  // static thread options are intentionally empty, so this proves the canonical live catalog.
+  await editor.getByLabel("Provider").first().selectOption("codex");
+  const exactModel = editor.getByLabel("Model").first();
+  await exactModel.focus();
+  await expect(exactModel.getByRole("option", { name: "Codex exact model" })).toHaveCount(1);
+  await exactModel.selectOption("codex-ui-test-exact");
+  await expect(editor.getByLabel("Effort").first()).toHaveValue("high");
+
   await editor.getByLabel("Squad name").fill("Atlas Eight");
   await expect(editor.getByRole("button", { name: "Use managers" })).toHaveCount(0);
   for (let index = 0; index < 6; index += 1) {

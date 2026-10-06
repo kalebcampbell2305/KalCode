@@ -35,6 +35,35 @@ pub struct ProviderAccount {
     pub archived_at: Option<String>,
 }
 
+/// One exact model choice reported for a provider account. Provider adapters preserve native
+/// model and effort identifiers verbatim; KalCode does not maintain a vendor allowlist.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ProviderAccountModel {
+    /// Exact provider-native value passed when the coding agent is launched.
+    pub id: String,
+    pub display_name: String,
+    pub is_default: bool,
+    /// Exact provider-native default when the provider advertises one.
+    pub default_effort: Option<String>,
+    /// Exact provider-native effort values supported by this model, in provider order.
+    pub supported_efforts: Vec<String>,
+}
+
+/// Account-bound model catalog returned by the canonical provider adapter path.
+///
+/// Echoing both identities lets an asynchronous UI discard a response after an account switch
+/// without trusting request timing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ProviderAccountModelCatalog {
+    pub account_id: String,
+    pub provider_id: ProviderId,
+    pub models: Vec<ProviderAccountModel>,
+}
+
 /// Scope that may select an account for a provider operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
