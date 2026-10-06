@@ -4,7 +4,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use kalcode_updater::{
     ArtifactFormat, FeedMetadata, MAX_UPDATE_STATE_BYTES, RollbackCache, UpdateChannel,
-    UpdateTarget, verify_signature_for_metadata,
+    UpdateTarget, validate_candidate_for_target, verify_signature_for_metadata,
 };
 use minisign::{KeyPair, sign};
 use sha2::{Digest, Sha256};
@@ -101,6 +101,90 @@ fn schema_v2_signature_is_bound_to_the_exact_target_and_channel() {
             .code(),
         "update_signature_channel_mismatch"
     );
+}
+
+#[test]
+fn schema_v1_signature_cannot_be_relabelled_to_another_signed_channel_or_target() {
+    let bytes = b"signed dev windows installer";
+    let feed = serde_json::json!({
+        "kalcode": {
+            "schemaVersion": 1,
+            "channel": "stable",
+            "size": bytes.len(),
+            "sha256": hex::encode(Sha256::digest(bytes)),
+            "commit": "0123456789abcdef0123456789abcdef01234567"
+        }
+    });
+    let candidate = validate_candidate_for_target(
+        UpdateTarget::WindowsX86_64,
+        UpdateChannel::Stable,
+        "0.1.8",
+        "0.1.9+3000",
+        "https://kalcoded.com/releases/updater/stable/0.1.9/windows.exe",
+        &feed,
+    )
+    .unwrap();
+    assert_eq!(candidate.metadata.schema_version, 1);
+    assert_eq!(candidate.metadata.channel, UpdateChannel::Stable);
+
+    // A dev build's signature served in a schema-1 feed that claims Stable.
+    let dev = "timestamp:1789992000\tfile:KalCode_0.1.9_x64-setup.exe\tversion:0.1.9+3000\ttarget:windows-x86_64\tchannel:dev";
+    let (public_key, signature) = signed_package_with_trusted_comment(dev, bytes);
+    assert_eq!(
+        verify_signature_for_metadata(
+            bytes,
+            &signature,
+            &public_key,
+            "0.1.9+3000",
+            &candidate.metadata
+        )
+        .unwrap_err()
+        .code(),
+        "update_signature_channel_mismatch"
+    );
+
+    let metadata = metadata(bytes);
+    for (comment, code) in [
+        (
+            "timestamp:1789992000\tversion:0.1.6\tchannel:beta",
+            "update_signature_channel_mismatch",
+        ),
+        (
+            "timestamp:1789992000\tversion:0.1.6\tchannel:stable\tchannel:dev",
+            "update_signature_channel_mismatch",
+        ),
+        (
+            "timestamp:1789992000\tfile:KalCode-0.1.6-macOS-arm64.dmg\tversion:0.1.6\ttarget:darwin-aarch64\tchannel:stable",
+            "update_signature_target_mismatch",
+        ),
+        (
+            "timestamp:1789992000\tversion:0.1.6\ttarget:windows-x86_64\ttarget:darwin-aarch64",
+            "update_signature_target_mismatch",
+        ),
+    ] {
+        let (public_key, signature) = signed_package_with_trusted_comment(comment, bytes);
+        assert_eq!(
+            verify_signature_for_metadata(bytes, &signature, &public_key, "0.1.6", &metadata)
+                .unwrap_err()
+                .code(),
+            code,
+            "{comment}"
+        );
+    }
+
+    // Matching signed bindings and older signatures without them keep working.
+    let (public_key, signature) =
+        signed_package_with_comment("0.1.6", Some(UpdateTarget::WindowsX86_64), bytes);
+    verify_signature_for_metadata(bytes, &signature, &public_key, "0.1.6", &metadata).unwrap();
+    let (public_key, signature) = signed_package("0.1.6", bytes);
+    verify_signature_for_metadata(bytes, &signature, &public_key, "0.1.6", &metadata).unwrap();
+    let mut dev_metadata = metadata.clone();
+    dev_metadata.channel = UpdateChannel::Dev;
+    let (public_key, signature) = signed_package_with_trusted_comment(
+        "timestamp:1789992000\tversion:0.1.6\ttarget:windows-x86_64\tchannel:dev",
+        bytes,
+    );
+    verify_signature_for_metadata(bytes, &signature, &public_key, "0.1.6", &dev_metadata).unwrap();
 }
 
 #[test]
