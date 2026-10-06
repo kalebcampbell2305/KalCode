@@ -39,9 +39,13 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
 
 // ------------------------------------------------------------------ fixtures
 
+// Windows refuses to remove a directory that a just-killed gate process still has open (as its cwd
+// or a file handle) until that process finishes exiting: EPERM/EBUSY. rmSync retries exactly those.
+const removeTemp = (dir) => rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+
 const temps = [];
 after(() => {
-  for (const t of temps) rmSync(t, { recursive: true, force: true });
+  for (const t of temps) removeTemp(t);
 });
 
 function sh(cwd, ...args) {
@@ -1070,7 +1074,7 @@ describe("gate", () => {
 
   test("an overrunning command's whole process tree is killed, not just its shell", async () => {
     const dir = mkdtempSync(join(tmpdir(), "kc-gate-timeout-"));
-    after(() => rmSync(dir, { recursive: true, force: true }));
+    after(() => removeTemp(dir));
     const pidFile = join(dir, "grandchild.pid");
     const fixture = join(dir, "hang.mjs");
     writeFileSync(
