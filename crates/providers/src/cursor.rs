@@ -197,27 +197,53 @@ fn probe(
 }
 
 fn probe_failure(output: &ProbeOutput, fallback: &str) -> ProviderError {
-    let detail = output.stderr.to_lowercase();
-    let (code, message) =
-        if detail.contains("authentication required") || detail.contains("not logged in") {
-            (
-                "cursor_not_authenticated",
-                "Cursor is not signed in. Reconnect to continue.",
-            )
-        } else if detail.contains("authentication failed")
-            || detail.contains("expired")
-            || detail.contains("invalid token")
-        {
-            (
-                "cursor_session_expired",
-                "Cursor session expired. Reconnect to continue.",
-            )
-        } else {
-            ("cursor_runtime_unavailable", fallback)
-        };
+    let (code, message) = classify_probe_failure(&output.stderr, fallback);
     ProviderError::Refused {
         code: code.into(),
         message: message.into(),
+    }
+}
+
+/// Only Cursor's own sign-in wording proves the native session is gone. A proxy that wants
+/// credentials ("407 Proxy Authentication Required") or an expired TLS certificate on the way to
+/// Cursor's service is a connection failure: it must never sign out a working account.
+fn classify_probe_failure<'a>(stderr: &str, fallback: &'a str) -> (&'static str, &'a str) {
+    let lines = stderr.to_lowercase();
+    let cursor_lines = || {
+        lines.lines().filter(|line| {
+            !["proxy", "certificate", "tls", "ssl"]
+                .iter()
+                .any(|network| line.contains(network))
+        })
+    };
+    if cursor_lines()
+        .any(|line| line.contains("authentication required") || line.contains("not logged in"))
+    {
+        (
+            "cursor_not_authenticated",
+            "Cursor is not signed in. Reconnect to continue.",
+        )
+    } else if cursor_lines().any(|line| {
+        line.contains("authentication failed")
+            || line.contains("invalid token")
+            || [
+                "session expired",
+                "session has expired",
+                "token expired",
+                "token has expired",
+                "login expired",
+                "credentials expired",
+                "credentials have expired",
+            ]
+            .iter()
+            .any(|expired| line.contains(expired))
+    }) {
+        (
+            "cursor_session_expired",
+            "Cursor session expired. Reconnect to continue.",
+        )
+    } else {
+        ("cursor_runtime_unavailable", fallback)
     }
 }
 
@@ -396,6 +422,37 @@ pub fn tools() -> Vec<ToolCapability> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_cursor_sign_in_wording_marks_a_session_signed_out() {
+        let classify = |stderr| super::classify_probe_failure(stderr, "fallback").0;
+        // Network failures on the way to Cursor's service keep the account signed in.
+        for stderr in [
+            "Error: request failed: certificate has expired",
+            "fetch failed: unable to verify the first certificate (CERT_HAS_EXPIRED: expired)",
+            "HTTP 407 Proxy Authentication Required",
+            "proxy authentication failed for 10.0.0.1:8080",
+            "SSL routines: tls session ticket expired",
+        ] {
+            assert_eq!(classify(stderr), "cursor_runtime_unavailable", "{stderr}");
+        }
+        // Cursor's own sign-in messages still require reconnecting.
+        assert_eq!(
+            classify("Error: Authentication required. Please run 'agent login' first."),
+            "cursor_not_authenticated"
+        );
+        assert_eq!(
+            classify("You are not logged in."),
+            "cursor_not_authenticated"
+        );
+        for stderr in [
+            "Error: Your session expired. Run agent login.",
+            "Authentication failed: invalid token",
+            "access token has expired",
+        ] {
+            assert_eq!(classify(stderr), "cursor_session_expired", "{stderr}");
+        }
+    }
+
     use super::*;
 
     #[test]
