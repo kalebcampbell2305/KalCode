@@ -114,11 +114,17 @@ export function useThreadDetail(threadId: string) {
   const { client } = useRuntime();
   const [thread, setThread] = useState<ThreadSummary | null>(null);
   const [messages, setMessages] = useState<ThreadMessage[]>([]);
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
   const [tools, setTools] = useState<ToolCallRecord[]>([]);
   const [live, setLive] = useState<LiveMessage[]>([]);
   const [state, setState] = useState<LoadState>("loading");
   const [error, setError] = useState<KalCodeError | null>(null);
+  /** The oldest loaded page was full, so earlier messages may exist. */
+  const [hasEarlier, setHasEarlier] = useState(false);
   const request = useRef(0);
+  /** Earlier pages are on screen: refreshes keep them instead of replacing the history. */
+  const pagedBack = useRef(false);
 
   const load = useCallback(async () => {
     const id = ++request.current;
@@ -130,7 +136,14 @@ export function useThreadDetail(threadId: string) {
       ]);
       if (id !== request.current) return;
       setThread(summary);
-      setMessages(page);
+      if (pagedBack.current) {
+        // Everything already loaded that the newest page no longer covers is older than it.
+        const fresh = new Set(page.map((m) => m.id));
+        setMessages((current) => [...current.filter((m) => !fresh.has(m.id)), ...page]);
+      } else {
+        setMessages(page);
+        setHasEarlier(page.length >= MESSAGE_PAGE);
+      }
       setTools(calls);
       // A completed streamed message is replaced by its stored copy once the history has it.
       setLive((current) =>
@@ -151,8 +164,29 @@ export function useThreadDetail(threadId: string) {
     setMessages([]);
     setTools([]);
     setLive([]);
+    setHasEarlier(false);
+    pagedBack.current = false;
     void load();
   }, [load]);
+
+  /** Prepends the page before the oldest loaded message. Resolves false when it couldn't load. */
+  const loadEarlier = useCallback(async (): Promise<boolean> => {
+    const oldest = messagesRef.current[0]?.id;
+    if (!oldest) return true;
+    try {
+      const older = await client.threadMessages(threadId, MESSAGE_PAGE, oldest);
+      if (messagesRef.current[0]?.id !== oldest) return true;
+      pagedBack.current = true;
+      setMessages((current) => {
+        const known = new Set(current.map((m) => m.id));
+        return [...older.filter((m) => !known.has(m.id)), ...current];
+      });
+      setHasEarlier(older.length >= MESSAGE_PAGE);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [client, threadId]);
 
   useThreadEvents((id) => id === threadId, load);
 
@@ -195,5 +229,5 @@ export function useThreadDetail(threadId: string) {
     void load();
   }, [load]);
 
-  return { thread, messages, tools, live, state, error, reload: load, retry, setThread };
+  return { thread, messages, tools, live, state, error, reload: load, retry, setThread, hasEarlier, loadEarlier };
 }

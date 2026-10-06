@@ -208,6 +208,12 @@
   padding: var(--space-5) var(--space-5);
 }
 
+.earlier {
+  display: flex;
+  justify-content: center;
+  margin-bottom: var(--space-4);
+}
+
 .empty {
   color: var(--color-text-muted);
   font-size: var(--type-ui);

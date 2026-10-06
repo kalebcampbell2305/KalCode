@@ -7,7 +7,7 @@ import { NewThread } from "./NewThread.tsx";
 import { ThreadDetail } from "./ThreadDetail.tsx";
 import { ThreadList } from "./ThreadList.tsx";
 import styles from "./ThreadsSurface.module.css";
-import { useThreadList } from "./useThreads.ts";
+import { type ThreadListEntry, useThreadList } from "./useThreads.ts";
 
 type Pane = { kind: "detail"; threadId: string | null } | { kind: "new"; prefill?: NewThreadPrefill };
 
@@ -54,7 +54,16 @@ export function ThreadsSurface() {
   }, [rebind]);
 
   const selectedId = pane.kind === "detail" ? pane.threadId : null;
-  const selectedEntry = list.entries.find((entry) => entry.thread.id === selectedId) ?? null;
+  const listed = list.entries.find((entry) => entry.thread.id === selectedId) ?? null;
+  // The open thread leaves the list when it's archived (or "Show archived" is turned off);
+  // keep what we last knew about it so the pane still treats it as archived.
+  const [known, setKnown] = useState<ThreadListEntry | null>(null);
+  useEffect(() => {
+    if (listed) setKnown(listed);
+  }, [listed]);
+  const selectedEntry = listed ?? (known && known.thread.id === selectedId ? known : null);
+  const markArchived = (archived: boolean) =>
+    setKnown((current) => (current && current.thread.id === selectedId ? { ...current, archived } : current));
 
   // Tell the palette and KalVoice which thread (and account) is on screen.
   const selectedThread = selectedEntry?.thread ?? null;
@@ -114,9 +123,14 @@ export function ThreadsSurface() {
               threadId={selectedId}
               archived={selectedEntry?.archived ?? false}
               onArchived={() => {
+                markArchived(true);
                 void list.reload();
               }}
               onUnarchived={() => {
+                markArchived(false);
+                void list.reload();
+              }}
+              onRead={() => {
                 void list.reload();
               }}
             />
