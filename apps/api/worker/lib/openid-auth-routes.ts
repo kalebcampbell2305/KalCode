@@ -1,6 +1,7 @@
 import type { AccountStore } from "./account-store";
 import { clearSessionCookie, sessionCookie, sessionToken } from "./auth";
 import { readJsonBody } from "./body";
+import { clientNetwork } from "./client-network";
 import { constantTimeEqual, hmacSha256Base64Url, randomBase64Url, sha256Base64Url } from "./crypto";
 import { isPkceChallenge, isPkceVerifier, verifyPkce } from "./github-oauth";
 import { apiError, json } from "./http";
@@ -81,7 +82,7 @@ function forbiddenOrigin(): Response {
 }
 
 function clientBucket(request: Request): string {
-  return request.headers.get("cf-connecting-ip")?.trim() || "unknown";
+  return clientNetwork(request);
 }
 
 function object(value: unknown): Record<string, unknown> | null {

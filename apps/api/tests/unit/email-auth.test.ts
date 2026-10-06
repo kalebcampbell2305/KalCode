@@ -234,4 +234,39 @@ describe("passwordless email auth", () => {
     expect(allowRateLimit).toHaveBeenCalledTimes(1);
     expect(vi.mocked(allowRateLimit).mock.calls[0]?.[0].action).toBe("session_refresh");
   });
+
+  it("rate-limits and budgets sign-in mail per IPv6 /64, so rotating addresses in one prefix shares a limit", async () => {
+    const allowRateLimit = vi.fn<AccountStore["allowRateLimit"]>(async () => true);
+    const sent = vi.fn<(email: string, verifyToken: string, identity: AccountMailIdentity) => Promise<boolean>>(
+      async () => true,
+    );
+    const auth = emailAuthService({
+      store: fakeStore({ allowRateLimit }),
+      mailer: { sendSignIn: sent, sendDelete: vi.fn(async () => true) },
+      rateLimitKey: "r".repeat(32),
+      now: () => NOW,
+    });
+    for (const [index, ip] of ["2001:db8:abcd:12::1", "2001:0DB8:abcd:0012:ffff:eeee:dddd:cccc"].entries()) {
+      const response = await auth.start(
+        post(
+          "/v1/auth/email/start",
+          { email: `user${index}@example.com`, client: "website" },
+          { "cf-connecting-ip": ip },
+        ),
+      );
+      expect(response.status).toBe(200);
+    }
+    const ipBuckets = vi
+      .mocked(allowRateLimit)
+      .mock.calls.map(([input]) => input)
+      .filter((input) => input.action === "email_start")
+      .map((input) => input.bucketHash);
+    // Calls alternate ip bucket, email bucket for each start.
+    expect(ipBuckets[0]).toBe(await hmacSha256Base64Url("r".repeat(32), "ip:2001:db8:abcd:12::/64"));
+    expect(ipBuckets[2]).toBe(ipBuckets[0]);
+    expect(sent.mock.calls[0]?.[2].networkHash).toBe(
+      await hmacSha256Base64Url("r".repeat(32), "account-mail:network:2001:db8:abcd:12::/64"),
+    );
+    expect(sent.mock.calls[1]?.[2].networkHash).toBe(sent.mock.calls[0]?.[2].networkHash);
+  });
 });
