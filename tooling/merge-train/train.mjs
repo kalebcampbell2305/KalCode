@@ -38,7 +38,7 @@ export function assertCandidateWorkflow(source) {
   const workflow = source.replaceAll("\r\n", "\n");
   const windows = workflow.match(/^ {2}windows:\n([\s\S]*?)(?=^ {2}[a-zA-Z][\w-]*:|$(?![\s\S]))/m)?.[1] ?? "";
   if (
-    !/ {2}push:\n(?:\s+#.*\n)* {4}branches: \[main, "merge-train\/\*\*"\]/.test(workflow) ||
+    !/ {2}push:\n(?:\s+#.*\n)* {4}branches: \[(?:main, )?"merge-train\/\*\*"\]/.test(workflow) ||
     !/ {4}runs-on: \[self-hosted, Windows, kalcode-gate(?:, kalcode-main-pc)?\]\n/.test(windows) ||
     !windows.includes("name: Gate\n") ||
     !windows.includes("trailers:key=Merge-Train-Base,valueonly")

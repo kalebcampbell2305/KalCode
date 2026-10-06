@@ -25,7 +25,12 @@ pre,
   display: grid;
   place-items: center;
   height: 100%;
-  background: radial-gradient(36rem 28rem at 50% 45%, var(--color-accent-soft), transparent 70%), var(--color-bg);
+  background:
+    radial-gradient(36rem 28rem at 50% 45%, var(--color-accent-soft), transparent 70%),
+    var(--atmosphere-stars) 0 0 / var(--atmosphere-stars-size),
+    var(--atmosphere-stars-far) 180px 90px / var(--atmosphere-stars-far-size),
+    var(--atmosphere-nebula),
+    var(--color-bg);
 }
 
 .boot-screen .boot-screen__mark {

@@ -126,6 +126,22 @@ describe("the Updates page for 0.1.9", () => {
     expect(earlier).toContain('id="build-1658"');
   });
 
+  it("lists a newly shipped build from its published release notes, with no page edit", async () => {
+    // 0.1.9+1816 has docs/releases/0.1.9+1816.md (written by the release tooling) but no
+    // hand-condensed entry: it must still lead the timeline once /download serves it.
+    select(signedStableBuild("0.1.9", 1816));
+    const html = await render(Updates, "/updates");
+    const copy = text(html);
+    expect(html).toContain('id="build-1816"');
+    expect(html.indexOf('id="build-1816"')).toBeLessThan(html.indexOf('id="build-1738"'));
+    expect(copy).toContain("Build 1816");
+    expect(copy).toContain("Project-centered navigation");
+    expect(copy).toContain("Weekly usage, front and center");
+    // The served build carries the manifest's publication date.
+    const latest = html.slice(html.indexOf('id="build-1816"'), html.indexOf('id="build-1738"'));
+    expect(latest).toMatch(/<time datetime="[^"]+"/);
+  });
+
   it("announces no 0.1.9 while the manifest selects 0.1.8 or a 0.1.8 build", async () => {
     // Fixed 0.1.8 manifests: COMMITTED becomes 0.1.9+N once the assemble step writes the 0.1.9 releases.json.
     for (const manifest of [

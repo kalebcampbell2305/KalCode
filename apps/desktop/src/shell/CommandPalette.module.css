@@ -22,10 +22,12 @@
   overflow: hidden;
   border: 1px solid var(--color-border-lit-soft);
   border-radius: var(--radius-floating);
-  background: var(--panel-sheen), var(--color-surface-3);
+  background: var(--panel-sheen), var(--glass-bg);
   box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.07),
     var(--shadow-xl),
-    0 0 60px -24px var(--color-glow);
+    0 0 72px -24px var(--color-glow);
+  backdrop-filter: blur(calc(var(--blur-glass) * 1.4)) saturate(1.3);
 }
 
 .input {
@@ -34,7 +36,10 @@
   padding: 0 var(--space-5);
   border: 0;
   border-bottom: 1px solid var(--color-border);
-  background: transparent;
+  /* The query line lights from its centre while the palette is focused. */
+  background:
+    linear-gradient(90deg, transparent 10%, var(--color-border-lit) 50%, transparent 90%) bottom / 100% 1px no-repeat,
+    transparent;
   color: var(--color-text);
   font-size: var(--text-lg);
   letter-spacing: -0.01em;
@@ -105,23 +110,42 @@
   opacity: 1;
 }
 
+/* The selected result: the same electric leading edge as a highlighted menu item. */
 .item[data-selected="true"] {
   background: linear-gradient(90deg, var(--color-surface-selected), transparent);
-  box-shadow: inset 0 0 0 1px var(--color-border-lit-soft);
+  box-shadow:
+    inset 2px 0 0 var(--color-accent),
+    inset 0 0 0 1px var(--color-border-lit-soft);
   color: var(--color-text);
 }
 
 .item[data-selected="true"] .itemIcon {
+  border-color: var(--color-border-lit-soft);
+  background: var(--color-accent-soft);
   color: var(--color-accent-text);
 }
 
+/* Each result's glyph sits in a small tile, so kinds (agent, terminal, setting) scan at a glance. */
 .itemIcon {
   display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.625rem;
+  height: 1.625rem;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+  color: var(--color-text-muted);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
 
 .itemIcon svg {
-  width: 1rem;
-  height: 1rem;
+  width: 0.875rem;
+  height: 0.875rem;
   stroke-width: 1.75;
 }
 

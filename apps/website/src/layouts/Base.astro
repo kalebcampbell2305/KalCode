@@ -3,6 +3,7 @@ import "@kalcode/ui/fonts.css";
 import "@kalcode/ui/tokens.css";
 import "@kalcode/ui/base.css";
 import "../styles/critical.css";
+import "../styles/space.css";
 // The hero world's own stylesheets, imported here as well so they ship in the same
 // render-blocking file as critical.css: one request in <head> instead of three.
 import "../styles/hero.css";
@@ -34,6 +35,8 @@ interface Props {
 }
 
 const { title, description, path, noindex = false, world = false, lateStyles = false, jsonLd } = Astro.props;
+// The space level, as in the app: world pages are cinematic, reading pages (docs, legal) quiet.
+const space = world ? "cinematic" : "quiet";
 const canonical = new URL(path, SITE_ORIGIN).href;
 const searchData = noindex ? undefined : pageStructuredData({ title, description, path }, jsonLd);
 const ogImage = new URL("/og.png", SITE_ORIGIN).href;
@@ -81,7 +84,7 @@ const ogImageAlt =
     <meta name="twitter:image:alt" content={ogImageAlt} />
     {searchData && <script type="application/ld+json" is:inline set:html={jsonLdText(searchData)} />}
   </head>
-  <body data-theme={world ? "dark" : undefined} data-world={world ? "" : undefined}>
+  <body data-theme={world ? "dark" : undefined} data-world={world ? "" : undefined} data-space={space}>
     <a class="skip-link" href="#main">Skip to content</a>
     <Header path={path} />
     <main id="main" tabindex="-1">

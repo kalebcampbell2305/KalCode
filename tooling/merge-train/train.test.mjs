@@ -980,7 +980,8 @@ describe("merge train pieces", () => {
       "\r\n",
       "\n",
     );
-    assert.match(workflow, /push:\n(?:\s+#.*\n)*\s+branches: \[main, "merge-train\/\*\*"\]/);
+    // main is never push-gated: it only moves to an already-gated exact candidate.
+    assert.match(workflow, /push:\n(?:\s+#.*\n)*\s+branches: \["merge-train\/\*\*"\]/);
     assert.match(
       workflow,
       /if: github\.event_name != 'pull_request' \|\| github\.event\.pull_request\.head\.repo\.full_name == github\.repository/,

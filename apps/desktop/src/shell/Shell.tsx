@@ -48,6 +48,7 @@ import styles from "./Shell.module.css";
 import { ShellSlotsProvider, useShellSlots } from "./ShellSlots.tsx";
 import { Sidebar } from "./Sidebar.tsx";
 import { useShortcuts } from "./shortcuts.ts";
+import { spaceLevelOf } from "./spaceLevel.ts";
 import { UpdateReadyNotice } from "./UpdateReadyNotice.tsx";
 
 export function Shell() {
@@ -164,7 +165,7 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
     <DashboardDataBoundary>
       <DeckUiProvider>
         <DeckDataProvider>
-          <div className={styles.frame}>
+          <div className={styles.frame} data-space={spaceLevelOf(current)}>
             <NavigationBridge />
             <a className={styles.skipLink} href="#main">
               Skip to content

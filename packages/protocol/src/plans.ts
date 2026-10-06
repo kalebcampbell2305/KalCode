@@ -465,8 +465,15 @@ export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
         verifiedIn: "0.1.9+1565",
       },
       {
+        id: "terminal-naming",
+        label: "Automatic terminal and agent naming",
+        from: "free",
+        status: "available",
+        verifiedIn: "0.1.9+1530",
+      },
+      {
         id: "terminal-smart",
-        label: "Automatic terminal naming and smart resume",
+        label: "Smart resume",
         from: "free",
         status: "coming_soon",
       },

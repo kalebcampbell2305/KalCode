@@ -32,17 +32,24 @@
   gap: var(--space-2-5);
 }
 
+/* Each widget is an instrument on the bridge: keyboard focus inside lights its edge, a drag lifts
+   it with an electric-blue rim. */
 .frame {
   position: relative;
   min-width: 0;
+  border-radius: var(--radius-panel);
   transition:
     box-shadow var(--dur-fast) var(--ease-out),
     transform var(--dur-fast) var(--ease-out);
 }
 
+.frame:has(:focus-visible) {
+  box-shadow: var(--glow-subtle);
+}
+
 .frame[data-dragging] {
   z-index: 1;
-  box-shadow: var(--shadow-xl);
+  box-shadow: var(--shadow-xl), var(--glow-active);
   transform: scale(1.01);
 }
 

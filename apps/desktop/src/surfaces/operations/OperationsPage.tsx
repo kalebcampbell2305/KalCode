@@ -752,6 +752,7 @@ function RunsView({
                 <button
                   type="button"
                   className={styles.runRow}
+                  data-tone={STATUS_TONE[run.status]}
                   data-operations-run-id={run.id}
                   data-selected={selected === run.id || undefined}
                   onClick={() => onSelect(run.id)}
@@ -1523,7 +1524,7 @@ function ServicesView({
                   target={{ kind: "service", id: service.id, workspaceId: service.workspaceId }}
                   title={service.name}
                 >
-                  <tr data-operations-service-id={service.id} tabIndex={-1}>
+                  <tr data-operations-service-id={service.id} data-status={service.status} tabIndex={-1}>
                     <td>
                       <strong>{service.name}</strong>
                     </td>
@@ -1696,6 +1697,7 @@ function EnvironmentsView({
                       data-operations-environment={kind}
                       data-operations-workspace={environmentWorkspaceId}
                       data-production={production || undefined}
+                      data-health={environmentTone(environment)}
                       tabIndex={-1}
                       aria-label={`${titleCase(kind)} environment`}
                     >
@@ -1817,16 +1819,29 @@ function EnvironmentsView({
   );
 }
 
+/** An environment's observed health as a status tone: verified good, verified bad, or not verified. */
+function environmentTone(environment: OperationEnvironment | undefined): "working" | "failed" | "muted" {
+  const health = environment?.health.toLowerCase() ?? "";
+  if (health === "healthy" || health === "live") return "working";
+  if (health === "failed" || health === "unhealthy") return "failed";
+  return "muted";
+}
+
+/** A timeline moment's tone from its recorded kind (never inferred beyond the words it carries). */
+function momentTone(kind: string): "working" | "done" | "failed" | "waiting" | "recovering" {
+  const value = kind.toLowerCase();
+  if (/fail|error|interrupt|cancel/.test(value)) return "failed";
+  if (/succeed|complete|done|deployed|pass/.test(value)) return "done";
+  if (/wait|block|pause|queue/.test(value)) return "waiting";
+  if (/run|start|progress/.test(value)) return "working";
+  return "recovering";
+}
+
 function EnvironmentHealth({ environment }: { environment?: OperationEnvironment }) {
   if (!environment) return <StatusIndicator tone="muted">Not observed</StatusIndicator>;
-  const health = environment.health.toLowerCase();
-  const tone =
-    health === "healthy" || health === "live"
-      ? "working"
-      : health === "failed" || health === "unhealthy"
-        ? "failed"
-        : "muted";
-  return <StatusIndicator tone={tone}>{titleCase(environment.health || "unknown")}</StatusIndicator>;
+  return (
+    <StatusIndicator tone={environmentTone(environment)}>{titleCase(environment.health || "unknown")}</StatusIndicator>
+  );
 }
 
 function ActivityView({
@@ -2048,7 +2063,7 @@ export function OperationsRunDetail({
   const errorMessage = error?.owner === loader ? error.message : null;
   return (
     <aside className={styles.detail} aria-label="Run details" role={role}>
-      <header className={styles.detailHeader}>
+      <header className={styles.detailHeader} data-tone={value ? STATUS_TONE[value.run.status] : undefined}>
         <div>
           <span className={styles.detailKind}>{value ? titleCase(value.run.spec.kind) : "Run"}</span>
           <h2>{value?.run.spec.name ?? "Loading run…"}</h2>
@@ -2108,7 +2123,7 @@ export function OperationsRunDetail({
               value.timeline.length > 0 ? (
                 <ol className={styles.timeline}>
                   {value.timeline.map((moment) => (
-                    <li key={moment.id}>
+                    <li key={moment.id} data-tone={momentTone(moment.kind)}>
                       <span />
                       <div>
                         <strong>{moment.message}</strong>

@@ -10,6 +10,21 @@
     radial-gradient(22rem 16rem at 0% 0%, var(--color-accent-soft), transparent 70%),
     linear-gradient(180deg, var(--color-surface-1), var(--color-bg-sunken) 55%);
   overflow: hidden;
+  isolation: isolate;
+}
+
+/* Faint far stars in the sidebar's open middle only: masked away from the places and the footer,
+   so no label ever sits on a star. Static; high contrast and light theme have none. */
+.sidebar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--atmosphere-stars-far) 40px 20px / var(--atmosphere-stars-far-size);
+  -webkit-mask-image: linear-gradient(180deg, transparent 32%, black 52%, black 66%, transparent 80%);
+  mask-image: linear-gradient(180deg, transparent 32%, black 52%, black 66%, transparent 80%);
+  opacity: 0.7;
+  pointer-events: none;
 }
 
 /* A lit hairline at the top of the rail edge, fading down: the only glow in the chrome. */

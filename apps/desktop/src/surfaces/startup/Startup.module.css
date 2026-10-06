@@ -6,7 +6,12 @@
   min-height: 100vh;
   padding: var(--space-8);
   overflow: hidden;
-  background: var(--color-bg);
+  /* Even a failure to start happens in KalCode's sky: quiet stars and the wash, never a blank void. */
+  background:
+    radial-gradient(48rem 26rem at 50% 20%, var(--color-accent-soft), transparent 72%),
+    var(--atmosphere-stars) 0 0 / var(--atmosphere-stars-size),
+    var(--atmosphere-stars-far) 180px 90px / var(--atmosphere-stars-far-size),
+    var(--color-bg);
 }
 
 .panel {
@@ -16,10 +21,12 @@
   gap: var(--space-5);
   width: min(36rem, 100%);
   padding: var(--space-6);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius-xl);
   background: var(--panel-sheen), var(--color-surface-1);
-  box-shadow: var(--shadow-xl);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.05),
+    var(--shadow-xl);
 }
 
 /* A lit hairline along the card's top edge. */

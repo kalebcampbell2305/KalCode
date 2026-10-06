@@ -20,7 +20,12 @@ export function CodeEmpty() {
         <EmptyState
           className={styles.codeWelcome}
           headingLevel={2}
-          art={<FolderOpen className={styles.emptyArt} />}
+          artStyle="free"
+          art={
+            <span className={styles.launchArt}>
+              <FolderOpen className={styles.emptyArt} />
+            </span>
+          }
           title="Open a project folder"
           actions={
             <Button variant="primary" icon={<FolderOpen />} onClick={() => void openFolder()} busy={picking}>
@@ -28,6 +33,7 @@ export function CodeEmpty() {
             </Button>
           }
         >
+          <p className={styles.launchEyebrow}>Code the future</p>
           <p>KalCode opens real terminals in the folder you choose. Your project files stay exactly where they are.</p>
           <ul className={styles.entryFeatures} aria-label="Code workspace features">
             <li>
