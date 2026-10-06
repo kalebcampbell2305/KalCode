@@ -81,6 +81,30 @@ describe("provider account session restoration", () => {
     expect(view.result.current?.states.get(saved.id)).toMatchObject({ account: expired, health: { usable: false } });
   });
 
+  it("shows the account the native store promoted to default after the default is removed", async () => {
+    const first = account("codex-a", "codex", "Codex A");
+    const second = account("codex-b", "codex", "Codex B");
+    const list = vi
+      .fn()
+      .mockResolvedValueOnce([first, second])
+      .mockResolvedValue([{ ...second, isDefault: true }]);
+    runtime.client = {
+      listProviderAccounts: list,
+      refreshCodexAccount: vi.fn(async (id: string) => (id === first.id ? first : second)),
+    } as unknown as KalCodeClient;
+    const view = renderHook(useOptionalProviderAccountSessions, { wrapper });
+    await waitFor(() => expect(view.result.current?.accounts).toHaveLength(2));
+    await waitFor(() => expect(view.result.current?.checking.size).toBe(0));
+
+    act(() => {
+      view.result.current?.replace({ ...first, isDefault: false, archivedAt: "2026-10-06T00:00:00.000Z" });
+    });
+
+    await waitFor(() =>
+      expect(view.result.current?.accounts).toEqual([expect.objectContaining({ id: second.id, isDefault: true })]),
+    );
+  });
+
   it("publishes models for the identity confirmed by the same Cursor response", async () => {
     const saved = account("cursor-a", "cursor", "Work");
     const checked = { ...saved, providerReportedIdentity: "verified@example.com" };

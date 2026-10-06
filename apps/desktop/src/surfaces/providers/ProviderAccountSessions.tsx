@@ -180,9 +180,14 @@ export function ProviderAccountSessionsProvider({ children }: { children: ReactN
     [version],
   );
 
+  const readAccountsRef = useRef<((reportError: boolean) => Promise<ProviderAccount[] | null>) | null>(null);
+
   const replace = useCallback(
     (account: ProviderAccount) => {
       commit(account);
+      // Removing an account can make another one the provider's default natively. Read the
+      // canonical registry so every surface shows the promoted default, not a provider with none.
+      if (account.archivedAt !== null) void readAccountsRef.current?.(false);
       setValidationErrors((current) => {
         if (!current.has(account.id)) return current;
         const next = new Map(current);
@@ -371,6 +376,8 @@ export function ProviderAccountSessionsProvider({ children }: { children: ReactN
     },
     [client, supersede],
   );
+
+  readAccountsRef.current = readAccounts;
 
   const reload = useCallback(async (): Promise<ProviderAccount[] | null> => {
     const owner = client;
