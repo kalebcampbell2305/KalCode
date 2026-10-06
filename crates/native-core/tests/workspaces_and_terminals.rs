@@ -676,13 +676,19 @@ fn restart_refuses_a_saved_start_folder_that_no_longer_exists() {
         .expect("original");
     let output = Output::attach(&core, &original.id);
     let change = if cfg!(windows) {
-        format!("cd /d \"{}\"\r\necho READY-IN-BUILD\r\n", build.display())
+        format!("cd /d \"{}\"\r", build.display())
     } else {
-        format!("cd '{}'\necho READY-IN-BUILD\n", build.display())
+        format!("cd '{}'\r", build.display())
     };
     core.write_terminal(&original.id, change.as_bytes())
         .expect("cd");
-    output.wait_for("\r\nREADY-IN-BUILD");
+    // A computed marker, as the other tests use: the echoed command line never contains it, and
+    // it does not depend on how the console paints line breaks (ConPTY may repaint the line after
+    // a cursor move instead of writing "\r\n").
+    let (command, expected) = echo_computed("kc-in-build");
+    core.write_terminal(&original.id, command.as_bytes())
+        .expect("echo");
+    output.wait_for(&expected);
     let copy = core
         .duplicate_terminal(&original.id, size(), None)
         .expect("duplicate in the build folder");
