@@ -100,6 +100,8 @@ function Toast({
         resume();
       }}
     >
+      {/* The tone bar on an inert element, not ::before (see Toast.module.css). */}
+      <span className={styles.toneBar} aria-hidden="true" />
       <span className={styles.icon} aria-hidden="true">
         <Icon />
       </span>
