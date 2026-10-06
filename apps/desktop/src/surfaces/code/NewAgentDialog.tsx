@@ -476,13 +476,18 @@ export function NewAgentDialog({
   // Low quota: suggest (never switch to) a same-provider account with more left. This judges the
   // window that actually limits work (the 5-hour one can block before the weekly does) and names
   // it, since the rows' headline percentage is the weekly one.
-  const lowWindow = account ? limitingLowWindow(usageOf(account.id)) : null;
+  // Model-scoped windows count only for the selected model (an Opus limit never warns a Sonnet launch).
+  const lowWindow = account ? limitingLowWindow(usageOf(account.id), model || null) : null;
   const alternative =
     account && lowWindow
       ? candidates.find((a) => {
           if (a.id === account.id || !sessionOf(a).usable) return false;
           const usage = usageOf(a.id);
-          return usage.status === "fresh" && limitingWindow(usage) !== null && limitingLowWindow(usage) === null;
+          return (
+            usage.status === "fresh" &&
+            limitingWindow(usage, model || null) !== null &&
+            limitingLowWindow(usage, model || null) === null
+          );
         })
       : undefined;
 
@@ -1098,7 +1103,7 @@ function ChipGroup({
 }
 
 /** The fresh window that limits this account when it is under LOW_USAGE_PERCENT, else null. */
-function limitingLowWindow(usage: AccountUsageState): UsageWindow | null {
-  const window = usage.status === "fresh" ? limitingWindow(usage) : null;
+function limitingLowWindow(usage: AccountUsageState, model: string | null): UsageWindow | null {
+  const window = usage.status === "fresh" ? limitingWindow(usage, model) : null;
   return window && window.remainingPercent < LOW_USAGE_PERCENT ? window : null;
 }
