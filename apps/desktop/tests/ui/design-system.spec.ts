@@ -122,16 +122,18 @@ const SCENES: Scene[] = [
   },
 ];
 
+// One test per scene, never one test looping all ten: each scene is a fresh boot plus a full axe
+// scan (contrast on every text node), so ten in one budget ran 1.3-2.2 min on a loaded gate and
+// timed out in whichever scan crossed 120 s, on both gate machines.
 test.describe("Z7-W0 design system accessibility", () => {
   for (const theme of ["dark", "light"] as const) {
-    test(`every restyled surface passes axe in ${theme} theme`, async ({ page }) => {
-      test.setTimeout(120_000);
-      await page.setViewportSize({ width: 1440, height: 900 });
-      for (const scene of SCENES) {
+    for (const scene of SCENES) {
+      test(`${scene.name} passes axe in ${theme} theme`, async ({ page }) => {
+        await page.setViewportSize({ width: 1440, height: 900 });
         await scene.run(page, theme);
         await expectNoSeriousA11yViolations(page, `${scene.name} (${theme})`);
-      }
-    });
+      });
+    }
   }
 });
 
@@ -179,27 +181,26 @@ test.describe("appearance modes", () => {
     await expect(page.locator("html")).toHaveAttribute("data-contrast", "more");
   });
 
+  // Per scene, like the theme checks above.
   for (const theme of ["dark", "light"] as const) {
-    test(`every restyled surface passes axe in ${theme} high contrast`, async ({ page }) => {
-      test.setTimeout(120_000);
-      await page.setViewportSize({ width: 1440, height: 900 });
-      for (const scene of SCENES) {
+    for (const scene of SCENES) {
+      test(`${scene.name} passes axe in ${theme} high contrast`, async ({ page }) => {
+        await page.setViewportSize({ width: 1440, height: 900 });
         await scene.run(page, theme);
         await mode(page, { contrast: "more" });
         await expectNoSeriousA11yViolations(page, `${scene.name} (${theme}, high contrast)`);
-      }
-    });
+      });
+    }
   }
 
-  test("every restyled surface passes axe at the larger text size", async ({ page }) => {
-    test.setTimeout(120_000);
-    await page.setViewportSize({ width: 1440, height: 900 });
-    for (const scene of SCENES) {
+  for (const scene of SCENES) {
+    test(`${scene.name} passes axe at the larger text size`, async ({ page }) => {
+      await page.setViewportSize({ width: 1440, height: 900 });
       await scene.run(page, "dark");
       await mode(page, { textSize: "larger" });
       await expectNoSeriousA11yViolations(page, `${scene.name} (larger text)`);
-    }
-  });
+    });
+  }
 });
 
 const SIZES = [

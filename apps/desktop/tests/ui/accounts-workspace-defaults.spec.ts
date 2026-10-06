@@ -77,10 +77,22 @@ async function rowAction(page: Page, card: ReturnType<Page["getByRole"]>, name: 
   await page.getByRole("menu").getByRole("menuitem", { name: item }).click();
 }
 
+/**
+ * Closes whatever toasts are still up. They also leave on their own timer, so there may be none
+ * left (a slow run outlasts them) or one may go between the count and the click.
+ */
+async function clearToasts(page: Page) {
+  const dismiss = page.getByRole("button", { name: "Dismiss notification" });
+  while ((await dismiss.count()) > 0)
+    await dismiss
+      .first()
+      .click({ timeout: 2_000 })
+      .catch(() => {});
+}
+
 async function expectNoSeriousA11yViolations(page: Page) {
   // Toasts are checked by their own suite; clear them so this checks the account UI.
-  const dismiss = page.getByRole("button", { name: "Dismiss notification" });
-  while ((await dismiss.count()) > 0) await dismiss.first().click();
+  await clearToasts(page);
   await expectA11y(page);
 }
 
@@ -119,7 +131,7 @@ test.describe("switch accounts: accounts view and workspace defaults", () => {
     for (const name of ["Claude Code", "Codex", "Gemini CLI"]) {
       await expect(page.getByRole("button", { name: `Add ${name} account` })).toBeVisible();
     }
-    await page.getByRole("button", { name: "Dismiss notification" }).first().click();
+    await clearToasts(page);
     await page
       .getByRole("region", { name: "Codex", exact: true })
       .evaluate((el) => el.scrollIntoView({ block: "start" }));
