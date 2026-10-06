@@ -664,6 +664,63 @@ fn restart_starts_a_fresh_shell_in_the_same_tab() {
 }
 
 #[test]
+fn restart_refuses_a_saved_start_folder_that_no_longer_exists() {
+    let data = tempfile::tempdir().expect("data");
+    let project = tempfile::tempdir().expect("project");
+    let build = project.path().join("build");
+    std::fs::create_dir(&build).expect("build folder");
+    let core = open(data.path());
+    let workspace = core.open_workspace(project.path()).expect("open");
+    let original = core
+        .create_terminal(&workspace.id, Some(&test_shell(&core)), size(), None)
+        .expect("original");
+    let output = Output::attach(&core, &original.id);
+    let change = if cfg!(windows) {
+        format!("cd /d \"{}\"\r\necho READY-IN-BUILD\r\n", build.display())
+    } else {
+        format!("cd '{}'\necho READY-IN-BUILD\n", build.display())
+    };
+    core.write_terminal(&original.id, change.as_bytes())
+        .expect("cd");
+    output.wait_for("\r\nREADY-IN-BUILD");
+    let copy = core
+        .duplicate_terminal(&original.id, size(), None)
+        .expect("duplicate in the build folder");
+    // End both shells so nothing holds the folder, then delete it.
+    core.stop_terminal(&copy.id).expect("stop copy");
+    core.stop_terminal(&original.id).expect("stop original");
+    assert!(wait_until(Duration::from_secs(10), || {
+        std::fs::remove_dir_all(&build).is_ok() || !build.exists()
+    }));
+    assert!(wait_until(Duration::from_secs(10), || {
+        core.terminal(&copy.id).is_ok_and(|t| t.ended_at.is_some())
+    }));
+
+    let events = collect_events(&core);
+    let error = core
+        .restart_terminal(&copy.id, size())
+        .expect_err("a missing start folder must not fall back to the home folder");
+    assert_eq!(error.code, "terminal_directory_unavailable");
+    assert_eq!(
+        core.terminal(&copy.id).expect("copy").status,
+        TerminalStatus::Exited
+    );
+    assert!(
+        !events
+            .lock()
+            .expect("events")
+            .iter()
+            .any(|e| e.event.type_name() == "shell.started")
+    );
+    // The workspace root still exists, so a tab started there restarts normally.
+    let restarted = core
+        .restart_terminal(&original.id, size())
+        .expect("restart in the existing folder");
+    assert_eq!(restarted.status, TerminalStatus::Running);
+    core.close_terminal(&original.id).expect("close");
+}
+
+#[test]
 fn closing_a_tab_ends_its_shell_and_records_it() {
     let data = tempfile::tempdir().expect("data");
     let projects = tempfile::tempdir().expect("projects");

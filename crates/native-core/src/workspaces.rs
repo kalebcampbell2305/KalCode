@@ -1178,6 +1178,12 @@ impl Core {
         if !workspace.available {
             return Err(folder_missing());
         }
+        // The PTY silently falls back to the home folder for a missing start folder; a command
+        // meant for the saved folder must never run there instead.
+        let start = Path::new(&workspace.root_path);
+        if !start.is_absolute() || !start.is_dir() {
+            return Err(duplicate_directory_unavailable());
+        }
         let shell = self.shell(Some(&terminal.shell_id))?;
         let tx = conn.transaction()?;
         let (session, generation, envelope) =
