@@ -83,7 +83,9 @@ export function CodingAgentContextMenu({
         setBusy(false);
       });
   };
-  const focus = () => intents.focus({ kind: "thread", threadId: local.id, workspaceId: local.workspaceId });
+  // An agent is a real coding terminal: the explicit agent intent always lands on its Code pane and
+  // never falls back to Threads (the thread intent does when its metadata read fails).
+  const focus = () => intents.focus({ kind: "agent", agentId: local.id, workspaceId: local.workspaceId });
   const items: ObjectMenuItem[] = useFavoriteMenuItems(
     { kind: "agent", id: local.id, workspaceId: local.workspaceId },
     local.name,
@@ -119,7 +121,7 @@ export function CodingAgentContextMenu({
         onSelect: () =>
           run("Duplicating agent", async () => {
             const created = await channel.create(input);
-            await intents.focus({ kind: "thread", threadId: created.id, workspaceId: created.workspaceId });
+            await intents.focus({ kind: "agent", agentId: created.id, workspaceId: created.workspaceId });
           }),
       });
   }

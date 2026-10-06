@@ -170,6 +170,28 @@ function AgentList({ sections }: { sections: AgentSections }) {
   // The row leaves at once; it comes back, with a toast, only if the removal fails.
   const kalTidy = useKalTidy();
   const [leaving, setLeaving] = useState<ReadonlySet<string>>(() => new Set());
+  // A cleared agent stays "leaving" only until it is gone from the rail: one restored later
+  // (Unarchive) must come back as a normal, visible row with its X, not stay hidden.
+  const shown = useMemo(
+    () =>
+      new Set(
+        [
+          ...sections.needsYou,
+          ...sections.failed,
+          ...sections.working,
+          ...sections.blocked,
+          ...sections.idle,
+          ...sections.finished,
+        ].map((thread) => thread.id),
+      ),
+    [sections],
+  );
+  useEffect(() => {
+    setLeaving((current) => {
+      if ([...current].every((id) => shown.has(id))) return current;
+      return new Set([...current].filter((id) => shown.has(id)));
+    });
+  }, [shown]);
   const dismiss = useCallback(
     (thread: ThreadSummary) => {
       if (!kalTidy) return;

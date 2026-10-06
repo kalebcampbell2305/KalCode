@@ -3,7 +3,13 @@
  * worktree is ready to merge — from the thread's runtime state plus its worktree's Git facts.
  * Nothing is inferred beyond those facts: "ready to merge" needs every condition observed.
  */
-import { displayStatusOf, type ThreadSummary, type ThreadWorktreeState } from "@kalcode/protocol";
+import {
+  agentStateOf,
+  displayStatusOf,
+  isAgentBusy,
+  type ThreadSummary,
+  type ThreadWorktreeState,
+} from "@kalcode/protocol";
 import { isLive, needsAttention } from "../data/status.ts";
 
 // ---- Merge readiness ----
@@ -18,11 +24,13 @@ export type MergeReadiness = { ready: true; ahead: number; base: string | null }
 export function mergeReadiness(thread: ThreadSummary, worktree: ThreadWorktreeState | undefined): MergeReadiness {
   if (!thread.worktreeId) return { ready: false, reason: "Runs in the workspace folder, not its own worktree" };
   if (!worktree) return { ready: false, reason: "Checking the worktree…" };
-  if (isLive(thread.status)) return { ready: false, reason: "Still working" };
-  if (needsAttention(thread.status)) {
-    return { ready: false, reason: thread.status === "failed" ? "The run failed" : "Waiting for you" };
-  }
-  if (thread.status === "waiting_for_dependency") return { ready: false, reason: "Blocked" };
+  // The shared agent state, so a card never says "Ready to merge" for an agent every other
+  // surface shows as needing the person (a pending approval) or FAILED (idle after a failed turn).
+  const state = agentStateOf(thread);
+  if (isAgentBusy(state)) return { ready: false, reason: "Still working" };
+  if (state === "failed") return { ready: false, reason: "The run failed" };
+  if (state === "needs_you") return { ready: false, reason: "Waiting for you" };
+  if (state === "waiting") return { ready: false, reason: "Blocked" };
   const dirty = worktree.changed + worktree.untracked;
   if (dirty > 0) return { ready: false, reason: `${dirty} uncommitted ${dirty === 1 ? "change" : "changes"}` };
   if (worktree.ahead === null) return { ready: false, reason: "No base branch to compare with" };
