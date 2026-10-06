@@ -89,6 +89,21 @@ pub use kalcode_contracts::agent_state::READY_ACTIVITY;
 /// Activity of an idle thread whose session ended because it was archived.
 pub const ARCHIVED_ACTIVITY: &str = "Archived";
 
+/// Whether persisted truth says KalCode itself interrupted this thread during shutdown or crash
+/// recovery. Interactive-pane identity is owned by the desktop marker authority, which combines
+/// this classification with `runtime_kind == interactive_pty` before exposing startup recovery.
+/// Deliberate user stops use [`STOPPED_ACTIVITY`] and never match.
+pub fn interrupted_by_application_exit(
+    status: ThreadStatus,
+    current_activity: Option<&str>,
+) -> bool {
+    status == ThreadStatus::Interrupted
+        && matches!(
+            current_activity,
+            Some(SHUTDOWN_ACTIVITY | RECOVERED_ACTIVITY)
+        )
+}
+
 type StreamSubscriber = Box<dyn Fn(&AgentEvent) -> bool + Send + Sync>;
 
 /// The current plan's cap on coding agents running at the same time (`None`: no cap). The
@@ -1523,6 +1538,19 @@ impl ThreadRuntime {
         text: Option<&str>,
         review_id: Option<&str>,
     ) -> Result<ThreadSummary> {
+        self.resume_reviewed_with_options(thread_id, text, review_id, true)
+    }
+
+    /// Resumes with an explicit queued-input policy. Existing callers allow pending input, which
+    /// preserves the owner-invoked Resume behavior. Automatic and generic recovery pass `false`
+    /// so the durable claim refuses before starting or sending a recorded user turn.
+    pub fn resume_reviewed_with_options(
+        &self,
+        thread_id: &str,
+        text: Option<&str>,
+        review_id: Option<&str>,
+        allow_pending_input: bool,
+    ) -> Result<ThreadSummary> {
         validate::thread_id(thread_id)?;
         let text = text
             .filter(|t| !t.trim().is_empty())
@@ -1544,7 +1572,8 @@ impl ThreadRuntime {
             }
             None => None,
         };
-        self.inner.resume(thread_id, admitted)?;
+        self.inner
+            .resume(thread_id, admitted, allow_pending_input)?;
         self.inner.summary(thread_id)
     }
 
@@ -1559,7 +1588,7 @@ impl ThreadRuntime {
             let ran_out = row.status == ThreadStatus::Interrupted
                 && row.error_code.as_deref() == Some(error_codes::RESOURCES_UNAVAILABLE);
             if ran_out {
-                self.inner.resume(thread_id, None)?;
+                self.inner.resume(thread_id, None, true)?;
             }
         }
         self.inner.summary(thread_id)
@@ -2024,6 +2053,10 @@ fn not_running() -> KalError {
     )
 }
 
+fn thread_already_running() -> KalError {
+    KalError::validation("thread_already_running", "This thread is already running.")
+}
+
 fn stop_target_changed() -> KalError {
     KalError::validation(
         "thread_stop_target_changed",
@@ -2388,6 +2421,8 @@ impl Inner {
                 .map(|(code, message)| ThreadError { code, message }),
             archived_at: row.archived_at,
             resumable,
+            restart_recoverable: Some(false),
+            resume_has_pending_input: row.resume_has_pending_input,
             permission_profile_id: row.permission_profile_id,
             runtime_kind: None,
             terminal_id: None,
@@ -2547,7 +2582,8 @@ impl Inner {
     ) -> Result<()> {
         let live = self.live_thread(row);
         let mut state = live.lock();
-        let current_workspace = self.row(&row.id)?.workspace_id;
+        let current = self.row(&row.id)?;
+        let current_workspace = current.workspace_id.clone();
         if live.ctx.workspace_id != current_workspace {
             let mut entries = self
                 .live
@@ -2578,11 +2614,14 @@ impl Inner {
         if current_workspace != row.workspace_id {
             return Err(thread_workspace_changed());
         }
+        // The durable `starting` claim and this live-thread authority together form the launch
+        // boundary. A stop can win after a resume transaction but before this lock is acquired;
+        // never resurrect that deliberately stopped thread by launching from the stale row.
+        if current.status != ThreadStatus::Starting {
+            return Err(thread_already_running());
+        }
         if state.session.is_some() || state.waiting.is_some() {
-            return Err(KalError::validation(
-                "thread_already_running",
-                "This thread is already running.",
-            ));
+            return Err(thread_already_running());
         }
         // Revalidate the opaque proof at the last in-process boundary before a provider starts.
         // This also prevents a reviewed prompt from being swapped after validation.
@@ -4063,7 +4102,12 @@ impl Inner {
         )
     }
 
-    fn resume(&self, thread_id: &str, text: Option<AdmittedPrompt>) -> Result<()> {
+    fn resume(
+        &self,
+        thread_id: &str,
+        text: Option<AdmittedPrompt>,
+        allow_pending_input: bool,
+    ) -> Result<()> {
         let row = self.row(thread_id)?;
         if row.archived_at.is_some() {
             return Err(archived());
@@ -4075,10 +4119,7 @@ impl Inner {
             }
             if state.session.is_some() {
                 if row.status != ThreadStatus::Paused {
-                    return Err(KalError::validation(
-                        "thread_already_running",
-                        "This thread is already running.",
-                    ));
+                    return Err(thread_already_running());
                 }
                 if let Some(text) = text {
                     self.prompt_gate.verify(
@@ -4138,6 +4179,15 @@ impl Inner {
             if current.workspace_id != row.workspace_id {
                 return Err(thread_workspace_changed());
             }
+            // Claim this exact durable snapshot once. Concurrent Resume calls can both pass
+            // provider/workspace preflight, but only one may change the original state to
+            // `starting`; a stop or any other transition wins instead of being overwritten.
+            if current.status != row.status || current.current_activity != row.current_activity {
+                return Err(thread_already_running());
+            }
+            if current.archived_at.is_some() {
+                return Err(archived());
+            }
             if let Some(account_id) = &current.provider_account_id
                 && store::account(tx, account_id)?.is_some_and(|account| account.archived)
             {
@@ -4150,6 +4200,11 @@ impl Inner {
                 && admitted.target.provider_account_id != current.provider_account_id
             {
                 return Err(thread_account_changed());
+            }
+            // Summary truth is advisory; this check shares the durable claim transaction so a
+            // queued turn created after the UI read cannot be sent by automatic recovery.
+            if !allow_pending_input && store::has_undelivered(tx, thread_id)? {
+                return Err(thread_resume_has_pending_input());
             }
             store::set_cwd(tx, thread_id, &cwd, &workspace.name)?;
             // New text supersedes a message that never reached the provider.
@@ -4476,6 +4531,13 @@ fn waiting_for_resources() -> KalError {
     )
 }
 
+fn thread_resume_has_pending_input() -> KalError {
+    KalError::validation(
+        "thread_resume_has_pending_input",
+        "This session has a queued task that was not sent. Choose Resume queued task to send it.",
+    )
+}
+
 fn thread_account_changed() -> KalError {
     KalError::validation(
         "thread_account_changed",
@@ -4623,6 +4685,25 @@ mod tests {
             assert!(!provider_settable(status), "{status:?}");
         }
         assert!(provider_settable(ThreadStatus::Thinking));
+    }
+
+    #[test]
+    fn application_exit_interruption_is_classified_from_canonical_truth() {
+        for activity in [SHUTDOWN_ACTIVITY, RECOVERED_ACTIVITY] {
+            assert!(interrupted_by_application_exit(
+                ThreadStatus::Interrupted,
+                Some(activity)
+            ));
+        }
+        for (status, activity) in [
+            (ThreadStatus::Interrupted, Some(STOPPED_ACTIVITY)),
+            (ThreadStatus::Interrupted, Some(INTERRUPTED_ACTIVITY)),
+            (ThreadStatus::Interrupted, None),
+            (ThreadStatus::Failed, Some(SHUTDOWN_ACTIVITY)),
+            (ThreadStatus::Completed, Some(RECOVERED_ACTIVITY)),
+        ] {
+            assert!(!interrupted_by_application_exit(status, activity));
+        }
     }
 
     #[test]

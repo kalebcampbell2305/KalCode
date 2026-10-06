@@ -1208,6 +1208,120 @@ fn resume_reattaches_the_provider_session() {
 }
 
 #[test]
+fn concurrent_resume_claims_one_durable_launch_and_never_reverts_to_starting() {
+    let h = Harness::new();
+    let id = started(&h, "x");
+    h.runtime.stop(&id).expect("stop");
+
+    // A new runtime has the persisted thread but no process-local LiveThread authority yet,
+    // exactly as after reopening KalCode. Hold one caller after its initial no-live check while
+    // the other completes a resume; the delayed caller must lose the durable compare-and-set.
+    let core = h.core.clone();
+    let registry = h.registry.clone();
+    let workspaces = h.workspaces.clone();
+    let gate = h.gate.clone();
+    let provider = h.provider.clone();
+    drop(h.runtime);
+    let runtime = Arc::new(
+        ThreadRuntime::new(core, registry, workspaces.clone(), gate).expect("restart runtime"),
+    );
+    let sessions_before = provider.session_count();
+
+    let (entered_tx, entered_rx) = sync_channel(1);
+    let (release_tx, release_rx) = sync_channel(1);
+    workspaces.on_next_resolve(move || {
+        entered_tx.send(()).expect("announce delayed resume");
+        release_rx.recv().expect("release delayed resume");
+    });
+    let delayed = {
+        let runtime = runtime.clone();
+        let id = id.clone();
+        std::thread::spawn(move || runtime.resume(&id, Some("delayed")))
+    };
+    entered_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("delayed resume reached workspace preflight");
+
+    let winner = runtime.resume(&id, Some("winner")).expect("winning resume");
+    assert_eq!(winner.status, ThreadStatus::Active);
+    release_tx.send(()).expect("release delayed resume");
+    let loser = delayed.join().expect("delayed resume task");
+    assert_code(loser, "thread_already_running");
+
+    assert_eq!(
+        provider.session_count(),
+        sessions_before + 1,
+        "only one provider session may be started"
+    );
+    assert_eq!(
+        runtime.get(&id).expect("final truth").status,
+        ThreadStatus::Active
+    );
+}
+
+#[test]
+fn stop_waits_for_a_resuming_launch_and_leaves_it_interrupted() {
+    let h = Harness::new();
+    let id = started(&h, "x");
+    h.runtime.stop(&id).expect("stop");
+
+    let core = h.core.clone();
+    let registry = h.registry.clone();
+    let workspaces = h.workspaces.clone();
+    let gate = h.gate.clone();
+    let provider = h.provider.clone();
+    drop(h.runtime);
+    let runtime = Arc::new(ThreadRuntime::new(core, registry, workspaces, gate).expect("restart"));
+
+    let (entered_tx, entered_rx) = sync_channel(1);
+    let (release_tx, release_rx) = sync_channel(1);
+    let first = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    provider.set_start_observer({
+        let first = first.clone();
+        let release_rx = Mutex::new(release_rx);
+        move || {
+            if first.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                entered_tx.send(()).expect("announce blocked resume");
+                release_rx.lock().unwrap().recv().expect("release resume");
+            }
+        }
+    });
+
+    let resuming = {
+        let runtime = runtime.clone();
+        let id = id.clone();
+        std::thread::spawn(move || runtime.resume(&id, None))
+    };
+    entered_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("resume reached provider start");
+    let (stopped_tx, stopped_rx) = sync_channel(1);
+    let stopping = {
+        let runtime = runtime.clone();
+        let id = id.clone();
+        std::thread::spawn(move || stopped_tx.send(runtime.stop(&id)).expect("return stop"))
+    };
+    assert!(
+        stopped_rx.recv_timeout(Duration::from_millis(75)).is_err(),
+        "stop must serialize with the canonical launch authority"
+    );
+
+    release_tx.send(()).expect("release provider start");
+    resuming
+        .join()
+        .expect("resume task")
+        .expect("resume completed before serialized stop");
+    let stopped = stopped_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("stop completed")
+        .expect("stop");
+    stopping.join().expect("stop task");
+    assert_eq!(stopped.status, ThreadStatus::Interrupted);
+    assert_eq!(stopped.current_activity.as_deref(), Some(STOPPED_ACTIVITY));
+    assert_eq!(runtime.get(&id).expect("final truth"), stopped);
+}
+
+#[test]
 fn resume_without_provider_support_starts_fresh_and_says_so() {
     let h = Harness::new();
     let provider = FakeProvider::configured("forgetful", "Forgetful", false, true);

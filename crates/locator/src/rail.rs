@@ -453,6 +453,7 @@ pub fn entry_for(
                         id: t.id.clone(),
                         name: t.name.clone(),
                         status: t.status,
+                        resumable: Some(t.resumable),
                         last_activity_at: t.last_activity_at.clone(),
                         pending_approvals: t.pending_approvals,
                     })

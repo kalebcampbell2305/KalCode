@@ -136,7 +136,7 @@ it.each(["terminal", "browser", "widget", "agent"] as const)(
     );
     await waitFor(() => expect(view.getByLabelText("one", { selector: "input" })).toBeTruthy());
     const original = view.getByLabelText("one", { selector: "input" });
-    expect(attached).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(attached).toHaveBeenCalledTimes(2));
     menuAvailable = false;
     act(() => controller.activate("left", 1));
     menuAvailable = true;

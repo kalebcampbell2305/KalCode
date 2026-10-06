@@ -27,12 +27,12 @@ it("Cancel keeps active work and its pane intact", async () => {
   expect(f.closed).not.toHaveBeenCalled();
 });
 
-it("only Keep Running hides active work without stopping it", async () => {
+it("does not offer a close path that leaves active work running", async () => {
   const f = setup();
   await act(async () => f.result.current.request(f.items, f.closed));
-  act(() => f.result.current.keepRunning());
+  expect(f.result.current).not.toHaveProperty("keepRunning");
   expect(f.stop).not.toHaveBeenCalled();
-  expect(f.closed).toHaveBeenCalledOnce();
+  expect(f.closed).not.toHaveBeenCalled();
 });
 
 it("retains the pane and reports stop failure in the same dialog", async () => {

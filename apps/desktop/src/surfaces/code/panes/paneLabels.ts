@@ -41,7 +41,8 @@ export interface PaneStatusView {
   display: string;
 }
 
-type AgentFacts = Pick<ThreadSummary, "status" | "currentActivity" | "pendingApprovals">;
+type AgentFacts = Pick<ThreadSummary, "status" | "currentActivity" | "pendingApprovals"> &
+  Partial<Pick<ThreadSummary, "resumable">>;
 
 /**
  * The agent's state, through the one shared agent-state model (packages/protocol): the same words
@@ -54,7 +55,9 @@ export function paneStatus(agent: AgentFacts): PaneStatusView {
     agent.status === "waiting_for_dependency"
       ? "waiting on another task"
       : agent.status === "interrupted"
-        ? "resumable"
+        ? agent.resumable
+          ? "resumable"
+          : "historical"
         : agent.status === "paused"
           ? "paused"
           : agent.status === "offline"
@@ -170,10 +173,12 @@ export function endedSummary(
   providerName: string,
   exitCode: number | null,
   errorMessage: string | null,
+  resumable = true,
 ): string {
   // Short: the bar shares a narrow pane with Resume, and the tab already names the provider.
   if (status === "failed") return errorMessage || `${providerName} stopped with an error`;
-  if (status === "interrupted") return "Stopped · resume to pick up where it left off";
+  if (status === "interrupted")
+    return resumable ? "Stopped · resume to pick up where it left off" : "Ended · saved in history";
   if (status === "offline") return `${providerName} is offline`;
   return exitCode !== null && exitCode !== 0 ? `Exited with code ${exitCode}` : "Finished";
 }

@@ -8,6 +8,7 @@ import { AccountClient } from "../../ipc/account.ts";
 import { KalCodeClient } from "../../ipc/client.ts";
 import { createMemoryTransport } from "../../ipc/memoryTransport.ts";
 import type { CommandName } from "../../ipc/transport.ts";
+import { DRAFT_STORAGE_KEY } from "../../runtime/drafts.ts";
 import { RuntimeProvider } from "../../runtime/RuntimeProvider.tsx";
 import nativeStableSurfaces from "../../shell/fixtures/stable-native-surfaces.json";
 import { Shell } from "../../shell/Shell.tsx";
@@ -354,6 +355,39 @@ describe("New thread account defaults (Stable)", () => {
     expect(await h.client.listProviderAccountBindings({ kind: "workspace" })).toEqual([
       { providerId: "claude-code", kind: "workspace", scopeId: h.beta.id, accountId: CLAUDE_PERSONAL },
     ]);
+  });
+
+  it("clears a submitted draft before a slow remembered-account write finishes", async () => {
+    const h = await mountStable();
+    const form = await openNewThread(h.user);
+    await waitFor(() => expect(workspace(form)).toHaveValue(h.beta.id));
+    await h.user.selectOptions(account(form), h.claudeWork);
+    await h.user.click(remember(form));
+    const submitted = "Already submitted before remembering this account";
+    await h.user.type(form.getByRole("textbox", { name: "Task" }), submitted);
+    const savedDrafts = () =>
+      Object.keys(localStorage)
+        .filter((key) => key.startsWith(DRAFT_STORAGE_KEY))
+        .map((key) => localStorage.getItem(key))
+        .join("");
+    expect(savedDrafts()).toContain(submitted);
+    let finishBinding!: () => void;
+    intercept = (command, args) =>
+      command === "provider_account_bind"
+        ? new Promise((resolve) => {
+            finishBinding = () => void h.raw(command, args).then(resolve);
+          })
+        : null;
+    await h.user.click(form.getByRole("button", { name: "Start thread" }));
+    await waitFor(() => expect(h.calls.some((call) => call.command === "provider_account_bind")).toBe(true));
+    try {
+      // A restart here must not recover text whose thread has already started.
+      expect(savedDrafts()).not.toContain(submitted);
+      expect(form.getByRole("textbox", { name: "Task" })).toHaveValue("");
+    } finally {
+      await act(async () => finishBinding());
+    }
+    await screen.findByRole("region", { name: "Thread" });
   });
 
   it("remembers the workspace account only after the thread was created and started (N5)", async () => {

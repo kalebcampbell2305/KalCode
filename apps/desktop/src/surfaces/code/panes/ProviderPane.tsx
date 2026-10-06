@@ -81,13 +81,15 @@ export interface ProviderPaneProps {
   /** Opens the governed agent-to-agent handoff flow for this coding terminal. */
   onHandOff?: () => void;
   onContinue?: PaneAccountPickerProps["onContinue"];
+  /** Explicit fresh replacement when the provider cannot recover its conversation. */
+  onStartFresh?: (threadId: string) => Promise<void>;
 }
 
 /**
  * One provider pane: the provider's real TUI in a terminal view, under one compact KalCode
  * header (Z7-15): "name · Account · model · effort · usage" and the agent's status. The canvas
- * tab strip already carries the provider mark, so the header never repeats it. Closing or hiding
- * the pane never stops the provider; only Stop does (Z7-14).
+ * tab strip already carries the provider mark, so the header never repeats it. Hiding preserves
+ * the provider; closing goes through the canvas owned-session stop.
  */
 export const ProviderPane = memo(function ProviderPane({
   thread,
@@ -104,6 +106,7 @@ export const ProviderPane = memo(function ProviderPane({
   onSplit,
   onHandOff,
   onContinue,
+  onStartFresh,
   throttled = false,
 }: ProviderPaneProps) {
   const { client } = useRuntime();
@@ -117,6 +120,7 @@ export const ProviderPane = memo(function ProviderPane({
   const [stopError, setStopError] = useState<string | null>(null);
   const [resuming, setResuming] = useState(false);
   const [resumeError, setResumeError] = useState<string | null>(null);
+  const [startingFresh, setStartingFresh] = useState(false);
   const [startingAnyway, setStartingAnyway] = useState(false);
   const kalTidy = useKalTidy();
   const [overlayDismissed, setOverlayDismissed] = useState<string | null>(null);
@@ -184,6 +188,18 @@ export const ProviderPane = memo(function ProviderPane({
       setResuming(false);
     }
   };
+  const fresh = async () => {
+    if (!onStartFresh || startingFresh) return;
+    setStartingFresh(true);
+    setResumeError(null);
+    try {
+      await onStartFresh(thread.id);
+    } catch (error) {
+      setResumeError(toKalCodeError(error).message);
+    } finally {
+      setStartingFresh(false);
+    }
+  };
 
   const startAnyway = async () => {
     setStartingAnyway(true);
@@ -235,7 +251,7 @@ export const ProviderPane = memo(function ProviderPane({
           setConfirmStop(true);
         }}
         onInfo={() => setShowInfo((v) => !v)}
-        onResume={resumable ? () => void resume() : undefined}
+        onResume={resumable && thread.resumable ? () => void resume() : undefined}
         canStop={running || !resumable}
         onMaximize={onMaximize}
         onSplit={onSplit}
@@ -262,7 +278,7 @@ export const ProviderPane = memo(function ProviderPane({
         >
           <span className={styles.confirmCopy}>
             <span id={confirmTextId} className={styles.confirmText}>
-              Stop {identity.name} in this pane? Its process ends; the conversation can be resumed later.
+              Stop {identity.name} in this pane? Its process ends; the saved task stays in history.
             </span>
             {stopError ? (
               <span className={styles.confirmError} role="alert">
@@ -375,20 +391,45 @@ export const ProviderPane = memo(function ProviderPane({
             <span
               className={styles.endedText}
               role="status"
-              title={endedSummary(thread.status, identity.name, info?.exitCode ?? null, thread.error?.message ?? null)}
+              title={endedSummary(
+                thread.status,
+                identity.name,
+                info?.exitCode ?? null,
+                thread.error?.message ?? null,
+                thread.resumable,
+              )}
             >
-              {endedSummary(thread.status, identity.name, info?.exitCode ?? null, thread.error?.message ?? null)}
+              {endedSummary(
+                thread.status,
+                identity.name,
+                info?.exitCode ?? null,
+                thread.error?.message ?? null,
+                thread.resumable,
+              )}
             </span>
             {resumeError ? (
               <span className={styles.endedError} role="alert">
                 Couldn't resume: {resumeError}
               </span>
             ) : null}
+            {!thread.resumable ? (
+              <span className={styles.endedText}>
+                The provider cannot restore this conversation. Start a fresh session in the same project. The saved task
+                stays in history.
+              </span>
+            ) : null}
           </span>
           <span className={styles.endedActions}>
-            <Button size="sm" variant="primary" icon={<Play />} busy={resuming} onClick={() => void resume()}>
-              {resumeError ? "Try again" : "Resume"}
-            </Button>
+            {thread.resumable ? (
+              <Button size="sm" variant="primary" icon={<Play />} busy={resuming} onClick={() => void resume()}>
+                {resumeError ? "Try again" : "Resume"}
+              </Button>
+            ) : null}
+            {onStartFresh && (!thread.resumable || resumeError) ? (
+              <Button size="sm" variant="primary" icon={<Play />} busy={startingFresh} onClick={() => void fresh()}>
+                Start fresh session
+              </Button>
+            ) : null}
             {startAnywayOffered ? (
               <Button
                 size="sm"

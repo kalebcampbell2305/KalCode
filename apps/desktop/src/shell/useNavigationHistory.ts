@@ -5,7 +5,9 @@ import {
   type NavigationEntry,
   type NavigationHistory,
   type NavigationLocation,
+  readNavigationHistory,
   visitLocation,
+  writeNavigationHistory,
 } from "./navigationHistory.ts";
 import { globalShortcut } from "./shortcuts.ts";
 
@@ -17,10 +19,39 @@ export type NavigationRestorer = (
 ) => boolean | undefined | Promise<boolean | undefined>;
 const paint = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
-export function useNavigationHistory(initial: Destination, visible: ReadonlySet<Destination>) {
-  const [state, setState] = useState(() => initialHistory(initial));
+function browserStorage(): Storage | null {
+  try {
+    return globalThis.localStorage ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function loadHistory(
+  initial: Destination,
+  visible: ReadonlySet<Destination>,
+  storageKey: string | undefined,
+): { state: NavigationHistory; previousSessionLocation: NavigationEntry | null } {
+  const storage = storageKey ? browserStorage() : null;
+  const restored = storage && storageKey ? readNavigationHistory(storage, storageKey, visible) : null;
+  const previousSessionLocation = restored?.entries[restored.index] ?? null;
+  return {
+    state: restored ?? initialHistory(initial),
+    previousSessionLocation,
+  };
+}
+
+export function useNavigationHistory(initial: Destination, visible: ReadonlySet<Destination>, storageKey?: string) {
+  const loaded = useRef<ReturnType<typeof loadHistory> | null>(null);
+  if (loaded.current === null) loaded.current = loadHistory(initial, visible, storageKey);
+  const [state, setState] = useState(() => loaded.current?.state ?? initialHistory(initial));
+  const [previousSessionLocation, setPreviousSessionLocation] = useState<NavigationEntry | null>(
+    () => loaded.current?.previousSessionLocation ?? null,
+  );
   const live = useRef(state);
   const [current, setCurrent] = useState(initial);
+  const loadedStorageKey = useRef(storageKey);
+  const skipPersistence = useRef(false);
   const generation = useRef(0);
   const replaying = useRef(false);
   const requestedIndex = useRef<number | null>(null);
@@ -196,6 +227,29 @@ export function useNavigationHistory(initial: Destination, visible: ReadonlySet<
       document.removeEventListener("focusin", capture, true);
     };
   }, [capture]);
+  useEffect(() => {
+    if (storageKey === loadedStorageKey.current) return;
+    generation.current += 1;
+    replaying.current = false;
+    requestedIndex.current = null;
+    focused.current.clear();
+    const next = loadHistory(initial, visible, storageKey);
+    loadedStorageKey.current = storageKey;
+    skipPersistence.current = true;
+    live.current = next.state;
+    setState(next.state);
+    setCurrent(initial);
+    setPreviousSessionLocation(next.previousSessionLocation);
+  }, [initial, storageKey, visible]);
+  useEffect(() => {
+    if (!storageKey || loadedStorageKey.current !== storageKey) return;
+    if (skipPersistence.current) {
+      skipPersistence.current = false;
+      return;
+    }
+    const storage = browserStorage();
+    if (storage) writeNavigationHistory(storage, storageKey, state, visible);
+  }, [state, storageKey, visible]);
   useEffect(
     () => () => {
       generation.current += 1;
@@ -212,11 +266,23 @@ export function useNavigationHistory(initial: Destination, visible: ReadonlySet<
       back,
       forward,
       restore,
+      previousSessionLocation,
       history: state.entries,
       historyIndex: state.index,
       canGoBack: state.index > 0,
       canGoForward: state.index < state.entries.length - 1,
     }),
-    [current, navigate, getIntentRevision, recordLocation, registerRestorer, back, forward, restore, state],
+    [
+      current,
+      navigate,
+      getIntentRevision,
+      recordLocation,
+      registerRestorer,
+      back,
+      forward,
+      restore,
+      previousSessionLocation,
+      state,
+    ],
   );
 }

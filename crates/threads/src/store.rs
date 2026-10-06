@@ -67,6 +67,8 @@ pub struct ThreadRow {
     /// The thread was created with its own worktree (a `git_worktrees` row of any status names
     /// it). Such a thread never runs in the workspace folder.
     pub isolated: bool,
+    /// A valid user message is durably marked for delivery on the next explicit resume.
+    pub resume_has_pending_input: bool,
 }
 
 /// One durable user turn, bounded by the exact event-log sequence numbers that started and
@@ -108,7 +110,13 @@ const THREAD_COLUMNS: &str =
     (SELECT COUNT(*) FROM thread_messages m
        WHERE m.thread_id = t.id AND m.role = 'assistant' AND m.seq > t.last_read_seq),
     (SELECT COUNT(*) FROM thread_files f WHERE f.thread_id = t.id),
-    t.permission_profile_id, t.effort, w.id, w.branch, w.status";
+    t.permission_profile_id, t.effort, w.id, w.branch, w.status,
+    EXISTS(
+      SELECT 1 FROM app_meta a
+      JOIN thread_messages pending
+        ON pending.id = a.value AND pending.thread_id = t.id AND pending.role = 'user'
+      WHERE a.key = 'thread.undelivered_message:' || t.id
+    )";
 
 /// `threads t` with the thread's own Git worktree `w` (`git_worktrees`, purpose `thread`, owned
 /// by the thread): the active one, else the newest. `NULL` columns for a thread without one.
@@ -146,6 +154,7 @@ fn row_to_thread(row: &Row<'_>) -> rusqlite::Result<ThreadRow> {
         worktree_id: None,
         worktree_branch: None,
         isolated: false,
+        resume_has_pending_input: row.get(27)?,
     })
     .and_then(|mut thread| {
         let id: Option<String> = row.get(24)?;
@@ -808,6 +817,21 @@ pub fn clear_undelivered(conn: &Connection, thread_id: &str) -> Result<()> {
         params![undelivered_key(thread_id)],
     )?;
     Ok(())
+}
+
+/// Whether a valid user message is durably marked for delivery on Resume. This query returns
+/// only a boolean; callers that decide whether a resume is safe never read prompt text.
+pub fn has_undelivered(conn: &Connection, thread_id: &str) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(
+           SELECT 1 FROM app_meta a
+           JOIN thread_messages m
+             ON m.id = a.value AND m.thread_id = ?2 AND m.role = 'user'
+           WHERE a.key = ?1
+         )",
+        params![undelivered_key(thread_id), thread_id],
+        |row| row.get(0),
+    )?)
 }
 
 /// The text of the thread's undelivered user message, if any (and if it still exists).

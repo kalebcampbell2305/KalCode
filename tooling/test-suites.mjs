@@ -14,6 +14,56 @@ const GROUPS = new Set(["unit", "e2e"]);
 const RUNNERS = new Set(["vitest", "node", "cargo", "playwright"]);
 const MAX_REPORT_BYTES = 32 * 1024 * 1024;
 const MAX_CAPTURE_BYTES = 32 * 1024 * 1024;
+export const WINDOWS_SESSION_ZERO_PROFILE_ENV = "KALCODE_TEST_WINDOWS_SESSION_0";
+const WINDOWS_SESSION_PROBE_TIMEOUT_MS = 2_000;
+const WINDOWS_SESSION_PROBE_MAX_BYTES = 1_024;
+
+/**
+ * Reads only this runner's Windows session id. A failed or unavailable probe returns false, which
+ * selects the stricter interactive profile and therefore cannot authorize a skip.
+ */
+export function detectWindowsSessionZero({ platform = process.platform, pid = process.pid, spawn = spawnSync } = {}) {
+  if (platform !== "win32" || !Number.isSafeInteger(pid) || pid < 1) return false;
+  try {
+    const child = spawn(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `[Console]::Out.Write((Get-Process -Id ${pid} -ErrorAction Stop).SessionId)`,
+      ],
+      {
+        encoding: "utf8",
+        windowsHide: true,
+        timeout: WINDOWS_SESSION_PROBE_TIMEOUT_MS,
+        maxBuffer: WINDOWS_SESSION_PROBE_MAX_BYTES,
+      },
+    );
+    return !child.error && child.status === 0 && child.signal === null && String(child.stdout).trim() === "0";
+  } catch {
+    return false;
+  }
+}
+
+function withoutProfileOnlyEnvironment(environment) {
+  return Object.fromEntries(
+    Object.entries(environment).filter(([name]) => name.toUpperCase() !== WINDOWS_SESSION_ZERO_PROFILE_ENV),
+  );
+}
+
+function profileEnvironment(suite, platform, environment, sessionZeroProbe) {
+  const selected = { ...environment };
+  if (suite.id !== "desktop-native-e2e" || platform !== "win32") return selected;
+  let sessionZero = false;
+  try {
+    sessionZero = sessionZeroProbe({ platform, pid: process.pid }) === true;
+  } catch {
+    // Unknown session state selects the zero-skip interactive profile.
+  }
+  if (sessionZero) selected[WINDOWS_SESSION_ZERO_PROFILE_ENV] = "1";
+  return selected;
+}
 
 function exactKeys(value, expected, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -496,17 +546,25 @@ export function runSuite(
     platform = process.platform,
     environment = process.env,
     spawn = spawnSync,
+    sessionZeroProbe = detectWindowsSessionZero,
     temporaryParent = tmpdir(),
   } = {},
 ) {
-  const profile = selectProfile(suite, platform, environment);
+  // This marker is runner-owned profile input. An inherited value never selects a weaker profile
+  // and never reaches the test process.
+  const childEnvironment = withoutProfileOnlyEnvironment(environment);
+  const profile = selectProfile(
+    suite,
+    platform,
+    profileEnvironment(suite, platform, childEnvironment, sessionZeroProbe),
+  );
   const temporaryDirectory = mkdtempSync(join(temporaryParent, "kalcode-test-suite-"));
   const reportPath = join(temporaryDirectory, "report.json");
   try {
-    const command = commandForSuite(suite, reportPath, platform, environment);
+    const command = commandForSuite(suite, reportPath, platform, childEnvironment);
     const child = spawn(command.file, command.args, {
       cwd: root,
-      env: { ...environment, ...command.environment, NO_COLOR: "1" },
+      env: { ...childEnvironment, ...command.environment, NO_COLOR: "1" },
       encoding: "utf8",
       windowsHide: true,
       timeout: suite.timeoutMs,
