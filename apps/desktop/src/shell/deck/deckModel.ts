@@ -67,6 +67,20 @@ export function runningAgentCount(sections: AgentSections): number {
 }
 
 /**
+ * Whether the rail opens on its own (until the person pins or collapses it): an agent is doing
+ * work or needs the person. An agent that is only starting doesn't count: a launch passes through
+ * "Starting" for about a second before the agent rests at "Ready", and opening for that blip
+ * squeezed Code, then left an empty full-width rail while it folded back.
+ */
+export function railWantsOpen(sections: AgentSections): boolean {
+  return (
+    sections.needsYou.length > 0 ||
+    sections.blocked.length > 0 ||
+    sections.working.some((thread) => agentStateOf(thread) !== "starting")
+  );
+}
+
+/**
  * Everything waiting on the person: agents that need a reply or approval, plus pending approvals
  * that no such agent already accounts for (each counted once).
  */

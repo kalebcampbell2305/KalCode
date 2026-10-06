@@ -20,7 +20,7 @@ import { useNavigation } from "../navigation.tsx";
 import { beginLiveResize } from "../panes/liveResize.ts";
 import styles from "./AgentRail.module.css";
 import { useDeckUi } from "./DeckUi.tsx";
-import { type AgentSections, agentSections, runningAgentCount, shortElapsed } from "./deckModel.ts";
+import { type AgentSections, agentSections, railWantsOpen, runningAgentCount, shortElapsed } from "./deckModel.ts";
 
 /** Which agents "Just finished" shows: the one part of the rail's grouping that moves with time. */
 function finishedKey(sections: AgentSections): string {
@@ -34,8 +34,9 @@ export function AgentRail() {
   // follows the clock by itself.
   const now = useClock((at) => (state.status === "ready" ? finishedKey(agentSections(state.data, at)) : ""));
   const sections = useMemo(() => (state.status === "ready" ? agentSections(state.data, now) : null), [state, now]);
-  // Until the person pins or collapses it, the rail opens while an agent runs or needs them.
-  const active = sections ? runningAgentCount(sections) > 0 || sections.needsYou.length > 0 : null;
+  // Until the person pins or collapses it, the rail opens while an agent works or needs them
+  // (not for a launch's brief "Starting").
+  const active = sections ? railWantsOpen(sections) : null;
   useEffect(() => {
     if (active !== null) setAgentsActive(active);
   }, [active, setAgentsActive]);
