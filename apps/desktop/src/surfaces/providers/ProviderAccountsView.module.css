@@ -314,6 +314,11 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* The accounts table has room for a readable rail. */
+.cellUsage {
+  --usage-meter-w: 4.5rem;
+}
+
 /* Provider usage: the canonical meter, then the plan as a quiet outlined tag. */
 .usageLine {
   display: flex;

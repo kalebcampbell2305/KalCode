@@ -1,7 +1,7 @@
 import type { ContrastPreference, Density, MotionPreference, TextSize, ThemePreference } from "@kalcode/protocol";
 import { Button, ErrorState, KeyValueList, Panel, SegmentedControl, Skeleton } from "@kalcode/ui/components";
 import { Activity, ClipboardCopy, FolderOpen, Info, KeyRound, Monitor, Moon, Palette, Sun } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import kalcodeMascot362 from "../../assets/brand/kalcode-mascot-362.webp";
 import kalcodeMascot724 from "../../assets/brand/kalcode-mascot-724.webp";
 import { KalVoiceSettings } from "../../kalvoice/KalVoiceSettings.tsx";
@@ -12,6 +12,7 @@ import { useDiagnostics } from "../../runtime/useDiagnostics.ts";
 import { KalCodeTagline, Wordmark } from "../../shell/Brand.tsx";
 import { viewVisible } from "../../shell/navigation.tsx";
 import { Page } from "../../shell/Page.tsx";
+import { focusSection } from "../dashboard/useNow.ts";
 import { DoctorSettings } from "../doctor/DoctorSettings.tsx";
 import { IntegrationSettings } from "../integrations/IntegrationSettings.tsx";
 import { PermissionsSettings } from "../permissions/index.ts";
@@ -37,6 +38,7 @@ export function SettingsPage() {
   return (
     <div onFocusCapture={(event) => recordFocus(event.target)}>
       <Page title="Settings" description="Changes apply immediately and are saved on this device.">
+        <SectionIndex />
         <div id="integrations" data-settings-section>
           <IntegrationSettings />
         </div>
@@ -63,6 +65,43 @@ export function SettingsPage() {
         </div>
       </Page>
     </div>
+  );
+}
+
+/** Every Settings section, in page order (ids of the panels below). */
+const SECTIONS: readonly { id: string; label: string }[] = [
+  { id: "integrations", label: "Integrations" },
+  { id: "kalcode-account", label: "Account" },
+  { id: "appearance", label: "Appearance" },
+  { id: "kalvoice", label: "KalVoice" },
+  { id: "permissions", label: "Permissions" },
+  { id: "updates", label: "Updates" },
+  { id: "diagnostics", label: "Diagnostics" },
+  { id: "about", label: "About" },
+];
+
+/**
+ * A sticky strip of the page's sections: one click (or Enter) scrolls to a section and moves focus
+ * to it, so Settings never means hunting down a long page. Sections this build doesn't render are
+ * left out once the page has mounted.
+ */
+function SectionIndex() {
+  const [present, setPresent] = useState<readonly string[]>(() => SECTIONS.map((s) => s.id));
+  useEffect(() => setPresent(SECTIONS.map((s) => s.id).filter((id) => document.getElementById(id))), []);
+  return (
+    <nav className={styles.index} aria-label="Settings sections">
+      {SECTIONS.filter((s) => present.includes(s.id)).map((section) => (
+        <button
+          key={section.id}
+          type="button"
+          className={styles.indexItem}
+          aria-label={`Jump to ${section.label}`}
+          onClick={() => focusSection(section.id)}
+        >
+          {section.label}
+        </button>
+      ))}
+    </nav>
   );
 }
 

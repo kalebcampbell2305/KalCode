@@ -35,6 +35,34 @@ This applies to Claude Code, Codex and every future agent, for every surface and
 - **Outcomes beside the work.** Every agent can show what changed, what passed/failed, its branch/worktree, and whether it is merged and shipped, from real state only. AGENT DONE, CHANGE VERIFIED, MERGED and SHIPPED TO USERS are different facts; never show one as another, and never guess.
 - **Unified Memory in the flow.** Project memory (see the Unified Memory rule) is visible where people work, inspectable, editable and removable, and only relevant notes reach a task.
 
+## Permanent futuristic space design system (owner directive 2026-10-05)
+
+"KALCODE'S VISUAL IDENTITY IS A FUTURISTIC AI ENGINEERING COMMAND CENTER INSPIRED BY DEEP SPACE.
+
+CODE THE FUTURE SHOULD BE FELT THROUGHOUT THE ENTIRE PRODUCT.
+
+USE DEEP GRAPHITE, SUBTLE STARS, RESTRAINED NEBULA ATMOSPHERE, ELECTRIC-BLUE ENERGY, BEAUTIFUL DEPTH, PREMIUM TYPOGRAPHY, AND PURPOSEFUL MOTION.
+
+SPACE IS THE ATMOSPHERE.
+KALCODE IS THE PRODUCT.
+
+NEVER SACRIFICE READABILITY, SIMPLICITY, RESPONSIVENESS, ACCESSIBILITY, OR PERFORMANCE FOR VISUAL EFFECTS.
+
+EVERY USER-FACING SURFACE SHOULD FEEL BEAUTIFUL, COHESIVE, PREMIUM, AND UNMISTAKABLY KALCODE."
+
+This applies to Claude Code, Codex and every future agent, on every user-facing surface (desktop app, website and interactive demo, installers and marketing where visual). It extends the visual quality rule; it never overrides responsiveness, accessibility or truthful state.
+
+- **Hierarchy:** CONTENT → STATE → INTERACTION → ATMOSPHERE. Never put bright stars, nebula or glow behind terminal text, code, settings, charts or Browser content. Dense work surfaces stay darker and quieter.
+- **One token system.** Everything comes from `packages/ui/src/styles/tokens.css`: graphite surfaces, the Constellation electric blue, status tones, the atmosphere planes (`--atmosphere-stars`, `--atmosphere-stars-far`, `--atmosphere-nebula`), space-level intensities (`--space-{quiet,standard,cinematic}-{stars,nebula}`), illumination (`--glow-active`, `--glow-subtle`, `--glow-waiting`, `--glow-failed`), depth (`--lift-active`, `--shadow-*`), glass (`--glass-bg`, `--glass-border`, `--blur-glass`), the focus trace (`--trace-*`, `--dur-trace`) and the motion roles. No one-off colours, glows or durations in components; `designTokens.test.ts` enforces it. New features inherit the system.
+- **Space intensity levels**, set once by the Shell (`[data-space]`, `shell/spaceLevel.ts`): **quiet** (Settings, Billing, forms, Unified Memory, dense text), **standard** (Code, Operations, Accounts/Providers, Threads, Browser), **cinematic** (Mission Control/Activity, KalVoice, Home, launch and empty states, major transitions).
+- **State colours, consistently:** BLUE = focused/active · GREEN = healthy/working · AMBER = waiting/Needs You · RED = failure/error. Only illuminate what matters; never glow everything.
+- **Focused pane:** a quick electric-blue energy trace that settles into a thin lit edge with a slight depth lift; no flashing. Inactive panes return to neutral graphite.
+- **Motion** communicates focus, location, causality, status and progress, never decoration: 160–260 ms UI transitions, purposeful routing (KalVoice → its target), opening/closing depth. CLICK → IMMEDIATE RESPONSE → BEAUTIFUL TRANSITION; animation never delays an action.
+- **Performance is part of the design.** Atmosphere layers are static CSS (cached SVG/gradients), no high-FPS star fields, particle systems, app-wide re-renders or large blurs in dense areas; idle KalCode does no per-frame atmospheric work. Measure with the perf harness when a change touches always-on chrome.
+- **Accessibility:** reduced motion removes parallax, traces, routing and loops while staying premium; high contrast removes atmosphere and glow; text size, keyboard focus and screen readers keep working.
+- **Original identity.** Learn from the best products' hierarchy, density and polish; never clone them. The website and demo use the same language so kalcoded.com → demo → download → app feels like one universe.
+- **Visual review is required** on the real rendered surface before shipping (see the visual quality rule).
+
 ## Permanent provider account truth and agent launch rule (owner directive 2026-10-04)
 
 **UNKNOWN PROVIDER USAGE NEVER EQUALS 0%. FAILURE TO READ PLAN OR USAGE METADATA MUST NOT BLOCK A VALID PROVIDER CODING SESSION.**
@@ -824,6 +852,26 @@ THE WEBSITE MUST BE BEAUTIFUL, DYNAMIC, FAST, SIMPLE, AND UNMISTAKABLY KALCODE."
 - **The demo is not the Free plan.** It is a temporary sample in the browser; the Free plan is a real account tier from `plans.ts`. Never invent prices, limits or plan features for the website.
 - **Truth:** a demo surface whose `PLAN_FEATURE_GROUPS` entry is `coming_soon` carries a Coming soon tag automatically; flipping the entry to `available` (after production verification) removes it. Sample data is fictional sample data, never real user information.
 - **Fast:** the demo script loads only near the viewport or on a Try control, honours reduced motion, pauses off-screen, and needs no inline styles (strict CSP).
+
+## Permanent community standard (owner directive 2026-10-05)
+
+> "KALCODE COMMUNITY SURFACES SHOULD FOLLOW THE SAME PRODUCT STANDARD AS KALCODE ITSELF: SIMPLE. BEAUTIFUL. PROFESSIONAL. HIGH-SIGNAL. SAFE. EASY TO NAVIGATE. DO NOT CREATE CLUTTER. DO NOT MAKE USERS HUNT. MAKE SUPPORT, FEEDBACK, UPDATES, AND COMMUNITY EASY TO FIND. THE KALCODE DISCORD SHOULD FEEL LIKE THE OFFICIAL COMMUNITY HOME FOR A SERIOUS TECHNOLOGY PRODUCT."
+
+- **Scope:** the Discord, social profiles, launch/community posts, and any future forum or community surface.
+- **The Discord is code.**
+  - It is declared in `tooling/community/discord/server.mjs` and reconciled with `kc-discord.mjs apply`.
+  - Change the declaration and re-apply. Never hand-configure the server, which would drift from the repo.
+- **Small and active over big and empty.** Add a channel only when activity justifies it. Prefer forums for support, bug reports and feature requests. `#announcements` is major news only; every build goes to `#changelog`.
+- **Truthful.**
+  - `#roadmap` is generated from `PLAN_FEATURE_GROUPS`, the same source as the website.
+  - `#changelog` comes from `docs/releases`.
+  - Never present a coming-soon or publicly unavailable feature as available (`PUBLICLY_UNAVAILABLE`), and never promise a date that isn't confirmed.
+- **Brand:** the current mascot and electric blue on graphite. There is no retired branding and no gamer-style clutter.
+- **Safe.**
+  - Never ask members for passwords, API keys, provider tokens or private code. AutoMod blocks secrets for everyone.
+  - Bot tokens and webhook URLs live only in `~/.kalcode/discord/` or the environment, never in the repo, logs or chat.
+  - Plan roles may only ever come from server-side entitlement verification (Discord Linked Roles, see the tool's README), never by hand, and never expose Stripe or customer data.
+- **After each release,** post it: `node tooling/community/discord/kc-discord.mjs changelog <version+build> --post`.
 
 ## Permanent KalCode pricing and entitlements (owner directive 2026-10-04)
 

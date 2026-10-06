@@ -31,6 +31,7 @@ import {
   agentState,
   agentsIn,
   agentsList,
+  attentionItems,
   canNav,
   counts,
   DEV_URL,
@@ -50,6 +51,7 @@ import {
   type Mode,
   modelLabel,
   needsYou,
+  PRIMARY_SURFACES,
   PROVIDER_NAME,
   PROVIDERS,
   type ProviderId,
@@ -218,30 +220,53 @@ function favoritesBar(state: State): string {
 
 function sidebar(state: State): string {
   const c = counts(state);
-  const approvals = agentsList(state).filter((a) => a.approval).length;
-  const items = SURFACES.map((s) => {
-    const badge = s.id === "dashboard" && c.needs > 0 ? `<span class="lk-badge">${c.needs}</span>` : "";
-    return `<li><button type="button" class="lk-nav" data-do="go:${s.id}" data-tour="nav-${s.id}" aria-current="${state.surface === s.id ? "page" : "false"}"${hint(s.hint)}>${icon(s.icon as LiveIcon)}<span class="lk-nav__label">${s.label}</span>${badge}</button></li>`;
-  }).join("");
+  const needs = attentionItems(state).length;
+  const items = SURFACES.filter((s) => PRIMARY_SURFACES.includes(s.id))
+    .map(
+      (s) =>
+        `<li><button type="button" class="lk-nav" data-do="go:${s.id}" data-tour="nav-${s.id}" aria-current="${state.surface === s.id ? "page" : "false"}"${hint(s.hint)}>${icon(s.icon as LiveIcon)}<span class="lk-nav__label">${s.label}</span></button></li>`,
+    )
+    .join("");
+  const busy = c.working + c.needs;
+  const more = SURFACES.some((s) => !PRIMARY_SURFACES.includes(s.id) && state.surface === s.id);
   return `<nav class="lk-side" aria-label="KalCode">
-  <ul role="list">${items}<li><button type="button" class="lk-nav" data-do="browser"${hint("Live Browser: your app beside your agents.")}>${icon("globe")}<span class="lk-nav__label">Browser</span></button></li></ul>
+  <ul role="list">${items}</ul>
+  <div class="lk-side__projects"><p class="lk-label">Projects</p><ul role="list"><li><button type="button" class="lk-project" data-do="go:code" aria-current="${state.surface === "code" ? "true" : "false"}">${icon("folder")}<span class="lk-nav__label">${esc(WORKSPACE.name)}</span>${busy ? `<span class="lk-project__live" data-tone="${c.needs ? "waiting" : "working"}" aria-label="${busy} active"><span class="lk-dot"></span>${busy}</span>` : ""}</button></li></ul></div>
   <ul role="list" class="lk-side__foot">
-    <li><button type="button" class="lk-nav" data-do="needs"${hint("Approvals your agents are waiting for.")}>${icon("approvals")}<span class="lk-nav__label">Approvals</span>${approvals ? `<span class="lk-badge">${approvals}</span>` : ""}</button></li>
-    <li class="lk-anchor"><button type="button" class="lk-nav" data-do="menu:notifications" aria-expanded="${state.menu === "notifications"}">${icon("bell")}<span class="lk-nav__label">Notifications</span>${state.unread ? `<span class="lk-badge">${state.unread}</span>` : ""}</button>${state.menu === "notifications" ? notifications(state) : ""}</li>
+    <li class="lk-anchor"><button type="button" class="lk-nav" data-do="menu:notifications" data-urgent="${needs > 0}" aria-expanded="${state.menu === "notifications"}" aria-label="${needs ? `Needs you, ${needs} waiting` : "Needs you, nothing waiting"}"${hint("Questions, approvals and failures: only what needs you.")}>${icon("bell")}<span class="lk-nav__label">Needs you</span>${needs ? `<span class="lk-badge">${needs}</span>` : ""}</button>${state.menu === "notifications" ? notifications(state) : ""}</li>
+    <li class="lk-anchor"><button type="button" class="lk-nav" data-do="menu:more" aria-expanded="${state.menu === "more"}" aria-current="${more ? "page" : "false"}"${hint("Browser, Operations, KalVoice, Threads, Unified Memory and Providers.")}>${icon("layout")}<span class="lk-nav__label">More</span></button>${state.menu === "more" ? moreMenu(state) : ""}</li>
     <li><button type="button" class="lk-nav" data-do="go:settings" aria-current="${state.surface === "settings" ? "page" : "false"}">${icon("settings")}<span class="lk-nav__label">Settings</span></button></li>
     <li class="lk-me"><span class="lk-me__avatar" aria-hidden="true">G</span><span class="lk-nav__label"><strong>Guest</strong><small>Demo workspace</small></span></li>
   </ul>
 </nav>`;
 }
 
+/** More: every other place, one click away (as in the app's sidebar footer). */
+function moreMenu(state: State): string {
+  const rows = SURFACES.filter((s) => !PRIMARY_SURFACES.includes(s.id))
+    .map(
+      (s) =>
+        `<button type="button" role="menuitem" class="lk-menu__item" data-do="go:${s.id}" data-tour="nav-${s.id}" aria-current="${state.surface === s.id ? "page" : "false"}">${icon(s.icon as LiveIcon)}<span>${s.label}</span></button>`,
+    )
+    .join("");
+  return `<div class="lk-menu lk-menu--more" role="menu" aria-label="More places"><button type="button" role="menuitem" class="lk-menu__item" data-do="browser">${icon("globe")}<span>Browser</span></button>${rows}</div>`;
+}
+
+/** Needs You: what genuinely needs the visitor (what, why, next), then the notification history. */
 function notifications(state: State): string {
+  const items = attentionItems(state)
+    .map(
+      (i) =>
+        `<li class="lk-attn" data-tone="${i.tone}"><span class="lk-attn__glyph" aria-hidden="true">${icon(i.tone === "failed" ? "alert" : "approvals")}</span><div><small>${esc(i.source)}</small><strong>${esc(i.what)}</strong><p>${esc(i.why)}</p><button type="button" class="lk-btn lk-btn--primary" data-do="agent:${i.agent}">${i.action}</button></div></li>`,
+    )
+    .join("");
   const rows = state.notes
     .map(
       (n) =>
         `<li data-tone="${n.tone === "done" ? "done" : n.tone === "waiting" ? "waiting" : "muted"}"><span class="lk-dot"></span><span>${esc(n.text)}</span>${n.agent && state.agents[n.agent] ? `<button type="button" class="lk-btn lk-btn--ghost" data-do="agent:${n.agent}">Open</button>` : ""}</li>`,
     )
     .join("");
-  return `<div class="lk-menu lk-menu--notes" role="dialog" aria-label="Notifications"><p class="lk-label">Notifications</p><ul role="list" class="lk-notes">${rows || `<li class="lk-empty">You're all caught up.</li>`}</ul></div>`;
+  return `<div class="lk-menu lk-menu--notes" role="dialog" aria-label="Needs you"><p class="lk-label">Needs you</p>${items ? `<ul role="list" class="lk-attns">${items}</ul>` : `<p class="lk-empty lk-attns__clear">${icon("check")}Nothing needs you.</p>`}<p class="lk-label">History</p><ul role="list" class="lk-notes">${rows || `<li class="lk-empty">You're all caught up.</li>`}</ul></div>`;
 }
 
 function tabBar(state: State): string {
@@ -512,6 +537,18 @@ function fleetCard(state: State, a: Agent): string {
 </article>`;
 }
 
+/** Needs You on Activity: one line that says what is waiting and opens the inbox. */
+function needsStrip(state: State): string {
+  const items = attentionItems(state);
+  const blocked = items.length;
+  return `<section class="lk-needs" aria-labelledby="lk-needs-title" data-urgent="${blocked > 0}">
+    <span class="lk-needs__glyph" aria-hidden="true">${icon(blocked ? "bell" : "check")}</span>
+    <h4 id="lk-needs-title" class="lk-needs__title">Needs you</h4>
+    <p class="lk-needs__count">${blocked ? `${blocked} blocked on you` : "Nothing needs you"}</p>
+    ${blocked ? `<button type="button" class="lk-btn lk-btn--primary" data-do="${state.mobile ? "needs" : "menu:notifications"}">Review ${blocked}</button>` : ""}
+  </section>`;
+}
+
 function dashboard(state: State): string {
   const c = counts(state);
   const n: Record<(typeof AGENT_FILTERS)[number], number> = {
@@ -550,8 +587,9 @@ function dashboard(state: State): string {
     .filter(Boolean)
     .join(" · ");
   return `<div class="lk-page lk-scroll" data-scroll-key="dash">
-  <header class="lk-page__head"><div><h3 class="lk-h1">Dashboard</h3><p>${summary}</p></div>
+  <header class="lk-page__head"><div><h3 class="lk-h1">Activity</h3><p>${summary}</p></div>
     <div class="lk-trend" aria-hidden="true"><small>Last hour</small><span class="lk-trend__bars">${[1, 1, 2, 1, 3, 2, 4, 3, 5, 6].map((h) => `<i data-h="${h}"></i>`).join("")}</span><strong>${12 + state.tick} events</strong></div></header>
+  ${needsStrip(state)}
   <section class="lk-board" aria-label="Agent Fleet" data-tour="fleet">
     <div class="lk-board__top"><p class="lk-board__count"><span class="lk-eyebrow">Agent Fleet ${soon("agent-fleet")}</span><strong>${c.agents}</strong> agents</p><span class="lk-segbar" aria-hidden="true">${seg(c.needs, "waiting")}${seg(c.working, "working")}${seg(c.waiting, "muted")}${seg(c.done, "done")}${seg(c.idle, "muted")}${seg(c.failed, "failed")}</span>
       <div class="lk-filters" role="group" aria-label="Filter agents">${AGENT_FILTERS.map((f) => `<button type="button" class="lk-filter" data-do="fleet:${f}" data-tone="${tones[f]}" aria-pressed="${state.fleet === f}">${f === "all" ? "" : '<span class="lk-dot"></span>'}${AGENT_FILTER_LABEL[f]} <strong>${n[f]}</strong></button>`).join("")}</div>
@@ -744,7 +782,7 @@ function kalvoice(state: State): string {
   ${state.voice.reply ? `<p class="lk-kvreply" role="status">${icon("kalvoice")}<span><small>You said “${esc(state.voice.heard)}”</small>${esc(state.voice.reply)}</span></p>` : ""}
   <div class="lk-kvcards">
     <div class="lk-kvcard"><p class="lk-label">Push to talk</p><span class="lk-pill" data-tone="working">Ready</span><p>On-device speech model, on this computer.</p><small>Hold <kbd>F8</kbd> to talk to KalVoice</small></div>
-    <div class="lk-kvcard"><p class="lk-label">Commands</p><span class="lk-pill" data-tone="working">Available</span><p>Say “Open Dashboard” or “Open four Codex terminals”: KalCode acts the moment you let go.</p><small>Dictation is never counted</small></div>
+    <div class="lk-kvcard"><p class="lk-label">Commands</p><span class="lk-pill" data-tone="working">Available</span><p>Say “Open Activity” or “Open four Codex terminals”: KalCode acts the moment you let go.</p><small>Dictation is never counted</small></div>
     <div class="lk-kvcard"><p class="lk-label">This month</p><p class="lk-kvcount"><strong>${formatKalVoiceAllowance(free.limits)}</strong> KalVoice Requests on ${free.name}</p><small>${PLANS.map((p) => `${p.name} ${formatKalVoiceAllowance(p.limits)}`).join(" · ")}</small></div>
   </div>
 </div>`;

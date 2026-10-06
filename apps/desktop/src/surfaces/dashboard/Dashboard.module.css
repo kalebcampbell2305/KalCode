@@ -138,30 +138,49 @@
   overscroll-behavior: contain;
 }
 
-/* Needs You on Activity: one quiet line, lit when something blocks on the person. */
+/* Needs You on Activity: the bridge's alert line. Glass over the atmosphere, quiet when clear;
+   when something blocks on the person, an amber energy edge and a static amber glow. */
 .needsYou {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--space-3);
   margin-bottom: var(--space-5);
   padding: var(--space-2-5) var(--space-3) var(--space-2-5) var(--space-3-5);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius-lg);
-  background: var(--panel-sheen), var(--color-surface-2);
-  box-shadow: var(--shadow-sm);
+  background: var(--panel-sheen), var(--glass-bg);
+  box-shadow: var(--shadow-panel);
+  backdrop-filter: blur(var(--blur-glass));
+  overflow: hidden;
+  transition:
+    border-color var(--dur-base) var(--ease-out),
+    box-shadow var(--dur-base) var(--ease-out);
 }
 
 .needsYou[data-urgent] {
   border-color: var(--status-waiting-line);
-  box-shadow:
-    var(--shadow-sm),
-    0 0 18px var(--status-waiting-soft);
+  box-shadow: var(--shadow-panel), var(--glow-waiting);
+}
+
+/* The amber energy edge on the left of an urgent line. */
+.needsYou[data-urgent]::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: linear-gradient(180deg, transparent, var(--status-waiting), transparent);
+  pointer-events: none;
 }
 
 .needsYou[data-empty] {
   border-style: dashed;
+  border-color: var(--color-border);
   background: var(--color-surface-1);
   box-shadow: none;
+  backdrop-filter: none;
 }
 
 .needsYouGlyph {

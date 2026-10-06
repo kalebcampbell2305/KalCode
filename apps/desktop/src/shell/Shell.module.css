@@ -6,12 +6,49 @@
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
   height: 100%;
-  /* The deep-space atmosphere: a faint star field over blue washes, visible in the gutters
-     between opaque panels (tokens.css turns it off in high contrast). */
+  /* The deep-space atmosphere: blue washes on graphite. The star and nebula planes are two static
+     layers below whose strength follows the surface's space level ([data-space]); panels are
+     opaque on top, so the atmosphere only shows in open space (tokens.css turns it off in high
+     contrast and keeps light theme to the wash). No animation loop: a level change is one fade. */
+  position: relative;
+  isolation: isolate;
+  background: var(--atmosphere-glow), var(--color-bg);
+  --space-stars: var(--space-standard-stars);
+  --space-nebula: var(--space-standard-nebula);
+}
+
+.frame[data-space="quiet"] {
+  --space-stars: var(--space-quiet-stars);
+  --space-nebula: var(--space-quiet-nebula);
+}
+
+.frame[data-space="cinematic"] {
+  --space-stars: var(--space-cinematic-stars);
+  --space-nebula: var(--space-cinematic-nebula);
+}
+
+.frame::before,
+.frame::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  transition: opacity var(--dur-slow) var(--ease-out);
+}
+
+/* Near and far star planes. */
+.frame::before {
   background:
     var(--atmosphere-stars) 0 0 / var(--atmosphere-stars-size),
-    var(--atmosphere-glow),
-    var(--color-bg);
+    var(--atmosphere-stars-far) 180px 90px / var(--atmosphere-stars-far-size);
+  opacity: var(--space-stars);
+}
+
+/* The nebula. */
+.frame::after {
+  background: var(--atmosphere-nebula);
+  opacity: var(--space-nebula);
 }
 
 .shell {

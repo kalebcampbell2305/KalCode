@@ -24,10 +24,14 @@
     box-shadow var(--dur-fast) var(--ease-out);
 }
 
-.card:hover,
-.card:focus-within {
+.card:hover {
   border-color: var(--color-border-lit-soft);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-sm), var(--lift-active);
+}
+
+.card:focus-within {
+  border-color: var(--color-border-lit);
+  box-shadow: var(--glow-active);
 }
 
 /* A lit bar on the left edge in the item's tone: what kind of attention, at a glance. */
