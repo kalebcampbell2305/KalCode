@@ -77,6 +77,9 @@ public final class RemoteClient {
     public private(set) var lastUpdate: Date?
     /// Set when the workstation removed this device (kept after the pairing is cleared, for the explanation).
     public private(set) var removedWorkstationName: String?
+    /// True while showing a simulated workstation (the in-app demo). No connection is made, no
+    /// request leaves the device and the pairing store is never touched until `endSimulation()`.
+    public private(set) var isSimulated = false
 
     /// Called for every `notify` (protocol §6).
     @ObservationIgnored public var onNotify: ((NotifyMessage) -> Void)?
@@ -120,6 +123,7 @@ public final class RemoteClient {
 
     /// Starts (or nudges) the connection loop. Safe to call repeatedly, e.g. on foreground.
     public func start() {
+        guard !isSimulated else { return }
         guard workstation != nil else { status = .unpaired; return }
         if loopTask == nil {
             launchLoop(initial: nil)
@@ -130,6 +134,7 @@ public final class RemoteClient {
 
     /// Retry immediately (pull-to-refresh, "Try again", app foreground).
     public func reconnectNow() {
+        guard !isSimulated else { return }
         wake()
         start()
     }
@@ -177,6 +182,7 @@ public final class RemoteClient {
             throw error
         }
         workstation = record
+        isSimulated = false
         removedWorkstationName = nil
         fleet.reset()
         lastUpdate = nil
@@ -212,17 +218,31 @@ public final class RemoteClient {
         if case .removed = status { status = .unpaired }
     }
 
-    #if DEBUG
-    /// Development only (never in Release): render a fixture without a workstation, for
-    /// design review in the simulator. Requests still fail with `notConnected`.
-    public func debugLoad(fleet: FleetState, status: ConnectionStatus, workstation: PairedWorkstation?) {
+    // MARK: Simulation
+
+    /// Shows a simulated workstation: the in-app demo (and design-review fixtures in DEBUG).
+    /// Stops any connection; the saved pairing stays untouched in the store. Requests through
+    /// this client fail with `notConnected` while simulating — the app answers them locally.
+    public func simulate(fleet: FleetState, status: ConnectionStatus, workstation: PairedWorkstation?) {
         stopLoop()
+        isSimulated = true
         self.fleet = fleet
         self.status = status
         self.workstation = workstation
         lastUpdate = env.now()
     }
-    #endif
+
+    /// Leaves the simulation and returns to the real pairing (or the welcome screen).
+    public func endSimulation() {
+        guard isSimulated else { return }
+        isSimulated = false
+        failQueue(with: .notConnected)
+        fleet.reset()
+        lastUpdate = nil
+        workstation = pairing.workstation()
+        status = workstation == nil ? .unpaired : .connecting
+        start()
+    }
 
     // MARK: Requests
 
@@ -239,6 +259,8 @@ public final class RemoteClient {
     public func requestRaw(_ op: String, _ args: [String: JSONValue] = [:]) async throws -> Data {
         let id = UUID().uuidString.lowercased()
         if status == .online {
+            // A simulated workstation has no session; the app answers its requests locally.
+            guard !isSimulated else { throw RemoteRequestError.notConnected }
             return try await sendNow(id: id, op: op, args: args)
         }
         // Only while Reconnecting (not Offline) may prompts and voice commands wait (§5).

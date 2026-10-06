@@ -62,6 +62,7 @@
 		D6B00048BB6911A9FB64FEEE /* Links.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62C9D922190966067DD0BDDE /* Links.swift */; };
 		E3E189AAFB58B0ACC3ADB2FA /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB46423982B9DCA9D7196682 /* Theme.swift */; };
 		E5DB47A8E41217D2BF5C4DA6 /* Atmosphere.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3DBC56A0D0B3613B8D7CD5D /* Atmosphere.swift */; };
+		E6378AD7C8001213BB7008DA /* DemoWorkstation.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB0B49193702C78F33FFDAD1 /* DemoWorkstation.swift */; };
 		E812ADDA803535D3157564EA /* JSONValue.swift in Sources */ = {isa = PBXBuildFile; fileRef = F31FC3BDF76BD9F81F4ABF4B /* JSONValue.swift */; };
 		EB3831E15B22449B53E65635 /* Messages.swift in Sources */ = {isa = PBXBuildFile; fileRef = D199AFA9041253634E6B0063 /* Messages.swift */; };
 		EFFB9D102D007C2DA8D7A17A /* Notifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74798F439925381508B747EF /* Notifier.swift */; };
@@ -184,6 +185,7 @@
 		BF5F6DF82C3636915A075ED9 /* AgentCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentCard.swift; sourceTree = "<group>"; };
 		C012ABB4B4A131F275F23F8B /* NoiseVectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoiseVectorTests.swift; sourceTree = "<group>"; };
 		C79F48CD9C229DC9A2D58BF4 /* Shells.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shells.swift; sourceTree = "<group>"; };
+		CB0B49193702C78F33FFDAD1 /* DemoWorkstation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoWorkstation.swift; sourceTree = "<group>"; };
 		D199AFA9041253634E6B0063 /* Messages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Messages.swift; sourceTree = "<group>"; };
 		DA03EFBBD51C7F36F5C07B89 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		E3DBC56A0D0B3613B8D7CD5D /* Atmosphere.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Atmosphere.swift; sourceTree = "<group>"; };
@@ -304,6 +306,7 @@
 				7FD439D1CAC2646FD085157E /* KalCodeRemoteApp.swift */,
 				BE46C6AF35D96B9769A8E669 /* Agent */,
 				95D42772823FFCE0D8F163B7 /* Core */,
+				F04C3DDC190A90FCE4E1A28B /* Demo */,
 				DDF51E07DDBE79429063BCCE /* Design */,
 				21F725AEE60858A0C02069DE /* Diff */,
 				98B97E15FB41ACF1567DB62B /* Fleet */,
@@ -480,6 +483,14 @@
 				B490C71D077CAAB289BD5254 /* Fonts */,
 			);
 			path = Resources;
+			sourceTree = "<group>";
+		};
+		F04C3DDC190A90FCE4E1A28B /* Demo */ = {
+			isa = PBXGroup;
+			children = (
+				CB0B49193702C78F33FFDAD1 /* DemoWorkstation.swift */,
+			);
+			path = Demo;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -692,6 +703,7 @@
 				E5DB47A8E41217D2BF5C4DA6 /* Atmosphere.swift in Sources */,
 				54FB047CD49BFEB7CD9D7D0D /* Components.swift in Sources */,
 				FC2AD99FACC1D92AF5A93219 /* ConnectionBanner.swift in Sources */,
+				E6378AD7C8001213BB7008DA /* DemoWorkstation.swift in Sources */,
 				A58D6F0C6B9C257EDA89F06F /* DiffView.swift in Sources */,
 				8A0CB59075629BE1B553CE0A /* ErrorCopy.swift in Sources */,
 				D42F564F8A6C12141394DFA5 /* Fixtures.swift in Sources */,
