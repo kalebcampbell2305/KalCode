@@ -157,7 +157,9 @@ export function RemoteSettings() {
             <div className={styles.pairRow}>
               <div>
                 <div className={styles.label}>Pair a device</div>
-                <div className={styles.help}>Scan a one-time code with the KalCode app on your iPhone or iPad.</div>
+                <div className={styles.help}>
+                  Scan a one-time code with the KalCode Remote app on your phone or tablet.
+                </div>
               </div>
               <Button
                 variant="primary"
@@ -224,16 +226,16 @@ function PairingCard({
         <img
           className={styles.qr}
           src={`data:image/svg+xml;utf8,${encodeURIComponent(pairing.qrSvg)}`}
-          alt="Pairing code. Scan it with the KalCode app."
+          alt="Pairing code. Scan it with the KalCode Remote app."
           width={176}
           height={176}
         />
       </div>
       <div className={styles.pairingText}>
-        <div className={styles.pairingTitle}>Scan with KalCode on your phone</div>
+        <div className={styles.pairingTitle}>Scan with KalCode Remote</div>
         <ol className={styles.steps}>
-          <li>Open KalCode on your iPhone or iPad.</li>
-          <li>Tap Pair a workstation and point the camera here.</li>
+          <li>Open KalCode Remote on your phone or tablet.</li>
+          <li>Tap Scan pairing code and point the camera here.</li>
         </ol>
         <div className={styles.expiry} aria-live="off">
           Code expires in <span className={styles.timer}>{countdown(pairing.expiresAt, now)}</span> · single use
