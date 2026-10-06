@@ -1,8 +1,9 @@
 //! One account-bound Operations coordinator. The ledger owns queue/run identity; execution
 //! remains in the existing guarded terminal and thread runtimes. Observations never confer
 //! execution authority, and neither a restart nor a sign-in replays work automatically.
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -14,8 +15,10 @@ use kalcode_contracts::events::{
 };
 use kalcode_contracts::operations::*;
 use kalcode_contracts::threads::{ThreadStatus, ThreadSummary};
-use kalcode_core::confirm::{NativeConfirmation, confirm};
-use kalcode_core::operations::{ACTIVITY_MOMENT_LIMIT, OperationsStore};
+use kalcode_core::confirm::{NativeConfirmation, NativeConfirmer, confirm};
+use kalcode_core::operations::{
+    ACTIVITY_MOMENT_LIMIT, OPERATION_CANCELLING_ACTION, OperationsStore,
+};
 use kalcode_core::plans::{Limited, PlanLimit, PlanTier};
 use kalcode_core::squads::SquadsStore;
 use kalcode_core::workspaces::{TerminalInfo, TerminalSize, TerminalStatus};
@@ -35,6 +38,14 @@ use crate::thread_commands::{OperationPaneRequest, ThreadsState};
 const OBSERVATION_TTL: Duration = Duration::from_secs(5);
 const HISTORY_PAGE_SIZE: usize = 100;
 const HISTORY_CURSOR_LIMIT: usize = 4096;
+/// Mechanical startup parallelism only. This never caps live coding agents: a worker returns to
+/// the pool as soon as its exact pane has been created or held.
+const SQUAD_DISPATCH_WORKERS: usize = 8;
+/// A member's pane was stopped by its exact id but no longer matched its settings. This needs only
+/// that member's attention; it is never treated as unproven cleanup that pauses the queue.
+const MEMBER_PANE_MISMATCH: &str = "operation_member_pane_mismatch";
+const UNBOUND_SQUAD_START_REASON: &str =
+    "This Squad member stopped before its provider pane started. Run now to start it.";
 
 fn event_time_upper_bound(ended_at: &str) -> Result<String> {
     let ended_at = OffsetDateTime::parse(ended_at, &Rfc3339).map_err(|_| {
@@ -227,6 +238,282 @@ impl Authorization {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SquadDispatchKind {
+    Authorize,
+    Run,
+}
+
+#[derive(Debug)]
+struct SquadDispatchJob {
+    operation_id: String,
+    kind: SquadDispatchKind,
+}
+
+#[derive(Default)]
+struct SquadDispatchState {
+    stopping: bool,
+    queued: VecDeque<SquadDispatchJob>,
+    reserved: HashSet<String>,
+    active: HashMap<String, Arc<AtomicU8>>,
+    /// Jobs handed to workers since start. Lets tests prove the scheduler does not spin.
+    taken: u64,
+}
+
+#[derive(Default)]
+struct SquadDispatchQueue {
+    state: Mutex<SquadDispatchState>,
+    changed: Condvar,
+}
+
+impl SquadDispatchQueue {
+    fn enqueue(&self, operation_id: &str, kind: SquadDispatchKind) -> Result<bool> {
+        let mut state = self.state.lock().map_err(|_| poisoned())?;
+        if state.stopping || !state.reserved.insert(operation_id.to_owned()) {
+            return Ok(false);
+        }
+        state.queued.push_back(SquadDispatchJob {
+            operation_id: operation_id.to_owned(),
+            kind,
+        });
+        self.changed.notify_one();
+        Ok(true)
+    }
+
+    fn take(&self) -> Option<(SquadDispatchJob, Arc<AtomicU8>)> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        loop {
+            if state.stopping {
+                return None;
+            }
+            if let Some(job) = state.queued.pop_front() {
+                state.taken += 1;
+                let canceled = Arc::new(AtomicU8::new(0));
+                state
+                    .active
+                    .insert(job.operation_id.clone(), canceled.clone());
+                return Some((job, canceled));
+            }
+            state = self
+                .changed
+                .wait(state)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+    }
+
+    fn finish(&self, operation_id: &str, canceled: &Arc<AtomicU8>) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state
+            .active
+            .get(operation_id)
+            .is_some_and(|active| Arc::ptr_eq(active, canceled))
+        {
+            state.active.remove(operation_id);
+            state.reserved.remove(operation_id);
+        }
+    }
+
+    fn cancel(&self, operation_id: &str, user_cancel: bool) -> bool {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(active) = state.active.get(operation_id) {
+            active.fetch_max(if user_cancel { 2 } else { 1 }, Ordering::AcqRel);
+            true
+        } else if state.reserved.remove(operation_id) {
+            state.queued.retain(|job| job.operation_id != operation_id);
+            false
+        } else {
+            false
+        }
+    }
+
+    fn reserved_ids(&self) -> HashSet<String> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .reserved
+            .clone()
+    }
+
+    fn is_reserved(&self, operation_id: &str) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .reserved
+            .contains(operation_id)
+    }
+
+    fn stop(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.stopping = true;
+        state.queued.clear();
+        for canceled in state.active.values() {
+            canceled.fetch_max(1, Ordering::AcqRel);
+        }
+        self.changed.notify_all();
+    }
+
+    #[cfg(test)]
+    fn jobs_taken(&self) -> u64 {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .taken
+    }
+}
+
+/// Owns one taken job's exact-ID reservation. `release` normally runs under the Operations gate,
+/// so it linearizes with cancel/update/hold. Dropping an unreleased guard (an early error return
+/// or a panic) still frees the member: a reservation can never outlive its job.
+struct DispatchReservation {
+    queue: Arc<SquadDispatchQueue>,
+    operation_id: String,
+    canceled: Arc<AtomicU8>,
+    released: AtomicBool,
+}
+
+impl DispatchReservation {
+    fn release(&self) {
+        if !self.released.swap(true, Ordering::AcqRel) {
+            self.queue.finish(&self.operation_id, &self.canceled);
+        }
+    }
+}
+
+impl Drop for DispatchReservation {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
+/// The account/runtime authority an Operations effect borrows. Production always uses the IPC or
+/// scheduler `RuntimeState`; tests use a stub so dispatch can run without a Tauri app.
+trait OperationsLease {
+    fn revalidate_core(&self) -> Result<()>;
+}
+
+impl OperationsLease for RuntimeState<OperationsState> {
+    fn revalidate_core(&self) -> Result<()> {
+        RuntimeState::revalidate_core(self)
+    }
+}
+
+/// Acquires a fresh lease for each scheduler tick or dispatch job.
+type LeaseSource = Arc<dyn Fn() -> Result<Box<dyn OperationsLease>> + Send + Sync>;
+
+fn app_leases(app: &AppHandle) -> LeaseSource {
+    let app = app.clone();
+    Arc::new(move || {
+        RuntimeState::<OperationsState>::from_app(&app)
+            .map(|lease| Box::new(lease) as Box<dyn OperationsLease>)
+            .map_err(|_| unavailable())
+    })
+}
+
+/// The provider-pane effects Operations performs, mostly outside its gate. Production always uses
+/// the canonical thread runtime; tests substitute a deliberately slow pane factory to prove the
+/// dispatcher never holds the Operations gate across a provider spawn.
+trait OperationPanes: Send + Sync {
+    fn canonicalize(
+        &self,
+        threads: &ThreadsState,
+        core: &Arc<Core>,
+        spec: &OperationSpec,
+    ) -> Result<OperationSpec>;
+    /// Creates (or resumes) a member's pane without sending its task.
+    fn prepare(
+        &self,
+        threads: &ThreadsState,
+        request: OperationPaneRequest<'_>,
+    ) -> Result<ThreadSummary>;
+    /// Creates a pane and, when the spec has a prompt, sends it.
+    fn start(
+        &self,
+        threads: &ThreadsState,
+        request: OperationPaneRequest<'_>,
+    ) -> Result<ThreadSummary>;
+    /// Releases an already-prepared pane and sends its task, when it has one.
+    fn deliver(
+        &self,
+        threads: &ThreadsState,
+        operation_id: &str,
+        prompt: Option<&str>,
+    ) -> Result<ThreadSummary>;
+    /// Reclaims a prepared pane the person typed into, after an explicit Run now.
+    fn rearm(&self, threads: &ThreadsState, operation_id: &str) -> Result<bool>;
+}
+
+struct ThreadPanes;
+
+impl OperationPanes for ThreadPanes {
+    fn canonicalize(
+        &self,
+        threads: &ThreadsState,
+        core: &Arc<Core>,
+        spec: &OperationSpec,
+    ) -> Result<OperationSpec> {
+        threads.canonicalize_operation(core, spec)
+    }
+
+    fn prepare(
+        &self,
+        threads: &ThreadsState,
+        request: OperationPaneRequest<'_>,
+    ) -> Result<ThreadSummary> {
+        threads.prepare_operation(request)
+    }
+
+    fn start(
+        &self,
+        threads: &ThreadsState,
+        request: OperationPaneRequest<'_>,
+    ) -> Result<ThreadSummary> {
+        threads.start_operation(request)
+    }
+
+    fn deliver(
+        &self,
+        threads: &ThreadsState,
+        operation_id: &str,
+        prompt: Option<&str>,
+    ) -> Result<ThreadSummary> {
+        let runtime = threads.runtime_handle().ok_or_else(unavailable)?;
+        match prompt {
+            Some(prompt) => runtime.send_prepared_operation(operation_id, prompt),
+            None => runtime.dependency_ready(operation_id),
+        }
+    }
+
+    fn rearm(&self, threads: &ThreadsState, operation_id: &str) -> Result<bool> {
+        match threads.runtime_handle() {
+            Some(runtime) => runtime.rearm_prepared_pane(operation_id),
+            None => Ok(false),
+        }
+    }
+}
+
+/// The fields that define a member's real provider pane. Task text and scheduling metadata can
+/// change without replacing a pane; these cannot.
+fn same_execution_identity(left: &OperationSpec, right: &OperationSpec) -> bool {
+    left.workspace_id == right.workspace_id
+        && left.kind == right.kind
+        && left.provider_id == right.provider_id
+        && left.provider_account_id == right.provider_account_id
+        && left.model == right.model
+        && left.effort == right.effort
+}
+
 pub struct OperationsState {
     core: Arc<Core>,
     store: OperationsStore,
@@ -239,6 +526,10 @@ pub struct OperationsState {
     gate: Mutex<()>,
     /// Consent is exact-object and account-epoch scoped, never restored from disk.
     authorized: Mutex<HashMap<String, Authorization>>,
+    squad_dispatch: Arc<SquadDispatchQueue>,
+    squad_workers: Mutex<Vec<JoinHandle<()>>>,
+    /// Provider-pane effects; always the canonical thread runtime outside tests.
+    panes: Arc<dyn OperationPanes>,
     stop: Arc<(Mutex<bool>, Condvar)>,
     worker: Mutex<Option<JoinHandle<()>>>,
     observations: Mutex<Option<(Instant, Vec<DevelopmentService>, bool)>>,
@@ -270,6 +561,9 @@ impl OperationsState {
             account: Some(account),
             gate: Mutex::new(()),
             authorized: Mutex::new(HashMap::new()),
+            squad_dispatch: Arc::new(SquadDispatchQueue::default()),
+            squad_workers: Mutex::new(Vec::new()),
+            panes: Arc::new(ThreadPanes),
             stop: Arc::new((Mutex::new(false), Condvar::new())),
             worker: Mutex::new(None),
             observations: Mutex::new(None),
@@ -277,9 +571,17 @@ impl OperationsState {
             artifact_checked: Mutex::new(HashSet::new()),
             voice_callback,
         });
-        let weak = Arc::downgrade(&state);
-        let stop = state.stop.clone();
-        let app = app.clone();
+        // Each tick and dispatch borrows the same account authority as an IPC command. No
+        // detached scheduler or worker can outlive sign-out or execute while the runtime drains.
+        let leases = app_leases(app);
+        state.start_squad_workers(leases.clone())?;
+        state.start_scheduler(leases)?;
+        Ok(state)
+    }
+
+    fn start_scheduler(self: &Arc<Self>, leases: LeaseSource) -> Result<()> {
+        let weak = Arc::downgrade(self);
+        let stop = self.stop.clone();
         let worker = std::thread::Builder::new()
             .name("operations".into())
             .spawn(move || {
@@ -295,31 +597,151 @@ impl OperationsState {
                     }
                     drop(stopping);
                     let Some(state) = weak.upgrade() else { break };
-                    // Each tick borrows the same account authority as an IPC command. No detached
-                    // scheduler can outlive sign-out or execute while the runtime is draining.
-                    let Ok(lease) = RuntimeState::<OperationsState>::from_app(&app) else {
-                        continue;
-                    };
-                    let Ok(_gate) = state.gate.try_lock() else {
+                    let Ok(lease) = leases() else {
                         continue;
                     };
                     if lease.revalidate_core().is_err() {
                         continue;
                     }
-                    if let Err(error) = state.tick(&lease) {
+                    if let Err(error) = state.tick(&*lease) {
                         tracing::warn!(event = "operations.tick_failed", code = error.code);
                         let _ = state.store.set_paused(true);
                     }
                 }
             })
             .map_err(|_| {
+                self.squad_dispatch.stop();
+                if let Ok(mut workers) = self.squad_workers.lock() {
+                    for worker in workers.drain(..) {
+                        let _ = worker.join();
+                    }
+                }
                 KalError::internal(
                     "operations_worker_unavailable",
                     "Operations could not start its scheduler.",
                 )
             })?;
-        *state.worker.lock().map_err(|_| poisoned())? = Some(worker);
-        Ok(state)
+        *self.worker.lock().map_err(|_| poisoned())? = Some(worker);
+        Ok(())
+    }
+
+    fn start_squad_workers(self: &Arc<Self>, leases: LeaseSource) -> Result<()> {
+        let mut workers: Vec<JoinHandle<()>> = Vec::with_capacity(SQUAD_DISPATCH_WORKERS);
+        for index in 0..SQUAD_DISPATCH_WORKERS {
+            let weak = Arc::downgrade(self);
+            let leases = leases.clone();
+            let queue = self.squad_dispatch.clone();
+            let worker = std::thread::Builder::new()
+                .name(format!("operations-squad-{index}"))
+                .spawn(move || {
+                    while let Some((job, canceled)) = queue.take() {
+                        let reservation = DispatchReservation {
+                            queue: queue.clone(),
+                            operation_id: job.operation_id.clone(),
+                            canceled: canceled.clone(),
+                            released: AtomicBool::new(false),
+                        };
+                        let Some(state) = weak.upgrade() else { break };
+                        if state.run_dispatch_job(&job, &reservation, &leases) {
+                            // Wake the scheduler only for a real ledger change. A no-op job (for
+                            // example a pane that is still waiting) must not re-arm it at once.
+                            state.stop.1.notify_all();
+                        }
+                    }
+                })
+                .map_err(|_| {
+                    self.squad_dispatch.stop();
+                    for worker in workers.drain(..) {
+                        let _ = worker.join();
+                    }
+                    KalError::internal(
+                        "operations_worker_unavailable",
+                        "Operations could not start its Squad dispatcher.",
+                    )
+                })?;
+            workers.push(worker);
+        }
+        *self.squad_workers.lock().map_err(|_| poisoned())? = workers;
+        Ok(())
+    }
+
+    /// Runs one taken dispatch job to completion and always releases its reservation. A panic in
+    /// provider or store code is contained here: it is logged, the member is held with a reason,
+    /// and the worker keeps serving the pool. Returns whether the ledger changed.
+    fn run_dispatch_job(
+        &self,
+        job: &SquadDispatchJob,
+        reservation: &DispatchReservation,
+        leases: &LeaseSource,
+    ) -> bool {
+        let canceled = &reservation.canceled;
+        let before = self.store.revision().ok();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let result = leases().and_then(|lease| {
+                lease.revalidate_core()?;
+                self.execute_squad_dispatch(job, canceled, &*lease)
+            });
+            self.complete_squad_dispatch(job, reservation, result)
+        }));
+        match outcome {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                if !dispatch_canceled(canceled) || error.code == "operation_cleanup_unproven" {
+                    tracing::warn!(
+                        event = "operations.squad_dispatch_failed",
+                        operation_id = job.operation_id,
+                        code = error.code
+                    );
+                }
+            }
+            Err(_) => {
+                tracing::error!(
+                    event = "operations.squad_dispatch_panicked",
+                    operation_id = job.operation_id
+                );
+                self.hold_panicked_dispatch(&job.operation_id);
+            }
+        }
+        // An early error or a panic may skip the gated release in `complete_squad_dispatch`.
+        // Release under the gate here so a racing cancel still sees one linear order.
+        {
+            let _gate = self.lock_gate_after_panic();
+            reservation.release();
+        }
+        before.is_none() || self.store.revision().ok() != before
+    }
+
+    /// The gate guards no in-memory data (`Mutex<()>`); ledger writes are transactional. A panic
+    /// while it was held must not wedge every later Operations command, so clear the poison.
+    fn lock_gate_after_panic(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.gate.lock().unwrap_or_else(|poisoned| {
+            self.gate.clear_poison();
+            poisoned.into_inner()
+        })
+    }
+
+    fn hold_panicked_dispatch(&self, id: &str) {
+        const REASON: &str = "This Squad member stopped unexpectedly while starting. Inspect its pane, then Run now to retry.";
+        let _gate = self.lock_gate_after_panic();
+        self.authorized
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(id);
+        let held = match self.store.get(id).map(|row| row.status) {
+            Ok(OperationStatus::Queued | OperationStatus::Blocked | OperationStatus::Paused) => {
+                self.store.hold_with_reason(id, REASON)
+            }
+            Ok(OperationStatus::Starting) => self.store.hold_starting_with_reason(id, REASON),
+            Ok(_) => Ok(()),
+            Err(error) => Err(error),
+        };
+        if let Err(error) = held {
+            tracing::warn!(
+                event = "operations.squad_dispatch_panic_hold_failed",
+                operation_id = id,
+                code = error.code
+            );
+        }
     }
 
     fn plan_limit(&self, kind: Limited) -> Option<PlanLimit> {
@@ -327,6 +749,33 @@ impl OperationsState {
             || AccountSnapshot::signed_out().plan_limit(kind),
             |account| account.snapshot().plan_limit(kind),
         )
+    }
+
+    fn ensure_dispatch_not_cancelling(&self, id: &str) -> Result<()> {
+        if self.squad_dispatch.is_reserved(id)
+            && self
+                .store
+                .get(id)?
+                .current_action
+                .as_deref()
+                .is_some_and(|action| action == OPERATION_CANCELLING_ACTION)
+        {
+            return Err(KalError::validation(
+                "operation_cancellation_in_progress",
+                "This Squad member is still stopping. Wait for cleanup to finish before running or editing it again.",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Run now must never supersede an in-flight dispatch: a member mid-launch may already have
+    /// received its task. Refuse clearly instead of cancelling or silently dropping the click.
+    fn ensure_dispatch_idle(&self, id: &str) -> Result<()> {
+        self.ensure_dispatch_not_cancelling(id)?;
+        if self.squad_dispatch.is_reserved(id) {
+            return Err(dispatch_in_progress());
+        }
+        Ok(())
     }
 
     pub(crate) fn core(&self) -> &Arc<Core> {
@@ -350,9 +799,15 @@ impl OperationsState {
     /// paused, blocked, interrupted, cancelled, or completed operation.
     pub(crate) fn authorize_squad_members(
         &self,
-        app: &AppHandle,
+        _app: &AppHandle,
         operation_ids: &[String],
     ) -> Result<()> {
+        self.queue_squad_authorizations(operation_ids)
+    }
+
+    /// Only short, gated ledger transitions happen here; every provider spawn and worktree
+    /// creation runs on the dispatcher outside the global Operations gate.
+    fn queue_squad_authorizations(&self, operation_ids: &[String]) -> Result<()> {
         let _gate = self.gate.lock().map_err(|_| poisoned())?;
         for id in operation_ids {
             let row = self.store.detail(id)?.run;
@@ -371,36 +826,353 @@ impl OperationsState {
             if !self.store.mark_squad_authorized(id)? {
                 continue;
             }
-            match self.prepare_authorization(&row.spec, LaunchOrigin::User, false) {
-                Ok(consent) => {
-                    let row = if consent.spec != row.spec {
-                        let (revision, _, _) = self.store.snapshot()?;
-                        self.store.update(id, consent.spec.clone(), revision)?
-                    } else {
-                        row
-                    };
-                    self.authorized
-                        .lock()
-                        .map_err(|_| poisoned())?
-                        .insert(row.id, consent);
-                }
-                Err(error) => {
-                    let reason = safe(&error.message);
-                    self.store.hold_with_reason(id, &reason)?;
-                    tracing::warn!(
-                        event = "operations.squad_member_authorization_held",
-                        operation_id = id,
-                        code = error.code
-                    );
-                }
-            }
+            self.squad_dispatch
+                .enqueue(id, SquadDispatchKind::Authorize)?;
         }
         self.stop.1.notify_all();
-        // The user asked for a Squad now. Run one scoped scheduler pass before returning so every
-        // available member has either started or owns its real dependency-waiting pane.
-        let lease = RuntimeState::<OperationsState>::from_app(app).map_err(|_| unavailable())?;
+        Ok(())
+    }
+
+    fn execute_squad_dispatch(
+        &self,
+        job: &SquadDispatchJob,
+        canceled: &AtomicU8,
+        lease: &dyn OperationsLease,
+    ) -> Result<bool> {
+        match job.kind {
+            SquadDispatchKind::Authorize => {
+                self.authorize_squad_member(&job.operation_id, canceled, lease)?;
+                // A successful member does not wait behind the rest of a large Squad's
+                // authorization queue. It immediately uses this same exact-ID reservation to
+                // prepare or start its real pane; the bounded workers keep pulling siblings.
+                self.run_squad_member(&job.operation_id, canceled, lease)
+            }
+            SquadDispatchKind::Run => self.run_squad_member(&job.operation_id, canceled, lease),
+        }
+    }
+
+    /// Settles one dispatch under the gate and releases its reservation there. `result` is
+    /// `Ok(true)` when this dispatch created the member's pane.
+    fn complete_squad_dispatch(
+        &self,
+        job: &SquadDispatchJob,
+        reservation: &DispatchReservation,
+        mut result: Result<bool>,
+    ) -> Result<()> {
+        let id = job.operation_id.as_str();
+        let canceled = &reservation.canceled;
+        let mut cleaned = false;
+        loop {
+            // Only an explicit user cancel tears a pane down here. A hold or shutdown never
+            // stops a member's pane from this path: it may already be running its task. This
+            // closes both races: a token visible after the factory, and one set after that check
+            // but before the worker reacquires the global gate.
+            if dispatch_user_canceled(canceled) && !cleaned {
+                let row = self.store.detail(id)?.run;
+                let cleanup = if result.as_ref().is_ok_and(|created| *created) {
+                    self.reap_created_squad_thread(&row)
+                } else {
+                    self.stop_exact_squad_thread(&row)
+                };
+                if let Err(error) = cleanup {
+                    result = Err(error);
+                }
+                cleaned = true;
+            }
+
+            let _gate = self.gate.lock().map_err(|_| poisoned())?;
+            if dispatch_user_canceled(canceled) && !cleaned {
+                drop(_gate);
+                continue;
+            }
+            if let Err(error) = &result
+                && error.code == "operation_cleanup_unproven"
+            {
+                self.hold_cleanup_unproven(id, &error.message)?;
+            } else if dispatch_user_canceled(canceled) {
+                let current = self.store.detail(id)?.run;
+                match current.status {
+                    OperationStatus::Queued
+                    | OperationStatus::Blocked
+                    | OperationStatus::Paused => self.store.cancel_pending(id)?,
+                    OperationStatus::Starting | OperationStatus::Running => {
+                        self.store
+                            .finish(id, OperationStatus::Cancelled, "Cancelled by you.")?
+                    }
+                    _ => {}
+                }
+                self.authorized.lock().map_err(|_| poisoned())?.remove(id);
+                // Cancellation is the requested final state; an earlier provider error is no
+                // longer actionable once exact cleanup and durable cancellation both succeeded.
+                result = Ok(false);
+            } else if let Err(error) = &result
+                && error.code == MEMBER_PANE_MISMATCH
+            {
+                // The pane was already stopped by its exact id. Only this member needs attention;
+                // the rest of the queue keeps running.
+                self.hold_member_with_reason(id, &error.message)?;
+            } else {
+                self.hold_unbound_start(id)?;
+            }
+            // The gate linearizes queue release with update/hold/cancel. If cancel acquired it
+            // first, its token and durable cancelling state are visible here; if it acquires next,
+            // the reservation is gone and it follows the ordinary synchronous cancel path.
+            reservation.release();
+            return result.map(|_| ());
+        }
+    }
+
+    /// Returns one member to an actionable hold without touching the global queue.
+    fn hold_member_with_reason(&self, id: &str, message: &str) -> Result<()> {
+        self.authorized.lock().map_err(|_| poisoned())?.remove(id);
+        let reason = safe(message);
+        match self.store.get(id)?.status {
+            OperationStatus::Queued | OperationStatus::Blocked | OperationStatus::Paused => {
+                self.store.hold_with_reason(id, &reason)
+            }
+            OperationStatus::Starting => self.store.hold_starting_with_reason(id, &reason),
+            _ => Ok(()),
+        }
+    }
+
+    /// A dispatch that claimed a member but never reserved or bound its pane (for example one
+    /// stopped by shutdown before the provider started) must not stay `starting` forever.
+    fn hold_unbound_start(&self, id: &str) -> Result<()> {
+        let row = self.store.get(id)?;
+        if row.status == OperationStatus::Starting
+            && row.thread_id.is_none()
+            && row.terminal_id.is_none()
+        {
+            self.authorized.lock().map_err(|_| poisoned())?.remove(id);
+            self.store
+                .hold_starting_with_reason(id, UNBOUND_SQUAD_START_REASON)?;
+        }
+        Ok(())
+    }
+
+    fn authorize_squad_member(
+        &self,
+        id: &str,
+        canceled: &AtomicU8,
+        lease: &dyn OperationsLease,
+    ) -> Result<()> {
+        let row = self.store.detail(id)?.run;
+        if row.status != OperationStatus::Queued || dispatch_canceled(canceled) {
+            return Ok(());
+        }
+        let consent = match self.prepare_authorization(&row.spec, LaunchOrigin::User, false, true) {
+            Ok(consent) => consent,
+            Err(error) => {
+                if !dispatch_canceled(canceled) {
+                    let _gate = self.gate.lock().map_err(|_| poisoned())?;
+                    if self.store.get(id).is_ok_and(|current| {
+                        !dispatch_canceled(canceled)
+                            && current.status == OperationStatus::Queued
+                            && current.spec == row.spec
+                    }) {
+                        self.store.hold_with_reason(id, &safe(&error.message))?;
+                    }
+                }
+                return Ok(());
+            }
+        };
+        if dispatch_canceled(canceled) {
+            return Ok(());
+        }
         lease.revalidate_core()?;
-        self.tick(&lease)
+        let _gate = self.gate.lock().map_err(|_| poisoned())?;
+        let current = self.store.detail(id)?.run;
+        if current.status != OperationStatus::Queued
+            || current.spec != row.spec
+            || dispatch_canceled(canceled)
+        {
+            return Ok(());
+        }
+        let current = if consent.spec != current.spec {
+            let (revision, _, _) = self.store.snapshot()?;
+            self.store.update(id, consent.spec.clone(), revision)?
+        } else {
+            current
+        };
+        self.authorized
+            .lock()
+            .map_err(|_| poisoned())?
+            .insert(current.id, consent);
+        Ok(())
+    }
+
+    fn run_squad_member(
+        &self,
+        id: &str,
+        canceled: &AtomicU8,
+        lease: &dyn OperationsLease,
+    ) -> Result<bool> {
+        if dispatch_canceled(canceled) {
+            return Ok(false);
+        }
+        let (row, consent, prepare) = {
+            let _gate = self.gate.lock().map_err(|_| poisoned())?;
+            lease.revalidate_core()?;
+            let row = self.store.detail(id)?.run;
+            let Some(consent) = self
+                .authorized
+                .lock()
+                .map_err(|_| poisoned())?
+                .get(id)
+                .filter(|consent| {
+                    consent.origin == LaunchOrigin::User && consent.matches(&row.spec)
+                })
+                .cloned()
+            else {
+                return Ok(false);
+            };
+            if SquadsStore::new(self.core.clone())
+                .get_member(id)?
+                .is_none()
+                || !matches!(
+                    row.status,
+                    OperationStatus::Queued | OperationStatus::Blocked
+                )
+                || dispatch_canceled(canceled)
+            {
+                return Ok(false);
+            }
+            if !row.blockers.is_empty() {
+                (row, consent, true)
+            } else {
+                if row.status != OperationStatus::Queued {
+                    return Ok(false);
+                }
+                match self.store.claim_user_squad_agent(id) {
+                    Ok(Some(claimed)) => (claimed, consent, false),
+                    Ok(None) => return Ok(false),
+                    // A refused claim holds only this member with its reason; it never fails
+                    // the dispatcher or the queue.
+                    Err(error) => {
+                        self.authorized.lock().map_err(|_| poisoned())?.remove(id);
+                        self.store.hold_with_reason(id, &safe(&error.message))?;
+                        return Ok(false);
+                    }
+                }
+            }
+        };
+
+        if prepare {
+            let runtime = self.threads.runtime_handle().ok_or_else(unavailable)?;
+            let existed = runtime.get(id).is_ok();
+            match self.prepare_squad_member(&row, &consent) {
+                Ok(()) => {
+                    let current = self.store.detail(id)?.run;
+                    // Task text may be edited while the pane starts; only an execution identity
+                    // change (refused while dispatching) would make the new pane wrong.
+                    if dispatch_canceled(canceled)
+                        || lease.revalidate_core().is_err()
+                        || !matches!(
+                            current.status,
+                            OperationStatus::Queued | OperationStatus::Blocked
+                        )
+                        || !same_execution_identity(&current.spec, &row.spec)
+                    {
+                        if !existed {
+                            if dispatch_user_canceled(canceled) {
+                                self.reap_created_squad_thread(&row)?;
+                            } else {
+                                self.stop_exact_squad_thread(&row)?;
+                            }
+                        }
+                        return Ok(false);
+                    }
+                    return Ok(!existed);
+                }
+                Err(_error) if dispatch_canceled(canceled) => {
+                    // A provider factory may report an error after inserting the exact pane. If
+                    // cancel raced before that insertion, its synchronous stop could not see it;
+                    // reap the late pane before the reservation is released.
+                    if !existed {
+                        if dispatch_user_canceled(canceled) {
+                            self.reap_created_squad_thread(&row)?;
+                        } else {
+                            self.stop_exact_squad_thread(&row)?;
+                        }
+                    }
+                }
+                Err(error) if error.code == "operation_cleanup_unproven" => {
+                    let _ = self.store.set_paused(true);
+                    return Err(error);
+                }
+                Err(error) => {
+                    let _gate = self.gate.lock().map_err(|_| poisoned())?;
+                    self.authorized.lock().map_err(|_| poisoned())?.remove(id);
+                    if self.store.get(id).is_ok_and(|current| {
+                        matches!(
+                            current.status,
+                            OperationStatus::Queued | OperationStatus::Blocked
+                        )
+                    }) {
+                        self.store.hold_with_reason(id, &safe(&error.message))?;
+                    }
+                }
+            }
+            return Ok(false);
+        }
+
+        let prepared = row.thread_id.as_deref() == Some(row.id.as_str());
+        self.launch_with_cancellation(row, lease, Some(canceled))?;
+        Ok(!prepared)
+    }
+
+    /// Stops a member's pane by its exact Operations-reserved id. The pane is stopped even when
+    /// its configuration no longer matches the member (it is still this member's pane); that case
+    /// is then reported as a member-scoped mismatch, never as unproven cleanup.
+    fn stop_exact_squad_thread(&self, row: &OperationRecord) -> Result<()> {
+        let runtime = self.threads.runtime_handle().ok_or_else(unavailable)?;
+        let thread = match runtime.get(&row.id) {
+            Ok(thread) => thread,
+            Err(error) if error.code == "thread_not_found" => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        match runtime.stop(&row.id) {
+            Ok(_) => {}
+            Err(error) if error.code == "thread_not_running" => {}
+            Err(_) => {
+                return Err(KalError::internal(
+                    "operation_cleanup_unproven",
+                    "The canceled Squad pane could not be stopped. Scheduling is paused; inspect the pane before continuing.",
+                ));
+            }
+        }
+        if !operation_thread_matches(&thread, &row.spec, &row.id) {
+            return Err(KalError::validation(
+                MEMBER_PANE_MISMATCH,
+                "This Squad member's pane no longer matched its settings, so KalCode stopped it. Review the member, then Run now.",
+            ));
+        }
+        Ok(())
+    }
+
+    fn reap_created_squad_thread(&self, row: &OperationRecord) -> Result<()> {
+        let stopped = self.stop_exact_squad_thread(row);
+        if let Err(error) = &stopped
+            && error.code != MEMBER_PANE_MISMATCH
+        {
+            return stopped;
+        }
+        let runtime = self.threads.runtime_handle().ok_or_else(unavailable)?;
+        match runtime.archive(&row.id) {
+            Ok(_) => stopped,
+            Err(error) if error.code == "thread_not_found" => stopped,
+            Err(_) => Err(KalError::internal(
+                "operation_cleanup_unproven",
+                "The canceled Squad pane stopped but its isolated workspace could not be released. Scheduling is paused; inspect the pane before continuing.",
+            )),
+        }
+    }
+
+    fn hold_cleanup_unproven(&self, id: &str, message: &str) -> Result<()> {
+        let reason = safe(message);
+        self.store.set_paused(true)?;
+        self.authorized.lock().map_err(|_| poisoned())?.remove(id);
+        self.store.hold_cleanup_unproven(id, &reason)
     }
 
     fn terminal_limit(&self) -> Option<PlanLimit> {
@@ -414,24 +1186,43 @@ impl OperationsState {
         };
         *stopping = true;
         wake.notify_all();
+        self.squad_dispatch.stop();
         drop(stopping);
-        let Ok(mut worker) = self.worker.lock() else {
-            return false;
-        };
-        if let Some(worker) = worker.take()
-            && worker.join().is_err()
-        {
-            return false;
-        }
-        self.authorized.lock().map(|mut ids| ids.clear()).is_ok()
-            && self.store.set_paused(true).is_ok()
+        let scheduler_clean = self
+            .worker
+            .lock()
+            .map(|mut worker| worker.take().is_none_or(|worker| worker.join().is_ok()))
+            .unwrap_or(false);
+        // Always join every owned dispatcher. Returning on the first panic would drop the rest
+        // of the handles and let those workers outlive a later apparently-successful shutdown.
+        let workers_clean = self
+            .squad_workers
+            .lock()
+            .map(|mut workers| {
+                workers
+                    .drain(..)
+                    .map(JoinHandle::join)
+                    // Join every handle (no short-circuit), then report whether all were clean.
+                    .filter(Result::is_err)
+                    .count()
+                    == 0
+            })
+            .unwrap_or(false);
+        let state_clean = self.authorized.lock().map(|mut ids| ids.clear()).is_ok()
+            && self.store.set_paused(true).is_ok();
+        scheduler_clean && workers_clean && state_clean
     }
 
-    fn tick(&self, lease: &RuntimeState<Self>) -> Result<()> {
-        self.reconcile()?;
+    fn tick(&self, lease: &dyn OperationsLease) -> Result<()> {
+        let Ok(_gate) = self.gate.try_lock() else {
+            return Ok(());
+        };
+        let dispatching = self.squad_dispatch.reserved_ids();
+        self.reconcile_excluding(&dispatching)?;
         let (_, paused, rows) = self.store.snapshot()?;
         self.prune_finished_terminals(&rows)?;
         let authorized = self.authorized.lock().map_err(|_| poisoned())?.clone();
+        let runtime = self.threads.runtime_handle();
         // Dependency-bound Squad members are real agents from the moment the Squad launches.
         // Prepare their canonical panes without a prompt; dependency admission below remains the
         // only path that can deliver the first task.
@@ -450,45 +1241,62 @@ impl OperationsState {
             {
                 continue;
             }
+            // A pane that is already prepared and waiting has nothing to do until its
+            // dependencies succeed. Re-dispatching it every tick would only spin the scheduler.
+            if !row.blockers.is_empty()
+                && row.thread_id.as_deref() == Some(row.id.as_str())
+                && runtime.as_ref().is_some_and(|runtime| {
+                    runtime.get(&row.id).is_ok_and(|thread| {
+                        thread.status == ThreadStatus::WaitingForDependency
+                            && operation_thread_matches(&thread, &row.spec, &row.id)
+                    })
+                })
+            {
+                continue;
+            }
             if SquadsStore::new(self.core.clone())
                 .get_member(&row.id)?
                 .is_none()
             {
                 continue;
             }
-            lease.revalidate_core()?;
-            if let Err(error) = self.prepare_squad_member(row, consent) {
-                if error.code == "operation_cleanup_unproven" {
-                    return Err(error);
-                }
-                self.authorized
-                    .lock()
-                    .map_err(|_| poisoned())?
-                    .remove(&row.id);
-                let reason = safe(&error.message);
-                self.store.hold_with_reason(&row.id, &reason)?;
-                tracing::warn!(
-                    event = "operations.squad_member_preparation_held",
-                    operation_id = row.id,
-                    code = error.code
-                );
-            }
+            self.squad_dispatch
+                .enqueue(&row.id, SquadDispatchKind::Run)?;
         }
         let (_, _, rows) = self.store.snapshot()?;
         // Store snapshot is dependency/priority ordered. Only native-confirmed Next tasks can
         // auto-start. One-use consent is consumed before launch, including failed launches.
+        // Ordinary background work keeps one launch per tick; Squad members only queue here and
+        // start on the dispatcher, so they are never serialized behind it.
+        let mut launched = false;
         for row in rows {
+            let Some(consent) = authorized
+                .get(&row.id)
+                .filter(|consent| consent.matches(&row.spec))
+            else {
+                continue;
+            };
             if row.spec.lane != OperationLane::Next
-                || !authorized
-                    .get(&row.id)
-                    .is_some_and(|consent| consent.matches(&row.spec))
                 || row.status != OperationStatus::Queued
                 || !row.blockers.is_empty()
-                || (paused && authorized[&row.id].origin != LaunchOrigin::User)
             {
                 continue;
             }
-            if !authorized[&row.id].revision_matches(&self.authorization_revision(&row)?) {
+            if consent.origin == LaunchOrigin::User
+                && SquadsStore::new(self.core.clone())
+                    .get_member(&row.id)?
+                    .is_some()
+            {
+                // An explicit Squad launch or Run now is the user's own action: it bypasses the
+                // global pause on its scoped dispatcher, exactly like `claim_user_squad_agent`.
+                self.squad_dispatch
+                    .enqueue(&row.id, SquadDispatchKind::Run)?;
+                continue;
+            }
+            if paused || launched {
+                continue;
+            }
+            if !consent.revision_matches(&self.authorization_revision(&row)?) {
                 self.authorized
                     .lock()
                     .map_err(|_| poisoned())?
@@ -496,29 +1304,40 @@ impl OperationsState {
                 continue;
             }
             lease.revalidate_core()?;
-            let claim = if paused && authorized[&row.id].origin == LaunchOrigin::User {
-                self.store.claim_user_squad_agent(&row.id)
-            } else {
-                self.store.claim(Some(&row.id))
-            };
-            match claim {
+            match self.store.claim(Some(&row.id)) {
                 Ok(Some(claimed)) => {
                     self.launch(claimed, lease)?;
+                    launched = true;
                 }
                 Ok(None) => {}
-                Err(error) if error.code == "operation_slot_unavailable" => {
+                Err(error)
+                    if matches!(
+                        error.code,
+                        "operation_slot_unavailable" | "operation_provider_account_missing"
+                    ) =>
+                {
                     continue;
                 }
-                Err(error) if error.code == "operation_provider_account_missing" => {
+                Err(error) => {
+                    // One row's refusal must never abort the tick: the scheduler would pause the
+                    // whole queue and every later row (including ready Squad members) would stall.
+                    tracing::warn!(
+                        event = "operations.claim_refused",
+                        operation_id = row.id,
+                        code = error.code
+                    );
                     self.authorized
                         .lock()
                         .map_err(|_| poisoned())?
                         .remove(&row.id);
-                    self.store
-                        .hold_with_reason(&row.id, &safe(&error.message))?;
-                    continue;
+                    if let Err(hold) = self.store.hold_with_reason(&row.id, &safe(&error.message)) {
+                        tracing::warn!(
+                            event = "operations.claim_refusal_hold_failed",
+                            operation_id = row.id,
+                            code = hold.code
+                        );
+                    }
                 }
-                Err(error) => return Err(error),
             }
         }
         Ok(())
@@ -573,15 +1392,18 @@ impl OperationsState {
             execution_branch.as_deref(),
             revision.1.as_deref(),
         )?;
-        match self.threads.prepare_operation(OperationPaneRequest {
-            core: &self.core,
-            git: &self.git,
-            operation_id: &row.id,
-            spec: &row.spec,
-            origin: consent.origin,
-            isolate: member.worktree,
-            start_revision: revision.1.as_deref(),
-        }) {
+        match self.panes.prepare(
+            &self.threads,
+            OperationPaneRequest {
+                core: &self.core,
+                git: &self.git,
+                operation_id: &row.id,
+                spec: &row.spec,
+                origin: consent.origin,
+                isolate: member.worktree,
+                start_revision: revision.1.as_deref(),
+            },
+        ) {
             Ok(thread) if operation_thread_matches(&thread, &row.spec, &row.id) => Ok(()),
             Ok(_) => Err(KalError::internal(
                 "operation_thread_identity_mismatch",
@@ -639,7 +1461,12 @@ impl OperationsState {
         Ok(())
     }
 
+    #[cfg(test)]
     fn reconcile(&self) -> Result<()> {
+        self.reconcile_excluding(&HashSet::new())
+    }
+
+    fn reconcile_excluding(&self, dispatching: &HashSet<String>) -> Result<()> {
         let (_, _, rows) = self.store.snapshot()?;
         let visible = rows
             .iter()
@@ -665,10 +1492,11 @@ impl OperationsState {
             self.capture_artifacts(row);
         }
         for mut row in rows.into_iter().filter(|r| {
-            matches!(
-                r.status,
-                OperationStatus::Running | OperationStatus::Starting
-            )
+            !dispatching.contains(&r.id)
+                && matches!(
+                    r.status,
+                    OperationStatus::Running | OperationStatus::Starting
+                )
         }) {
             if row.thread_id.is_none() && row.spec.kind == OperationKind::Agent {
                 let runtime = self.threads.runtime_handle().ok_or_else(unavailable)?;
@@ -688,6 +1516,24 @@ impl OperationsState {
                             "operation_thread_identity_mismatch",
                             "A reserved Operations thread did not match its task. Scheduling is paused; inspect the run before continuing.",
                         ));
+                    }
+                    // A Squad member is claimed under the gate but starts on the dispatcher.
+                    // Once no dispatch owns it, a claim that never reserved a pane is abandoned:
+                    // return it to an actionable hold instead of leaving it `starting` forever.
+                    Err(error)
+                        if error.code == "thread_not_found"
+                            && row.status == OperationStatus::Starting
+                            && SquadsStore::new(self.core.clone())
+                                .get_member(&row.id)?
+                                .is_some() =>
+                    {
+                        self.authorized
+                            .lock()
+                            .map_err(|_| poisoned())?
+                            .remove(&row.id);
+                        self.store
+                            .hold_starting_with_reason(&row.id, UNBOUND_SQUAD_START_REASON)?;
+                        continue;
                     }
                     Err(error) if error.code == "thread_not_found" => {}
                     Err(error) => return Err(error),
@@ -867,7 +1713,23 @@ impl OperationsState {
         }
     }
 
-    fn launch(&self, row: OperationRecord, lease: &RuntimeState<Self>) -> Result<()> {
+    fn launch(&self, row: OperationRecord, lease: &dyn OperationsLease) -> Result<()> {
+        self.launch_with_cancellation(row, lease, None)
+    }
+
+    fn launch_with_cancellation(
+        &self,
+        row: OperationRecord,
+        lease: &dyn OperationsLease,
+        canceled: Option<&AtomicU8>,
+    ) -> Result<()> {
+        if canceled.is_some_and(dispatch_canceled) {
+            self.authorized
+                .lock()
+                .map_err(|_| poisoned())?
+                .remove(&row.id);
+            return Ok(());
+        }
         let consent = self.take_authorization(&row.id)?;
         let revision = match self.authorization_revision(&row) {
             Ok(revision) => revision,
@@ -895,6 +1757,7 @@ impl OperationsState {
             let (branch, version) = self.revision(&row.spec.workspace_id)?;
             if row.spec.kind == OperationKind::Agent {
                 let squad_member = SquadsStore::new(self.core.clone()).get_member(&row.id)?;
+                let is_squad_member = squad_member.is_some();
                 let isolate = squad_member.as_ref().is_some_and(|member| member.worktree);
                 let prepared = row.thread_id.as_deref() == Some(row.id.as_str());
                 let (execution_branch, execution_version) = if isolate {
@@ -927,20 +1790,21 @@ impl OperationsState {
                             "The prepared provider pane did not match its Squad member.",
                         ));
                     }
-                    match row.spec.prompt.as_deref() {
-                        Some(prompt) => runtime.send_prepared_operation(&row.id, prompt),
-                        None => runtime.dependency_ready(&row.id),
-                    }
+                    self.panes
+                        .deliver(&self.threads, &row.id, row.spec.prompt.as_deref())
                 } else {
-                    self.threads.start_operation(OperationPaneRequest {
-                        core: &self.core,
-                        git: &self.git,
-                        operation_id: &row.id,
-                        spec: &row.spec,
-                        origin: consent.origin,
-                        isolate,
-                        start_revision: execution_version.as_deref(),
-                    })
+                    self.panes.start(
+                        &self.threads,
+                        OperationPaneRequest {
+                            core: &self.core,
+                            git: &self.git,
+                            operation_id: &row.id,
+                            spec: &row.spec,
+                            origin: consent.origin,
+                            isolate,
+                            start_revision: execution_version.as_deref(),
+                        },
+                    )
                 };
                 let thread = if prepared {
                     started?
@@ -952,7 +1816,12 @@ impl OperationsState {
                                 return Err(start_error);
                             }
                             Ok(thread) if operation_thread_matches(&thread, &row.spec, &row.id) => {
-                                if runtime.stop(&row.id).is_ok() {
+                                let cleanup = if is_squad_member {
+                                    self.reap_created_squad_thread(&row)
+                                } else {
+                                    runtime.stop(&row.id).map(|_| ())
+                                };
+                                if cleanup.is_ok() {
                                     return Err(start_error);
                                 }
                                 return Err(KalError::internal(
@@ -975,6 +1844,22 @@ impl OperationsState {
                         "The provider thread did not match its reserved Operations identity. Scheduling is paused; inspect the run before continuing.",
                     ));
                 }
+                if canceled.is_some_and(dispatch_canceled) {
+                    if prepared {
+                        self.stop_exact_squad_thread(&row)?;
+                    } else {
+                        self.reap_created_squad_thread(&row)?;
+                    }
+                    return Ok(());
+                }
+                if let Err(error) = lease.revalidate_core() {
+                    if prepared {
+                        self.stop_exact_squad_thread(&row)?;
+                    } else {
+                        self.reap_created_squad_thread(&row)?;
+                    }
+                    return Err(error);
+                }
                 if let Err(error) = self.store.bind(
                     &row.id,
                     None,
@@ -982,7 +1867,12 @@ impl OperationsState {
                     execution_branch.as_deref(),
                     execution_version.as_deref(),
                 ) {
-                    if runtime.stop(&row.id).is_ok() {
+                    let cleanup = if is_squad_member && !prepared {
+                        self.reap_created_squad_thread(&row)
+                    } else {
+                        runtime.stop(&row.id).map(|_| ())
+                    };
+                    if cleanup.is_ok() {
                         return Err(error);
                     }
                     return Err(KalError::internal(
@@ -1036,6 +1926,10 @@ impl OperationsState {
             Ok(())
         })();
         if let Err(error) = result {
+            if canceled.is_some_and(dispatch_canceled) && error.code != "operation_cleanup_unproven"
+            {
+                return Ok(());
+            }
             self.handle_launch_error(&row, error)?;
         }
         *self.observations.lock().map_err(|_| poisoned())? = None;
@@ -1058,7 +1952,7 @@ impl OperationsState {
                 .hold_starting_with_reason(&row.id, &safe(&error.message));
         }
         if error.code == "operation_cleanup_unproven" {
-            let _ = self.store.set_paused(true);
+            self.hold_cleanup_unproven(&row.id, &error.message)?;
             return Err(error);
         }
         self.finish_run(
@@ -1876,30 +2770,46 @@ impl OperationsState {
         ))
     }
 
-    fn authorize(&self, app: &AppHandle, spec: &OperationSpec) -> Result<Authorization> {
-        self.authorize_with_origin(app, spec, LaunchOrigin::Background)
-    }
-
-    fn authorize_with_origin(
+    fn authorize(
         &self,
-        app: &AppHandle,
+        confirmer: &dyn NativeConfirmer,
         spec: &OperationSpec,
-        origin: LaunchOrigin,
     ) -> Result<Authorization> {
-        self.authorize_with_origin_at_revision(app, spec, origin, None)
+        self.authorize_with_origin_at_revision(
+            confirmer,
+            spec,
+            LaunchOrigin::Background,
+            None,
+            false,
+        )
     }
 
     fn authorize_with_origin_at_revision(
         &self,
-        app: &AppHandle,
+        confirmer: &dyn NativeConfirmer,
         spec: &OperationSpec,
         origin: LaunchOrigin,
         exact_revision: Option<(Option<String>, Option<String>)>,
+        squad_member: bool,
     ) -> Result<Authorization> {
-        let mut authorization = self.prepare_authorization(spec, origin, true)?;
+        let mut authorization = self.prepare_authorization(spec, origin, true, squad_member)?;
         if let Some(revision) = exact_revision {
             authorization.revision = revision;
         }
+        if squad_member {
+            // A Squad member can wait on its dependencies far longer than 30 minutes. Its consent
+            // lasts until it starts or is edited; a workspace revision change still revokes it.
+            authorization.expires = None;
+        }
+        self.confirm_authorization(confirmer, &authorization)?;
+        Ok(authorization)
+    }
+
+    fn confirm_authorization(
+        &self,
+        confirmer: &dyn NativeConfirmer,
+        authorization: &Authorization,
+    ) -> Result<()> {
         let spec = &authorization.spec;
         let workspace = self
             .core
@@ -1915,8 +2825,15 @@ impl OperationsState {
             .or(spec.prompt.as_deref())
             .unwrap_or("");
         let revision = &authorization.revision;
+        let lifetime = match (authorization.expires, authorization.revision_bound) {
+            (Some(_), _) => "Consent expires after 30 minutes or a workspace revision change.",
+            (None, true) => {
+                "Consent lasts until this Squad member starts or is edited; a workspace revision change revokes it."
+            }
+            (None, false) => "Consent lasts until this Squad member starts or is edited.",
+        };
         let context = format!(
-            "Environment: {:?}\nProvider: {}\nAccount: {}\nModel: {}\nEffort: {}\nBranch: {}\nRevision: {}\nConsent expires after 30 minutes or a workspace revision change.\n\nCommand / prompt:\n{}",
+            "Environment: {:?}\nProvider: {}\nAccount: {}\nModel: {}\nEffort: {}\nBranch: {}\nRevision: {}\n{}\n\nCommand / prompt:\n{}",
             spec.environment,
             spec.provider_id.as_deref().unwrap_or("local shell"),
             spec.provider_account_id
@@ -1926,10 +2843,11 @@ impl OperationsState {
             spec.effort.as_deref().unwrap_or("provider default"),
             revision.0.as_deref().unwrap_or("not available"),
             revision.1.as_deref().unwrap_or("not available"),
+            lifetime,
             content
         );
         confirm(
-            &TauriConfirmer::new(app.clone()),
+            confirmer,
             &NativeConfirmation::operations_task(
                 &spec.name,
                 &workspace.name,
@@ -1938,7 +2856,7 @@ impl OperationsState {
             ),
         )
         .map_err(|_| KalError::validation("confirmation_declined", "Nothing was authorized."))?;
-        Ok(authorization)
+        Ok(())
     }
 
     /// An isolated prepared pane remains bound to the exact reviewed worktree base even when the
@@ -1958,17 +2876,25 @@ impl OperationsState {
         self.revision(&row.spec.workspace_id)
     }
 
+    /// Canonicalizes one exact spec for consent. Only a Squad member may be a taskless coding
+    /// terminal; an ordinary agent task still requires its prompt.
     fn prepare_authorization(
         &self,
         spec: &OperationSpec,
         origin: LaunchOrigin,
         revision_bound: bool,
+        squad_member: bool,
     ) -> Result<Authorization> {
-        let mut spec = kalcode_core::operations::normalize_spec(spec.clone())?;
+        let normalize = if squad_member {
+            kalcode_core::operations::normalize_squad_member_spec
+        } else {
+            kalcode_core::operations::normalize_spec
+        };
+        let mut spec = normalize(spec.clone())?;
         if spec.kind == OperationKind::Agent {
-            spec = self.threads.canonicalize_operation(&self.core, &spec)?;
+            spec = self.panes.canonicalize(&self.threads, &self.core, &spec)?;
         }
-        let spec = kalcode_core::operations::normalize_spec(spec)?;
+        let spec = normalize(spec)?;
         self.core
             .workspaces()?
             .into_iter()
@@ -1982,7 +2908,11 @@ impl OperationsState {
             .or(spec.prompt.as_deref())
             .unwrap_or("");
         validate_authorization_content(content)?;
-        let revision = self.revision(&spec.workspace_id)?;
+        let revision = if revision_bound {
+            self.revision(&spec.workspace_id)?
+        } else {
+            (None, None)
+        };
         Ok(Authorization {
             spec,
             revision,
@@ -2002,10 +2932,13 @@ impl OperationsState {
                 self.core.stop_operation_terminal(terminal, None)?;
             }
             if let Some(thread) = &row.thread_id {
-                self.threads
-                    .runtime_handle()
-                    .ok_or_else(unavailable)?
-                    .stop(thread)?;
+                let runtime = self.threads.runtime_handle().ok_or_else(unavailable)?;
+                match runtime.stop(thread) {
+                    Ok(_) => {}
+                    Err(error)
+                        if matches!(error.code, "thread_not_running" | "thread_not_found") => {}
+                    Err(error) => return Err(error),
+                }
             }
             let artifact_note = self.capture_artifacts(&row);
             let mut outcome = self.with_output_evidence(&row, "Cancelled by you.");
@@ -2038,6 +2971,18 @@ fn unavailable() -> KalError {
         "operations_unavailable",
         "Operations is not available in this runtime.",
     )
+}
+fn dispatch_in_progress() -> KalError {
+    KalError::validation(
+        "operation_dispatch_in_progress",
+        "This Squad member is already starting. Wait for its pane to be ready, then try again.",
+    )
+}
+fn dispatch_canceled(state: &AtomicU8) -> bool {
+    state.load(Ordering::Acquire) != 0
+}
+fn dispatch_user_canceled(state: &AtomicU8) -> bool {
+    state.load(Ordering::Acquire) == 2
 }
 fn operation_not_found() -> KalError {
     KalError::validation("operation_not_found", "This run is no longer available.")
@@ -2393,7 +3338,7 @@ pub async fn operations_enqueue(
         // Refuse a task past the plan's queue cap before asking the owner to approve it.
         let limit = s.plan_limit(Limited::QueuedTasks);
         s.store.check_queue_capacity(limit)?;
-        let consent = s.authorize(&app, &spec)?;
+        let consent = s.authorize(&TauriConfirmer::new(app.clone()), &spec)?;
         s.revalidate_core()?;
         let row = s.store.enqueue_limited(consent.spec.clone(), limit)?;
         s.authorized
@@ -2414,15 +3359,7 @@ pub async fn operations_update(
     revision: u64,
 ) -> std::result::Result<OperationRecord, IpcError> {
     blocking(state, move |s| {
-        let _gate = s.gate.lock().map_err(|_| poisoned())?;
-        let consent = s.authorize(&app, &spec)?;
-        s.revalidate_core()?;
-        let row = s.store.update(&id, consent.spec.clone(), revision)?;
-        s.authorized
-            .lock()
-            .map_err(|_| poisoned())?
-            .insert(row.id.clone(), consent);
-        Ok(row)
+        s.update_command(&TauriConfirmer::new(app), s, &id, spec, revision)
     })
     .await
 }
@@ -2458,11 +3395,7 @@ pub async fn operations_hold(
     id: String,
     paused: bool,
 ) -> std::result::Result<(), IpcError> {
-    blocking(state, move |s| {
-        let _gate = s.gate.lock().map_err(|_| poisoned())?;
-        s.store.hold(&id, paused)
-    })
-    .await
+    blocking(state, move |s| s.hold_command(&id, paused)).await
 }
 #[tauri::command]
 pub async fn operations_cancel(
@@ -2470,11 +3403,7 @@ pub async fn operations_cancel(
     state: RuntimeState<OperationsState>,
     id: String,
 ) -> std::result::Result<(), IpcError> {
-    blocking(state, move |s| {
-        let _gate = s.gate.lock().map_err(|_| poisoned())?;
-        s.cancel(&id)
-    })
-    .await
+    blocking(state, move |s| s.cancel_command(&id)).await
 }
 #[tauri::command]
 pub async fn operations_run_now(
@@ -2484,69 +3413,187 @@ pub async fn operations_run_now(
     id: String,
 ) -> std::result::Result<(), IpcError> {
     blocking(state, move |s| {
-        let _gate = s.gate.lock().map_err(|_| poisoned())?;
-        let row = s.store.detail(&id)?.run;
-        let squad_member = SquadsStore::new(s.core.clone()).get_member(&id)?;
+        s.run_now_command(&TauriConfirmer::new(app), s, &id)
+    })
+    .await
+}
+
+/// IPC command bodies, kept free of Tauri types so the dispatcher's interaction with edits,
+/// holds, cancellation and Run now is exercised directly by tests.
+impl OperationsState {
+    fn update_command(
+        &self,
+        confirmer: &dyn NativeConfirmer,
+        lease: &dyn OperationsLease,
+        id: &str,
+        spec: OperationSpec,
+        revision: u64,
+    ) -> Result<OperationRecord> {
+        let _gate = self.gate.lock().map_err(|_| poisoned())?;
+        self.ensure_dispatch_not_cancelling(id)?;
+        let consent = if SquadsStore::new(self.core.clone())
+            .get_member(id)?
+            .is_some()
+        {
+            // A Squad member keeps the User-origin, non-expiring consent its launch granted, now
+            // for exactly the edited spec, so it stays on the lock-free dispatcher path.
+            let consent = self.prepare_authorization(&spec, LaunchOrigin::User, false, true)?;
+            // A member whose pane is being created outside the gate keeps the identity that pane
+            // is being built with; task text may still change.
+            if self.squad_dispatch.is_reserved(id)
+                && !same_execution_identity(&consent.spec, &self.store.get(id)?.spec)
+            {
+                return Err(KalError::validation(
+                    "operation_dispatch_identity_locked",
+                    "This Squad member is starting. Wait for its pane to be ready before changing its workspace, provider, account, model or effort.",
+                ));
+            }
+            self.confirm_authorization(confirmer, &consent)?;
+            consent
+        } else {
+            self.authorize(confirmer, &spec)?
+        };
+        lease.revalidate_core()?;
+        let row = self.store.update(id, consent.spec.clone(), revision)?;
+        self.authorized
+            .lock()
+            .map_err(|_| poisoned())?
+            .insert(row.id.clone(), consent);
+        Ok(row)
+    }
+
+    fn hold_command(&self, id: &str, paused: bool) -> Result<()> {
+        let _gate = self.gate.lock().map_err(|_| poisoned())?;
+        if paused {
+            self.store.hold(id, true)?;
+            // A hold supersedes a dispatch that has not taken effect yet. It never stops a pane
+            // that already exists: a held prepared member keeps its waiting pane.
+            self.squad_dispatch.cancel(id, false);
+            Ok(())
+        } else {
+            self.ensure_dispatch_not_cancelling(id)?;
+            self.store.hold(id, false)
+        }
+    }
+
+    fn cancel_command(&self, id: &str) -> Result<()> {
+        let _gate = self.gate.lock().map_err(|_| poisoned())?;
+        let current = self.store.detail(id)?.run;
+        if current.status == OperationStatus::Cancelled {
+            return Ok(());
+        }
+        if self.squad_dispatch.is_reserved(id) {
+            // Publish a truthful durable cancelling state before signaling the out-of-gate
+            // worker. Provider termination and worktree cleanup never hold the global gate.
+            self.store.request_dispatch_cancel(id)?;
+            self.authorized.lock().map_err(|_| poisoned())?.remove(id);
+            if self.squad_dispatch.cancel(id, true) {
+                return Ok(());
+            }
+            // The job was still queued and is now removed atomically, so no worker can race.
+            // Take the full cancel path: a prepared member's real pane stops with its row.
+        }
+        self.cancel(id)
+    }
+
+    fn run_now_command(
+        &self,
+        confirmer: &dyn NativeConfirmer,
+        lease: &dyn OperationsLease,
+        id: &str,
+    ) -> Result<()> {
+        let (row, squad_member) = {
+            let _gate = self.gate.lock().map_err(|_| poisoned())?;
+            let squad_member = SquadsStore::new(self.core.clone()).get_member(id)?;
+            if squad_member.is_some() {
+                self.ensure_dispatch_idle(id)?;
+            }
+            (self.store.detail(id)?.run, squad_member)
+        };
+        let is_squad_member = squad_member.is_some();
         let exact_revision = squad_member
             .as_ref()
             .filter(|member| member.worktree && row.thread_id.as_deref() == Some(row.id.as_str()))
             .map(|_| (row.branch.clone(), row.version.clone()));
-        let consent = match s.authorize_with_origin_at_revision(
-            &app,
+        // Only a Squad member's Run now is User work that its scoped dispatcher may start while
+        // the queue is paused. Ordinary tasks keep main's Background consent.
+        let origin = if is_squad_member {
+            LaunchOrigin::User
+        } else {
+            LaunchOrigin::Background
+        };
+        let consent = match self.authorize_with_origin_at_revision(
+            confirmer,
             &row.spec,
-            LaunchOrigin::User,
+            origin,
             exact_revision,
+            is_squad_member,
         ) {
             Ok(consent) => consent,
             Err(error) => {
                 if row.attention_reason.is_some() {
-                    s.store.hold_with_reason(&id, &safe(&error.message))?;
+                    let _gate = self.gate.lock().map_err(|_| poisoned())?;
+                    if self
+                        .store
+                        .get(id)
+                        .is_ok_and(|current| current.spec == row.spec)
+                    {
+                        self.store.hold_with_reason(id, &safe(&error.message))?;
+                    }
                 }
                 return Err(error);
             }
         };
-        s.revalidate_core()?;
-        if consent.spec != row.spec {
-            let (revision, _, _) = s.store.snapshot()?;
-            s.store.update(&id, consent.spec.clone(), revision)?;
+        lease.revalidate_core()?;
+        let _gate = self.gate.lock().map_err(|_| poisoned())?;
+        if is_squad_member {
+            // The native confirmation ran outside the gate; a dispatch may have started since.
+            self.ensure_dispatch_idle(id)?;
         }
-        let is_squad_member = squad_member.is_some();
-        if is_squad_member
-            && let Some(runtime) = s.threads.runtime_handle()
-            && let Err(error) = runtime.rearm_prepared_pane(&id)
-        {
-            let reason = safe(&error.message);
-            s.store.hold_with_reason(&id, &reason)?;
+        let current = self.store.detail(id)?.run;
+        if current.spec != row.spec {
+            return Err(KalError::validation(
+                "operation_authorization_changed",
+                "This task changed while it was being authorized. Run it again.",
+            ));
+        }
+        if consent.spec != current.spec {
+            let (revision, _, _) = self.store.snapshot()?;
+            self.store.update(id, consent.spec.clone(), revision)?;
+        }
+        if is_squad_member && let Err(error) = self.panes.rearm(&self.threads, id) {
+            // Run now is the explicit action that may reclaim a prepared pane the person typed
+            // into. Without it the member's task could never be sent again.
+            self.store.hold_with_reason(id, &safe(&error.message))?;
             return Err(error);
         }
         if row.attention_reason.is_some() {
-            s.store.clear_attention_hold(&id)?;
+            self.store.clear_attention_hold(id)?;
         } else if is_squad_member && row.status == OperationStatus::Paused {
-            s.store.hold(&id, false)?;
+            self.store.hold(id, false)?;
         }
-        s.authorized
+        self.authorized
             .lock()
             .map_err(|_| poisoned())?
-            .insert(id.clone(), consent);
+            .insert(id.to_owned(), consent);
         if is_squad_member {
-            // Scoped Squad retry prepares or resumes the member's real pane and, when its
-            // dependencies are ready, admits its first task. The global queue pause is unchanged.
-            return s.tick(s);
-        }
-        let armed = s.store.detail(&id)?.run;
-        if armed.status == OperationStatus::Blocked || !armed.blockers.is_empty() {
+            // Squad retries always execute on the bounded dispatcher, outside the gate.
+            if !self.squad_dispatch.enqueue(id, SquadDispatchKind::Run)? {
+                return Err(dispatch_in_progress());
+            }
+            self.stop.1.notify_all();
             return Ok(());
         }
-        let claim = s.store.claim(Some(&id));
-        let row = claim?.ok_or_else(|| {
+        let claimed = self.store.claim(Some(id))?.ok_or_else(|| {
             KalError::validation(
                 "operation_blocked",
                 "Resume the queue and resolve this task's blockers before running it.",
             )
         })?;
-        s.launch(row, s)
-    })
-    .await
+        // Ordinary Operations keep main's one-task effect serialization: claim and launch in one
+        // gate epoch so reconciliation cannot interrupt a just-claimed row.
+        self.launch(claimed, lease)
+    }
 }
 #[tauri::command]
 pub async fn operations_service_action(
@@ -2579,7 +3626,7 @@ pub async fn operations_service_action(
             }
         }
         if action == "restart" {
-            let consent = s.authorize(&app, &old.spec)?; s.revalidate_core()?;
+            let consent = s.authorize(&TauriConfirmer::new(app.clone()), &old.spec)?; s.revalidate_core()?;
             // Reserve the successor before stopping a healthy service. Queue admission failure
             // must not turn a requested restart into an avoidable outage.
             let row = s.store.enqueue(consent.spec.clone())?;
@@ -2653,6 +3700,1096 @@ mod tests {
     use kalcode_contracts::squads::{SquadDefinition, SquadMemberDefinition};
     use kalcode_core::{CoreConfig, Paths, flags::BuildChannel};
 
+    #[test]
+    fn squad_dispatch_cancel_retains_exact_reservation_until_worker_cleanup() {
+        let queue = SquadDispatchQueue::default();
+        assert!(
+            queue
+                .enqueue("member-1", SquadDispatchKind::Authorize)
+                .expect("enqueue")
+        );
+        let (job, canceled) = queue.take().expect("worker claim");
+        assert_eq!(job.operation_id, "member-1");
+        assert!(queue.cancel("member-1", true));
+        assert!(dispatch_user_canceled(&canceled));
+        assert!(
+            !queue
+                .enqueue("member-1", SquadDispatchKind::Run)
+                .expect("retry is bounded"),
+            "an active canceled worker retains the exact-ID reservation"
+        );
+
+        queue.finish("member-1", &canceled);
+        assert!(
+            queue
+                .enqueue("member-1", SquadDispatchKind::Run)
+                .expect("retry after cleanup")
+        );
+        assert!(
+            !queue.cancel("member-1", true),
+            "queued cancellation removes the job without inventing an active worker"
+        );
+        assert!(!queue.is_reserved("member-1"));
+    }
+
+    #[test]
+    fn squad_dispatch_user_cancel_finishes_durably_before_releasing_reservation() {
+        let data = tempfile::tempdir().expect("data");
+        let project = tempfile::tempdir().expect("project");
+        let core = Arc::new(
+            Core::open(CoreConfig {
+                paths: Paths::new(data.path()),
+                app_version: "0.1.9-test".into(),
+                channel: BuildChannel::Development,
+            })
+            .expect("core"),
+        );
+        let workspace = core.open_workspace(project.path()).expect("workspace");
+        let (state, resources) = fixture_with_thread_runtime(core.clone(), data.path());
+        let mut spec = observed_spec("Cancel member".into(), workspace.id, OperationKind::Agent);
+        spec.prompt = Some("Review the change".into());
+        spec.provider_id = Some("fixture".into());
+        let operation = state.store.enqueue(spec).expect("enqueue");
+        state
+            .squad_dispatch
+            .enqueue(&operation.id, SquadDispatchKind::Authorize)
+            .expect("queue dispatch");
+        let (job, canceled) = state.squad_dispatch.take().expect("claim dispatch");
+        let reservation = reservation_for(&state, &job, &canceled);
+        state
+            .store
+            .request_dispatch_cancel(&operation.id)
+            .expect("durable cancelling state");
+        canceled.store(2, Ordering::Release);
+
+        state
+            .complete_squad_dispatch(&job, &reservation, Ok(false))
+            .expect("complete exact cancellation");
+        let cancelled = state.store.get(&operation.id).expect("cancelled member");
+        assert_eq!(cancelled.status, OperationStatus::Cancelled);
+        assert!(cancelled.attention_reason.is_none());
+        assert!(!state.squad_dispatch.is_reserved(&operation.id));
+
+        state
+            .threads
+            .shutdown_checked()
+            .expect("thread runtime shutdown");
+        assert!(resources.shutdown_checked());
+        core.shutdown();
+    }
+
+    #[test]
+    fn shutdown_joins_every_squad_worker_even_after_one_panics() {
+        let data = tempfile::tempdir().expect("data");
+        let core = Arc::new(
+            Core::open(CoreConfig {
+                paths: Paths::new(data.path()),
+                app_version: "0.1.9-test".into(),
+                channel: BuildChannel::Development,
+            })
+            .expect("core"),
+        );
+        let (state, resources) = fixture(core.clone(), data.path());
+        let release = Arc::new((Mutex::new(false), Condvar::new()));
+        let waiting = release.clone();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let first = std::thread::spawn(|| panic!("expected worker panic"));
+        let second = std::thread::spawn(move || {
+            ready_tx.send(()).expect("ready");
+            let (lock, wake) = &*waiting;
+            let mut released = lock.lock().expect("release lock");
+            while !*released {
+                released = wake.wait(released).expect("release wait");
+            }
+        });
+        ready_rx.recv().expect("worker waiting");
+        state
+            .squad_workers
+            .lock()
+            .expect("workers")
+            .extend([first, second]);
+
+        let shutdown = std::thread::spawn(move || {
+            let clean = state.shutdown_checked();
+            (clean, state)
+        });
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(
+            !shutdown.is_finished(),
+            "shutdown must keep joining workers after the first panic"
+        );
+        {
+            let (lock, wake) = &*release;
+            *lock.lock().expect("release lock") = true;
+            wake.notify_all();
+        }
+        let (clean, state) = shutdown.join().expect("shutdown caller");
+        assert!(!clean, "the panicked worker remains a truthful failure");
+        assert!(
+            state.shutdown_checked(),
+            "a retry succeeds only after all worker handles were joined"
+        );
+
+        assert!(resources.shutdown_checked());
+        core.shutdown();
+    }
+
+    fn reservation_for(
+        state: &OperationsState,
+        job: &SquadDispatchJob,
+        canceled: &Arc<AtomicU8>,
+    ) -> DispatchReservation {
+        DispatchReservation {
+            queue: state.squad_dispatch.clone(),
+            operation_id: job.operation_id.clone(),
+            canceled: canceled.clone(),
+            released: AtomicBool::new(false),
+        }
+    }
+
+    struct TestLease;
+
+    impl OperationsLease for TestLease {
+        fn revalidate_core(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    fn test_leases() -> LeaseSource {
+        Arc::new(|| Ok(Box::new(TestLease) as Box<dyn OperationsLease>))
+    }
+
+    struct AllowAll;
+
+    impl NativeConfirmer for AllowAll {
+        fn show(&self, _confirmation: &NativeConfirmation) -> kalcode_core::confirm::DialogAnswer {
+            kalcode_core::confirm::DialogAnswer::Confirmed
+        }
+    }
+
+    fn insert_pane(core: &Core, id: &str, spec: &OperationSpec, status: ThreadStatus) {
+        let workspace = core
+            .workspaces()
+            .expect("workspaces")
+            .into_iter()
+            .find(|workspace| workspace.id == spec.workspace_id)
+            .expect("pane workspace");
+        let provider = kalcode_contracts::agent::ProviderId::new(
+            spec.provider_id.as_deref().expect("pane provider"),
+        );
+        let now = kalcode_core::time::now_rfc3339();
+        core.write_with_events(|tx| {
+            kalcode_threads::store::insert_thread(
+                tx,
+                &kalcode_threads::store::NewThreadRow {
+                    id,
+                    name: &spec.name,
+                    provider_id: &provider,
+                    provider_name: "Fake provider",
+                    model: spec.model.as_deref(),
+                    effort: spec.effort.as_deref(),
+                    provider_account_id: spec.provider_account_id.as_deref(),
+                    account_label: Some("Fake account"),
+                    workspace_id: &workspace.id,
+                    workspace_name: &workspace.name,
+                    cwd: &workspace.root_path,
+                    permission_mode: PermissionMode::Auto,
+                    now: &now,
+                },
+            )?;
+            kalcode_threads::store::set_status(tx, id, status, Some("Fake pane"), &now)?;
+            Ok(((), Vec::new()))
+        })
+        .expect("insert fake pane");
+    }
+
+    fn set_pane_status(core: &Core, id: &str, status: ThreadStatus) {
+        let now = kalcode_core::time::now_rfc3339();
+        core.write_with_events(|tx| {
+            kalcode_threads::store::set_status(tx, id, status, Some("Fake pane"), &now)?;
+            Ok(((), Vec::new()))
+        })
+        .expect("set fake pane status");
+    }
+
+    #[derive(Default)]
+    struct FakeSpawns {
+        block: bool,
+        released: HashSet<String>,
+        spawning: HashSet<String>,
+    }
+
+    /// A deliberately slow provider-pane factory. Creation can be held mid-spawn; it records the
+    /// pane in the real thread store so every runtime lookup, stop and archive is genuine.
+    struct FakePanes {
+        core: Arc<Core>,
+        spawns: Mutex<FakeSpawns>,
+        changed: Condvar,
+        user_turn: Mutex<HashSet<String>>,
+        panic_on: Mutex<HashSet<String>>,
+        rearmed: Mutex<Vec<String>>,
+    }
+
+    impl FakePanes {
+        fn new(core: Arc<Core>) -> Self {
+            Self {
+                core,
+                spawns: Mutex::new(FakeSpawns::default()),
+                changed: Condvar::new(),
+                user_turn: Mutex::new(HashSet::new()),
+                panic_on: Mutex::new(HashSet::new()),
+                rearmed: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn block_spawns(&self) {
+            self.spawns.lock().expect("spawns").block = true;
+        }
+
+        fn release(&self, id: &str) {
+            self.spawns
+                .lock()
+                .expect("spawns")
+                .released
+                .insert(id.to_owned());
+            self.changed.notify_all();
+        }
+
+        fn release_all(&self) {
+            self.spawns.lock().expect("spawns").block = false;
+            self.changed.notify_all();
+        }
+
+        fn wait_spawning(&self, count: usize) -> bool {
+            let deadline = Instant::now() + Duration::from_secs(20);
+            let mut spawns = self.spawns.lock().expect("spawns");
+            while spawns.spawning.len() < count {
+                let now = Instant::now();
+                if now >= deadline {
+                    return false;
+                }
+                spawns = self
+                    .changed
+                    .wait_timeout(spawns, deadline - now)
+                    .expect("spawn wait")
+                    .0;
+            }
+            true
+        }
+
+        fn create(
+            &self,
+            threads: &ThreadsState,
+            request: &OperationPaneRequest<'_>,
+            status: ThreadStatus,
+        ) -> Result<ThreadSummary> {
+            let panic = self
+                .panic_on
+                .lock()
+                .expect("panic set")
+                .contains(request.operation_id);
+            if panic {
+                panic!("fake provider factory panicked");
+            }
+            {
+                let mut spawns = self.spawns.lock().expect("spawns");
+                spawns.spawning.insert(request.operation_id.to_owned());
+                self.changed.notify_all();
+                while spawns.block && !spawns.released.contains(request.operation_id) {
+                    spawns = self.changed.wait(spawns).expect("spawn release");
+                }
+                spawns.spawning.remove(request.operation_id);
+                self.changed.notify_all();
+            }
+            insert_pane(&self.core, request.operation_id, request.spec, status);
+            threads
+                .runtime_handle()
+                .ok_or_else(unavailable)?
+                .get(request.operation_id)
+        }
+    }
+
+    impl OperationPanes for FakePanes {
+        fn canonicalize(
+            &self,
+            _threads: &ThreadsState,
+            _core: &Arc<Core>,
+            spec: &OperationSpec,
+        ) -> Result<OperationSpec> {
+            Ok(spec.clone())
+        }
+
+        fn prepare(
+            &self,
+            threads: &ThreadsState,
+            request: OperationPaneRequest<'_>,
+        ) -> Result<ThreadSummary> {
+            let runtime = threads.runtime_handle().ok_or_else(unavailable)?;
+            if runtime.get(request.operation_id).is_ok() {
+                // Mirrors the runtime: a pane the person typed into refuses to re-enter the
+                // dependency wait until an explicit Run now re-arms it.
+                if self
+                    .user_turn
+                    .lock()
+                    .expect("user turns")
+                    .contains(request.operation_id)
+                {
+                    return Err(KalError::validation(
+                        "operation_prepared_thread_busy",
+                        "This member's terminal is already working.",
+                    ));
+                }
+                set_pane_status(
+                    &self.core,
+                    request.operation_id,
+                    ThreadStatus::WaitingForDependency,
+                );
+                return runtime.get(request.operation_id);
+            }
+            self.create(threads, &request, ThreadStatus::WaitingForDependency)
+        }
+
+        fn start(
+            &self,
+            threads: &ThreadsState,
+            request: OperationPaneRequest<'_>,
+        ) -> Result<ThreadSummary> {
+            self.create(threads, &request, ThreadStatus::Active)
+        }
+
+        fn deliver(
+            &self,
+            threads: &ThreadsState,
+            operation_id: &str,
+            _prompt: Option<&str>,
+        ) -> Result<ThreadSummary> {
+            set_pane_status(&self.core, operation_id, ThreadStatus::Active);
+            threads
+                .runtime_handle()
+                .ok_or_else(unavailable)?
+                .get(operation_id)
+        }
+
+        fn rearm(&self, _threads: &ThreadsState, operation_id: &str) -> Result<bool> {
+            self.rearmed
+                .lock()
+                .expect("rearmed")
+                .push(operation_id.to_owned());
+            Ok(self
+                .user_turn
+                .lock()
+                .expect("user turns")
+                .remove(operation_id))
+        }
+    }
+
+    /// A real Squad launch over a real ledger and thread store, with a fake pane factory.
+    struct SquadHarness {
+        core: Arc<Core>,
+        state: Arc<OperationsState>,
+        resources: Arc<crate::resource_commands::ResourceGovernorState>,
+        panes: Arc<FakePanes>,
+        workspace_id: String,
+        ids: HashMap<String, String>,
+        _data: tempfile::TempDir,
+        _project: tempfile::TempDir,
+    }
+
+    impl SquadHarness {
+        fn new(members: &[(&str, &[&str])]) -> Self {
+            let data = tempfile::tempdir().expect("data");
+            let project = tempfile::tempdir().expect("project");
+            let core = Arc::new(
+                Core::open(CoreConfig {
+                    paths: Paths::new(data.path()),
+                    app_version: "0.1.9-test".into(),
+                    channel: BuildChannel::Development,
+                })
+                .expect("core"),
+            );
+            let workspace = core.open_workspace(project.path()).expect("workspace");
+            let account_id = kalcode_contracts::ids::new_id();
+            core.transact(|tx| {
+                tx.execute(
+                    "INSERT INTO provider_accounts (
+                       id, provider_id, display_name, authentication_state, is_default, created_at
+                     ) VALUES (?1, 'codex', 'Codex test', 'authenticated', 0,
+                       '2026-10-06T12:00:00.000Z')",
+                    [&account_id],
+                )?;
+                Ok(((), Vec::new()))
+            })
+            .expect("provider account");
+            let ids: HashMap<String, String> = if members.is_empty() {
+                HashMap::new()
+            } else {
+                let squads = SquadsStore::new(core.clone());
+                let saved = squads
+                    .save_squad(SquadDefinition {
+                        id: kalcode_contracts::ids::new_id(),
+                        name: "Dispatch crew".into(),
+                        goal: "Exercise the Squad dispatcher".into(),
+                        members: members
+                            .iter()
+                            .map(|(key, depends_on)| SquadMemberDefinition {
+                                key: (*key).into(),
+                                name: format!("{key} member"),
+                                provider_id: "codex".into(),
+                                provider_account_id: account_id.clone(),
+                                model: "gpt-test".into(),
+                                effort: "high".into(),
+                                role: "implementation".into(),
+                                task: Some(format!("Implement {key}.")),
+                                worktree: false,
+                                depends_on: depends_on.iter().map(|key| (*key).into()).collect(),
+                                manager_key: None,
+                                owned_paths: vec![format!("{key}/")],
+                            })
+                            .collect(),
+                    })
+                    .expect("save squad");
+                let launch = squads
+                    .launch(
+                        &kalcode_contracts::ids::new_id(),
+                        &saved.id,
+                        &workspace.id,
+                        None,
+                        None,
+                    )
+                    .expect("launch squad");
+                launch
+                    .members
+                    .iter()
+                    .map(|member| (member.key.clone(), member.operation_id.clone()))
+                    .collect()
+            };
+            let (mut state, resources) = fixture_with_thread_runtime(core.clone(), data.path());
+            let panes = Arc::new(FakePanes::new(core.clone()));
+            state.panes = panes.clone() as Arc<dyn OperationPanes>;
+            Self {
+                core,
+                state: Arc::new(state),
+                resources,
+                panes,
+                workspace_id: workspace.id,
+                ids,
+                _data: data,
+                _project: project,
+            }
+        }
+
+        fn id(&self, key: &str) -> String {
+            self.ids[key].clone()
+        }
+
+        fn row(&self, key: &str) -> OperationRecord {
+            self.state.store.get(&self.ids[key]).expect("member row")
+        }
+
+        fn thread(&self, key: &str) -> ThreadSummary {
+            self.state
+                .threads
+                .runtime_handle()
+                .expect("runtime")
+                .get(&self.ids[key])
+                .expect("member pane")
+        }
+
+        /// The exact consent a Squad launch grants a member.
+        fn launch_consent(&self, key: &str) {
+            let row = self.row(key);
+            self.state.authorized.lock().expect("consent").insert(
+                row.id.clone(),
+                Authorization {
+                    spec: row.spec,
+                    revision: (None, None),
+                    expires: None,
+                    origin: LaunchOrigin::User,
+                    revision_bound: false,
+                },
+            );
+        }
+
+        fn prepare_waiting(&self, key: &str) {
+            let row = self.row(key);
+            self.state
+                .store
+                .prepare_agent_thread(&row.id, None, None)
+                .expect("prepare member");
+            insert_pane(
+                &self.core,
+                &row.id,
+                &row.spec,
+                ThreadStatus::WaitingForDependency,
+            );
+        }
+
+        fn start_running(&self, key: &str) {
+            let id = self.id(key);
+            let claimed = self
+                .state
+                .store
+                .claim_user_squad_agent(&id)
+                .expect("claim")
+                .expect("claimable");
+            self.state
+                .store
+                .reserve_agent_thread(&id, None, None)
+                .expect("reserve pane");
+            insert_pane(&self.core, &id, &claimed.spec, ThreadStatus::Active);
+            self.state
+                .store
+                .bind(&id, None, Some(&id), None, None)
+                .expect("bind pane");
+        }
+
+        fn take_job(
+            &self,
+            key: &str,
+            kind: SquadDispatchKind,
+        ) -> (SquadDispatchJob, DispatchReservation) {
+            assert!(
+                self.state
+                    .squad_dispatch
+                    .enqueue(&self.ids[key], kind)
+                    .expect("enqueue")
+            );
+            let (job, canceled) = self.state.squad_dispatch.take().expect("take job");
+            assert_eq!(job.operation_id, self.ids[key]);
+            let reservation = reservation_for(&self.state, &job, &canceled);
+            (job, reservation)
+        }
+
+        fn wait_released(&self, key: &str) {
+            let deadline = Instant::now() + Duration::from_secs(20);
+            while self.state.squad_dispatch.is_reserved(&self.ids[key]) {
+                assert!(Instant::now() < deadline, "{key} dispatch never finished");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+
+        fn shutdown(self) {
+            self.panes.release_all();
+            assert!(self.state.shutdown_checked(), "Operations shutdown");
+            self.state
+                .threads
+                .shutdown_checked()
+                .expect("thread runtime shutdown");
+            assert!(self.resources.shutdown_checked());
+            self.core.shutdown();
+        }
+    }
+
+    #[test]
+    fn cancelling_an_ordinary_run_whose_thread_already_ended_still_cancels() {
+        // All-Operations hardening kept from the branch: a provider thread that already ended
+        // (stop reports `thread_not_running`) must not make Cancel fail for an ordinary task.
+        let squad = SquadHarness::new(&[]);
+        let mut spec = observed_spec(
+            "Ordinary agent".into(),
+            squad.workspace_id.clone(),
+            OperationKind::Agent,
+        );
+        spec.prompt = Some("Review the change".into());
+        spec.provider_id = Some("codex".into());
+        let operation = squad.state.store.enqueue(spec).expect("enqueue");
+        let claimed = squad
+            .state
+            .store
+            .claim(Some(&operation.id))
+            .expect("claim")
+            .expect("claimable");
+        squad
+            .state
+            .store
+            .reserve_agent_thread(&operation.id, None, None)
+            .expect("reserve");
+        insert_pane(
+            &squad.core,
+            &operation.id,
+            &claimed.spec,
+            ThreadStatus::Completed,
+        );
+        squad
+            .state
+            .store
+            .bind(&operation.id, None, Some(&operation.id), None, None)
+            .expect("bind");
+
+        squad
+            .state
+            .cancel_command(&operation.id)
+            .expect("cancel an ended run");
+        assert_eq!(
+            squad.state.store.get(&operation.id).expect("run").status,
+            OperationStatus::Cancelled
+        );
+        squad.shutdown();
+    }
+
+    #[test]
+    fn prepared_waiting_member_does_not_spin_the_scheduler() {
+        let squad = SquadHarness::new(&[("build", &[]), ("review", &["build"])]);
+        squad.start_running("build");
+        squad.prepare_waiting("review");
+        squad.launch_consent("review");
+        assert!(!squad.row("review").blockers.is_empty());
+        squad
+            .state
+            .start_squad_workers(test_leases())
+            .expect("workers");
+        squad
+            .state
+            .start_scheduler(test_leases())
+            .expect("scheduler");
+
+        std::thread::sleep(Duration::from_millis(2_500));
+        let dispatched = squad.state.squad_dispatch.jobs_taken();
+        assert!(
+            dispatched <= 2,
+            "a pane waiting on a running dependency must not be re-dispatched in a hot loop \
+             (dispatched {dispatched} jobs in 2.5 s)"
+        );
+        let review = squad.row("review");
+        assert!(review.attention_reason.is_none());
+        assert_eq!(
+            squad.thread("review").status,
+            ThreadStatus::WaitingForDependency
+        );
+        assert!(
+            !squad.state.store.snapshot().expect("snapshot").1,
+            "queue not paused"
+        );
+        squad.shutdown();
+    }
+
+    #[test]
+    fn cancelling_a_queued_squad_dispatch_stops_the_prepared_pane() {
+        let squad = SquadHarness::new(&[("build", &[]), ("review", &["build"])]);
+        squad.prepare_waiting("review");
+        let id = squad.id("review");
+        assert!(
+            squad
+                .state
+                .squad_dispatch
+                .enqueue(&id, SquadDispatchKind::Run)
+                .expect("enqueue")
+        );
+
+        squad
+            .state
+            .cancel_command(&id)
+            .expect("cancel queued dispatch");
+        assert_eq!(squad.row("review").status, OperationStatus::Cancelled);
+        assert_eq!(
+            squad.thread("review").status,
+            ThreadStatus::Interrupted,
+            "the prepared provider pane stops with its cancelled member"
+        );
+        assert!(!squad.state.squad_dispatch.is_reserved(&id));
+        squad.shutdown();
+    }
+
+    #[test]
+    fn run_now_rearms_a_prepared_pane_the_person_used_before_redispatch() {
+        let squad = SquadHarness::new(&[("build", &[]), ("review", &["build"])]);
+        squad.prepare_waiting("review");
+        let id = squad.id("review");
+        // The person typed into the waiting pane; the scheduler then held the member.
+        squad
+            .panes
+            .user_turn
+            .lock()
+            .expect("user turns")
+            .insert(id.clone());
+        set_pane_status(&squad.core, &id, ThreadStatus::Idle);
+        squad
+            .state
+            .store
+            .hold_with_reason(&id, "Terminal used directly; Squad task remains held.")
+            .expect("hold");
+
+        squad
+            .state
+            .run_now_command(&AllowAll, &TestLease, &id)
+            .expect("run now");
+        assert_eq!(
+            *squad.panes.rearmed.lock().expect("rearmed"),
+            vec![id.clone()]
+        );
+        let (job, canceled) = squad.state.squad_dispatch.take().expect("re-dispatch");
+        let reservation = reservation_for(&squad.state, &job, &canceled);
+        squad
+            .state
+            .run_dispatch_job(&job, &reservation, &test_leases());
+
+        let review = squad.row("review");
+        assert!(
+            review.attention_reason.is_none(),
+            "dispatch proceeds after the explicit re-arm: {:?}",
+            review.attention_reason
+        );
+        assert!(matches!(
+            review.status,
+            OperationStatus::Queued | OperationStatus::Blocked
+        ));
+        assert_eq!(
+            squad.thread("review").status,
+            ThreadStatus::WaitingForDependency
+        );
+        assert!(!squad.state.squad_dispatch.is_reserved(&id));
+        squad.shutdown();
+    }
+
+    #[test]
+    fn run_now_refuses_an_in_flight_squad_dispatch_and_abandoned_starts_are_held() {
+        let squad = SquadHarness::new(&[("one", &[]), ("two", &[]), ("three", &[])]);
+        let (_job, reservation) = squad.take_job("one", SquadDispatchKind::Run);
+        let error = squad
+            .state
+            .run_now_command(&AllowAll, &TestLease, &squad.id("one"))
+            .expect_err("Run now during an in-flight dispatch");
+        assert_eq!(error.code, "operation_dispatch_in_progress");
+        assert_eq!(
+            reservation.canceled.load(Ordering::Acquire),
+            0,
+            "Run now never cancels a member that may already have its task"
+        );
+        assert!(squad.state.squad_dispatch.is_reserved(&squad.id("one")));
+        reservation.release();
+
+        // A dispatch that claimed a member but never reserved its pane returns it to a hold.
+        let (job, reservation) = squad.take_job("two", SquadDispatchKind::Run);
+        squad
+            .state
+            .store
+            .claim_user_squad_agent(&squad.id("two"))
+            .expect("claim")
+            .expect("claimable");
+        squad
+            .state
+            .complete_squad_dispatch(&job, &reservation, Ok(false))
+            .expect("complete");
+        let two = squad.row("two");
+        assert_eq!(two.status, OperationStatus::Paused);
+        assert_eq!(
+            two.attention_reason.as_deref(),
+            Some(UNBOUND_SQUAD_START_REASON)
+        );
+        assert!(!squad.state.squad_dispatch.is_reserved(&squad.id("two")));
+
+        // Reconcile does the same for one no dispatch owns any more.
+        squad
+            .state
+            .store
+            .claim_user_squad_agent(&squad.id("three"))
+            .expect("claim")
+            .expect("claimable");
+        squad.state.reconcile().expect("reconcile");
+        let three = squad.row("three");
+        assert_eq!(three.status, OperationStatus::Paused);
+        assert_eq!(
+            three.attention_reason.as_deref(),
+            Some(UNBOUND_SQUAD_START_REASON)
+        );
+        squad.shutdown();
+    }
+
+    #[test]
+    fn identity_edits_wait_for_an_in_flight_dispatch_and_mismatch_holds_only_the_member() {
+        let squad = SquadHarness::new(&[("one", &[]), ("two", &["one"])]);
+        let id = squad.id("one");
+        assert!(
+            squad
+                .state
+                .squad_dispatch
+                .enqueue(&id, SquadDispatchKind::Run)
+                .expect("enqueue")
+        );
+        let mut identity_edit = squad.row("one").spec;
+        identity_edit.model = Some("other-model".into());
+        let revision = squad.state.store.snapshot().expect("snapshot").0;
+        let error = squad
+            .state
+            .update_command(&AllowAll, &TestLease, &id, identity_edit, revision)
+            .expect_err("identity edit while dispatching");
+        assert_eq!(error.code, "operation_dispatch_identity_locked");
+        assert_eq!(squad.row("one").spec.model.as_deref(), Some("gpt-test"));
+        let mut task_edit = squad.row("one").spec;
+        task_edit.prompt = Some("Implement one, then report.".into());
+        squad
+            .state
+            .update_command(&AllowAll, &TestLease, &id, task_edit, revision)
+            .expect("task text may change while the pane starts");
+        // Drop the still-queued job so the next take is the member under test.
+        assert!(!squad.state.squad_dispatch.cancel(&id, false));
+
+        // A pane created with an older identity is stopped by its exact id and only its member
+        // is held; the global queue keeps running.
+        let two = squad.row("two");
+        squad
+            .state
+            .store
+            .prepare_agent_thread(&two.id, None, None)
+            .expect("prepare");
+        let mut old = two.spec.clone();
+        old.model = Some("old-model".into());
+        insert_pane(
+            &squad.core,
+            &two.id,
+            &old,
+            ThreadStatus::WaitingForDependency,
+        );
+        let (job, reservation) = squad.take_job("two", SquadDispatchKind::Run);
+        let error = squad
+            .state
+            .stop_exact_squad_thread(&squad.row("two"))
+            .expect_err("mismatched pane");
+        assert_eq!(error.code, MEMBER_PANE_MISMATCH);
+        assert_eq!(squad.thread("two").status, ThreadStatus::Interrupted);
+        let _ = squad
+            .state
+            .complete_squad_dispatch(&job, &reservation, Err(error));
+        let two = squad.row("two");
+        assert_eq!(two.status, OperationStatus::Paused);
+        assert!(
+            two.attention_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("no longer matched"))
+        );
+        assert!(
+            !squad.state.store.snapshot().expect("snapshot").1,
+            "a member mismatch never pauses the whole queue"
+        );
+        assert!(!squad.state.squad_dispatch.is_reserved(&two.id));
+        squad.shutdown();
+    }
+
+    #[test]
+    fn paused_queue_with_a_run_now_ordinary_task_still_dispatches_ready_squad_members() {
+        let squad = SquadHarness::new(&[("one", &[])]);
+        // The ordinary task is ahead of the Squad member in queue order.
+        let mut build = observed_spec(
+            "Ordinary build".into(),
+            squad.workspace_id.clone(),
+            OperationKind::Build,
+        );
+        build.command = Some("echo build".into());
+        let build = squad.state.store.enqueue(build).expect("enqueue build");
+        squad.state.store.set_paused(true).expect("pause queue");
+
+        let error = squad
+            .state
+            .run_now_command(&AllowAll, &TestLease, &build.id)
+            .expect_err("paused queue");
+        assert_eq!(error.code, "operations_paused");
+        assert_eq!(
+            squad.state.authorized.lock().expect("consent")[&build.id].origin,
+            LaunchOrigin::Background,
+            "an ordinary Run now keeps main's Background consent"
+        );
+
+        squad.launch_consent("one");
+        squad.state.tick(&TestLease).expect("tick never fails");
+        assert!(
+            squad.state.squad_dispatch.is_reserved(&squad.id("one")),
+            "the ready Squad member is still dispatched"
+        );
+        assert_eq!(
+            squad.state.store.get(&build.id).expect("build").status,
+            OperationStatus::Queued
+        );
+        squad.shutdown();
+    }
+
+    #[test]
+    fn cancelling_member_refuses_run_now_edits_and_resume() {
+        let squad = SquadHarness::new(&[("one", &[])]);
+        let id = squad.id("one");
+        let (job, reservation) = squad.take_job("one", SquadDispatchKind::Run);
+        squad
+            .state
+            .cancel_command(&id)
+            .expect("cancel active dispatch");
+        assert!(dispatch_user_canceled(&reservation.canceled));
+
+        let run_now = squad
+            .state
+            .run_now_command(&AllowAll, &TestLease, &id)
+            .expect_err("Run now while stopping");
+        assert_eq!(run_now.code, "operation_cancellation_in_progress");
+        let mut edit = squad.row("one").spec;
+        edit.prompt = Some("Different task".into());
+        let revision = squad.state.store.snapshot().expect("snapshot").0;
+        let update = squad
+            .state
+            .update_command(&AllowAll, &TestLease, &id, edit, revision)
+            .expect_err("edit while stopping");
+        assert_eq!(update.code, "operation_cancellation_in_progress");
+        let resume = squad
+            .state
+            .hold_command(&id, false)
+            .expect_err("resume while stopping");
+        assert_eq!(resume.code, "operation_cancellation_in_progress");
+        let stopping = squad.row("one");
+        assert_eq!(stopping.status, OperationStatus::Paused);
+        assert_eq!(
+            stopping.current_action.as_deref(),
+            Some(OPERATION_CANCELLING_ACTION)
+        );
+
+        squad
+            .state
+            .complete_squad_dispatch(&job, &reservation, Ok(false))
+            .expect("cleanup completes");
+        assert_eq!(squad.row("one").status, OperationStatus::Cancelled);
+        squad.shutdown();
+    }
+
+    #[test]
+    fn editing_a_squad_member_keeps_user_non_expiring_dispatcher_consent() {
+        let squad = SquadHarness::new(&[("one", &[])]);
+        let id = squad.id("one");
+        let mut edit = squad.row("one").spec;
+        edit.prompt = Some("Implement one with tests.".into());
+        let revision = squad.state.store.snapshot().expect("snapshot").0;
+        squad
+            .state
+            .update_command(&AllowAll, &TestLease, &id, edit.clone(), revision)
+            .expect("edit member");
+        {
+            let consent = squad.state.authorized.lock().expect("consent");
+            let consent = &consent[&id];
+            assert_eq!(consent.origin, LaunchOrigin::User);
+            assert!(
+                consent.expires.is_none(),
+                "a Squad member's consent never expires"
+            );
+            assert_eq!(consent.spec.prompt, edit.prompt, "exactly the edited spec");
+        }
+        squad.state.tick(&TestLease).expect("tick");
+        assert!(
+            squad.state.squad_dispatch.is_reserved(&id),
+            "the edited member stays on the lock-free dispatcher path"
+        );
+        assert_eq!(squad.row("one").status, OperationStatus::Queued);
+        squad.shutdown();
+    }
+
+    #[test]
+    fn dispatch_job_releases_its_reservation_after_a_store_error_and_a_panic() {
+        let squad = SquadHarness::new(&[("one", &[])]);
+        // A store error (the row no longer exists) on the early-return path.
+        let missing = kalcode_contracts::ids::new_id();
+        assert!(
+            squad
+                .state
+                .squad_dispatch
+                .enqueue(&missing, SquadDispatchKind::Run)
+                .expect("enqueue")
+        );
+        let (job, canceled) = squad.state.squad_dispatch.take().expect("take");
+        let reservation = reservation_for(&squad.state, &job, &canceled);
+        squad
+            .state
+            .run_dispatch_job(&job, &reservation, &test_leases());
+        assert!(!squad.state.squad_dispatch.is_reserved(&missing));
+
+        // A panic inside the provider factory is contained and the member is held.
+        let id = squad.id("one");
+        squad.launch_consent("one");
+        squad
+            .panes
+            .panic_on
+            .lock()
+            .expect("panic set")
+            .insert(id.clone());
+        let (job, reservation) = squad.take_job("one", SquadDispatchKind::Run);
+        squad
+            .state
+            .run_dispatch_job(&job, &reservation, &test_leases());
+        assert!(!squad.state.squad_dispatch.is_reserved(&id));
+        let one = squad.row("one");
+        assert_eq!(one.status, OperationStatus::Paused);
+        assert!(
+            one.attention_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("stopped unexpectedly"))
+        );
+        assert!(squad.state.gate.lock().is_ok(), "the gate stays usable");
+        squad.shutdown();
+    }
+
+    #[test]
+    fn squad_fanout_spawns_outside_the_operations_gate() {
+        let squad = SquadHarness::new(&[("one", &[]), ("two", &[]), ("three", &[])]);
+        let mut build = observed_spec(
+            "Unrelated build".into(),
+            squad.workspace_id.clone(),
+            OperationKind::Build,
+        );
+        build.command = Some("echo build".into());
+        let build = squad.state.store.enqueue(build).expect("enqueue build");
+        squad.panes.block_spawns();
+        squad
+            .state
+            .start_squad_workers(test_leases())
+            .expect("workers");
+        let ids = ["one", "two", "three"].map(|key| squad.id(key));
+        squad
+            .state
+            .queue_squad_authorizations(&ids)
+            .expect("authorize Squad");
+        assert!(
+            squad.panes.wait_spawning(3),
+            "every member reaches its provider spawn in parallel"
+        );
+
+        // (a) The global gate is free while every member is mid-spawn.
+        let state = squad.state.clone();
+        let build_id = build.id.clone();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = done_tx.send(state.hold_command(&build_id, true));
+        });
+        done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("another Operations command completes during the spawns")
+            .expect("hold succeeds");
+        assert_eq!(
+            squad.state.store.get(&build.id).expect("build").status,
+            OperationStatus::Paused
+        );
+
+        // (c) Run now during a spawn is a clear refusal, not a silent drop.
+        let error = squad
+            .state
+            .run_now_command(&AllowAll, &TestLease, &squad.id("two"))
+            .expect_err("Run now mid-spawn");
+        assert_eq!(error.code, "operation_dispatch_in_progress");
+
+        // (b) Cancel during a spawn returns at once, then stops that member's pane.
+        squad
+            .state
+            .cancel_command(&squad.id("one"))
+            .expect("cancel mid-spawn");
+        squad.panes.release(&squad.id("one"));
+        squad.wait_released("one");
+        assert_eq!(squad.row("one").status, OperationStatus::Cancelled);
+        let pane = squad.thread("one");
+        assert_eq!(pane.status, ThreadStatus::Interrupted);
+        assert!(pane.archived_at.is_some(), "the created pane is reaped");
+
+        squad.panes.release_all();
+        for key in ["two", "three"] {
+            squad.wait_released(key);
+            let row = squad.row(key);
+            assert_eq!(row.status, OperationStatus::Running, "{key}");
+            assert_eq!(row.thread_id.as_deref(), Some(row.id.as_str()), "{key}");
+        }
+        squad.shutdown();
+    }
+
     fn fixture(
         core: Arc<Core>,
         data: &Path,
@@ -2691,6 +4828,9 @@ mod tests {
                 account: None,
                 gate: Mutex::new(()),
                 authorized: Mutex::new(HashMap::new()),
+                squad_dispatch: Arc::new(SquadDispatchQueue::default()),
+                squad_workers: Mutex::new(Vec::new()),
+                panes: Arc::new(ThreadPanes),
                 stop: Arc::new((Mutex::new(false), Condvar::new())),
                 worker: Mutex::new(None),
                 observations: Mutex::new(None),
@@ -2742,6 +4882,9 @@ mod tests {
                 account: None,
                 gate: Mutex::new(()),
                 authorized: Mutex::new(HashMap::new()),
+                squad_dispatch: Arc::new(SquadDispatchQueue::default()),
+                squad_workers: Mutex::new(Vec::new()),
+                panes: Arc::new(ThreadPanes),
                 stop: Arc::new((Mutex::new(false), Condvar::new())),
                 worker: Mutex::new(None),
                 observations: Mutex::new(None),

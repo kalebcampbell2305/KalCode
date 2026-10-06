@@ -2074,6 +2074,85 @@ fn crash_recovery_interrupts_threads_left_running() {
 }
 
 #[test]
+fn recovered_prepared_pane_resumes_same_identity_without_sending_its_task() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("repo");
+    std::fs::create_dir_all(&root).expect("workspace root");
+    let (workspaces, workspace_id) = FakeWorkspaces::with(root);
+    let provider = FakeProvider::new("fake", "Fake Provider");
+    let operation_id = new_id();
+
+    {
+        let core = Arc::new(Core::open(config(dir.path())).expect("core"));
+        let registry = Arc::new(ProviderRegistry::new());
+        registry.register(provider.clone());
+        let runtime = ThreadRuntime::new(
+            core,
+            registry,
+            workspaces.clone(),
+            TestGate::new(PolicyEffect::Ask),
+        )
+        .expect("runtime");
+        runtime
+            .create_idle_with_id_for_origin(
+                &operation_id,
+                kalcode_threads::CreateIdleThread {
+                    provider_id: "fake".into(),
+                    provider_account_id: None,
+                    account_label: None,
+                    workspace_id: workspace_id.clone(),
+                    model: None,
+                    effort: None,
+                    permission_mode: PermissionMode::Approve,
+                    name: Some("Dependent member".into()),
+                },
+                LaunchOrigin::User,
+            )
+            .expect("prepared pane");
+        runtime
+            .wait_for_dependency(&operation_id, "Waiting for dependencies")
+            .expect("dependency wait");
+        assert!(
+            runtime
+                .messages(&operation_id, 10, None)
+                .unwrap()
+                .is_empty()
+        );
+        // Simulate process loss: the runtime is dropped without a graceful thread stop.
+    }
+
+    let core = Arc::new(Core::open(config(dir.path())).expect("reopen core"));
+    let registry = Arc::new(ProviderRegistry::new());
+    registry.register(provider.clone());
+    let runtime = ThreadRuntime::new(core, registry, workspaces, TestGate::new(PolicyEffect::Ask))
+        .expect("reopened runtime");
+    assert_eq!(
+        runtime.get(&operation_id).expect("recovered pane").status,
+        ThreadStatus::Interrupted
+    );
+    let resumed = runtime
+        .resume(&operation_id, None)
+        .expect("resume exact prepared pane");
+    assert_eq!(resumed.id, operation_id);
+    assert_eq!(resumed.status, ThreadStatus::Idle);
+    let waiting = runtime
+        .wait_for_dependency(&operation_id, "Waiting for dependencies")
+        .expect("restore dependency wait");
+    assert_eq!(waiting.id, operation_id);
+    assert_eq!(waiting.status, ThreadStatus::WaitingForDependency);
+    assert!(
+        runtime
+            .messages(&operation_id, 10, None)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        provider.last_session().calls().is_empty(),
+        "recovery starts the provider prompt but never replays the withheld Squad task"
+    );
+}
+
+#[test]
 fn idle_threads_start_without_a_task() {
     let h = Harness::new();
     let request = kalcode_threads::CreateIdleThread {

@@ -1115,6 +1115,110 @@ fn prepared_agent_stays_pending_and_keeps_exact_identity_through_claim_and_hold(
 }
 
 #[test]
+fn cleanup_unproven_overrides_a_terminal_cancel_with_one_actionable_hold() {
+    let data = tempfile::tempdir().expect("data");
+    let project = tempfile::tempdir().expect("project");
+    let core = open(data.path());
+    let workspace_id = workspace(&core, project.path());
+    let store = OperationsStore::new(core);
+    let operation = store
+        .enqueue(spec(&workspace_id, "Late provider cleanup"))
+        .expect("enqueue");
+    store.cancel_pending(&operation.id).expect("cancel pending");
+
+    let reason =
+        "The canceled Squad pane could not be stopped. Inspect the pane before continuing.";
+    store
+        .hold_cleanup_unproven(&operation.id, reason)
+        .expect("actionable cleanup hold");
+    let held = store.get(&operation.id).expect("held operation");
+    assert_eq!(held.status, OperationStatus::Paused);
+    assert_eq!(held.attention_reason.as_deref(), Some(reason));
+    assert!(held.ended_at.is_none());
+
+    let revision = store.snapshot().expect("snapshot").0;
+    store
+        .hold_cleanup_unproven(&operation.id, reason)
+        .expect("idempotent hold replay");
+    assert_eq!(
+        store.snapshot().expect("replayed snapshot").0,
+        revision,
+        "replaying the same cleanup hold is a quiet no-op"
+    );
+}
+
+#[test]
+fn prepared_agent_allows_task_edits_but_rejects_execution_identity_changes() {
+    let data = tempfile::tempdir().expect("data");
+    let project = tempfile::tempdir().expect("project");
+    let core = open(data.path());
+    let workspace_id = workspace(&core, project.path());
+    let account_id = provider_account(&core, "Prepared edit account");
+    let store = OperationsStore::new(core);
+    let operation = store
+        .enqueue(agent_spec(
+            &workspace_id,
+            &account_id,
+            "Prepared edit member",
+        ))
+        .expect("enqueue agent");
+    store
+        .prepare_agent_thread(&operation.id, Some("kal/prepared"), Some("revision-1"))
+        .expect("prepare exact pane identity");
+
+    let mut task_edit = operation.spec.clone();
+    task_edit.name = "Prepared edit member renamed".into();
+    task_edit.prompt = Some("Review only the updated dependency output.".into());
+    let revision = store.snapshot().expect("snapshot").0;
+    let updated = store
+        .update(&operation.id, task_edit.clone(), revision)
+        .expect("identity-preserving task edit");
+    assert_eq!(updated.spec.prompt, task_edit.prompt);
+    assert_eq!(updated.thread_id.as_deref(), Some(operation.id.as_str()));
+
+    let mut identity_edit = task_edit;
+    identity_edit.model = Some("different-model".into());
+    let revision = store.snapshot().expect("updated snapshot").0;
+    let error = store
+        .update(&operation.id, identity_edit, revision)
+        .expect_err("prepared identity change must fail atomically");
+    assert_eq!(error.code, "operation_prepared_identity_immutable");
+    let unchanged = store.get(&operation.id).expect("unchanged prepared member");
+    assert_eq!(
+        unchanged.spec.model.as_deref(),
+        Some("gpt-test"),
+        "the canonical pane and Operation identity remain aligned"
+    );
+}
+
+#[test]
+fn dispatch_cancellation_is_pending_until_cleanup_then_clears_attention() {
+    let data = tempfile::tempdir().expect("data");
+    let project = tempfile::tempdir().expect("project");
+    let core = open(data.path());
+    let workspace_id = workspace(&core, project.path());
+    let store = OperationsStore::new(core);
+    let operation = store
+        .enqueue(spec(&workspace_id, "Cancel delayed member"))
+        .expect("enqueue");
+    store
+        .request_dispatch_cancel(&operation.id)
+        .expect("request cancellation");
+    let stopping = store.get(&operation.id).expect("stopping operation");
+    assert_eq!(stopping.status, OperationStatus::Paused);
+    assert_eq!(stopping.current_action.as_deref(), Some("Stopping safely"));
+    assert!(stopping.ended_at.is_none());
+
+    store
+        .cancel_pending(&operation.id)
+        .expect("cleanup-proven cancellation");
+    let cancelled = store.get(&operation.id).expect("cancelled operation");
+    assert_eq!(cancelled.status, OperationStatus::Cancelled);
+    assert!(cancelled.current_action.is_none());
+    assert!(cancelled.attention_reason.is_none());
+}
+
+#[test]
 fn restart_holds_prepared_agent_only_before_the_durable_task_attempt() {
     for attempted in [false, true] {
         let data = tempfile::tempdir().expect("data");

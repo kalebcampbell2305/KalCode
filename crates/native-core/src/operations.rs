@@ -34,6 +34,7 @@ const MAX_SERVICE_ACTIVE: i64 = 4;
 const SNAPSHOT_FINAL_LIMIT: i64 = 200;
 const MAX_HISTORY_PAGE: u32 = 200;
 pub const ACTIVITY_MOMENT_LIMIT: u32 = 5_000;
+pub const OPERATION_CANCELLING_ACTION: &str = "Stopping safely";
 
 const OPERATION_COLUMNS: &str = "
     o.id AS operation_id,
@@ -127,6 +128,12 @@ pub struct BackgroundRunRecord {
 impl OperationsStore {
     pub fn new(core: Arc<Core>) -> Self {
         Self { core }
+    }
+
+    /// The optimistic ledger revision alone. Dispatchers compare it to tell a real state change
+    /// from a no-op without loading the whole snapshot.
+    pub fn revision(&self) -> Result<u64> {
+        self.core.read(|conn| Ok(state(conn)?.0))
     }
 
     /// Current optimistic revision, global pause state and all queue/run identities.
@@ -610,6 +617,20 @@ impl OperationsStore {
                 return Err(invalid_state(
                     "operation_not_pending",
                     "Only pending Operations tasks can be edited.",
+                ));
+            }
+            let stored = load_stored(tx, id)?;
+            if stored.thread_id.is_some()
+                && (stored.workspace_id != spec.workspace_id
+                    || stored.kind != kind_text(spec.kind)
+                    || stored.provider_id != spec.provider_id
+                    || stored.provider_account_id != spec.provider_account_id
+                    || stored.model != spec.model
+                    || stored.effort != spec.effort)
+            {
+                return Err(invalid_state(
+                    "operation_prepared_identity_immutable",
+                    "This member already has a real provider pane. Keep its workspace, provider, account, model and effort, or cancel it and launch a replacement.",
                 ));
             }
             let (_workspace_name, account_label) = validate_references(tx, &spec)?;
@@ -1220,6 +1241,83 @@ impl OperationsStore {
         })
     }
 
+    /// Pauses orchestration when a started effect could not be proven stopped or released.
+    /// Unlike an ordinary hold, this may replace a just-written terminal state because a late
+    /// provider factory can surface after cancellation. The execution identities remain linked
+    /// so the owner can inspect and retry cleanup without losing the real pane/worktree.
+    pub fn hold_cleanup_unproven(&self, id: &str, reason: &str) -> Result<()> {
+        validate_id(id)?;
+        validate_text(reason, 512, false, "invalid_operation_action")?;
+        reject_secret(reason)?;
+        self.write(|tx| {
+            let (status, attention): (String, Option<String>) = tx
+                .query_row(
+                    "SELECT status, attention_reason FROM operations WHERE id = ?1",
+                    [id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?
+                .ok_or_else(not_found)?;
+            if status == "paused" && attention.as_deref() == Some(reason) {
+                return Ok(());
+            }
+            tx.execute(
+                "UPDATE operations SET status = 'paused', ended_at = NULL,
+                    current_action = NULL, attention_reason = ?2, outcome = NULL WHERE id = ?1",
+                params![id, reason],
+            )?;
+            append_moment(tx, id, "paused", reason)?;
+            auto_order(tx)?;
+            bump_revision(tx)?;
+            Ok(())
+        })
+    }
+
+    /// Records a non-blocking cancellation request for an exact in-flight Squad dispatch. The
+    /// dispatcher owns provider cleanup and writes the final Cancelled state only after stop is
+    /// proven; queued members cannot be reclaimed while that cleanup is outstanding.
+    pub fn request_dispatch_cancel(&self, id: &str) -> Result<()> {
+        validate_id(id)?;
+        self.write(|tx| {
+            let status = operation_status(tx, id)?;
+            if status == OperationStatus::Cancelled {
+                return Ok(());
+            }
+            if !matches!(
+                status,
+                OperationStatus::Queued
+                    | OperationStatus::Blocked
+                    | OperationStatus::Paused
+                    | OperationStatus::Starting
+                    | OperationStatus::Running
+            ) {
+                return Err(invalid_state(
+                    "operation_not_cancellable",
+                    "Only pending or active Operations can be cancelled.",
+                ));
+            }
+            let next_status = if is_pending(status) {
+                "paused"
+            } else {
+                status_text(status)
+            };
+            tx.execute(
+                "UPDATE operations SET status = ?2, current_action = ?3,
+                    attention_reason = NULL WHERE id = ?1",
+                params![id, next_status, OPERATION_CANCELLING_ACTION],
+            )?;
+            append_moment(
+                tx,
+                id,
+                "cancelling",
+                "Cancellation requested; waiting for provider cleanup.",
+            )?;
+            auto_order(tx)?;
+            bump_revision(tx)?;
+            Ok(())
+        })
+    }
+
     /// Connects a claimed operation to its real execution identity and marks it running.
     pub fn bind(
         &self,
@@ -1388,7 +1486,7 @@ impl OperationsStore {
             }
             tx.execute(
                 "UPDATE operations SET status = ?2, ended_at = ?3,
-                    current_action = NULL, outcome = ?4 WHERE id = ?1",
+                    current_action = NULL, attention_reason = NULL, outcome = ?4 WHERE id = ?1",
                 params![id, status_text(status), ended_at, outcome.as_deref()],
             )?;
             append_moment(tx, id, status_text(status), final_message(status))?;
@@ -1449,7 +1547,8 @@ impl OperationsStore {
             }
             tx.execute(
                 "UPDATE operations SET status = 'cancelled', ended_at = ?2,
-                    current_action = NULL, outcome = 'Cancelled before starting.' WHERE id = ?1",
+                    current_action = NULL, attention_reason = NULL,
+                    outcome = 'Cancelled before starting.' WHERE id = ?1",
                 params![id, now_rfc3339()],
             )?;
             append_moment(tx, id, "cancelled", "Cancelled before execution started.")?;
