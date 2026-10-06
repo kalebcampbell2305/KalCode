@@ -45,7 +45,6 @@ import { forgetVoiceText } from "../../kalvoice/voiceSpans.ts";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { ContentContextMenu } from "../../shell/context/ContentContextMenu.tsx";
-import { holdLiveReload } from "../../shell/liveUpdate/hold.ts";
 import { MOD_LABEL } from "../../shell/shortcuts.ts";
 import { useKalTidy } from "../code/kaltidy/kalTidyContext.ts";
 import { ApprovalPrompt, usePermissions } from "../permissions/index.ts";
@@ -676,45 +675,41 @@ function Composer({
     if (blocked) return "blocked";
     if (sending) return "busy";
     if (!submittedText.trim()) return "empty";
-    // A live UI update waits for this send, so the composer is cleared before the page reloads.
-    const releaseLiveReload = holdLiveReload();
     const hasContext = context.preview !== null;
     // Settled by the callbacks below; still "confirm" afterwards means the warning dialog is open.
     let outcome: ComposerSubmitOutcome = "confirm";
-    await confirmation
-      .request({
-        review: () => client.reviewThreadPrompt(thread.id, submittedText),
-        effect: async (promptReviewId) => {
-          if (!hasContext) return { kind: "plain" as const, sent: await onSubmit(submittedText, promptReviewId) };
-          return { kind: "context" as const, result: await context.send(submittedText, promptReviewId) };
-        },
-        onComplete: (result) => {
-          if (result.kind === "plain") {
-            outcome = result.sent ? "sent" : "not_sent";
-            if (result.sent) setText("");
-            return;
-          }
-          if (result.result?.kind === "sent") {
-            outcome = "sent";
-            onContextSent(result.result.thread);
-            setText("");
-          } else {
-            outcome = "not_sent";
-            if (result.result?.kind === "stale") {
-              toast.show({
-                tone: "info",
-                title: "Context changed",
-                description: "Review the refreshed preview before sending.",
-              });
-            }
-          }
-        },
-        onError: (error) => {
+    await confirmation.request({
+      review: () => client.reviewThreadPrompt(thread.id, submittedText),
+      effect: async (promptReviewId) => {
+        if (!hasContext) return { kind: "plain" as const, sent: await onSubmit(submittedText, promptReviewId) };
+        return { kind: "context" as const, result: await context.send(submittedText, promptReviewId) };
+      },
+      onComplete: (result) => {
+        if (result.kind === "plain") {
+          outcome = result.sent ? "sent" : "not_sent";
+          if (result.sent) setText("");
+          return;
+        }
+        if (result.result?.kind === "sent") {
+          outcome = "sent";
+          onContextSent(result.result.thread);
+          setText("");
+        } else {
           outcome = "not_sent";
-          toast.show({ tone: "danger", title: "Message not sent", description: describeSendError(error) });
-        },
-      })
-      .finally(releaseLiveReload);
+          if (result.result?.kind === "stale") {
+            toast.show({
+              tone: "info",
+              title: "Context changed",
+              description: "Review the refreshed preview before sending.",
+            });
+          }
+        }
+      },
+      onError: (error) => {
+        outcome = "not_sent";
+        toast.show({ tone: "danger", title: "Message not sent", description: describeSendError(error) });
+      },
+    });
     return outcome;
   };
 

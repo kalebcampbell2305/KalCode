@@ -10,6 +10,8 @@ import { createMemoryTransport } from "../../ipc/memoryTransport.ts";
 import type { CommandName } from "../../ipc/transport.ts";
 import { RuntimeProvider } from "../../runtime/RuntimeProvider.tsx";
 import nativeStableSurfaces from "../../shell/fixtures/stable-native-surfaces.json";
+import { liveReloadHeld } from "../../shell/liveUpdate/hold.ts";
+import { QUIET_MS } from "../../shell/liveUpdate/LiveUpdateHost.tsx";
 import { Shell } from "../../shell/Shell.tsx";
 import { goTo } from "../../test/nav.ts";
 
@@ -437,4 +439,42 @@ describe("New thread permission mode (Stable)", () => {
     await h.user.click(modes(form).getByRole("radio", { name: "Plan" }));
     expect(form.queryByRole("note")).not.toBeInTheDocument();
   });
+});
+
+describe("New thread and a live UI update", () => {
+  it(
+    "holds the reload through a confirmed create that takes longer than the quiet window",
+    async () => {
+      const h = await mountStable(async ({ client, alpha }) => {
+        await client.activateWorkspace(alpha.id);
+      });
+      const form = await openNewThread(h.user);
+      await waitFor(() => expect(account(form)).not.toHaveValue(""));
+      // The prompt review asks for confirmation (a secret-shaped value in the task).
+      await h.user.type(form.getByRole("textbox", { name: "Task" }), "api_key=only-for-this-thread");
+      let finishCreate: () => void = () => undefined;
+      intercept = (command, args) => {
+        if (command !== "thread_create") return null;
+        intercept = null;
+        return new Promise((resolve, reject) => {
+          finishCreate = () => {
+            h.raw("thread_create", args).then(resolve, reject);
+          };
+        });
+      };
+      await h.user.click(form.getByRole("button", { name: "Start thread" }));
+      const dialog = await screen.findByRole("alertdialog");
+      expect(liveReloadHeld()).toBe(false); // the warning is open; nothing has been sent yet
+      await h.user.click(within(dialog).getByRole("button", { name: "Start thread anyway" }));
+
+      // Longer than a live update's quiet window: the reload must keep waiting for the create.
+      await new Promise((resolve) => setTimeout(resolve, QUIET_MS + 500));
+      expect(liveReloadHeld()).toBe(true);
+
+      await act(async () => finishCreate());
+      await waitFor(() => expect(liveReloadHeld()).toBe(false));
+      await waitFor(() => expect(screen.queryByRole("region", { name: "New thread" })).toBeNull());
+    },
+    QUIET_MS + 20_000,
+  );
 });

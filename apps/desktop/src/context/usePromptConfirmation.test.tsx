@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { PromptReview } from "../ipc/context.ts";
+import { liveReloadHeld, resetLiveReloadHolds } from "../shell/liveUpdate/hold.ts";
 import { usePromptConfirmation } from "./usePromptConfirmation.ts";
 
 const warning: PromptReview = {
@@ -139,5 +140,93 @@ describe("usePromptConfirmation", () => {
     expect(afterUnmount.onComplete).not.toHaveBeenCalled();
     expect(afterUnmount.onError).not.toHaveBeenCalled();
     expect(authority.cancelPromptReview).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("usePromptConfirmation holds a live UI reload through the send", () => {
+  function deferred() {
+    let resolve!: (value: string) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<string>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  it("holds a clean send from its effect until its completion has run", async () => {
+    resetLiveReloadHolds();
+    const send = deferred();
+    const heldAtComplete: boolean[] = [];
+    const clean = operation(
+      async () => ({ kind: "clean" }),
+      vi.fn(() => send.promise),
+    );
+    clean.onComplete = vi.fn(() => heldAtComplete.push(liveReloadHeld()));
+    const authority = { cancelPromptReview: vi.fn(async () => true) };
+    const { result } = renderHook(() => usePromptConfirmation("account:target", authority));
+
+    let request!: Promise<void>;
+    act(() => {
+      request = result.current.request(clean);
+    });
+    await waitFor(() => expect(clean.effect).toHaveBeenCalled());
+    expect(liveReloadHeld()).toBe(true);
+    await act(async () => {
+      send.resolve("sent");
+      await request;
+    });
+    // Still held while onComplete cleared the composer; released only afterwards.
+    expect(heldAtComplete).toEqual([true]);
+    expect(liveReloadHeld()).toBe(false);
+  });
+
+  it("holds the confirmed send that runs after the warning closes, not just the review", async () => {
+    resetLiveReloadHolds();
+    const send = deferred();
+    const warned = operation(
+      async () => warning,
+      vi.fn(() => send.promise),
+    );
+    const authority = { cancelPromptReview: vi.fn(async () => true) };
+    const { result } = renderHook(() => usePromptConfirmation("account:target", authority));
+
+    await act(async () => result.current.request(warned));
+    // The warning is open: nothing is in flight, so a reload would only keep the unsent draft.
+    expect(liveReloadHeld()).toBe(false);
+
+    let confirming!: Promise<void>;
+    act(() => {
+      confirming = result.current.confirm();
+    });
+    expect(liveReloadHeld()).toBe(true);
+    await act(async () => {
+      send.resolve("sent");
+      await confirming;
+    });
+    expect(warned.onComplete).toHaveBeenCalledWith("sent");
+    expect(liveReloadHeld()).toBe(false);
+  });
+
+  it("releases the hold when the send fails", async () => {
+    resetLiveReloadHolds();
+    const send = deferred();
+    const clean = operation(
+      async () => ({ kind: "clean" }),
+      vi.fn(() => send.promise),
+    );
+    const authority = { cancelPromptReview: vi.fn(async () => true) };
+    const { result } = renderHook(() => usePromptConfirmation("account:target", authority));
+    let request!: Promise<void>;
+    act(() => {
+      request = result.current.request(clean);
+    });
+    await waitFor(() => expect(liveReloadHeld()).toBe(true));
+    await act(async () => {
+      send.reject(new Error("offline"));
+      await request;
+    });
+    expect(clean.onError).toHaveBeenCalled();
+    expect(liveReloadHeld()).toBe(false);
   });
 });
