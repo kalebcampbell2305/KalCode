@@ -35,6 +35,23 @@ This applies to Claude Code, Codex and every future agent, for every surface and
 - **Outcomes beside the work.** Every agent can show what changed, what passed/failed, its branch/worktree, and whether it is merged and shipped, from real state only. AGENT DONE, CHANGE VERIFIED, MERGED and SHIPPED TO USERS are different facts; never show one as another, and never guess.
 - **Unified Memory in the flow.** Project memory (see the Unified Memory rule) is visible where people work, inspectable, editable and removable, and only relevant notes reach a task.
 
+## Permanent Stack & items organization rule (owner directive 2026-10-06)
+
+"STACK & ITEMS IS THE FAST ORGANIZATION SURFACE FOR LIVE KALCODE WORK.
+
+RENAMING MUST BE INLINE AND IMMEDIATE.
+
+DRAG/DROP MUST BE OBVIOUS, FORGIVING, FAST, AND PERSISTENT.
+
+USERS CAN REORDER ITEMS, MOVE THEM BETWEEN GROUPS, AND REORDER GROUPS WITHOUT AFFECTING THE UNDERLYING REAL CODING-AGENT OR TERMINAL SESSION.
+
+MANUAL USER NAMES ALWAYS WIN OVER AUTOMATIC NAMING."
+
+- **Where it lives.** The Terminal Stack in Code (`apps/desktop/src/surfaces/code/organization/`): `TerminalStack.tsx` (UI), `useStackDrag.ts` (pointer drag: movement threshold, drop targets, auto-scroll, hover-to-open collapsed groups), `arrange.ts` (pure reorder/move), `model.ts` `organize` and `prefs.ts` (per-workspace persistence). Extend these; never add a second organization model.
+- **Rename** is inline (double-click, F2, context menu), never a modal or navigation, and goes through the canonical rename path (`CodeCanvasApi.renameContent`: `renameTerminal` / `renameThread`). An agent rename sets `name_origin = manual`, which automatic task naming never overwrites; every surface (Fleet, Needs You, Runs, KalTidy, restore) reads that same name.
+- **Arrangement is display metadata only**, keyed by stable ids (item = pane content key; group = built-in purpose id or a generated `g:` id), never by visible names. Reordering, moving between groups, renaming groups or collapsing never restarts, duplicates, kills or rebinds a session, provider, account, model, effort or worktree.
+- **Drops are obvious and forgiving:** whole-row grab past a small movement threshold, an insertion line, a whole-group highlight, a large "Move to <group>" target for empty or collapsed groups, edge auto-scroll for long lists, and Escape cancels. Keyboard parity: arrows, F2, Alt+↑/↓ and the context menu's Move actions. Drag state stays local to the stack; a pointer move never re-renders the Code workspace.
+
 ## Permanent futuristic space design system (owner directive 2026-10-05)
 
 "KALCODE'S VISUAL IDENTITY IS A FUTURISTIC AI ENGINEERING COMMAND CENTER INSPIRED BY DEEP SPACE.

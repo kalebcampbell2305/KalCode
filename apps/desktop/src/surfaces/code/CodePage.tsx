@@ -147,7 +147,9 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
           </header>
           {integrationsOpen ? <CodeIntegrationPanel workspaceId={workspace.id} /> : null}
           <div className={styles.canvasArea}>
-            {api ? <TerminalStack organization={api.organization} controller={api.controller} /> : null}
+            {api ? (
+              <TerminalStack organization={api.organization} controller={api.controller} rename={api.renameContent} />
+            ) : null}
             {canvas}
             {workspace.available ? null : <MissingFolder workspace={workspace} />}
           </div>

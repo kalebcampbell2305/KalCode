@@ -297,16 +297,35 @@ export interface OrgItem {
   order: string;
 }
 
+/** A group the person added. Its id is stable; only the name changes on rename. */
+export interface CustomGroup {
+  id: string;
+  name: string;
+}
+
+/**
+ * The workspace's organization: display and arrangement only. Items are identified by their
+ * pane content key and groups by a stable id (a built-in purpose group's id is its purpose, an
+ * added group's is generated), never by a visible name. Nothing here touches the terminal or
+ * coding-agent session behind an item.
+ */
 export interface OrgPrefs {
   /** Show purpose groups (on by default); off shows one stack. */
   grouping: boolean;
+  /** Ids of collapsed groups. */
   collapsedGroups: string[];
   /** Pinned items never collapse into Finished. */
   pinned: string[];
-  /** Items the person moved to another group. */
+  /** Item key → id of the group the person moved it to. */
   groupOf: Record<string, string>;
-  /** Groups the person added. */
-  customGroups: string[];
+  /** Groups the person added, in creation order. */
+  customGroups: CustomGroup[];
+  /** Built-in group id → the name the person gave it. */
+  groupLabels: Record<string, string>;
+  /** Group ids in the order the person arranged them; unlisted groups follow in default order. */
+  groupOrder: string[];
+  /** Item keys in the order the person arranged them; unlisted items follow by status. */
+  itemOrder: string[];
   /** The stack panel is open; null follows the workspace (open once it is busy). */
   stackOpen: boolean | null;
 }
@@ -317,8 +336,14 @@ export const DEFAULT_PREFS: OrgPrefs = {
   pinned: [],
   groupOf: {},
   customGroups: [],
+  groupLabels: {},
+  groupOrder: [],
+  itemOrder: [],
   stackOpen: null,
 };
+
+/** The single stack shown while grouping is off. */
+export const ALL_GROUP = "all";
 
 /** With no choice made, the stack opens once a workspace has this many terminals and agents. */
 export const BUSY_WORKSPACE_ITEMS = 4;
@@ -329,9 +354,16 @@ export function stackShown(prefs: OrgPrefs, itemCount: number): boolean {
 }
 
 export interface StackGroup {
+  /** Stable id: a built-in purpose, an added group's id, or `ALL_GROUP`. */
+  id: string;
+  /** The name shown (the person's name for it, else the built-in one). */
   name: string;
+  /** The built-in purpose group this is; null for an added group or the single stack. */
+  auto: AutoGroup | null;
   collapsed: boolean;
-  /** In order: waiting, failed, working, testing, starting, ready, unknown. */
+  /** Every member in arranged order (active and finished together). */
+  members: OrgItem[];
+  /** The person's arrangement, else by status: needs you, failed, waiting, working, ... unknown. */
   active: OrgItem[];
   /** Done and idle items that aren't pinned or focused; collapsed under "Finished". */
   finished: OrgItem[];
@@ -355,34 +387,70 @@ const STACK_ORDER: Record<OrgBadge | "unknown", number> = {
 const isFinished = (item: OrgItem) =>
   item.status?.badge === "done" || item.status?.badge === "stopped" || item.status?.badge === "idle";
 
+export function isAutoGroup(name: string): name is AutoGroup {
+  return (AUTO_GROUPS as readonly string[]).includes(name);
+}
+
+/** Every group id in the order it shows: arranged ones first, then built-in, then added groups. */
+export function groupIdsInOrder(prefs: OrgPrefs): string[] {
+  const rank = new Map(prefs.groupOrder.map((id, index) => [id, index]));
+  return [...AUTO_GROUPS, ...prefs.customGroups.map((g) => g.id)]
+    .map((id, index) => ({ id, index, rank: rank.get(id) ?? prefs.groupOrder.length }))
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map((g) => g.id);
+}
+
+/** A group's shown name. */
+export function groupName(prefs: OrgPrefs, id: string): string {
+  if (id === ALL_GROUP) return "All";
+  if (isAutoGroup(id)) return prefs.groupLabels[id] ?? id;
+  return prefs.customGroups.find((g) => g.id === id)?.name ?? id;
+}
+
+/** The group an item shows in: where the person moved it while that group exists, else its purpose. */
+export function groupIdOf(prefs: OrgPrefs, item: OrgItem): string {
+  if (!prefs.grouping) return ALL_GROUP;
+  const moved = prefs.groupOf[item.key];
+  if (moved && (isAutoGroup(moved) || prefs.customGroups.some((g) => g.id === moved))) return moved;
+  return item.group;
+}
+
 /**
- * Groups and stacks the workspace's terminals and agents. Finished work (Done, Idle) collapses
- * under each group's "Finished" unless it is pinned or focused; nothing is removed. Without
- * grouping everything is one stack named "All".
+ * Groups and stacks the workspace's terminals and agents. Arranged items keep the person's order
+ * and new ones follow by status (what needs you first). Finished work (Done, Idle) collapses under
+ * each group's "Finished" unless it is pinned or focused; nothing is removed. Without grouping
+ * everything is one stack named "All". A built-in group shows while it has members or the person
+ * named it; an added group always shows.
  */
 export function organize(items: readonly OrgItem[], prefs: OrgPrefs, focusedKey: string | null): StackGroup[] {
-  const groupName = (item: OrgItem) => (prefs.grouping ? (prefs.groupOf[item.key] ?? item.group) : "All");
-  const names = prefs.grouping ? [...AUTO_GROUPS, ...prefs.customGroups.filter((g) => !isAutoGroup(g))] : ["All"];
+  const ids = prefs.grouping ? groupIdsInOrder(prefs) : [ALL_GROUP];
+  const rank = new Map(prefs.itemOrder.map((key, index) => [key, index]));
+  const unarranged = prefs.itemOrder.length;
+  const byArrangement = (a: OrgItem, b: OrgItem) =>
+    (rank.get(a.key) ?? unarranged) - (rank.get(b.key) ?? unarranged) ||
+    STACK_ORDER[a.status?.badge ?? "unknown"] - STACK_ORDER[b.status?.badge ?? "unknown"] ||
+    a.order.localeCompare(b.order) ||
+    a.key.localeCompare(b.key);
+  const membersOf = new Map<string, OrgItem[]>();
   for (const item of items) {
-    const name = groupName(item);
-    if (!names.includes(name)) names.push(name);
+    const id = groupIdOf(prefs, item);
+    const list = membersOf.get(id);
+    if (list) list.push(item);
+    else membersOf.set(id, [item]);
   }
   const pinned = new Set(prefs.pinned);
+  const keep = (item: OrgItem) => !isFinished(item) || pinned.has(item.key) || item.key === focusedKey;
   const groups: StackGroup[] = [];
-  for (const name of names) {
-    const members = items
-      .filter((item) => groupName(item) === name)
-      .sort(
-        (a, b) =>
-          STACK_ORDER[a.status?.badge ?? "unknown"] - STACK_ORDER[b.status?.badge ?? "unknown"] ||
-          a.order.localeCompare(b.order) ||
-          a.key.localeCompare(b.key),
-      );
-    if (members.length === 0 && !prefs.customGroups.includes(name)) continue;
-    const keep = (item: OrgItem) => !isFinished(item) || pinned.has(item.key) || item.key === focusedKey;
+  for (const id of ids) {
+    const members = (membersOf.get(id) ?? []).sort(byArrangement);
+    const auto = isAutoGroup(id) ? id : null;
+    if (members.length === 0 && auto && prefs.groupLabels[auto] === undefined) continue;
     groups.push({
-      name,
-      collapsed: prefs.collapsedGroups.includes(name),
+      id,
+      name: groupName(prefs, id),
+      auto,
+      collapsed: prefs.grouping && prefs.collapsedGroups.includes(id),
+      members,
       active: members.filter(keep),
       finished: members.filter((item) => !keep(item)),
       counts: {
@@ -394,10 +462,6 @@ export function organize(items: readonly OrgItem[], prefs: OrgPrefs, focusedKey:
     });
   }
   return groups;
-}
-
-export function isAutoGroup(name: string): name is AutoGroup {
-  return (AUTO_GROUPS as readonly string[]).includes(name);
 }
 
 // ---- What's Happening ----

@@ -203,6 +203,11 @@ export interface CodeCanvasApi {
   layoutSuggestion: ReturnType<typeof suggestTask>;
   /** Terminal Organization: purpose names, status badges, the stack and What's Happening. */
   organization: Organization;
+  /**
+   * Renames a terminal or coding agent in place: the same canonical path as the pane's Rename.
+   * An agent's name becomes a manual name that automatic task naming never replaces.
+   */
+  renameContent: (content: PaneContent, name: string) => Promise<void>;
 }
 
 interface CodeCanvasProps {
@@ -1693,6 +1698,18 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       ),
     [controller.layout, terminals],
   );
+  const renameLatest = useRef({ client, refreshWorkspaces, providerPanes });
+  renameLatest.current = { client, refreshWorkspaces, providerPanes };
+  const renameContent = useCallback(async (content: PaneContent, name: string) => {
+    const { client: ipc, refreshWorkspaces: refresh, providerPanes: panes } = renameLatest.current;
+    if (content.kind === "terminal") {
+      await ipc.renameTerminal(content.terminalId, name);
+      await refresh();
+    } else if (content.kind === "agent") {
+      panes.updated(await ipc.renameThread(content.agentId, name));
+    }
+  }, []);
+
   const api = useMemo<CodeCanvasApi>(
     () => ({
       controller,
@@ -1708,6 +1725,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       applyTaskLayout,
       layoutSuggestion,
       organization,
+      renameContent,
     }),
     [
       controller,
@@ -1723,6 +1741,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       applyTaskLayout,
       layoutSuggestion,
       organization,
+      renameContent,
     ],
   );
 
@@ -1738,14 +1757,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
           returnFocus={() => focusMenuObject(renaming.content)}
           kind={renaming.content.kind}
           onClose={() => setRenaming(null)}
-          onSave={async (name) => {
-            if (renaming.content.kind === "terminal") {
-              await client.renameTerminal(renaming.content.terminalId, name);
-              await refreshWorkspaces();
-            } else if (renaming.content.kind === "agent") {
-              providerPanes.updated(await client.renameThread(renaming.content.agentId, name));
-            }
-          }}
+          onSave={(name) => renameContent(renaming.content, name)}
         />
       ) : null}
       {rebinding ? (

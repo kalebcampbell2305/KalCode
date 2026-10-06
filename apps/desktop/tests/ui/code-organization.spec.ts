@@ -160,11 +160,12 @@ test("the stack keeps active work visible, collapses finished work unless pinned
   // Moving an item to another group, and a new group, both stay after a reload.
   const firstMenu = terminals.getByRole("button", { name: /^More for / }).first();
   await firstMenu.click();
-  await page.getByRole("menuitemradio", { name: "Tests" }).click();
+  await page.getByRole("menuitem", { name: "Move to group" }).click();
+  await page.getByRole("menuitem", { name: "Tests", exact: true }).click();
   const testsGroup = stack(page).getByRole("region", { name: "Tests group" });
   await expect(testsGroup.getByRole("listitem")).toHaveCount(1);
   await stack(page).getByRole("button", { name: "New group" }).click();
-  await stack(page).getByRole("textbox", { name: "Group name" }).fill("Docs");
+  await stack(page).getByRole("textbox", { name: "Name of the New group group" }).fill("Docs");
   await page.keyboard.press("Enter");
   await expect(stack(page).getByRole("region", { name: "Docs group" })).toBeVisible();
   await testsGroup.getByRole("button", { name: /^Tests/ }).click();
