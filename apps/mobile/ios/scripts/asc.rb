@@ -166,7 +166,7 @@ module ASC
   end
 
   def wait_for_screenshot(id)
-    60.times do
+    150.times do # Apple often takes a few minutes per image
       state = get("/v1/appScreenshots/#{id}")['data']['attributes']['assetDeliveryState']
       return state if %w[COMPLETE FAILED].include?(state['state'])
       sleep 2
