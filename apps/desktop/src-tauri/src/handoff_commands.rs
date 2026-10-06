@@ -1069,22 +1069,22 @@ impl HandoffState {
     }
 
     fn handle_preflight_error(&self, id: &str, error: KalError) -> Result<HandoffRecord> {
-        let message = bounded_blocker(&error.message);
-        if error.retryable {
-            return self.store.set_queue_blocker(id, Some(&message));
+        match preflight_disposition(&error) {
+            PreflightDisposition::Blocked(message) => {
+                self.store.set_queue_blocker(id, Some(&message))
+            }
+            PreflightDisposition::Interrupted(message) => {
+                // Any non-retryable failure ends the queued handoff visibly; returning the error
+                // alone would leave it queued and re-dispatched every tick with no state change.
+                tracing::warn!(
+                    event = "handoff.preflight_interrupted",
+                    code = error.code,
+                    error = %error.diagnostic()
+                );
+                self.drafts.lock().map_err(|_| poisoned())?.remove(id);
+                self.store.interrupt_pending(id, &message)
+            }
         }
-        if matches!(
-            error.category,
-            ErrorCategory::Validation
-                | ErrorCategory::Provider
-                | ErrorCategory::Filesystem
-                | ErrorCategory::Git
-                | ErrorCategory::Permission
-        ) {
-            self.drafts.lock().map_err(|_| poisoned())?.remove(id);
-            return self.store.interrupt_pending(id, &message);
-        }
-        Err(error)
     }
 
     fn defer_delivery(&self, id: &str, blocker: &str) -> Result<HandoffRecord> {
@@ -1436,6 +1436,37 @@ fn readiness_disposition(error: HandoffDeliveryError) -> ReadinessDisposition {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PreflightDisposition {
+    /// Transient: keep the handoff queued and show why.
+    Blocked(String),
+    /// Permanent: end the queued handoff with this user-safe reason.
+    Interrupted(String),
+}
+
+fn preflight_disposition(error: &KalError) -> PreflightDisposition {
+    if error.retryable {
+        return PreflightDisposition::Blocked(bounded_blocker(&error.message));
+    }
+    if matches!(
+        error.category,
+        ErrorCategory::Validation
+            | ErrorCategory::Provider
+            | ErrorCategory::Filesystem
+            | ErrorCategory::Git
+            | ErrorCategory::Permission
+    ) {
+        return PreflightDisposition::Interrupted(bounded_blocker(&error.message));
+    }
+    let detail = error.message.trim();
+    let reason = if detail.is_empty() {
+        "KalCode could not prepare this handoff for delivery. Review a new handoff.".to_owned()
+    } else {
+        format!("KalCode could not prepare this handoff for delivery: {detail}")
+    };
+    PreflightDisposition::Interrupted(bounded_blocker(&reason))
+}
+
 fn target_unavailable() -> KalError {
     KalError::new(
         ErrorCategory::Provider,
@@ -1602,6 +1633,47 @@ mod tests {
             readiness_disposition(HandoffDeliveryError::TargetChanged),
             ReadinessDisposition::Interrupted
         );
+    }
+
+    #[test]
+    fn non_retryable_preflight_errors_always_end_the_queued_handoff() {
+        let retryable =
+            KalError::new(ErrorCategory::Database, "busy", "Database is busy.").retryable();
+        assert_eq!(
+            preflight_disposition(&retryable),
+            PreflightDisposition::Blocked("Database is busy.".into())
+        );
+        assert_eq!(
+            preflight_disposition(&KalError::validation("gone", "Agent is gone.")),
+            PreflightDisposition::Interrupted("Agent is gone.".into())
+        );
+        for category in [
+            ErrorCategory::Database,
+            ErrorCategory::Internal,
+            ErrorCategory::Network,
+            ErrorCategory::SecureStore,
+        ] {
+            let PreflightDisposition::Interrupted(reason) =
+                preflight_disposition(&KalError::new(category, "x", "Store unavailable.\u{1b}"))
+            else {
+                panic!("{category:?} must interrupt, not loop forever");
+            };
+            assert!(reason.starts_with("KalCode could not prepare this handoff"));
+            assert!(reason.contains("Store unavailable."));
+            assert!(!reason.chars().any(char::is_control));
+        }
+        let PreflightDisposition::Interrupted(reason) =
+            preflight_disposition(&KalError::internal("x", "  "))
+        else {
+            panic!("empty internal errors must interrupt");
+        };
+        assert!(!reason.trim().is_empty());
+        let PreflightDisposition::Interrupted(reason) =
+            preflight_disposition(&KalError::internal("x", "y".repeat(5_000)))
+        else {
+            panic!("long internal errors must interrupt");
+        };
+        assert!(reason.chars().count() <= 800);
     }
 
     fn fixture(name: &str, provider: &str) -> ThreadSummary {

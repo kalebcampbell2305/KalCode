@@ -174,4 +174,70 @@ describe("HandOffDialog", () => {
     await user.click(screen.getByRole("button", { name: "Back" }));
     expect(await screen.findByRole("heading", { name: "Choose a recipient" })).toBeInTheDocument();
   });
+
+  it("reloads activity after a failed send so a record created before the failure is visible", async () => {
+    const created = record("queued");
+    const list = vi.fn<KalCodeClient["handoffs"]["list"]>().mockResolvedValueOnce([]).mockResolvedValue([created]);
+    const send = vi.fn(async () => {
+      throw { category: "internal", code: "x", message: "Send failed.", retryable: false };
+    });
+    client({ list, send });
+    dialog();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Prepare handoff" }));
+    await user.click(await screen.findByRole("button", { name: "Send handoff" }));
+    expect(await screen.findByRole("button", { name: "Cancel queued handoff to Review Dashboard" })).toBeVisible();
+    expect(list).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps every live handoff visible and trims only settled history", async () => {
+    const settled = Array.from({ length: 10 }, (_, index) => ({
+      ...record("completed"),
+      id: `settled-${index}`,
+      updatedAt: `2026-10-01T01:${String(10 + index).padStart(2, "0")}:00.000Z`,
+    }));
+    const oldQueued = { ...record("queued"), id: "old-queued", updatedAt: "2026-10-01T00:00:00.000Z" };
+    client({ list: vi.fn(async () => [oldQueued, ...settled]) });
+    dialog();
+    expect(await screen.findByRole("button", { name: "Cancel queued handoff to Review Dashboard" })).toBeVisible();
+    expect(document.querySelectorAll('[data-handoff-status="completed"]')).toHaveLength(8);
+    expect(document.querySelectorAll('[data-handoff-status="queued"]')).toHaveLength(1);
+  });
+
+  it("names row actions by their handoff and hides Return findings once returned", async () => {
+    const incoming = (id: string, sourceName: string): HandoffRecord => ({
+      ...record("completed"),
+      id,
+      sourceThreadId: TARGET.id,
+      targetThreadId: SOURCE.id,
+      sourceName,
+      targetName: SOURCE.name,
+      result: "Findings",
+    });
+    const returned = incoming("returned", "Claude B");
+    const returnRecord: HandoffRecord = {
+      ...record("delivered"),
+      id: "return",
+      returnOfId: returned.id,
+    };
+    const interruptedReturn: HandoffRecord = {
+      ...record("interrupted"),
+      id: "return-interrupted",
+      returnOfId: "retry",
+    };
+    client({
+      list: vi.fn(async () => [
+        returned,
+        returnRecord,
+        incoming("fresh", "Claude C"),
+        incoming("retry", "Claude D"),
+        interruptedReturn,
+      ]),
+    });
+    dialog();
+    expect(await screen.findByRole("button", { name: "Return findings to Claude C" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Return findings to Claude D" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Return findings to Claude B" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Open receiver Review Dashboard" })).toHaveLength(2);
+  });
 });
