@@ -191,7 +191,9 @@ jobs:
             "KALCODE_E2E_INSPECTOR_PORT=$($ports.InspectorPort)", "KALCODE_UI_TEST_PORT=$($ports.UiPort)",
             "KALCODE_E2E_CDP_PORT=$($ports.CdpPort)",
             'KALCODE_GATE_REPORT_DIR=C:\ProgramData\KalCodeGatePool\reports',
-            'KALCODE_GATE_EVIDENCE_DIR=C:\ProgramData\KalCodeGatePool\evidence'
+            'KALCODE_GATE_EVIDENCE_DIR=C:\ProgramData\KalCodeGatePool\evidence',
+            # desktop-ui and desktop-native-e2e never overlap across this PC's jobs (machine-lock.mjs).
+            'KALCODE_GATE_LOCK_DIR=C:\ProgramData\KalCodeGatePool\heavy'
           ) | Add-Content -Path $env:GITHUB_ENV -Encoding ascii
           "python=$(([string]($ids -contains 'tooling-unit' -or $ids -contains 'desktop-native-e2e')).ToLower())" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding ascii
           "native=$(([string]($ids -contains 'desktop-native-e2e')).ToLower())" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding ascii
