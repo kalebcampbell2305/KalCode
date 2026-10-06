@@ -67,6 +67,13 @@ Until it carries `kalcode-gate-pc2`, the PC2 job stays queued and candidates do 
 label together with landing this workflow. Removing the label later requires reverting to the single-job
 workflow first.
 
+The second PC started processes ~10x slower than the build PC (each git ~1.3 s vs ~0.14 s, gate
+37410227962), so git- and process-heavy checks ran 3-8x slower there. `windows/tune-gate-pc2.ps1` (one
+elevated run on that PC, no gate job running) measures git start and `git init` times, adds Defender path
+exclusions for `C:\kalcode-ci` and the gate account's `%TEMP%`, switches to the High performance power
+plan, measures again and writes a receipt to `C:\kalcode-ci`. `-MeasureOnly` only measures; `-Undo`
+reverts.
+
 ## Workflows
 
 - `.github/workflows/gate.yml` runs `node tooling/release/ship.mjs gate` (the same gate agents run locally) on the gate runner. Fork PRs never run. The checkout keeps no GitHub token. The job uses dedicated ports so it never collides with an agent session on the same PC. The legacy macOS job stays disabled under the current owner policy.
