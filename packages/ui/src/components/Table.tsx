@@ -57,12 +57,16 @@ export interface RowItemProps extends HTMLAttributes<HTMLLIElement> {
   interactive?: boolean;
 }
 
-export function RowItem({ selected = false, interactive = false, className, ...rest }: RowItemProps) {
+export function RowItem({ selected = false, interactive = false, className, children, ...rest }: RowItemProps) {
   return (
     <li
       className={cx(styles.row, interactive && styles.interactive, className)}
       data-selected={selected || undefined}
       {...rest}
-    />
+    >
+      {/* The selected rail on an inert element, not ::before (see Table.module.css). */}
+      {selected ? <span className={styles.selectedRail} aria-hidden="true" /> : null}
+      {children}
+    </li>
   );
 }

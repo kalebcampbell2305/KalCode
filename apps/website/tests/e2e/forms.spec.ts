@@ -1,12 +1,15 @@
 import { expect, test } from "@playwright/test";
 import { CONSENT_VERSION } from "../../src/lib/site";
-import { mailTo, queryEarlyAccess, uniqueEmail, uniqueIp, useClientIp } from "./helpers";
+import { mailTo, queryEarlyAccess, resetEmailBudget, uniqueEmail, uniqueIp, useClientIp } from "./helpers";
 
 const SIGNUP_SUCCESS =
   "Almost there: check your inbox and open the link we sent to confirm your email. It expires in 72 hours.";
 const REMOVE_SUCCESS = "If that address is on the early-access list, we've emailed it a link to confirm the removal.";
 
 test.describe("early-access form", () => {
+  // These send real (captured) emails from the same persisted daily budget as double-opt-in.
+  test.beforeEach(() => resetEmailBudget());
+
   test("joins, then shows the same message for a duplicate", async ({ page }) => {
     await useClientIp(page);
     const email = uniqueEmail("join");

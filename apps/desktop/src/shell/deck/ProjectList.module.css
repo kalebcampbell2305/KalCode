@@ -299,8 +299,10 @@
 .project[data-dragging] {
   opacity: 0.65;
 }
-.project[data-drop]::after {
-  content: "";
+/* The drop line: an aria-hidden element rendered only on the drop target (last in the item,
+   ProjectList.tsx), not ::after: axe's colour-contrast check reports "incomplete" for the row's
+   text under an absolute pseudo-element with a background. */
+.project[data-drop] > .dropLine {
   position: absolute;
   left: var(--space-2);
   right: var(--space-2);
@@ -309,10 +311,10 @@
   background: var(--color-accent);
   pointer-events: none;
 }
-.project[data-drop="before"]::after {
+.project[data-drop="before"] > .dropLine {
   top: -1px;
 }
-.project[data-drop="after"]::after {
+.project[data-drop="after"] > .dropLine {
   bottom: -1px;
 }
 .initial[data-pin] {

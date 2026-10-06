@@ -42,6 +42,8 @@ export function PermissionsSettings() {
     >
       {settings && !startable && !MODES.includes(mode) ? (
         <div className={styles.defaultNote} role="status">
+          {/* The rail on an inert element, not ::before (see PermissionsSettings.module.css). */}
+          <span className={styles.defaultNoteRail} aria-hidden="true" />
           <TriangleAlert aria-hidden="true" />
           <div>
             <p className={styles.bannerTitle}>{MODE_LABELS[mode]} is your saved default</p>

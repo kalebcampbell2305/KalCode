@@ -357,8 +357,11 @@ interface ItemProps {
 
 function StackItem({ item, focused, pinned, groupNames, currentGroup, onShow, onPin, onMove, onNewGroup }: ItemProps) {
   const detail = item.status ? `${BADGES[item.status.badge].label}: ${item.status.detail}` : "State unknown";
+  const edge = focused || item.status?.badge === "needs_you" || item.status?.badge === "waiting";
   return (
     <li className={styles.item} data-focused={focused || undefined} data-badge={item.status?.badge}>
+      {/* The focus / needs-you edge on an inert element, not ::before (see Organization.module.css). */}
+      {edge ? <span className={styles.itemEdge} aria-hidden="true" /> : null}
       <button
         type="button"
         className={styles.itemMain}

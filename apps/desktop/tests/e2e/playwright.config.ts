@@ -1,4 +1,8 @@
 import { defineConfig } from "@playwright/test";
+import { lowerLocalPriority } from "../../../../tooling/local-priority.mjs";
+
+// Local runs yield the CPU to the gate (tooling/local-priority.mjs); CI is unchanged.
+lowerLocalPriority();
 
 /**
  * End-to-end tests against the real, compiled KalCode desktop app. Each test launches the

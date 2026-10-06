@@ -170,6 +170,12 @@ export function ProjectList({ collapsed }: { collapsed: boolean }) {
               const label = status ? `${workspace.name}, ${status}` : workspace.name;
               // A missing folder can't be fixed from here; removing it keeps the list honest.
               const missing = workspace.available ? undefined : workspaces.find((w) => w.id === workspace.id);
+              const drop =
+                drag?.over === workspace.id && drag.id !== workspace.id
+                  ? pinned.findIndex((p) => p.workspaceId === drag.id) < index
+                    ? "after"
+                    : "before"
+                  : undefined;
               return (
                 <li
                   key={workspace.id}
@@ -177,13 +183,7 @@ export function ProjectList({ collapsed }: { collapsed: boolean }) {
                   data-project-id={workspace.id}
                   data-pinned={workspace.pinned || undefined}
                   data-dragging={drag?.id === workspace.id || undefined}
-                  data-drop={
-                    drag?.over === workspace.id && drag.id !== workspace.id
-                      ? pinned.findIndex((p) => p.workspaceId === drag.id) < index
-                        ? "after"
-                        : "before"
-                      : undefined
-                  }
+                  data-drop={drop}
                 >
                   <Tooltip
                     hidden={menuFor !== null || drag !== null}
@@ -366,6 +366,8 @@ export function ProjectList({ collapsed }: { collapsed: boolean }) {
                       ) : null}
                     </DropdownMenuContent>
                   </DropdownMenu>
+                  {/* The drop line on an inert element, not ::after (see ProjectList.module.css). */}
+                  {drop ? <span className={styles.dropLine} aria-hidden="true" /> : null}
                 </li>
               );
             })}

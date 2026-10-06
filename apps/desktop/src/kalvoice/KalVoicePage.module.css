@@ -250,8 +250,9 @@
   padding-left: var(--space-6);
 }
 
-.privacy li::before {
-  content: "";
+/* Each point's mark: an aria-hidden element (first in the item, KalVoicePage.tsx), not ::before,
+   like the hero and tile edges above. */
+.privacyMark {
   position: absolute;
   top: 0.4em;
   left: 0;

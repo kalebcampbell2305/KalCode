@@ -1,5 +1,9 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
+import { lowerLocalPriority } from "../../tooling/local-priority.mjs";
+
+// Local runs yield the CPU to the gate (tooling/local-priority.mjs); CI is unchanged.
+lowerLocalPriority();
 
 export default defineConfig({
   plugins: [react()],
