@@ -4,6 +4,7 @@ import {
   browserContent,
   clampCustomViewport,
   normalizeBrowserAddress,
+  persistableBrowserUrl,
   updateBrowserUrl,
   viewportWidth,
 } from "./browserModel.ts";
@@ -15,6 +16,15 @@ describe("normalizeBrowserAddress", () => {
     ["[::1]:8000", "http://[::1]:8000/"],
     ["kalcoded.com/docs", "https://kalcoded.com/docs"],
     [" HTTPS://EXAMPLE.COM/a?b=c#d ", "https://example.com/a?b=c#d"],
+    ["example.com:8080", "https://example.com:8080/"],
+    ["myapp.test:3000/x", "https://myapp.test:3000/x"],
+    ["host.docker.internal:8080", "https://host.docker.internal:8080/"],
+    ["dev.localhost:5173", "http://dev.localhost:5173/"],
+    ["0.0.0.0:3000", "http://0.0.0.0:3000/"],
+    ["192.168.1.5:5173", "http://192.168.1.5:5173/"],
+    ["10.0.0.2:8000/app?x=1", "http://10.0.0.2:8000/app?x=1"],
+    ["172.20.0.3:80", "http://172.20.0.3/"],
+    ["172.32.0.3:8080", "https://172.32.0.3:8080/"],
   ])("normalizes %s", (input, expected) => {
     expect(normalizeBrowserAddress(input)).toBe(expected);
   });
@@ -26,6 +36,9 @@ describe("normalizeBrowserAddress", () => {
     "data:text/html,hello",
     "blob:https://example.com/id",
     "about:blank",
+    "javascript:0",
+    "about:1",
+    "example.com:99999",
     "https://user:password@example.com",
     "https://example.com/line\nbreak",
     "https://example.com/tab\tbreak",
@@ -35,6 +48,15 @@ describe("normalizeBrowserAddress", () => {
     `https://${"a".repeat(2048)}.com`,
   ])("rejects unsafe address %s", (input) => {
     expect(() => normalizeBrowserAddress(input)).toThrow();
+  });
+});
+
+describe("persistableBrowserUrl", () => {
+  it("escapes a stray percent so the layout stays saveable", () => {
+    expect(persistableBrowserUrl("http://localhost:3000/100%")).toBe("http://localhost:3000/100%25");
+    expect(persistableBrowserUrl("http://localhost:3000/a%2Fb%zz%4?q=1%#h%")).toBe(
+      "http://localhost:3000/a%2Fb%25zz%254",
+    );
   });
 });
 
