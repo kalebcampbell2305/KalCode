@@ -158,6 +158,12 @@
   white-space: nowrap;
 }
 
+.chipLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .chip[data-tone="muted"] .chipValue,
 .chip[data-empty] .chipValue {
   color: var(--color-text-muted);
@@ -286,12 +292,25 @@
   font-size: var(--type-label);
 }
 
-/* When the chips and signals squeeze the field to its 2rem minimum (Larger text in a 1440px
-   window), the shortcut no longer fits: it spilled out of the field and over "0 working".
-   The field keeps its icon; the shortcut stays announced through aria-keyshortcuts. */
-@container deck-command (max-width: 8rem) {
+/* A squeezed field gives its room to the caption first: the shortcut (still announced through
+   aria-keyshortcuts) goes before the caption is cut, which otherwise ellipsized to a
+   meaningless "S…" beside "Ctrl K" (1360px window with the agent rail open). It also no longer
+   spills over "0 working" at the 2rem minimum (Larger text in a 1440px window). */
+@container deck-command (max-width: 13rem) {
   .kbd {
     display: none;
+  }
+}
+
+/* Too narrow even for "Search": an icon button, not an empty-looking field; the button keeps
+   its name through aria-label. */
+@container deck-command (max-width: 5.5rem) {
+  .commandText {
+    display: none;
+  }
+
+  .command {
+    width: auto;
   }
 }
 
