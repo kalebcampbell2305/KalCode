@@ -45,6 +45,9 @@ fn test_shell(core: &Core) -> String {
         .expect("a test shell is installed")
 }
 
+/// Hang guard for waits on shell exit, its events and folder release: never a latency assertion.
+const HANG_GUARD: Duration = Duration::from_secs(30);
+
 fn wait_until(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
@@ -179,7 +182,7 @@ fn terminal_context_actions_preserve_output_and_target_only_the_selected_tab() {
         "terminal_not_running"
     );
     core.stop_terminal(&terminal.id).expect("idempotent stop");
-    assert!(wait_until(Duration::from_secs(5), || {
+    assert!(wait_until(HANG_GUARD, || {
         events.lock().expect("events").iter().any(|event| matches!(&event.event, EventPayload::ShellCompleted { terminal_id, closed_by_user: false, .. } if terminal_id == &terminal.id))
     }));
     let recorded = core.terminal(&terminal.id).expect("recorded stop");
@@ -695,10 +698,10 @@ fn restart_refuses_a_saved_start_folder_that_no_longer_exists() {
     // End both shells so nothing holds the folder, then delete it.
     core.stop_terminal(&copy.id).expect("stop copy");
     core.stop_terminal(&original.id).expect("stop original");
-    assert!(wait_until(Duration::from_secs(10), || {
+    assert!(wait_until(HANG_GUARD, || {
         std::fs::remove_dir_all(&build).is_ok() || !build.exists()
     }));
-    assert!(wait_until(Duration::from_secs(10), || {
+    assert!(wait_until(HANG_GUARD, || {
         core.terminal(&copy.id).is_ok_and(|t| t.ended_at.is_some())
     }));
 

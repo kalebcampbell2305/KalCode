@@ -176,4 +176,13 @@ describe("locator open lifecycle", () => {
       workspaceId: "workspace",
     });
   });
+
+  it("opens a located coding agent through the canonical agent focus, never as a chat thread", async () => {
+    mocks.client.locatorOpen.mockResolvedValueOnce({ threadId: "agent-1", terminalId: "term-1", workspaceId: "w1" });
+    const { result } = renderHook(useOpenLocated);
+    await act(async () => {
+      expect(await result.current("thread", "agent-1", "palette")).toBe(true);
+    });
+    expect(mocks.focus).toHaveBeenCalledExactlyOnceWith({ kind: "agent", agentId: "agent-1", workspaceId: "w1" });
+  });
 });

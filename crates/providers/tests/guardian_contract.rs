@@ -30,6 +30,11 @@ fn profile() -> Result<ProfileIdentity, Box<dyn std::error::Error>> {
     )?)
 }
 
+/// Hang guard for reaping terminated helpers and providers on a loaded machine: never a latency
+/// assertion. It stays below the 60 s fixture sleeps, so a process left running is still caught.
+#[cfg(windows)]
+const HANG_GUARD: std::time::Duration = std::time::Duration::from_secs(30);
+
 fn process(pid: u32, birth_time_100ns: u64) -> Result<ProcessIdentity, Box<dyn std::error::Error>> {
     Ok(ProcessIdentity::new(pid, birth_time_100ns)?)
 }
@@ -78,7 +83,7 @@ fn force_terminate_and_wait(pid: u32) -> Result<(), Box<dyn std::error::Error>> 
     }
 
     let quoted_pid = format!("\"{pid}\"");
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + HANG_GUARD;
     loop {
         let output = std::process::Command::new(&tasklist)
             .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
@@ -279,7 +284,7 @@ fn windows_unnamed_job_survives_least_rights_handoff_and_proves_process_zero() {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(observer.active_processes().expect("zero count"), 0);
-    child.wait(Duration::from_secs(2)).expect("reap helper");
+    child.wait(HANG_GUARD).expect("reap helper");
 }
 
 #[cfg(windows)]
@@ -372,7 +377,7 @@ fn external_guardian_owns_job_until_desktop_channel_loss_drains_it() {
     };
     assert!(status.success(), "guardian cleanup failed: {status}");
     provider
-        .wait(Duration::from_secs(2))
+        .wait(HANG_GUARD)
         .expect("provider tree ended before guardian exit");
 }
 
@@ -475,7 +480,7 @@ fn external_guardian_drains_when_the_response_channel_breaks() {
         std::thread::sleep(Duration::from_millis(10));
     }
     provider
-        .wait(Duration::from_secs(2))
+        .wait(HANG_GUARD)
         .expect("provider ended before helper exit");
 }
 

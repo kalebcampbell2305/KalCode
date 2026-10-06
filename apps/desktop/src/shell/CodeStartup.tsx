@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { useDeskRestore } from "../runtime/deskRestore.ts";
 import { useWorkspaces } from "../runtime/WorkspaceProvider.tsx";
 import { useNavigation } from "./navigation.tsx";
 
@@ -7,16 +8,18 @@ import { useNavigation } from "./navigation.tsx";
  * accepted navigation while that restore is pending wins, including a click on the current page.
  */
 export function CodeStartup() {
+  const { automatic } = useDeskRestore();
   const { state, active } = useWorkspaces();
-  const { navigate, getIntentRevision } = useNavigation();
+  const { current, navigate, getIntentRevision } = useNavigation();
   const initialIntentRevision = useRef(getIntentRevision());
   const initialRestoreSettled = useRef(false);
 
   useEffect(() => {
     if (initialRestoreSettled.current || state === "loading") return;
     initialRestoreSettled.current = true;
-    if (state === "ready" && active && getIntentRevision() === initialIntentRevision.current) navigate("code");
-  }, [active, getIntentRevision, navigate, state]);
+    if (getIntentRevision() !== initialIntentRevision.current) return;
+    navigate(automatic && state === "ready" && active ? "code" : current);
+  }, [active, automatic, current, getIntentRevision, navigate, state]);
 
   return null;
 }

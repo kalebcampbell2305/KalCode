@@ -1,6 +1,7 @@
+import type { ListeningPort } from "@kalcode/protocol";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MemoryUtilityApi } from "../../ipc/memory/utilities.ts";
 import { UtilityDock } from "./UtilityDock.tsx";
 
@@ -150,5 +151,39 @@ describe("UtilityDock", () => {
 
     expect(screen.getByText(/opens through the workspace terminal authority/i)).toBeVisible();
     expect(screen.queryByRole("button", { name: /open scratch terminal/i })).not.toBeInTheDocument();
+  });
+  it("lists every process sharing one port without colliding row keys", async () => {
+    const user = userEvent.setup();
+    const shared: Omit<ListeningPort, "pid" | "processName"> = {
+      protocol: "udp",
+      localAddress: "0.0.0.0",
+      port: 5353,
+      exposure: "all_interfaces",
+      owner: null,
+      label: null,
+      workspaceId: null,
+      workspaceName: null,
+    };
+    const api = new MemoryUtilityApi({
+      ports: async () => ({
+        ports: [
+          { ...shared, pid: 2500, processName: "svchost.exe" },
+          { ...shared, pid: 4100, processName: "chrome.exe" },
+        ],
+        source: "Windows IP Helper",
+        sampledAt: "2026-09-25T12:00:00Z",
+      }),
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      render(<UtilityDock api={api} />);
+      await user.click(screen.getByRole("tab", { name: "Ports" }));
+
+      expect(await screen.findByText("svchost.exe")).toBeVisible();
+      expect(screen.getByText("chrome.exe")).toBeVisible();
+      expect(consoleError.mock.calls.flat().join(" ")).not.toMatch(/same key/i);
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 });

@@ -7,6 +7,7 @@ import { isPaneProvider, PaneChannel, type PaneProviderId, resolvePaneStartMode 
 
 /** How a new coding agent starts: account, exact model and effort (each optional). */
 export interface AgentLaunch {
+  contextSourceThreadId?: string;
   providerAccountId?: string | null;
   model?: string | null;
   effort?: string | null;
@@ -23,6 +24,8 @@ const CODEX_WAITING_POLL_MS = 4000;
 const REFRESH_DEBOUNCE_MS = 120;
 /** A multi-agent launch starts this many sessions at once (each is still its own fresh session). */
 const LAUNCH_CONCURRENCY = 4;
+/** Pane-info reads can touch PTY/runtime locks; keep startup hydration bounded. */
+const INFO_READ_CONCURRENCY = 4;
 
 /** Which panes a refresh re-reads: all, or only these thread ids (plus any not known yet). */
 type RefreshScope = "all" | ReadonlySet<string>;
@@ -42,6 +45,31 @@ function sameRecord(a: unknown, b: unknown): boolean {
 /** Whether two id lists are the same ids in the same order. */
 function sameIds(previous: readonly string[], next: readonly string[]): boolean {
   return previous.length === next.length && previous.every((id, i) => id === next[i]);
+}
+
+async function allSettledBounded<Input, Output>(
+  inputs: readonly Input[],
+  concurrency: number,
+  read: (input: Input) => Promise<Output>,
+  isCurrent: () => boolean = () => true,
+): Promise<PromiseSettledResult<Output>[]> {
+  const results = new Array<PromiseSettledResult<Output>>(inputs.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < inputs.length) {
+      // A superseded refresh may finish reads it already owns, but must not keep claiming work
+      // from the shared PTY/runtime locks while the current generation hydrates the same panes.
+      if (!isCurrent()) return;
+      const index = next++;
+      try {
+        results[index] = { status: "fulfilled", value: await read(inputs[index] as Input) };
+      } catch (reason) {
+        results[index] = { status: "rejected", reason };
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(Math.max(1, concurrency), inputs.length) }, worker));
+  return results;
 }
 
 /** Codex and Gemini CLI panes are offered only when threads can use that provider (PROVIDERS-2). */
@@ -127,16 +155,33 @@ export function useProviderPanes(workspace: Workspace, { active = true }: Provid
       try {
         const threads = await client.listThreads({ workspaceId: workspace.id });
         const candidates = threads.filter((t) => isPaneProvider(t.providerId));
+        if (current !== generation.current) return;
+        // Interactive thread identity is durable and sufficient to restore its saved pane frame.
+        // Publish it before slower runtime-info reads; legacy headless rows still wait for a
+        // positive pane-info answer so chat sessions are never presented as coding agents.
+        setPanes((previous) => {
+          const next = candidates.flatMap((thread): ProviderPaneEntry[] => {
+            const before = previous.find((entry) => entry.thread.id === thread.id);
+            if (thread.runtimeKind !== "interactive_pty" && !before?.info) return [];
+            const entry = { thread, info: before?.info ?? null };
+            return [before && sameRecord(before.thread, thread) ? before : entry];
+          });
+          next.sort((a, b) => a.thread.createdAt.localeCompare(b.thread.createdAt));
+          return next.length === previous.length && next.every((entry, i) => entry === previous[i]) ? previous : next;
+        });
         const { panes: knownPanes, settled: knownSettled } = known.current;
-        const infos = await Promise.allSettled(
-          candidates.map((t) => {
+        const infos = await allSettledBounded(
+          candidates,
+          INFO_READ_CONCURRENCY,
+          (t) => {
             if (scope !== "all" && !scope.has(t.id)) {
               const before = knownPanes.find((entry) => entry.thread.id === t.id)?.info;
               if (before) return Promise.resolve(before);
               if (knownSettled.includes(t.id)) return Promise.resolve(null);
             }
             return channel.info(t.id);
-          }),
+          },
+          () => current === generation.current,
         );
         if (current !== generation.current) return;
         inflightScope.current = null;
@@ -235,7 +280,9 @@ export function useProviderPanes(workspace: Workspace, { active = true }: Provid
       lastSeq = Math.max(lastSeq, events[0]?.seq ?? 0);
       const provider = fresh.find((e) => e.type.startsWith("provider."));
       if (provider) setProviderSeq(provider.seq);
-      let scope: RefreshScope | null = null;
+      // Provider detection can make a persisted session newly resumable without naming a
+      // workspace or thread. Re-read summaries so recovery sees that capability transition.
+      let scope: RefreshScope | null = provider ? "all" : null;
       for (const e of fresh) {
         const threadId = e.correlation.threadId;
         if (threadId !== null && (paneIds.current.has(threadId) || e.correlation.workspaceId === workspace.id))
@@ -260,11 +307,13 @@ export function useProviderPanes(workspace: Workspace, { active = true }: Provid
   // A pane without info is awaited (just launched, or a failed read) unless native already
   // answered that it has no live pane: an ended or restored agent never gains info by polling.
   // The poll pauses while the Code surface is hidden; thread events still refresh.
-  const waiting = panes.some(
-    (p) =>
-      (!p.info && !settled.includes(p.thread.id)) ||
-      (p.info?.hookChannel === "waiting" && p.thread.providerId === "claude-code"),
-  );
+  const waiting =
+    loaded &&
+    panes.some(
+      (p) =>
+        (!p.info && !settled.includes(p.thread.id)) ||
+        (p.info?.hookChannel === "waiting" && p.thread.providerId === "claude-code"),
+    );
   const codexWaiting = panes.some((p) => p.info?.hookChannel === "waiting" && p.thread.providerId === "codex");
   // Only the panes still waiting are polled; the others keep their info until an event names them.
   useEffect(() => {
@@ -293,6 +342,7 @@ export function useProviderPanes(workspace: Workspace, { active = true }: Provid
         // saved Plan preference. A read failure is surfaced below and no pane is created.
         const permissionMode = await resolvePaneStartMode(settings, () => client.getPermissionSettings());
         const input = {
+          ...(launch.contextSourceThreadId ? { contextSourceThreadId: launch.contextSourceThreadId } : {}),
           providerId,
           providerAccountId: launch.providerAccountId ?? null,
           model: launch.model ?? null,
@@ -322,7 +372,7 @@ export function useProviderPanes(workspace: Workspace, { active = true }: Provid
           // the instant before creation; never drop a fresh terminal on that snapshot.
           generation.current += 1;
           const ids = new Set(threads.map((thread) => thread.id));
-          const infos = await Promise.allSettled(threads.map((thread) => channel.info(thread.id)));
+          const infos = await allSettledBounded(threads, INFO_READ_CONCURRENCY, (thread) => channel.info(thread.id));
           setSettled((previous) =>
             previous.some((id) => ids.has(id)) ? previous.filter((id) => !ids.has(id)) : previous,
           );

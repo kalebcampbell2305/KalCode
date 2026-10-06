@@ -330,6 +330,51 @@ pub fn expire_pending(
     Ok(expired)
 }
 
+/// A pending Environment Doctor or Utility Dock request: the short-lived origins whose requests
+/// lapse after a fixed lifetime.
+#[derive(Debug, Clone)]
+pub struct PendingShortLived {
+    pub request: Expired,
+    pub origin_kind: String,
+    pub created_at: String,
+}
+
+/// Pending requests from the short-lived origins (Environment Doctor, Utility Dock).
+pub fn pending_short_lived(conn: &Connection) -> Result<Vec<PendingShortLived>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, COALESCE(thread_id, ''), COALESCE(workspace_id, ''), COALESCE(provider_id, ''),
+           origin_kind, created_at FROM approvals
+         WHERE status = 'pending' AND origin_kind IN ('doctor', 'utility')",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(PendingShortLived {
+                request: Expired {
+                    id: row.get(0)?,
+                    thread_id: row.get(1)?,
+                    workspace_id: row.get(2)?,
+                    provider_id: row.get(3)?,
+                },
+                origin_kind: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        })?
+        .collect::<std::result::Result<_, _>>()?;
+    Ok(rows)
+}
+
+/// Expires one pending request whose lifetime passed. The stored reason stays NULL: the schema's
+/// fixed reason list names why a request was cut short, and a lapsed lifetime is the request's
+/// own window ending. Returns false when it was no longer pending.
+pub fn expire_lapsed(conn: &Connection, id: &str) -> Result<bool> {
+    let changed = conn.execute(
+        "UPDATE approvals SET status = 'expired', resolved_at = ?2, resolved_by = 'system', expire_reason = NULL
+         WHERE id = ?1 AND status = 'pending'",
+        params![id, now_rfc3339()],
+    )?;
+    Ok(changed == 1)
+}
+
 pub fn insert_grant(conn: &Connection, grant: &Grant, source_request_id: &str) -> Result<()> {
     conn.execute(
         "INSERT INTO permission_grants (id, kind, thread_id, workspace_id, scopes, fingerprint, matcher,

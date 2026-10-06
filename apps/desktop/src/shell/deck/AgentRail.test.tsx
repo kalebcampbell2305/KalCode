@@ -70,6 +70,32 @@ it("clears through KalTidy's canonical removal and the row leaves at once", asyn
   expect(row).toHaveAttribute("data-leaving");
 });
 
+it("shows a cleared agent again, with its X, when it is restored later", async () => {
+  const api = kalTidy(Promise.resolve(true));
+  const tree = () => (
+    <TooltipProvider>
+      <KalTidyContext.Provider value={api}>
+        <AgentRail />
+      </KalTidyContext.Provider>
+    </TooltipProvider>
+  );
+  const { rerender } = render(tree());
+  const user = userEvent.setup();
+  const shipped = mocks.threads[2] as ThreadSummary;
+  await user.click(screen.getByRole("button", { name: "Clear Shipped" }));
+  // Archived: the next read no longer lists it.
+  mocks.threads = mocks.threads.filter((t) => t.id !== shipped.id);
+  rerender(tree());
+  expect(screen.queryByText("Shipped")).toBeNull();
+  // Unarchived (from the Fleet's Archived view): the same agent is back in the list.
+  mocks.threads = [...mocks.threads, shipped];
+  rerender(tree());
+  const row = screen.getByText("Shipped").closest("li") as HTMLElement;
+  expect(row).not.toHaveAttribute("data-leaving");
+  expect(row).not.toHaveAttribute("aria-hidden");
+  expect(within(row).getByRole("button", { name: "Clear Shipped" })).toBeEnabled();
+});
+
 it("brings the row back when the removal fails", async () => {
   let finish: (removed: boolean) => void = () => undefined;
   const api = kalTidy(new Promise((resolve) => (finish = resolve)));

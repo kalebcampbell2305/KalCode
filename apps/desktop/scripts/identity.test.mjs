@@ -102,6 +102,18 @@ test("desktop Cargo tests build the real guardian first with the same output con
   assert.equal(denied.length, 1, "desktop tests cannot run without the real guardian prerequisite");
 });
 
+test("a failed cargo test still normalizes the generated protocol bindings", () => {
+  let normalized = 0;
+  const normalize = () => {
+    normalized += 1;
+  };
+  const failing = () => ({ status: 101 });
+  assert.equal(runCargo(["test", "-p", "kalcode-contracts"], {}, failing, normalize), 101);
+  assert.equal(normalized, 1, "gate 37499865413: a red test run left raw ts-rs output behind");
+  assert.equal(runCargo(["clippy", "--workspace"], {}, failing, normalize), 101);
+  assert.equal(normalized, 1, "only test runs export bindings");
+});
+
 test("Stable identity remains unchanged and release CLI arguments pass through", () => {
   assert.equal(base.identifier, "com.kalcode.desktop");
   assert.equal(base.productName, "KalCode");

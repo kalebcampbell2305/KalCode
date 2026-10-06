@@ -30,14 +30,9 @@ import {
   MINIMUM_CONTRAST,
   monoFontFamily,
   TERMINAL_THEMES,
+  terminalFontSize,
 } from "./terminalTheme.ts";
 
-const FONT_SIZE = 13;
-
-/** Terminal font size for an interface text scale, in whole pixels so glyph cells stay crisp. */
-export function terminalFontSize(scale: number): number {
-  return Math.round(FONT_SIZE * scale);
-}
 const RESIZE_DEBOUNCE_MS = 80;
 /** Rendered output is acknowledged to native in steps of this many bytes. */
 const ACK_EVERY_BYTES = 64 * 1024;

@@ -95,6 +95,7 @@ import { UtilityDockRegistration } from "../utilities/UtilityDockPane.tsx";
 import styles from "./Code.module.css";
 import { CodeContextOperationsRegistration } from "./CodeContextOperations.tsx";
 import { CodeShownContext, createShownStore, useCodeShown } from "./codeShown.ts";
+import { DeskRecovery } from "./DeskRecovery.tsx";
 import { HandOffDialog } from "./HandOffDialog.tsx";
 import { useKalTidyClosedPanes } from "./kaltidy/closedPanes.ts";
 import { type AgentLaunchSpec, NewAgentDialog } from "./NewAgentDialog.tsx";
@@ -181,6 +182,7 @@ export interface BackgroundItem {
 }
 
 export interface CodeCanvasApi {
+  continuity: ReactNode;
   controller: PaneController;
   /** Contents that run but aren't shown in any pane. */
   background: BackgroundItem[];
@@ -260,7 +262,6 @@ function CanvasSkeleton({ label }: { label: string }) {
 export function CodeCanvas({ workspace, children }: CodeCanvasProps) {
   const workspaceVisible = useWorkspaceVisible();
   const providerPanes = useProviderPanes(workspace, { active: useNavigation().current === "code" && workspaceVisible });
-  if (!providerPanes.loaded) return <>{children(null, <CanvasSkeleton label="Loading panes" />)}</>;
   return (
     <LoadedCanvas workspace={workspace} providerPanes={providerPanes}>
       {children}
@@ -372,7 +373,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
           client.getThread(content.agentId),
           providerPanes.channel.info(content.agentId),
         ]);
-        return pane?.running !== false || !["completed", "failed", "interrupted", "offline"].includes(thread.status);
+        return pane?.running === true || !["completed", "failed", "interrupted", "offline"].includes(thread.status);
       }
       return false;
     },
@@ -387,8 +388,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
           client.getThread(content.agentId),
           providerPanes.channel.info(content.agentId),
         ]);
-        if (pane?.running === false && ["completed", "failed", "interrupted", "offline"].includes(thread.status))
-          return;
+        if (!pane?.running && ["completed", "failed", "interrupted", "offline"].includes(thread.status)) return;
         if (!confirmed)
           throw {
             category: "terminal",
@@ -414,6 +414,17 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       load: async () => {
         const stored = await client.layoutGet(workspace.id);
         const layout = stored ? parseLayout(stored.layout) : null;
+        if (stored && !layout) throw new Error("The saved layout could not be read.");
+        if (!stored) {
+          const agents = await client.listThreads({ workspaceId: workspace.id });
+          return defaultLayoutFor(
+            initialState.current.terminals,
+            initialState.current.activeTerminalId,
+            agents
+              .filter((thread) => thread.runtimeKind === "interactive_pty" && thread.archivedAt === null)
+              .map((thread) => thread.id),
+          );
+        }
         return layout
           ? removeContents(
               migrateAgentContents(layout, new Set(initialState.current.panes)),
@@ -771,6 +782,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     returnToHandoff: boolean;
     /** Pre-fills the count ("start six agents" that still needs a choice). */
     count?: number;
+    contextSourceThreadId?: string;
   } | null>(null);
   const [handoffTargetId, setHandoffTargetId] = useState<string | null>(null);
   // The id only: the dialog always reads the thread's current summary, and closes if it's gone.
@@ -837,8 +849,10 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
         const focused = leaves(current.layout.root).find((l) => l.paneId === current.focusedPaneId);
         current.show(agentContent(first), {
           focus: true,
-          placement: focused && focused.tabs.length > 0 ? "split" : "tab",
+          placement: !launch.contextSourceThreadId && focused && focused.tabs.length > 0 ? "split" : "tab",
         });
+        if (launch.contextSourceThreadId)
+          current.forget(new Set([contentKey(agentContent(launch.contextSourceThreadId))]));
       } else if (created.length > 1 && first) {
         const next = arrangeContents(current.layout, created.map(agentContent));
         if (next) {
@@ -1220,12 +1234,34 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   const latestPanes = useRef({ paneById, providerPanes });
   latestPanes.current = { paneById, providerPanes };
   const continueWithAccount = useCallback(
-    async (threadId: string, accountId: string) => {
+    async (threadId: string, accountId?: string) => {
       const { paneById, providerPanes } = latestPanes.current;
       const source = paneById.get(threadId)?.thread;
       const input = source ? duplicatePaneInput(source) : null;
+      if (!input && !accountId && source && isPaneProvider(source.providerId)) {
+        providerPanes.clearLaunchError();
+        const sourcePane = leaves(controllerRef.current.layout.root).find((leaf) =>
+          leaf.tabs.some((tab) => contentKey(tab) === contentKey(agentContent(threadId))),
+        );
+        setLauncher({
+          providerId: source.providerId,
+          paneId: sourcePane?.paneId ?? null,
+          returnToHandoff: false,
+          contextSourceThreadId: threadId,
+          count: 1,
+        });
+        toast.show({
+          tone: "info",
+          title: "Choose settings for the fresh session",
+          description: "The saved task stays in history. Custom settings need a new launch choice.",
+        });
+        return;
+      }
       if (!input) throw new Error("This coding session cannot be continued with its current settings.");
-      const created = await providerPanes.channel.create({ ...input, switchAccountId: accountId });
+      const created = await providerPanes.channel.create({
+        ...input,
+        ...(accountId ? { switchAccountId: accountId } : {}),
+      });
       pendingAgents.current.add(created.id);
       const content = agentContent(created.id);
       const current = controllerRef.current;
@@ -1234,10 +1270,23 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       );
       current.forget(new Set([contentKey(content)]));
       current.show(content, { paneId: pane?.paneId, focus: true, placement: "tab" });
+      // A recovery replaces the ended tab, retaining its thread in history. No old prompt is replayed.
+      if (!accountId && source) {
+        current.forget(new Set([contentKey(agentContent(threadId))]));
+        try {
+          providerPanes.updated(await client.renameThread(created.id, source.name));
+        } catch {
+          toast.show({
+            tone: "info",
+            title: "Fresh session started",
+            description: "The earlier task remains in history; its name couldn't be copied.",
+          });
+        }
+      }
       // Creation succeeded. A failed list refresh must not invite a duplicate launch on retry.
       void Promise.all([refreshWorkspaces(), providerPanes.refresh()]).catch(() => undefined);
     },
-    [refreshWorkspaces],
+    [refreshWorkspaces, client, toast],
   );
 
   const { error: paneError, refresh: refreshPanes, channel: paneChannel, updated: paneUpdated } = providerPanes;
@@ -1274,7 +1323,10 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       }
       if (content.kind === "agent") {
         const entry = paneById.get(content.agentId);
-        if (!entry?.info) {
+        if (
+          !entry ||
+          (!entry.info && !["interrupted", "completed", "failed", "offline"].includes(entry.thread.status))
+        ) {
           return <AgentConnecting error={paneError} onRetry={refreshPanes} />;
         }
         // Code's own visibility reaches the terminal through `CodeShownContext`, not these props.
@@ -1291,6 +1343,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
             throttled={!context.focused}
             onChanged={paneUpdated}
             onContinue={continueWithAccount}
+            onStartFresh={continueWithAccount}
             onHandOff={handOffFor(entry.thread.id)}
             onClose={closeAgentFor(entry.thread.id)}
           />
@@ -1695,6 +1748,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   );
   const api = useMemo<CodeCanvasApi>(
     () => ({
+      continuity: <DeskRecovery controller={controller} panes={providerPanes} active={codeShown} />,
       controller,
       background,
       providerPanes,
@@ -1711,6 +1765,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     }),
     [
       controller,
+      codeShown,
       background,
       providerPanes,
       shells,
@@ -1804,9 +1859,18 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
           initialCount={launcher.count}
           busy={launching || providerPanes.creating}
           error={providerPanes.error}
-          fixedCount={launcher.returnToHandoff ? 1 : undefined}
+          fixedCount={launcher.returnToHandoff || launcher.contextSourceThreadId ? 1 : undefined}
           purpose={launcher.returnToHandoff ? "handoff" : "standard"}
-          onLaunch={(spec) => launchAgents(spec, launcher.paneId, launcher.returnToHandoff)}
+          onLaunch={(spec) =>
+            launchAgents(
+              {
+                ...spec,
+                ...(launcher.contextSourceThreadId ? { contextSourceThreadId: launcher.contextSourceThreadId } : {}),
+              },
+              launcher.paneId,
+              launcher.returnToHandoff,
+            )
+          }
           onNewTerminal={
             launcher.returnToHandoff
               ? undefined

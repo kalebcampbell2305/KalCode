@@ -338,3 +338,52 @@ fn watcher_keeps_the_index_current() {
     );
     drop(watcher);
 }
+
+/// A workspace that is its own repository inside another one (a home folder kept in Git with a
+/// `*` `.gitignore`, a monorepo checkout folder): like Git, the outer repository's ignore rules
+/// stop at the workspace's repository and never hide its files. Within one repository, a parent
+/// folder's rules still apply to a workspace that is a subfolder of it.
+#[test]
+fn ignore_rules_stop_at_the_repository_boundary() {
+    let fx = Fixture::plain_folder();
+    // The outer repository ignores everything (a common dotfiles setup).
+    let outer = fx.temp.path();
+    common::init_repo(outer);
+    std::fs::write(outer.join(".gitignore"), "*\n!.gitignore\n").expect("outer ignore");
+    // The workspace is a repository of its own inside it.
+    common::init_repo(&fx.root);
+    fx.write(".gitignore", "target/\n");
+    fx.write("src/main.rs", "fn main() {}");
+    fx.write("target/out.bin", "x");
+    // Git agrees the file is not ignored in the workspace's repository.
+    assert!(!common::try_plain(
+        &fx.root,
+        &["check-ignore", "-q", "src/main.rs"]
+    ));
+
+    let index = FileIndex::build(fx.ws.clone()).expect("index");
+    let rel = |p: &str| RelPath::parse(p).expect("rel");
+    assert!(
+        index.get(&rel("src/main.rs")).is_some(),
+        "outer ignore leaked"
+    );
+    assert!(index.get(&rel("target/out.bin")).is_none());
+    let handles = HandleRegistry::default();
+    let root = index.list_dir(None, &page(50), &handles).expect("list");
+    let src = root
+        .items
+        .iter()
+        .find(|e| e.file.display_path == "src")
+        .expect("src listed");
+    assert!(!src.ignored, "src is not ignored");
+
+    // A workspace that is a subfolder of a repository keeps that repository's parent rules.
+    let sub = fx.root.join("pkg");
+    std::fs::create_dir_all(sub.join("target")).expect("mkdir");
+    std::fs::write(sub.join("target").join("x.bin"), "x").expect("write");
+    std::fs::write(sub.join("lib.rs"), "x").expect("write");
+    let sub_ws = WorkspaceRoot::new(&new_id(), &sub).expect("sub workspace");
+    let sub_index = FileIndex::build(sub_ws).expect("index");
+    assert!(sub_index.get(&rel("lib.rs")).is_some());
+    assert!(sub_index.get(&rel("target/x.bin")).is_none());
+}

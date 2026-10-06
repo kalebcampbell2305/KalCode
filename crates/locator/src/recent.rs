@@ -141,6 +141,7 @@ pub fn items_from_events(
                 provider_id: None,
                 provider_name: None,
                 status: None,
+                resumable: None,
                 last_activity_at: at.clone(),
             });
         }
@@ -154,6 +155,7 @@ pub fn items_from_events(
                 provider_id: None,
                 provider_name: None,
                 status: None,
+                resumable: None,
                 last_activity_at: at,
             });
         }

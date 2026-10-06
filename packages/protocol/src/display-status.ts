@@ -18,6 +18,16 @@ export interface DisplayInfo {
   chip: DashboardChip;
 }
 
+export interface ThreadDisplayFacts {
+  /** Whether the provider can resume its own historical conversation. */
+  resumable: boolean;
+}
+
+export interface ThreadDisplayInfo extends DisplayInfo {
+  /** Truthful, ready-to-render qualifier text for this specific thread. */
+  qualifierLabel: string | null;
+}
+
 export const DISPLAY_STATUS_OF = {
   starting: { status: "starting", qualifier: null, chip: "working" },
   active: { status: "working", qualifier: null, chip: "working" },
@@ -77,6 +87,17 @@ export const DISPLAY_QUALIFIER_LABEL = {
 } as const satisfies Record<DisplayQualifier, string>;
 
 /** The display status, qualifier and Dashboard chip of a runtime status. */
-export function displayStatusOf(status: ThreadStatus): DisplayInfo {
-  return DISPLAY_STATUS_OF[status];
+export function displayStatusOf(status: ThreadStatus): DisplayInfo;
+/** The display status plus a truthful qualifier when the caller has thread facts. */
+export function displayStatusOf(status: ThreadStatus, facts: ThreadDisplayFacts): ThreadDisplayInfo;
+export function displayStatusOf(status: ThreadStatus, facts?: ThreadDisplayFacts): DisplayInfo | ThreadDisplayInfo {
+  const display: DisplayInfo = DISPLAY_STATUS_OF[status];
+  if (!facts) return display;
+  if (status === "interrupted" && !facts.resumable) {
+    return { ...display, qualifier: null, qualifierLabel: "stopped · historical" };
+  }
+  return {
+    ...display,
+    qualifierLabel: display.qualifier ? DISPLAY_QUALIFIER_LABEL[display.qualifier] : null,
+  };
 }

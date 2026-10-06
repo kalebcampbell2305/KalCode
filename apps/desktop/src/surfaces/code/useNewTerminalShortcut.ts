@@ -17,6 +17,8 @@ export function useNewTerminalShortcut() {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || codeShortcut(event) !== "new-terminal") return;
       event.preventDefault();
+      // Holding the keys opens one terminal, not one per key repeat.
+      if (event.repeat) return;
       const { navigate: go, workspaces: state } = latest.current;
       go("code");
       if (state.active?.available) void state.createTerminal(null);

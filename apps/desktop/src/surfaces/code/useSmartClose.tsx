@@ -95,11 +95,7 @@ export function useSmartClose(ports: {
     current.current = null;
     setPending(null);
   }, []);
-  const keepRunning = useCallback(() => {
-    if (current.current && !stopping.current) finish(current.current);
-  }, [finish]);
-
-  return { request, pending, busy, cancel, keepRunning, stopAndClose };
+  return { request, pending, busy, cancel, stopAndClose };
 }
 
 export function SmartCloseDialog({ close }: { close: ReturnType<typeof useSmartClose> }) {
@@ -120,7 +116,7 @@ export function SmartCloseDialog({ close }: { close: ReturnType<typeof useSmartC
         >
           <AlertDialog.Title className={styles.title}>Close active work?</AlertDialog.Title>
           <AlertDialog.Description className={styles.description}>
-            A terminal or agent may still be running. Keep it in the background, or stop it and close.
+            A terminal or agent may still be running. Stop it and close the pane, or cancel to keep working.
           </AlertDialog.Description>
           {close.pending?.error ? (
             <p className={styles.error} role="alert">
@@ -133,9 +129,6 @@ export function SmartCloseDialog({ close }: { close: ReturnType<typeof useSmartC
                 Cancel
               </Button>
             </AlertDialog.Cancel>
-            <Button disabled={close.busy} onClick={close.keepRunning}>
-              Keep Running
-            </Button>
             <Button variant="danger" busy={close.busy} onClick={() => void close.stopAndClose()}>
               Stop and Close
             </Button>

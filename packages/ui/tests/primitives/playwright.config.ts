@@ -1,4 +1,8 @@
 import { defineConfig, devices } from "@playwright/test";
+import { lowerLocalPriority } from "../../../../tooling/local-priority.mjs";
+
+// Local runs yield the CPU to the gate (tooling/local-priority.mjs); CI is unchanged.
+lowerLocalPriority();
 
 const port = Number(process.env.KALCODE_UI_TEST_PORT ?? 15563);
 

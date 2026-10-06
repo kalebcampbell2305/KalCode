@@ -119,8 +119,10 @@
   background: linear-gradient(90deg, var(--color-surface-selected), transparent 115%);
 }
 
-.row[aria-current="true"]::before {
-  content: "";
+/* The rail is an aria-hidden element rendered only on the selected row (first in the row,
+   ThreadList.tsx), not ::before: axe's colour-contrast check reports "incomplete" for the row's
+   text under an absolute pseudo-element with a background. */
+.row[aria-current="true"] > .selectedRail {
   position: absolute;
   left: 0;
   top: var(--space-2);

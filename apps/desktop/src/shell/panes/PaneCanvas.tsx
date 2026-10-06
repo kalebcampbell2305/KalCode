@@ -56,6 +56,7 @@ import {
 } from "./paneCommands.ts";
 import { type PaneShortcut, paneShortcut } from "./paneShortcuts.ts";
 import type { PaneController } from "./usePaneController.ts";
+import { isHeavyPaneContent, useProgressivePaneHydration } from "./useProgressivePaneHydration.ts";
 
 /** What the surface hosting the canvas provides. */
 export interface PaneHost {
@@ -257,9 +258,27 @@ function PaneCanvasSurface({
   const panes = useMemo(() => leaves(layout.root), [layout]);
   const items = useMemo(() => orderedItems(layout.root, geometry.dividers), [layout.root, geometry.dividers]);
   const maximized = layout.maximizedPaneId;
-  const contents = allContents(layout);
+  const contents = useMemo(() => allContents(layout), [layout]);
   const currentKeys = new Set(contents.map(contentKey));
   for (const key of mountedContent.current) if (!currentKeys.has(key)) mountedContent.current.delete(key);
+  const hydrationCandidates = useMemo(
+    () =>
+      contents.flatMap((content) => {
+        if (!isHeavyPaneContent(content)) return [];
+        const location = findContent(layout, contentKey(content));
+        const leaf = location ? findLeaf(layout, location.paneId) : null;
+        const active = !!leaf && leaf.activeTab === location?.index;
+        return [
+          {
+            key: contentKey(content),
+            paneId: leaf?.paneId ?? "",
+            visible: active && !leaf?.collapsed && (!maximized || maximized === leaf.paneId),
+          },
+        ];
+      }),
+    [contents, layout, maximized],
+  );
+  const hydratedHeavyContent = useProgressivePaneHydration(hydrationCandidates, controller.focusedPaneId);
 
   // Delivery and visual focus read the same immutable native-session target. This remains pinned
   // if focus moves after push-to-talk starts and ignores stale session identities.
@@ -632,8 +651,10 @@ function PaneCanvasSurface({
           const leaf = location ? findLeaf(layout, location.paneId) : null;
           const active = !!leaf && leaf.activeTab === location?.index;
           const visible = active && !leaf.collapsed && (!maximized || maximized === leaf.paneId);
-          // Initialize on first visibility; thereafter layout changes only hide or move the host.
-          if (visible) mountedContent.current.add(key);
+          // Light contents initialize on first visibility. Heavy terminal/webview contents wait
+          // until the frames paint, then hydrate progressively. Thereafter moves only relocate the host.
+          if (visible && (!isHeavyPaneContent(content) || hydratedHeavyContent.has(key)))
+            mountedContent.current.add(key);
           if (!mountedContent.current.has(key)) return null;
           const request = leaf && controller.focusRequest.paneId === leaf.paneId ? controller.focusRequest.n : 0;
           if (leaf && request !== contentFocus.current.get(leaf.paneId)?.n) {

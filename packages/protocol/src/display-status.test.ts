@@ -97,6 +97,21 @@ describe("display status", () => {
     expect(DISPLAY_QUALIFIER_LABEL.stopped_resumable).toBe("stopped · resumable");
   });
 
+  it("qualifies an interrupted thread from its real resume capability", () => {
+    expect(displayStatusOf("interrupted", { resumable: false })).toEqual({
+      status: "idle",
+      qualifier: null,
+      qualifierLabel: "stopped · historical",
+      chip: "idle",
+    });
+    expect(displayStatusOf("interrupted", { resumable: true })).toEqual({
+      status: "idle",
+      qualifier: "stopped_resumable",
+      qualifierLabel: "stopped · resumable",
+      chip: "idle",
+    });
+  });
+
   it("labels every display status and tone", () => {
     for (const status of DISPLAY_STATUSES) {
       expect(DISPLAY_STATUS_LABEL[status]).toMatch(/^[A-Z ]+$/);

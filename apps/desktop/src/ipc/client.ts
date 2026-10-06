@@ -675,7 +675,7 @@ export class KalCodeClient {
 
   /** Git facts for the agents that run in their own worktree (Agent Fleet); others are left out. */
   threadWorktreeStates(threadIds: readonly string[]): Promise<ThreadWorktreeState[]> {
-    return this.call("thread_worktree_states", { threadIds });
+    return this.call("thread_worktree_states", { args: { threadIds } });
   }
 
   /**
@@ -683,7 +683,7 @@ export class KalCodeClient {
    * person asks (agents may not be able to commit from their sandbox). Refused while it works.
    */
   commitThreadWorktree(threadId: string, message: string): Promise<ThreadWorktreeState> {
-    return this.call("thread_worktree_commit", { threadId, message });
+    return this.call("thread_worktree_commit", { args: { threadId, message } });
   }
 
   /**
@@ -788,8 +788,18 @@ export class KalCodeClient {
     return this.call("thread_interrupt", { threadId });
   }
 
-  resumeThread(threadId: string, text?: string, promptReviewId?: string | null): Promise<ThreadSummary> {
-    return this.call("thread_resume", { threadId, text: text ?? null, promptReviewId: promptReviewId ?? null });
+  resumeThread(
+    threadId: string,
+    text?: string,
+    promptReviewId?: string | null,
+    allowPendingInput = true,
+  ): Promise<ThreadSummary> {
+    return this.call("thread_resume", {
+      threadId,
+      text: text ?? null,
+      promptReviewId: promptReviewId ?? null,
+      allowPendingInput,
+    });
   }
 
   stopThread(threadId: string): Promise<ThreadSummary> {

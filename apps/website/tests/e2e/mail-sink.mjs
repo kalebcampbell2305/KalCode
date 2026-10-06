@@ -5,6 +5,8 @@
 //   POST /messages          (the Worker) store one message; answers 500 while failing
 //   GET  /messages?to=addr  messages sent to addr, oldest first
 //   POST /fail {"count":n}  fail the next n sends with HTTP 500 (0 clears)
+//   POST /fail {"count":n,"to":addr}  the same, for sends to addr only: tests running side by
+//                           side never take (or are spared) each other's simulated failure
 //   GET  /health            readiness probe for Playwright's webServer
 //
 // Listens on 127.0.0.1 only. Usage: node tests/e2e/mail-sink.mjs <port>
@@ -18,6 +20,23 @@ if (!Number.isInteger(port) || port <= 0) {
 
 const messages = [];
 let failNext = 0;
+/** Simulated failures left per recipient (lowercased). */
+const failFor = new Map();
+
+function takeFailure(message) {
+  for (const address of message.to ?? []) {
+    const key = String(address).toLowerCase();
+    const left = failFor.get(key) ?? 0;
+    if (left > 0) {
+      if (left === 1) failFor.delete(key);
+      else failFor.set(key, left - 1);
+      return true;
+    }
+  }
+  if (failNext === 0) return false;
+  failNext -= 1;
+  return true;
+}
 
 function readBody(request) {
   return new Promise((resolve, reject) => {
@@ -48,10 +67,7 @@ const server = createServer(async (request, response) => {
     if (request.method === "GET" && url.pathname === "/health") return send(response, 200, { ok: true });
     if (request.method === "POST" && url.pathname === "/messages") {
       const message = JSON.parse(await readBody(request));
-      if (failNext > 0) {
-        failNext -= 1;
-        return send(response, 500, { message: "simulated provider failure" });
-      }
+      if (takeFailure(message)) return send(response, 500, { message: "simulated provider failure" });
       messages.push({ ...message, receivedAt: new Date().toISOString() });
       return send(response, 200, { id: `sink-${messages.length}` });
     }
@@ -64,9 +80,15 @@ const server = createServer(async (request, response) => {
       );
     }
     if (request.method === "POST" && url.pathname === "/fail") {
-      const { count } = JSON.parse((await readBody(request)) || "{}");
-      failNext = Number.isInteger(count) && count > 0 ? count : 0;
-      return send(response, 200, { failNext });
+      const { count, to } = JSON.parse((await readBody(request)) || "{}");
+      const n = Number.isInteger(count) && count > 0 ? count : 0;
+      if (typeof to !== "string") {
+        failNext = n;
+        return send(response, 200, { failNext });
+      }
+      if (n > 0) failFor.set(to.toLowerCase(), n);
+      else failFor.delete(to.toLowerCase());
+      return send(response, 200, { failNext: n, to });
     }
     return send(response, 404, { error: "not_found" });
   } catch (error) {

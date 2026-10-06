@@ -6,6 +6,7 @@ import {
   notChecked,
   type UsageWindow,
   usagePercent,
+  windowAppliesToModel,
 } from "./accountUsage.ts";
 import { USAGE_STALE_AFTER_MS } from "./accountUsageReader.ts";
 
@@ -24,9 +25,7 @@ function currentWindow(state: AccountUsageState, model: string | null, now: numb
       return false;
     if (window.resetsAt !== null && !(Date.parse(window.resetsAt) > now)) return false;
     // Model-specific quotas are meaningful only for the model this agent is using.
-    if (window.id.includes("opus") && !model?.toLowerCase().includes("opus")) return false;
-    if (window.id.includes("sonnet") && !model?.toLowerCase().includes("sonnet")) return false;
-    return true;
+    return windowAppliesToModel(window, model);
   });
   return windows.reduce<UsageWindow | null>(
     (best, window) => (!best || window.remainingPercent < best.remainingPercent ? window : best),

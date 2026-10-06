@@ -7,7 +7,9 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { lowerLocalPriority } from "../../../tooling/local-priority.mjs";
 
+lowerLocalPriority();
 const targetDir = fileURLToPath(new URL("../../../target/e2e", import.meta.url));
 const env = { ...process.env, CARGO_TARGET_DIR: targetDir };
 const shell = process.platform === "win32";

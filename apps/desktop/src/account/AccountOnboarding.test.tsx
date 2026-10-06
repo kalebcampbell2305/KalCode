@@ -47,6 +47,7 @@ function actions() {
     activateFree: vi.fn<() => Promise<void>>(async () => undefined),
     checkout: vi.fn<(tier: PurchasableTier, interval: BillingInterval) => Promise<void>>(async () => undefined),
     retry: vi.fn<() => Promise<void>>(async () => undefined),
+    logout: vi.fn<() => Promise<void>>(async () => undefined),
   } satisfies AccountOnboardingActions;
 }
 
@@ -157,11 +158,39 @@ describe("AccountOnboarding", () => {
     await userEvent.click(screen.getByRole("button", { name: "Email me a sign-in link" }));
     expect(accountActions.startEmail).toHaveBeenCalledWith("owner@example.com");
 
+    // The link was sent; cancelling it returns to the welcome screen, not the form.
+    rerender(
+      <AccountOnboarding snapshot={snapshot("email_pending")} busy={false} error={null} actions={accountActions} />,
+    );
     rerender(
       <AccountOnboarding snapshot={snapshot("signed_out")} busy={false} error={null} actions={accountActions} />,
     );
+    expect(screen.getByRole("heading", { name: "Welcome to KalCode" })).toBeInTheDocument();
     // One email entry serves new and returning people alike.
     expect(screen.getAllByRole("button", { name: /with email/ })).toHaveLength(1);
+  });
+
+  it("keeps the email form and the typed address when sending the link fails", async () => {
+    const accountActions = actions();
+    const { rerender } = render(
+      <AccountOnboarding snapshot={snapshot("signed_out")} busy={false} error={null} actions={accountActions} />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue with email" }));
+    await userEvent.type(screen.getByLabelText("Email"), "owner@example.com");
+    await userEvent.click(screen.getByRole("button", { name: "Email me a sign-in link" }));
+    // The request failed: the phase never moved on and the provider reports the error.
+    rerender(
+      <AccountOnboarding
+        snapshot={snapshot("signed_out")}
+        busy={false}
+        error={{ code: "rate_limited", message: "Too many requests. Try again shortly.", retryable: true }}
+        actions={accountActions}
+      />,
+    );
+    expect(screen.getByRole("heading", { name: "Continue with email" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Email")).toHaveValue("owner@example.com");
+    expect(screen.getByRole("alert")).toHaveTextContent("Too many requests");
+    expect(screen.queryByRole("heading", { name: "Welcome to KalCode" })).toBeNull();
   });
 
   it("checks the email link when KalCode regains focus, and keeps the manual button", async () => {
@@ -237,6 +266,33 @@ describe("AccountOnboarding", () => {
     expect(screen.getByRole("heading", { name: "Confirming plan" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Check again" }));
     expect(accountActions.retry).toHaveBeenCalledOnce();
+  });
+
+  it("never traps an unfinished checkout: go back to plan choice, or sign out", async () => {
+    const accountActions = actions();
+    render(
+      <AccountOnboarding snapshot={snapshot("confirming_plan")} busy={false} error={null} actions={accountActions} />,
+    );
+    expect(screen.queryByRole("button", { name: "Check again" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Choose a different plan" }));
+    expect(accountActions.cancelAuth).toHaveBeenCalledOnce();
+    await userEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    expect(accountActions.logout).toHaveBeenCalledOnce();
+  });
+
+  it("lets a verified account sign out from plan choice", async () => {
+    const accountActions = actions();
+    render(
+      <AccountOnboarding
+        snapshot={snapshot("authenticated_unactivated")}
+        busy={false}
+        error={null}
+        actions={accountActions}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    expect(accountActions.logout).toHaveBeenCalledOnce();
+    expect(accountActions.activateFree).not.toHaveBeenCalled();
   });
 });
 

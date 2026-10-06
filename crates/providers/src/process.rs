@@ -912,6 +912,10 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
+    /// Hang guard for one `tasklist` inspection: spawning it on a loaded machine can take seconds, so
+    /// it never decides an outcome (the enclosing deadlines still bound each wait).
+    #[cfg(windows)]
+    const TASKLIST_GUARD: Duration = Duration::from_secs(30);
     #[cfg(windows)]
     const PROCESS_TREE_FIXTURE_ROLE: &str = "KALCODE_PROCESS_TREE_FIXTURE_ROLE";
     #[cfg(windows)]
@@ -1134,7 +1138,7 @@ mod tests {
                 Err(error) => break Err(format!("couldn't read descendant readiness: {error}")),
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
-            let inspection = remaining.min(Duration::from_secs(2));
+            let inspection = remaining.min(TASKLIST_GUARD);
             match windows_process_is_running(&tasklist, root_pid, inspection) {
                 Ok(true) => {}
                 Ok(false) => match std::fs::read_to_string(&marker) {
@@ -1172,11 +1176,11 @@ mod tests {
         let root_first_exit = loop {
             let root_timeout = root_exit_deadline
                 .saturating_duration_since(Instant::now())
-                .min(Duration::from_secs(2));
+                .min(TASKLIST_GUARD);
             let root_running = windows_process_is_running(&tasklist, root_pid, root_timeout);
             let descendant_timeout = root_exit_deadline
                 .saturating_duration_since(Instant::now())
-                .min(Duration::from_secs(2));
+                .min(TASKLIST_GUARD);
             let descendant_running =
                 windows_process_is_running(&tasklist, descendant_pid, descendant_timeout);
             match (root_running, descendant_running) {
@@ -1216,7 +1220,7 @@ mod tests {
             "the supervised root failed: {status}; stderr={}; output={output:?}",
             child.stderr_tail()
         );
-        match windows_process_is_running(&tasklist, descendant_pid, Duration::from_secs(2)) {
+        match windows_process_is_running(&tasklist, descendant_pid, TASKLIST_GUARD) {
             Ok(false) => {}
             Ok(true) => {
                 let cleanup = cleanup_process_tree_fixture(&child);

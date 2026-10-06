@@ -18,6 +18,8 @@ import {
   Workflow,
 } from "lucide-react";
 import { createContext, type ReactNode, useContext, useMemo } from "react";
+import { useOptionalAccount } from "../account/AccountProvider.tsx";
+import { navigationHistoryStorageKey } from "./navigationHistory.ts";
 import { useNavigationHistory } from "./useNavigationHistory.ts";
 
 export interface SurfaceMeta {
@@ -205,6 +207,7 @@ export function NavigationProvider({
   features?: readonly FeatureFlag[];
   children: ReactNode;
 }) {
+  const accountId = useOptionalAccount()?.snapshot.account?.id;
   // Home is the provisional start when its feature is available (not merely visible in a
   // development build). CodeStartup resolves returning users with a restored workspace to Code.
   const initial = features?.some((f) => f.id === "workspace_home" && f.state === "available" && f.visible)
@@ -215,7 +218,7 @@ export function NavigationProvider({
     for (const view of ["home", "folder"] as const) if (viewVisible(view, features)) ids.add(view);
     return ids;
   }, [flags, features]);
-  const value = useNavigationHistory(initial, visible);
+  const value = useNavigationHistory(initial, visible, accountId ? navigationHistoryStorageKey(accountId) : undefined);
   return <NavigationContext.Provider value={value}>{children}</NavigationContext.Provider>;
 }
 

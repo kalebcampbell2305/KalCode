@@ -216,14 +216,16 @@ fn rail_counts_threads_per_provider_and_badges() {
     let ws = workspace(&core, dir.path(), "atlas");
     let sources = FakeSources::new();
     let at = now();
-    sources.add(thread(
+    let mut resumable = thread(
         "A",
         "claude-code",
         &ws.id,
         &ws.name,
         ThreadStatus::RunningTool,
         &at,
-    ));
+    );
+    resumable.resumable = true;
+    sources.add(resumable);
     sources.add(thread(
         "B",
         "claude-code",
@@ -269,6 +271,15 @@ fn rail_counts_threads_per_provider_and_badges() {
     assert_eq!(
         (claude.threads, claude.working, claude.needs_you),
         (2, 1, 1)
+    );
+    assert_eq!(
+        claude
+            .items
+            .iter()
+            .find(|item| item.name == "A")
+            .unwrap()
+            .resumable,
+        Some(true)
     );
     let codex = entry
         .providers
@@ -455,14 +466,23 @@ fn home_summary_is_real_state_only() {
             ThreadStatus::WaitingForPermission,
             &now(),
         );
-        let stopped = thread(
-            "Stopped one",
+        let stopped_historical = thread(
+            "Stopped historical",
             "claude-code",
             &ws.id,
             &ws.name,
             ThreadStatus::Interrupted,
             &now(),
         );
+        let mut stopped_resumable = thread(
+            "Stopped resumable",
+            "claude-code",
+            &ws.id,
+            &ws.name,
+            ThreadStatus::Interrupted,
+            &now(),
+        );
+        stopped_resumable.resumable = true;
         let done = thread(
             "Shipped thing",
             "claude-code",
@@ -471,7 +491,13 @@ fn home_summary_is_real_state_only() {
             ThreadStatus::Completed,
             &now(),
         );
-        for t in [&working, &waiting, &stopped, &done] {
+        for t in [
+            &working,
+            &waiting,
+            &stopped_historical,
+            &stopped_resumable,
+            &done,
+        ] {
             sources.add(t.clone());
             core.emit(NewEvent {
                 source: EventSource::Core,
@@ -508,7 +534,8 @@ fn home_summary_is_real_state_only() {
     };
     assert_eq!(names(&summary.running), vec!["Build the rail"]);
     assert_eq!(names(&summary.needs_you), vec!["Needs approval"]);
-    assert_eq!(names(&summary.resumable), vec!["Stopped one"]);
+    assert_eq!(names(&summary.resumable), vec!["Stopped resumable"]);
+    assert_eq!(summary.resumable[0].resumable, Some(true));
     assert_eq!(summary.finished_since_last_visit.len(), 1);
     assert_eq!(summary.finished_since_last_visit[0].id, done_id);
     let last: Vec<RecentWorkKind> = summary.last_session.iter().map(|i| i.kind).collect();

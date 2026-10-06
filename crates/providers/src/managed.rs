@@ -1043,6 +1043,9 @@ mod tests {
     use std::ffi::OsStr;
     use std::time::Duration;
 
+    /// Hang guard for test-only thread handshakes: never a latency assertion.
+    const HANG_GUARD: Duration = Duration::from_secs(30);
+
     fn source(vars: &[(&str, &OsStr)]) -> DetectEnv {
         DetectEnv {
             vars: vars
@@ -1386,7 +1389,7 @@ mod tests {
         let writer = std::thread::spawn(move || {
             writer_profiles.acquire_account_lifecycle_lease("codex", &writer_account)
         });
-        let deadline = Instant::now() + Duration::from_secs(1);
+        let deadline = Instant::now() + HANG_GUARD;
         while !canceled.load(Ordering::Acquire) && Instant::now() < deadline {
             std::thread::yield_now();
         }

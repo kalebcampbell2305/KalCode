@@ -68,7 +68,7 @@ interface AccountHubProps {
  */
 export function AccountHub({ collapsed, onOpenPalette }: AccountHubProps) {
   const account = useOptionalAccount();
-  const { info, settings } = useRuntime();
+  const { info } = useRuntime();
   const { navigate } = useNavigation();
   // A section opened from the menu takes focus; Radix must not move it back to the trigger.
   const focusMoves = useRef(false);
@@ -78,9 +78,9 @@ export function AccountHub({ collapsed, onOpenPalette }: AccountHubProps) {
   const user = account?.snapshot.account;
   if (!account || !user) return null;
   const { snapshot, usage, busy, actions } = account;
-  // The KalCode account's synced display name; a name set on this computer before account
-  // names existed still shows until one is set.
-  const { name, initials } = kalcodeIdentity(user.displayName ?? settings.displayName, user.email);
+  // The KalCode account's synced display name, else the email's local part: the same fallback
+  // Settings → KalCode account promises ("Until you set one, KalCode uses …").
+  const { name, initials } = kalcodeIdentity(user.displayName, user.email);
   const plan = planLabel(snapshot.tier, snapshot.phase);
   const limits = limitsFor(snapshot.tier ?? "free");
   const billingInterval = usage?.billingInterval ?? snapshot.billingInterval;

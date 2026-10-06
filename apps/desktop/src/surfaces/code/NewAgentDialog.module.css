@@ -34,8 +34,11 @@
   animation: rise var(--dur-base) var(--ease-emphasized);
 }
 
-/* Lit top edge + a faint starfield: depth without decoration competing with content. */
-.dialog::before {
+/* Lit top edge + a faint starfield: depth without decoration competing with content. Both are
+   aria-hidden elements (the edge first in the dialog, the starfield last, NewAgentDialog.tsx), not
+   ::before/::after: axe's colour-contrast check reports "incomplete" for any text under an absolute
+   pseudo-element with a background. */
+.dialog > .dialogEdge {
   position: absolute;
   inset: 0 0 auto;
   z-index: -1;
@@ -47,11 +50,10 @@
     var(--color-border-lit) 70%,
     transparent
   );
-  content: "";
   opacity: 0.7;
 }
 
-.dialog::after {
+.dialog > .starfield {
   position: absolute;
   inset: 0 0 auto;
   z-index: -1;
@@ -66,19 +68,22 @@
     ),
     radial-gradient(1px 1px at 41% 58%, rgb(255 255 255 / 0.25), transparent 60%),
     radial-gradient(1px 1px at 92% 12%, rgb(255 255 255 / 0.3), transparent 60%);
-  content: "";
   mask-image: linear-gradient(180deg, black, transparent);
   pointer-events: none;
 }
 
-:global([data-theme="light"]) .dialog::after {
+:global([data-theme="light"]) .dialog > .starfield {
   display: none;
 }
 
+/* Its own stacking context (no paint change: it is the dialog's only in-flow child and the
+   decorations sit at z-index -1), so axe stacks the form's text above the 9rem starfield instead
+   of reporting it as overlapped. */
 .form {
   display: flex;
   min-height: 0;
   flex-direction: column;
+  isolation: isolate;
 }
 
 .body {

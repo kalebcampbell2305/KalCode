@@ -514,3 +514,28 @@ fn integration_limits_are_atomic_and_reconnections_obey_current_plan() {
     );
     assert!(broker.save(input, None).is_err());
 }
+
+#[test]
+fn a_completed_call_stays_completed_when_the_integration_changes_mid_flight() {
+    let (_dir, broker, integration) = setup();
+    grant(&broker, &integration.id);
+    let dispatched_at = broker.record(&integration.id).unwrap().view.revision;
+    // The person saves access while the (already dispatched) remote write is in flight.
+    grant(&broker, &integration.id);
+    assert_ne!(
+        broker.record(&integration.id).unwrap().view.revision,
+        dispatched_at
+    );
+    let outcome = broker
+        .finish_call(
+            integration.id.clone(),
+            "deploy".into(),
+            dispatched_at,
+            Ok(json!({"deployed": true})),
+        )
+        .expect("a call that ran is reported as completed, never as retryable");
+    let CallOutcome::Completed { result } = outcome else {
+        panic!("expected a completed call");
+    };
+    assert_eq!(result.content, json!({"deployed": true}));
+}

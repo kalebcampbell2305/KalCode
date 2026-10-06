@@ -1042,9 +1042,23 @@ impl IntegrationBroker {
             Ok(redact(content, credential.as_ref()))
         }
         .await;
+        self.finish_call(integration_id, tool_name, record.view.revision, result)
+    }
+
+    /// Records health for a dispatched call and returns its real outcome. The remote side effect
+    /// has already happened, so a health-write failure (the integration's revision moved while the
+    /// call was in flight, e.g. grants were saved) must never turn a completed call into an error:
+    /// that would tell the agent to retry a write that already ran.
+    fn finish_call(
+        &self,
+        integration_id: String,
+        tool_name: String,
+        revision: u64,
+        result: Result<Value>,
+    ) -> Result<CallOutcome> {
         match result {
             Ok(content) => {
-                self.record_health(&integration_id, record.view.revision, None)?;
+                let _ = self.record_health(&integration_id, revision, None);
                 Ok(CallOutcome::Completed {
                     result: ToolResult {
                         integration_id,
@@ -1056,7 +1070,7 @@ impl IntegrationBroker {
                 })
             }
             Err(error) => {
-                let _ = self.record_health(&integration_id, record.view.revision, Some(&error));
+                let _ = self.record_health(&integration_id, revision, Some(&error));
                 Err(error)
             }
         }

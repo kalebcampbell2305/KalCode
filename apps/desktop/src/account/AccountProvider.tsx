@@ -385,6 +385,10 @@ export function AccountProvider({
 
   // The latest display-name save: an older save's result or rollback never overwrites a newer one.
   const displayNameSave = useRef(0);
+  // The name the server last confirmed: a failed save rolls back to it, never to another save's
+  // optimistic name. Read from the account whenever no save is in flight.
+  const confirmedName = useRef<{ accountId: string; displayName: string | null } | null>(null);
+  const displayNameSavesInFlight = useRef(0);
   const setDisplayName = useCallback(
     async (raw: string): Promise<AccountUiError | null> => {
       const account = latestState.current.snapshot.account;
@@ -392,7 +396,11 @@ export function AccountProvider({
         return { code: "authentication_required", message: "Sign in to continue.", retryable: false };
       }
       const save = ++displayNameSave.current;
-      const previous = account.displayName;
+      if (displayNameSavesInFlight.current === 0 || confirmedName.current?.accountId !== account.id) {
+        confirmedName.current = { accountId: account.id, displayName: account.displayName };
+      }
+      const confirmed = confirmedName.current;
+      displayNameSavesInFlight.current += 1;
       const requested = raw.trim() || null;
       const show = (displayName: string | null) => {
         if (mounted.current && save === displayNameSave.current) {
@@ -403,14 +411,21 @@ export function AccountProvider({
       try {
         const snapshot = await client.setDisplayName(requested);
         const saved = snapshot.account?.id === account.id ? snapshot.account.displayName : requested;
+        if (confirmedName.current?.accountId === account.id) {
+          confirmedName.current = { accountId: account.id, displayName: saved };
+        }
         show(saved);
         return null;
       } catch (error) {
-        show(previous);
+        show(
+          confirmedName.current?.accountId === account.id ? confirmedName.current.displayName : confirmed.displayName,
+        );
         const failure = safeError(error);
         // The session ended: show the sign-in gate rather than a stale account.
         if (failure.code === "authentication_required" && mounted.current) void runSnapshot(() => client.status());
         return failure;
+      } finally {
+        displayNameSavesInFlight.current -= 1;
       }
     },
     [client, runSnapshot],

@@ -2798,8 +2798,12 @@ mod tests {
             .begin_account_validation(ProviderId::CODEX, &other.id)
             .expect("other validation");
         let other_cancellation = other_validation.cancellation();
+        // Hang guards, not latency budgets: on a loaded gate machine the observer thread can wait
+        // well over 250 ms to be scheduled (gate 37499865413). `preempt_account_validation`
+        // returns false on timeout, so `true` already proves the exact validation was cancelled
+        // and released before the deadline.
         let observer = std::thread::spawn(move || {
-            let deadline = Instant::now() + Duration::from_secs(1);
+            let deadline = Instant::now() + Duration::from_secs(30);
             while !cancellation.load(Ordering::Acquire) && Instant::now() < deadline {
                 std::thread::yield_now();
             }
@@ -2807,13 +2811,11 @@ mod tests {
             drop(validation);
         });
 
-        let started = Instant::now();
         assert!(fixture.runtime.preempt_account_validation(
             ProviderId::CODEX,
             &fixture.account.id,
-            Duration::from_secs(1)
+            Duration::from_secs(30)
         ));
-        assert!(started.elapsed() < Duration::from_millis(250));
         observer.join().expect("observer exits");
         assert!(!other_cancellation.load(Ordering::Acquire));
         drop(other_validation);

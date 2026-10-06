@@ -567,3 +567,121 @@ fn a_crash_while_waiting_recovers_without_phantom_waits() {
         [Call::Send("resume me".into())]
     );
 }
+
+/// An established session can have a user turn recorded before the Resource Governor admits its
+/// send. Restart recovery must expose that queued-input fact without exposing its text, and an
+/// automatic/generic resume must atomically refuse it. The dedicated explicit action may then
+/// resume the provider session and deliver the queued turn exactly once.
+#[test]
+fn restart_reports_queued_input_and_only_explicit_resume_delivers_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("repo");
+    std::fs::create_dir_all(&root).expect("repo");
+    let (workspaces, workspace_id) = FakeWorkspaces::with(root);
+    let provider = FakeProvider::new("fake", "Fake Provider");
+    let request = |prompt: &str| kalcode_threads::CreateThread {
+        provider_id: "fake".into(),
+        provider_account_id: None,
+        account_label: None,
+        workspace_id: workspace_id.clone(),
+        model: None,
+        effort: None,
+        permission_mode: kalcode_contracts::permissions::PermissionMode::Approve,
+        prompt: prompt.into(),
+        name: None,
+    };
+
+    let (queued_id, normal_id) = {
+        let core = Arc::new(Core::open(config(dir.path())).expect("core"));
+        let registry = Arc::new(ProviderRegistry::new());
+        registry.register(provider.clone());
+        let runtime = ThreadRuntime::new(
+            core,
+            registry,
+            workspaces.clone(),
+            TestGate::new(PolicyEffect::Ask),
+        )
+        .expect("runtime");
+
+        let queued_id = runtime.create(request("first")).expect("queued thread").id;
+        let queued_session = provider.last_session();
+        queued_session.emit(AgentEvent::TurnCompleted { ok: true });
+        wait_until("queued thread idle", || {
+            runtime.get(&queued_id).expect("queued summary").status == ThreadStatus::Idle
+        });
+        queued_session.fail_sends_with(
+            1_000,
+            hold(LaunchHoldKind::MemoryCritical, Duration::from_secs(10)),
+        );
+        let held = runtime
+            .send(&queued_id, "queued after restart")
+            .expect("held send");
+        assert_eq!(held.status, ThreadStatus::WaitingForDependency);
+        assert!(held.resume_has_pending_input);
+
+        let normal_id = runtime
+            .create(request("ordinary turn"))
+            .expect("normal thread")
+            .id;
+        provider
+            .last_session()
+            .emit(AgentEvent::TurnCompleted { ok: true });
+        wait_until("normal thread idle", || {
+            runtime.get(&normal_id).expect("normal summary").status == ThreadStatus::Idle
+        });
+        assert!(!runtime.get(&normal_id).unwrap().resume_has_pending_input);
+
+        runtime.shutdown_checked().expect("shutdown");
+        (queued_id, normal_id)
+    };
+
+    provider.admit_starts();
+    let sessions_before_resume = provider.started_sessions();
+    let core = Arc::new(Core::open(config(dir.path())).expect("reopen"));
+    let registry = Arc::new(ProviderRegistry::new());
+    registry.register(provider.clone());
+    let runtime = ThreadRuntime::new(core, registry, workspaces, TestGate::new(PolicyEffect::Ask))
+        .expect("restarted runtime");
+
+    let recovered = runtime.get(&queued_id).expect("recovered queued summary");
+    assert_eq!(recovered.status, ThreadStatus::Interrupted);
+    assert!(recovered.resume_has_pending_input);
+    assert!(!runtime.get(&normal_id).unwrap().resume_has_pending_input);
+    let listed = runtime
+        .list(Some(&workspace_id), false)
+        .expect("recovered list");
+    assert!(
+        listed
+            .iter()
+            .find(|thread| thread.id == queued_id)
+            .expect("queued thread in list")
+            .resume_has_pending_input
+    );
+
+    let denied = runtime
+        .resume_reviewed_with_options(&queued_id, None, None, false)
+        .expect_err("generic recovery cannot implicitly send queued input");
+    assert_eq!(denied.code, "thread_resume_has_pending_input");
+    assert!(!denied.message.contains("queued after restart"));
+    let retained = runtime.get(&queued_id).expect("retained queued summary");
+    assert_eq!(retained.status, ThreadStatus::Interrupted);
+    assert!(retained.resume_has_pending_input);
+    assert_eq!(provider.started_sessions(), sessions_before_resume);
+
+    let resumed = runtime
+        .resume(&queued_id, None)
+        .expect("explicit queued resume");
+    assert!(!resumed.resume_has_pending_input);
+    assert_eq!(
+        provider.last_session().calls(),
+        [Call::Send("queued after restart".into())]
+    );
+    let user_messages = runtime
+        .messages(&queued_id, 50, None)
+        .expect("persisted messages")
+        .into_iter()
+        .filter(|message| message.role == MessageRole::User)
+        .map(|message| message.content)
+        .collect::<Vec<_>>();
+    assert_eq!(user_messages, ["first", "queued after restart"]);
+}

@@ -281,6 +281,8 @@ impl Transport {
         let mut response = self
             .client
             .post(self.endpoint.clone())
+            // Some providers (GitHub) answer form-encoded unless JSON is asked for explicitly.
+            .header(reqwest::header::ACCEPT, "application/json")
             .form(&[
                 ("grant_type", "authorization_code"),
                 ("client_id", client_id),
@@ -348,6 +350,10 @@ fn parse_sse(bytes: &[u8], id: Option<u64>) -> Result<Option<Value>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Hang guard for loopback HTTP with an in-process fixture server: never a latency assertion.
+    const IO_GUARD: Duration = Duration::from_secs(30);
+
     #[test]
     fn rejects_private_reserved_and_url_credentials() {
         for ip in [
@@ -406,7 +412,7 @@ mod tests {
             client: Client::builder()
                 .no_proxy()
                 .redirect(reqwest::redirect::Policy::none())
-                .timeout(Duration::from_secs(2))
+                .timeout(IO_GUARD)
                 .build()
                 .unwrap(),
             endpoint: Url::parse(&format!("http://{address}/mcp")).unwrap(),
@@ -469,9 +475,7 @@ mod tests {
                 ),
             ] {
                 let (mut socket, _) = listener.accept().unwrap();
-                socket
-                    .set_read_timeout(Some(Duration::from_secs(2)))
-                    .unwrap();
+                socket.set_read_timeout(Some(IO_GUARD)).unwrap();
                 let mut request = Vec::new();
                 loop {
                     let mut buffer = [0u8; 2048];
@@ -512,7 +516,7 @@ mod tests {
         let transport = Transport {
             client: Client::builder()
                 .no_proxy()
-                .timeout(Duration::from_secs(3))
+                .timeout(IO_GUARD)
                 .build()
                 .unwrap(),
             endpoint: Url::parse(&format!("http://{address}/mcp")).unwrap(),
@@ -539,3 +543,7 @@ mod tests {
         thread.join().unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "transport_oauth_tests.rs"]
+mod oauth_tests;

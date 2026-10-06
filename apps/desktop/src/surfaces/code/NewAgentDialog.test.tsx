@@ -165,6 +165,23 @@ describe("restored accounts in the Code launcher", () => {
     expect(onLaunch).not.toHaveBeenCalled();
   });
 
+  it("takes keyboard focus into the dialog while accounts are still restoring", async () => {
+    const pending = deferred<ProviderAccount[]>();
+    runtime.client = {
+      listProviderAccounts: vi.fn(() => pending.promise),
+      listProviderAccountBindings: vi.fn(async () => []),
+      threadOptions: vi.fn(async () => ({ providers: [] })),
+    } as unknown as KalCodeClient;
+    const opener = document.createElement("button");
+    document.body.append(opener);
+    opener.focus();
+    render(dialog({}));
+    const launcher = await screen.findByRole("dialog");
+    expect(within(launcher).getByText("Restoring accounts…")).toBeVisible();
+    await waitFor(() => expect(launcher.contains(document.activeElement)).toBe(true));
+    opener.remove();
+  });
+
   it("shows a truthful recovery action when startup restore exhausts its quiet retries", async () => {
     const claude = makeAccount("claude-a", "Claude A", true);
     runtime.client = {
@@ -475,6 +492,29 @@ describe("restored accounts in the Code launcher", () => {
     expect(optionA).not.toHaveTextContent(/4% left/);
     expect(screen.getByRole("option", { name: /Claude B/ })).toHaveTextContent(/40% left/);
     expect(screen.getByText("Claude A is running low on its 5-hour limit. Use Claude B instead?")).toBeVisible();
+  });
+
+  it("does not warn about another model's weekly limit (#284)", async () => {
+    const a = makeAccount("claude-a", "Claude A", true);
+    const b = makeAccount("claude-b", "Claude B", false);
+    const scoped = fresh(a.id, 73, "Max");
+    usage.map = new Map([
+      [
+        a.id,
+        {
+          ...scoped,
+          windows: [
+            ...scoped.windows,
+            { id: "weekly_fable", label: "Weekly Fable", remainingPercent: 2, resetsAt: null },
+          ],
+        },
+      ],
+      [b.id, fresh(b.id, 91, "Max")],
+    ]);
+    runtime.client = clientWith([a, b], async () => threadOptions(["claude-code"]));
+    render(dialog({}));
+    expect(await screen.findByRole("option", { name: /Claude A/ })).toHaveTextContent(/73% left/);
+    expect(screen.queryByText(/running low/)).not.toBeInTheDocument();
   });
 
   it("never invents usage: unknown accounts say so", async () => {
@@ -906,6 +946,38 @@ describe("Cursor native runtime models", () => {
     await userEvent.setup().click(screen.getByRole("button", { name: "Launch Cursor agent" }));
     expect(onLaunch).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ providerAccountId: cursor.id, model: "custom/code-v9" }),
+    );
+  });
+
+  it("repeats the last Cursor launch, with its exact model, in one click from Recent", async () => {
+    const entry = {
+      providerId: "cursor",
+      accountId: cursor.id,
+      model: "custom/code-v9",
+      modelName: "custom/code-v9",
+      effort: null,
+      count: 1,
+      workspaceId: "ws",
+      boundAccountId: null,
+      at: "2026-10-04T00:00:00Z",
+    };
+    window.localStorage.setItem(
+      "kalcode.agentLauncher.v1",
+      JSON.stringify({ last: entry, byProvider: { cursor: entry } }),
+    );
+    const onLaunch = mountCursor(
+      async () => ({
+        account: cursor,
+        models: [{ id: "custom/code-v9", displayName: "custom/code-v9", isDefault: false }],
+        modelsError: null,
+      }),
+      cursor,
+      true,
+    );
+    await waitFor(() => expect(screen.getByRole("radio", { name: "custom/code-v9" })).toBeChecked());
+    await userEvent.setup().click(screen.getByRole("button", { name: /^Repeat last: Cursor/ }));
+    expect(onLaunch).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ providerId: "cursor", providerAccountId: cursor.id, model: "custom/code-v9" }),
     );
   });
 

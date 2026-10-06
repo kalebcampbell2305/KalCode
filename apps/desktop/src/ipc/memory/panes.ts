@@ -295,6 +295,18 @@ export function createPanesMemory(options: {
     provider_pane_create: async (args) => {
       requireEnabled();
       await options.beforeCreate?.();
+      if (args.sourceThreadId && args.contextSourceThreadId)
+        invalid("pane_context_source_conflict", "Choose one source for the fresh session.");
+      if (typeof args.contextSourceThreadId === "string") {
+        const context = (await threads.handlers.thread_get({ threadId: args.contextSourceThreadId })) as ThreadSummary;
+        if (
+          context.archivedAt !== null ||
+          context.runtimeKind !== "interactive_pty" ||
+          context.workspaceId !== args.workspaceId
+        )
+          invalid("pane_context_source_unavailable", "The saved coding task is not available in this project.");
+        args = { ...args, name: context.name };
+      }
       if (args.switchAccountId !== undefined && typeof args.sourceThreadId !== "string")
         invalid("pane_switch_source_required", "Choose a coding session before switching accounts.");
       if (typeof args.sourceThreadId === "string") {

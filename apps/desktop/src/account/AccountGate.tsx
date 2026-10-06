@@ -35,6 +35,8 @@ function RuntimeTransition({
   return (
     <main className={styles.screen} aria-labelledby="account-runtime-title">
       <section className={styles.card}>
+        {/* The lit top edge on an inert element, not ::before (see Account.module.css). */}
+        <span className={styles.cardEdge} aria-hidden="true" />
         <div className={styles.center} role="status" aria-busy={busy || undefined}>
           <p className={styles.eyebrow}>{eyebrow}</p>
           <h1 id="account-runtime-title">{title}</h1>
