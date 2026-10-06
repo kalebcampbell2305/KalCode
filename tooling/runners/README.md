@@ -44,29 +44,6 @@ macOS release work keeps the existing path: the release runner on Windows drives
 
 The guard is copied next to the runner and wired as `ACTIONS_RUNNER_HOOK_JOB_STARTED` in the runner's `.env`. A job can't change either file, and a job the guard refuses fails before any of its steps run. Re-run the setup script after changing the guard.
 
-## Split gate: build PC + second PC
-
-Owner, 2026-10-05: split gate work across both Windows PCs so neither pins its CPU. `gate.yml` runs two
-Windows jobs on the same event SHA: `Gate (Windows)` on the build PC's pool (Rust, desktop frontend/UI,
-native E2E and anything not listed for the second PC) and `Gate (Windows, PC2)` on the second PC
-(`biome`, `branding`, `capabilities`, `zero-cost`, `release-manifest`, `packages`, `tooling-unit`, `api`,
-`website`, `website-e2e`, `website-checkout-e2e`, `pnpm-audit`; the list lives in
-`tooling/release/lifecycle/gate-split.mjs`). The merge train lands a candidate only when both jobs passed
-for that exact SHA (a workflow without the PC2 job keeps single-job evidence).
-
-The PC2 job runs on `kalcode-win-gate-2` (the second PC's gate account) without the build-PC pool hooks,
-at below-normal priority, on fixed ports (pool base + 200). That account needs Git, Node.js and pnpm on
-its PATH; the job installs Playwright's Chromium and the pinned portable Python itself. Activate it once
-the runner is online and idle:
-
-```powershell
-gh api -X PUT repos/kalebcampbell2305/KalCode/actions/runners/25/labels -f "labels[]=kalcode-gate-pc2"
-```
-
-Until it carries `kalcode-gate-pc2`, the PC2 job stays queued and candidates do not land, so activate the
-label together with landing this workflow. Removing the label later requires reverting to the single-job
-workflow first.
-
 ## Workflows
 
 - `.github/workflows/gate.yml` runs `node tooling/release/ship.mjs gate` (the same gate agents run locally) on the gate runner. Fork PRs never run. The checkout keeps no GitHub token. The job uses dedicated ports so it never collides with an agent session on the same PC. The legacy macOS job stays disabled under the current owner policy.
