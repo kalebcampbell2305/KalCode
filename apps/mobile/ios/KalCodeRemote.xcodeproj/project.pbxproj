@@ -40,6 +40,7 @@
 		975E7EA707BBB7F41C3B21B6 /* AgentCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF5F6DF82C3636915A075ED9 /* AgentCard.swift */; };
 		9994D96DF66F8707C2F0A178 /* LaunchSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D701AD16A0E940EFAB01A68 /* LaunchSheet.swift */; };
 		9B94E8353518CDA7867AFFD8 /* AgentLogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7898EEAABC1224660FC8F4CB /* AgentLogView.swift */; };
+		A2250E3B7629499A64AE4FC0 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 3002C03ACAC7DBCA76CF50D2 /* PrivacyInfo.xcprivacy */; };
 		A58D6F0C6B9C257EDA89F06F /* DiffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1014AAA268D5104CDD255195 /* DiffView.swift */; };
 		A68C301B8B9F543D66695E21 /* LexendDeca-400.ttf in Resources */ = {isa = PBXBuildFile; fileRef = ED72A5827A2A429420B19D80 /* LexendDeca-400.ttf */; };
 		A6CAB7C426E244E33F9BDBAC /* JetBrainsMono-700.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 79B266884A33AAD4600FB139 /* JetBrainsMono-700.ttf */; };
@@ -137,6 +138,7 @@
 		2AE9EFAFD96A21D2CFDA4DD0 /* FleetState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetState.swift; sourceTree = "<group>"; };
 		2B5A1FE2DBF5500249898E89 /* Fixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Fixtures.swift; sourceTree = "<group>"; };
 		2D701AD16A0E940EFAB01A68 /* LaunchSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchSheet.swift; sourceTree = "<group>"; };
+		3002C03ACAC7DBCA76CF50D2 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		376C1C06DA631F33D0B1095C /* noise_ik.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = noise_ik.json; sourceTree = "<group>"; };
 		39757F02B6467973351C1A0D /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		39DF29EF0285F39762AAD43B /* Router.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Router.swift; sourceTree = "<group>"; };
@@ -474,6 +476,7 @@
 			children = (
 				4130E7FB7AB61903EE95F466 /* Assets.xcassets */,
 				1E4AFA1F85786856398101F8 /* Info.plist */,
+				3002C03ACAC7DBCA76CF50D2 /* PrivacyInfo.xcprivacy */,
 				B490C71D077CAAB289BD5254 /* Fonts */,
 			);
 			path = Resources;
@@ -569,20 +572,20 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					08EBF50B1082089F965F3370 = {
-						DevelopmentTeam = "";
+						DevelopmentTeam = JG5K9T47ZF;
 						ProvisioningStyle = Automatic;
 					};
 					0A0CB5380B20BDEAA35BF795 = {
-						DevelopmentTeam = "";
+						DevelopmentTeam = JG5K9T47ZF;
 						ProvisioningStyle = Automatic;
 					};
 					B6E71D4833C39A76D09D9074 = {
-						DevelopmentTeam = "";
+						DevelopmentTeam = JG5K9T47ZF;
 						ProvisioningStyle = Automatic;
 						TestTargetID = DD800DC2C202243E2C7CEF91;
 					};
 					DD800DC2C202243E2C7CEF91 = {
-						DevelopmentTeam = "";
+						DevelopmentTeam = JG5K9T47ZF;
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -625,6 +628,7 @@
 				666F1E81A9A6B88C1DFBF53C /* LexendDeca-700.ttf in Resources */,
 				1A25AE18D78749C5770548FC /* OFL-JetBrainsMono.txt in Resources */,
 				CAF50F0E862C2172733CF632 /* OFL-LexendDeca.txt in Resources */,
+				A2250E3B7629499A64AE4FC0 /* PrivacyInfo.xcprivacy in Resources */,
 				F74FD73AEC7FAD0E55B82F6D /* README.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -776,7 +780,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = JG5K9T47ZF;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -971,7 +975,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = JG5K9T47ZF;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
