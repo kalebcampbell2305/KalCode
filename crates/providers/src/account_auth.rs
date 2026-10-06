@@ -13,12 +13,12 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::codex::managed_policy;
 use crate::detect::DetectEnv;
 use crate::managed::{ManagedProfiles, ProfileLease};
-use crate::process::{recv_until, OutputLine, ProcessSpec, SupervisedChild};
+use crate::process::{OutputLine, ProcessSpec, SupervisedChild, recv_until};
 
 const MAX_IGNORED_MESSAGES: usize = 64;
 const MAX_AUTH_LINE_BYTES: usize = 128 * 1024;
@@ -1324,7 +1324,7 @@ mod tests {
     use super::*;
     use crate::detect::DetectEnv;
     use kalcode_contracts::agent::ProviderId;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use std::ffi::OsString;
     use std::io::{BufRead, Write};
     use std::path::PathBuf;

@@ -211,6 +211,60 @@ impl Drop for ObservedSession {
     }
 }
 
+impl AgentProvider for ObservedProvider {
+    fn id(&self) -> ProviderId {
+        self.inner.id()
+    }
+
+    fn display_name(&self) -> &str {
+        self.inner.display_name()
+    }
+
+    fn detect(&self) -> ProviderDetection {
+        self.inner.detect()
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        self.inner.capabilities()
+    }
+
+    fn start_session(
+        &self,
+        config: SessionConfig,
+        sink: Box<dyn AgentEventSink>,
+    ) -> Result<Box<dyn AgentSession>, ProviderError> {
+        let provider = self.inner.id();
+        let observer = Arc::new(Observer {
+            provider: provider.clone(),
+            monitor: Arc::clone(&self.monitor),
+            awaiting: Mutex::new(None),
+            // Not counted until the start succeeds.
+            ended: AtomicBool::new(true),
+            exited: AtomicBool::new(false),
+        });
+        let observed_sink = Box::new(ObservedSink {
+            inner: sink,
+            observer: Arc::clone(&observer),
+        });
+        match self.inner.start_session(config, observed_sink) {
+            Ok(session) => {
+                if !observer.exited.load(Ordering::SeqCst) {
+                    observer.ended.store(false, Ordering::SeqCst);
+                    self.monitor.session_started(&provider);
+                }
+                Ok(Box::new(ObservedSession {
+                    inner: session,
+                    observer,
+                }))
+            }
+            Err(error) => {
+                self.monitor.start_failed(&provider, &error);
+                Err(error)
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,59 +334,5 @@ mod tests {
                 .latency_samples,
             0
         );
-    }
-}
-
-impl AgentProvider for ObservedProvider {
-    fn id(&self) -> ProviderId {
-        self.inner.id()
-    }
-
-    fn display_name(&self) -> &str {
-        self.inner.display_name()
-    }
-
-    fn detect(&self) -> ProviderDetection {
-        self.inner.detect()
-    }
-
-    fn capabilities(&self) -> ProviderCapabilities {
-        self.inner.capabilities()
-    }
-
-    fn start_session(
-        &self,
-        config: SessionConfig,
-        sink: Box<dyn AgentEventSink>,
-    ) -> Result<Box<dyn AgentSession>, ProviderError> {
-        let provider = self.inner.id();
-        let observer = Arc::new(Observer {
-            provider: provider.clone(),
-            monitor: Arc::clone(&self.monitor),
-            awaiting: Mutex::new(None),
-            // Not counted until the start succeeds.
-            ended: AtomicBool::new(true),
-            exited: AtomicBool::new(false),
-        });
-        let observed_sink = Box::new(ObservedSink {
-            inner: sink,
-            observer: Arc::clone(&observer),
-        });
-        match self.inner.start_session(config, observed_sink) {
-            Ok(session) => {
-                if !observer.exited.load(Ordering::SeqCst) {
-                    observer.ended.store(false, Ordering::SeqCst);
-                    self.monitor.session_started(&provider);
-                }
-                Ok(Box::new(ObservedSession {
-                    inner: session,
-                    observer,
-                }))
-            }
-            Err(error) => {
-                self.monitor.start_failed(&provider, &error);
-                Err(error)
-            }
-        }
     }
 }
