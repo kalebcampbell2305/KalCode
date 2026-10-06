@@ -25,3 +25,21 @@
     transform: scale(0.96);
   }
 }
+
+/*
+ * Reduced motion: no entrance at all, rather than the 0 ms one the duration tokens leave. Radix
+ * Presence compares animation names when a tooltip closes; a tooltip closed before its mount effect
+ * ran (focus-opened, then a click elsewhere, on a busy page) reads as "animating out" and waits for an
+ * animationend the 0 ms entrance already fired, so the closed tooltip stayed in the page. With its
+ * trigger then hidden, Popper parked it at the window's top-left corner over the brand lettering.
+ * With no animation name Presence unmounts it at once.
+ */
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion="full"]) .content {
+    animation: none;
+  }
+}
+
+:root[data-motion="reduced"] .content {
+  animation: none;
+}
