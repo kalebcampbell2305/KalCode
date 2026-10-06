@@ -9,13 +9,22 @@ import {
   createGitHubProvider,
   gateStateFrom,
   MAIN_PC_GATE_RUNNER,
+  NATIVE_GATE_JOB,
   PC2_GATE_JOB,
   parseGateLog,
   parseSlug,
   queueFromGraphql,
 } from "./github.mjs";
 import { releaseKitCommand } from "./on-landed.mjs";
-import { assertCandidateWorkflow, candidateBranch, createTrain, parseArgs, QUEUE_LABEL, withLock } from "./train.mjs";
+import {
+  assertCandidateWorkflow,
+  candidateBranch,
+  createTrain,
+  makeGit,
+  parseArgs,
+  QUEUE_LABEL,
+  withLock,
+} from "./train.mjs";
 
 const temps = [];
 after(() => {
@@ -924,6 +933,23 @@ describe("merge train pieces", () => {
     );
     assert.equal(state(main, { ...pc2, conclusion: "cancelled" }), "stale");
     assert.equal(state({ ...pc2, name: "Gate (Windows)" }), "stale", "the second PC never satisfies the build-PC half");
+    // The build PC's two-job half: its native job must be green on a pool worker too.
+    const native = { ...main, name: NATIVE_GATE_JOB, runner_name: "kalcode-win-gate-w4" };
+    assert.equal(state(main, native, pc2), "success", "all three jobs green");
+    assert.equal(state(main, { ...native, conclusion: "failure" }, pc2), "failure", "a red native job refuses");
+    assert.equal(state(main, { ...native, status: "in_progress", conclusion: null }, pc2), "pending");
+    assert.equal(state(main, native, native, pc2), "stale", "two native jobs are ambiguous");
+    assert.equal(state(main, { ...native, runner_name: "kalcode-win-gate-2" }, pc2), "stale", "only a pool worker");
+    assert.equal(state(main, { ...native, head_sha: "b".repeat(40) }, pc2), "stale");
+    assert.equal(
+      state(main, { ...native, steps: [{ name: "Gate", status: "completed", conclusion: "skipped" }] }, pc2),
+      "stale",
+    );
+    assert.equal(state(native, pc2), "pending", "the native job never satisfies the main job");
+    assert.equal(
+      state({ ...main, conclusion: "failure" }, native, { ...pc2, status: "queued", conclusion: null }),
+      "failure",
+    );
   });
 
   test("the canonical registry includes exactly the original worker and five additional slots", () => {
@@ -1053,12 +1079,29 @@ describe("merge train pieces", () => {
     // The split: the second PC's half gates the same exact candidate and recorded base.
     assert.match(workflow, /name: Gate \(Windows, PC2\)/);
     assert.match(workflow, /runs-on: \[self-hosted, Windows, kalcode-gate-pc2\]\n/);
-    assert.match(workflow, /gate-split\.mjs main/);
+    // The build PC's share runs as two matrix jobs (main, native), each gating its half of the split.
+    assert.match(workflow, /half: \[main, native\]/);
+    assert.match(workflow, /gate-split\.mjs \$env:GATE_HALF/);
     assert.match(workflow, /gate-split\.mjs pc2/);
     assert.match(workflow, /github\.event\.pull_request\.base\.sha/);
     assert.match(workflow, /%\(trailers:key=Merge-Train-Base,valueonly\)/);
     assert.match(workflow, /--keep-going/);
   });
+});
+
+test("a git that exits before reading its input is reported by its exit code, never a pipe crash", async () => {
+  // gate 37410227962: on a slow machine a git child closed its stdin before the write landed and the
+  // unhandled EPIPE failed the run. `git --version` never reads stdin; 8 MiB cannot fit a pipe buffer.
+  const repo = mkdtempSync(join(tmpdir(), "kc-train-stdin-"));
+  temps.push(repo);
+  const git = makeGit(repo);
+  const unread = await git(["--version"], { allowFail: true, input: "x".repeat(8 * 1024 * 1024) });
+  assert.equal(unread.code, 0);
+  assert.match(unread.stdout, /^git version /);
+  sh(repo, ["init", "-q"]);
+  const hashed = await git(["hash-object", "--stdin"], { input: "kalcode\n" });
+  assert.equal(hashed.stdout.trim(), sh(repo, ["hash-object", "--stdin"], "kalcode\n"), "input still reaches git");
+  assert.equal((await git(["rev-parse", "--is-inside-work-tree"])).stdout.trim(), "true", "no input: no stdin pipe");
 });
 
 test("PR-specific landing is refused even with a valid queued PR", async () => {

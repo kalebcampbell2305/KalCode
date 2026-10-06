@@ -42,6 +42,8 @@ import {
 
 /** How long after the last change the layout is written to the store. */
 export const SAVE_DEBOUNCE_MS = 400;
+/** First retry delay after a failed layout load; doubles per attempt up to 30 s. */
+export const LOAD_RETRY_MS = 1000;
 /** One keyboard resize step, in pixels. */
 export const RESIZE_STEP_PX = 32;
 const CLOSED_KEPT = 12;
@@ -140,6 +142,8 @@ export function usePaneController({
 }: PaneControllerOptions): PaneController {
   const [layout, setLayout] = useState<PaneLayout>(() => initial());
   const [ready, setReady] = useState(false);
+  // False until a load succeeds: a failed load must never write the default over a saved layout.
+  const [persisting, setPersisting] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [focusedPaneId, setFocusedPaneId] = useState<string | null>(null);
   const [focusRequest, setFocusRequest] = useState({ paneId: "", n: 0 });
@@ -170,29 +174,46 @@ export function usePaneController({
   // biome-ignore lint/correctness/useExhaustiveDependencies: flush is stable; reload only for a different workspace.
   useEffect(() => {
     let cancelled = false;
+    let retry: ReturnType<typeof setTimeout> | null = null;
     loadedScope.current = null;
     setReady(false);
-    storeRef.current
-      .load()
-      .catch(() => null)
-      .then((stored) => {
-        if (cancelled) return;
-        const next = stored && validateLayout(stored) === null ? stored : initialRef.current();
-        lastSaved.current = stored ? JSON.stringify(stored) : null;
-        setLayout(next);
-        const remembered = savedFocus(scope);
-        setFocusedPaneId(
-          remembered && findLeaf(next, remembered)
-            ? remembered
-            : (next.maximizedPaneId ?? leaves(next.root)[0]?.paneId ?? null),
-        );
-        setUndo(null);
-        setClosed([]);
-        loadedScope.current = scope;
-        setReady(true);
-      });
+    setPersisting(false);
+    const show = (next: PaneLayout) => {
+      setLayout(next);
+      const remembered = savedFocus(scope);
+      setFocusedPaneId(
+        remembered && findLeaf(next, remembered)
+          ? remembered
+          : (next.maximizedPaneId ?? leaves(next.root)[0]?.paneId ?? null),
+      );
+      setUndo(null);
+      setClosed([]);
+      loadedScope.current = scope;
+      setReady(true);
+    };
+    const load = (attempt: number) => {
+      storeRef.current.load().then(
+        (stored) => {
+          if (cancelled) return;
+          const valid = stored && validateLayout(stored) === null ? stored : null;
+          lastSaved.current = stored ? JSON.stringify(stored) : null;
+          // A retry that finds nothing saved keeps what the user arranged meanwhile.
+          if (attempt === 0 || valid) show(valid ?? initialRef.current());
+          setPersisting(true);
+        },
+        () => {
+          if (cancelled) return;
+          // A failed load (runtime not ready, database error) is not "nothing saved": show the
+          // default without saving it, and retry until the saved layout can be read.
+          if (attempt === 0) show(initialRef.current());
+          retry = setTimeout(() => load(attempt + 1), Math.min(LOAD_RETRY_MS * 2 ** attempt, 30_000));
+        },
+      );
+    };
+    load(0);
     return () => {
       cancelled = true;
+      if (retry) clearTimeout(retry);
       void flush();
     };
   }, [scope]);
@@ -227,7 +248,7 @@ export function usePaneController({
 
   // Save debounced after every change once loaded.
   useEffect(() => {
-    if (!ready || loadedScope.current !== scope) return;
+    if (!ready || !persisting || loadedScope.current !== scope) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = null;
     if (JSON.stringify(layout) === lastSaved.current && writesInFlight.current === 0) {
@@ -236,7 +257,7 @@ export function usePaneController({
     }
     pendingSave.current = { scope, layout, store: storeRef.current };
     saveTimer.current = setTimeout(() => void flush(), SAVE_DEBOUNCE_MS);
-  }, [layout, ready, scope, flush]);
+  }, [layout, ready, persisting, scope, flush]);
 
   // Whatever is pending is written when the canvas goes away (navigation, workspace switch).
   useEffect(

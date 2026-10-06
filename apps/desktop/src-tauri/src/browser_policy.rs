@@ -48,6 +48,52 @@ fn local_development_address(value: &str) -> bool {
         || lower.starts_with("[::1]/")
 }
 
+/// Mirrors the frontend's `^([^/:?#@\s]+):\d{1,5}(?:[/?#]|$)` host:port shape.
+fn host_port_address(value: &str) -> Option<&str> {
+    let (host, rest) = value.split_once(':')?;
+    if host.is_empty()
+        || host
+            .chars()
+            .any(|ch| matches!(ch, '/' | '?' | '#' | '@') || ch.is_whitespace())
+    {
+        return None;
+    }
+    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    let ends_port = matches!(rest.as_bytes().get(digits), None | Some(b'/' | b'?' | b'#'));
+    // `javascript:0` and friends stay schemes; everything else shaped like host:port is an address.
+    let privileged = ["about", "blob", "data", "file", "javascript", "vbscript"]
+        .iter()
+        .any(|scheme| host.eq_ignore_ascii_case(scheme));
+    ((1..=5).contains(&digits) && ends_port && !privileged).then_some(host)
+}
+
+/// Loopback and private-network hosts serve plain-HTTP dev servers, so they open over http.
+fn local_host(host: &str) -> bool {
+    let lower = host.to_ascii_lowercase();
+    if lower == "localhost" || lower.ends_with(".localhost") {
+        return true;
+    }
+    let parts: Vec<&str> = lower.split('.').collect();
+    if parts.len() != 4
+        || !parts.iter().all(|part| {
+            (1..=3).contains(&part.len()) && part.bytes().all(|byte| byte.is_ascii_digit())
+        })
+    {
+        return false;
+    }
+    let Ok(octets) = parts
+        .iter()
+        .map(|part| part.parse::<u8>())
+        .collect::<Result<Vec<u8>, _>>()
+    else {
+        return false;
+    };
+    matches!(
+        (octets[0], octets[1]),
+        (127 | 10, _) | (172, 16..=31) | (192, 168)
+    ) || lower == "0.0.0.0"
+}
+
 fn looks_like_explicit_scheme(value: &str) -> bool {
     let Some(colon) = value.find(':') else {
         return false;
@@ -77,6 +123,9 @@ pub fn normalize_browser_url(input: &str) -> Result<Url, BrowserPolicyError> {
         value.to_owned()
     } else if local_development_address(value) {
         format!("http://{value}")
+    } else if let Some(host) = host_port_address(value) {
+        let scheme = if local_host(host) { "http" } else { "https" };
+        format!("{scheme}://{value}")
     } else if value.contains("://") || looks_like_explicit_scheme(value) {
         return Err(BrowserPolicyError(
             "Only HTTP and HTTPS addresses can open here.",
