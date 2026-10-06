@@ -71,13 +71,17 @@ pub async fn squads_save(
     .await
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub async fn squads_delete(
     _runtime_access: RuntimeAccess,
     state: RuntimeState<OperationsState>,
     id: String,
+    expected_recipes: Option<Vec<SquadRecipe>>,
 ) -> std::result::Result<(), IpcError> {
-    blocking(state, move |_, store| store.delete_squad(&id)).await
+    blocking(state, move |_, store| {
+        store.delete_squad_with_recipes(&id, expected_recipes)
+    })
+    .await
 }
 
 #[tauri::command]

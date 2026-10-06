@@ -95,11 +95,56 @@ impl SquadsStore {
     }
 
     pub fn delete_squad(&self, id: &str) -> Result<()> {
+        self.delete_squad_with_recipes(id, None)
+    }
+
+    pub fn delete_squad_with_recipes(
+        &self,
+        id: &str,
+        expected_recipes: Option<Vec<SquadRecipe>>,
+    ) -> Result<()> {
         validate_id(id, "invalid_squad_id")?;
+        let expected_recipes = expected_recipes
+            .map(|mut recipes| {
+                let mut ids = HashSet::with_capacity(recipes.len());
+                for recipe in &recipes {
+                    let normalized = normalize_recipe(recipe.clone())?;
+                    if normalized != *recipe {
+                        return Err(recipe_confirmation_stale());
+                    }
+                    if !ids.insert(recipe.id.clone()) {
+                        return Err(KalError::validation(
+                            "squad_recipe_confirmation_duplicate",
+                            "Refresh the Squad before deleting it because the Recipe confirmation contains a duplicate.",
+                        ));
+                    }
+                }
+                recipes.sort_by(|left, right| left.id.cmp(&right.id));
+                Ok(recipes)
+            })
+            .transpose()?;
         self.core
             .transact(|tx| {
+                require_squad(tx, id)?;
+                let current_recipes = load_recipes_for_squad(tx, id)?;
+                match expected_recipes.as_ref() {
+                    None if !current_recipes.is_empty() => {
+                        return Err(KalError::validation(
+                            "squad_recipes_require_confirmation",
+                            format!(
+                                "Deleting this Squad also deletes {} saved Recipe{}. Review and confirm the current Recipes first.",
+                                current_recipes.len(),
+                                if current_recipes.len() == 1 { "" } else { "s" }
+                            ),
+                        ));
+                    }
+                    Some(expected) if expected != &current_recipes => {
+                        return Err(recipe_confirmation_stale());
+                    }
+                    _ => {}
+                }
                 if tx.execute("DELETE FROM squad_definitions WHERE id = ?1", [id])? != 1 {
-                    return Err(squad_not_found());
+                    return Err(corrupt());
                 }
                 Ok(((), Vec::new()))
             })
@@ -1106,6 +1151,23 @@ fn load_recipes(conn: &Connection) -> Result<Vec<SquadRecipe>> {
     Ok(rows)
 }
 
+fn load_recipes_for_squad(conn: &Connection, squad_id: &str) -> Result<Vec<SquadRecipe>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, name, squad_id, goal FROM squad_recipes
+         WHERE squad_id = ?1 ORDER BY id",
+    )?;
+    Ok(stmt
+        .query_map([squad_id], |row| {
+            Ok(SquadRecipe {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                squad_id: row.get(2)?,
+                goal: row.get(3)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?)
+}
+
 fn load_recipe(conn: &Connection, id: &str) -> Result<SquadRecipe> {
     conn.query_row(
         "SELECT id, name, squad_id, goal FROM squad_recipes WHERE id = ?1",
@@ -1497,6 +1559,13 @@ fn recipe_not_found() -> KalError {
     KalError::validation(
         "squad_recipe_not_found",
         "That Recipe no longer exists. Refresh and choose another Recipe.",
+    )
+}
+
+fn recipe_confirmation_stale() -> KalError {
+    KalError::validation(
+        "squad_recipe_confirmation_stale",
+        "The Squad's saved Recipes changed. Refresh, review the current Recipes, and confirm deletion again.",
     )
 }
 

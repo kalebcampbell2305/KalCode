@@ -13,12 +13,12 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::codex::managed_policy;
 use crate::detect::DetectEnv;
 use crate::managed::{ManagedProfiles, ProfileLease};
-use crate::process::{OutputLine, ProcessSpec, SupervisedChild, recv_until};
+use crate::process::{recv_until, OutputLine, ProcessSpec, SupervisedChild};
 
 const MAX_IGNORED_MESSAGES: usize = 64;
 const MAX_AUTH_LINE_BYTES: usize = 128 * 1024;
@@ -970,6 +970,9 @@ impl RpcSession {
                 models.push(model);
             }
             match next_cursor {
+                None if models.is_empty() => {
+                    return Err(CodexAccountAuthError::InvalidResponse);
+                }
                 None => return Ok(models),
                 Some(next) if seen_cursors.insert(next.clone()) => cursor = Some(next),
                 Some(_) => return Err(CodexAccountAuthError::InvalidResponse),
@@ -1209,57 +1212,7 @@ fn decode_model_page(
     if data.len() > MODEL_PAGE_SIZE as usize {
         return Err(CodexAccountAuthError::InvalidResponse);
     }
-    let mut models = Vec::with_capacity(data.len());
-    for item in data {
-        // Both fields are required by the installed app-server schema. `model`, rather than the
-        // catalog's opaque `id`, is the exact value Codex persists and uses for turns.
-        let catalog_id = required_bounded_string(item, "id", MAX_MODEL_ID_BYTES)?;
-        let model = required_bounded_string(item, "model", MAX_MODEL_ID_BYTES)?;
-        let display_name = required_bounded_string(item, "displayName", MAX_MODEL_LABEL_BYTES)?;
-        let _description =
-            required_bounded_string(item, "description", MAX_MODEL_DESCRIPTION_BYTES)?;
-        let hidden = item
-            .get("hidden")
-            .and_then(Value::as_bool)
-            .ok_or(CodexAccountAuthError::InvalidResponse)?;
-        let is_default = item
-            .get("isDefault")
-            .and_then(Value::as_bool)
-            .ok_or(CodexAccountAuthError::InvalidResponse)?;
-        let default_reasoning_effort = required_bounded_string(item, "defaultReasoningEffort", 64)?;
-        let efforts = item
-            .get("supportedReasoningEfforts")
-            .and_then(Value::as_array)
-            .ok_or(CodexAccountAuthError::InvalidResponse)?;
-        if efforts.len() > MAX_MODEL_EFFORTS {
-            return Err(CodexAccountAuthError::InvalidResponse);
-        }
-        let mut supported_reasoning_efforts = Vec::with_capacity(efforts.len());
-        let mut seen_efforts = HashSet::new();
-        for effort in efforts {
-            let reasoning_effort = required_bounded_string(effort, "reasoningEffort", 64)?;
-            let _description = required_bounded_string(effort, "description", 4 * 1024)?;
-            if !seen_efforts.insert(reasoning_effort.clone()) {
-                return Err(CodexAccountAuthError::InvalidResponse);
-            }
-            supported_reasoning_efforts.push(reasoning_effort);
-        }
-        if hidden
-            || !supported_reasoning_efforts
-                .iter()
-                .any(|effort| effort == &default_reasoning_effort)
-        {
-            return Err(CodexAccountAuthError::InvalidResponse);
-        }
-        models.push(CodexAccountModel {
-            catalog_id,
-            model,
-            display_name,
-            is_default,
-            default_reasoning_effort,
-            supported_reasoning_efforts,
-        });
-    }
+    let models = data.iter().filter_map(decode_model_item).collect();
     let next_cursor = match value.get("nextCursor") {
         None | Some(Value::Null) => None,
         Some(Value::String(cursor))
@@ -1272,6 +1225,65 @@ fn decode_model_page(
         _ => return Err(CodexAccountAuthError::InvalidResponse),
     };
     Ok((models, next_cursor))
+}
+
+fn decode_model_item(value: &Value) -> Option<CodexAccountModel> {
+    // A model row is provider-owned catalog data. Hidden rows and malformed rows are not
+    // actionable, but neither is evidence that valid sibling rows are unsafe. The page envelope,
+    // cursor, aggregate bounds, duplicate selectors, and conflicting defaults remain fail-closed.
+    if value.get("hidden").and_then(Value::as_bool)? {
+        return None;
+    }
+    // Both identifiers are required by the installed app-server schema. `model`, rather than the
+    // catalog's opaque `id`, is the exact value Codex persists and uses for turns.
+    let catalog_id = required_bounded_string(value, "id", MAX_MODEL_ID_BYTES).ok()?;
+    let model = required_bounded_string(value, "model", MAX_MODEL_ID_BYTES).ok()?;
+    let display_name = required_bounded_string(value, "displayName", MAX_MODEL_LABEL_BYTES).ok()?;
+    required_bounded_metadata(value, "description", MAX_MODEL_DESCRIPTION_BYTES).ok()?;
+    let is_default = value.get("isDefault").and_then(Value::as_bool)?;
+    let default_reasoning_effort =
+        required_bounded_string(value, "defaultReasoningEffort", 64).ok()?;
+    let efforts = value.get("supportedReasoningEfforts")?.as_array()?;
+    if efforts.len() > MAX_MODEL_EFFORTS {
+        return None;
+    }
+    let mut supported_reasoning_efforts = Vec::with_capacity(efforts.len());
+    let mut seen_efforts = HashSet::new();
+    for effort in efforts {
+        let reasoning_effort = required_bounded_string(effort, "reasoningEffort", 64).ok()?;
+        required_bounded_metadata(effort, "description", 4 * 1024).ok()?;
+        if !seen_efforts.insert(reasoning_effort.clone()) {
+            return None;
+        }
+        supported_reasoning_efforts.push(reasoning_effort);
+    }
+    if !supported_reasoning_efforts
+        .iter()
+        .any(|effort| effort == &default_reasoning_effort)
+    {
+        return None;
+    }
+    Some(CodexAccountModel {
+        catalog_id,
+        model,
+        display_name,
+        is_default,
+        default_reasoning_effort,
+        supported_reasoning_efforts,
+    })
+}
+
+fn required_bounded_metadata(
+    value: &Value,
+    field: &str,
+    max_len: usize,
+) -> Result<(), CodexAccountAuthError> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .filter(|text| text.len() <= max_len)
+        .map(|_| ())
+        .ok_or(CodexAccountAuthError::InvalidResponse)
 }
 
 fn required_bounded_string(
@@ -1312,7 +1324,7 @@ mod tests {
     use super::*;
     use crate::detect::DetectEnv;
     use kalcode_contracts::agent::ProviderId;
-    use serde_json::{Value, json};
+    use serde_json::{json, Value};
     use std::ffi::OsString;
     use std::io::{BufRead, Write};
     use std::path::PathBuf;
@@ -1499,6 +1511,41 @@ mod tests {
     }
 
     #[test]
+    fn model_list_keeps_actionable_entries_when_siblings_are_hidden_or_malformed() {
+        let fixture = fixture("models_mixed_entries");
+        let models = list_fixture_models(&fixture, ACCOUNT_ID).expect("filtered model catalog");
+        assert_eq!(
+            models,
+            vec![
+                CodexAccountModel {
+                    catalog_id: "catalog-visible".into(),
+                    model: "codex-visible-selector".into(),
+                    display_name: "Visible".into(),
+                    is_default: true,
+                    default_reasoning_effort: "high".into(),
+                    supported_reasoning_efforts: vec!["low".into(), "high".into()],
+                },
+                CodexAccountModel {
+                    catalog_id: "catalog-future".into(),
+                    model: "codex-future-selector".into(),
+                    display_name: "Future".into(),
+                    is_default: false,
+                    default_reasoning_effort: "future-effort".into(),
+                    supported_reasoning_efforts: vec!["future-effort".into()],
+                },
+                CodexAccountModel {
+                    catalog_id: "catalog-empty-descriptions".into(),
+                    model: "codex-empty-descriptions-selector".into(),
+                    display_name: "Empty descriptions".into(),
+                    is_default: false,
+                    default_reasoning_effort: "medium".into(),
+                    supported_reasoning_efforts: vec!["medium".into()],
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn model_list_isolated_profiles_cannot_swap_account_catalogs() {
         const OTHER_ACCOUNT_ID: &str = "f46fe6f7-0cd0-4d86-a88c-64a0b2148753";
         let fixture = fixture("models_account_scoped");
@@ -1518,7 +1565,27 @@ mod tests {
             ),
             ("models_unavailable", CodexAccountAuthError::InvalidResponse),
             ("models_malformed", CodexAccountAuthError::InvalidResponse),
+            (
+                "models_all_non_actionable",
+                CodexAccountAuthError::InvalidResponse,
+            ),
+            (
+                "models_invalid_envelope",
+                CodexAccountAuthError::InvalidResponse,
+            ),
+            (
+                "models_page_oversized",
+                CodexAccountAuthError::InvalidResponse,
+            ),
+            (
+                "models_invalid_cursor",
+                CodexAccountAuthError::InvalidResponse,
+            ),
             ("models_duplicate", CodexAccountAuthError::InvalidResponse),
+            (
+                "models_duplicate_catalog",
+                CodexAccountAuthError::InvalidResponse,
+            ),
             (
                 "models_conflicting_defaults",
                 CodexAccountAuthError::InvalidResponse,
@@ -2055,7 +2122,109 @@ mod tests {
                             id,
                             json!({"data":[{"id":"incomplete"}],"nextCursor":null}),
                         ),
-                        "models_paginated" | "models_duplicate" | "models_conflicting_defaults" => {
+                        "models_mixed_entries" => {
+                            let mut hidden = model_value(
+                                "catalog-hidden",
+                                "codex-hidden-selector",
+                                "Hidden",
+                                false,
+                                "medium",
+                                &["medium"],
+                            );
+                            hidden["hidden"] = json!(true);
+                            let mut malformed_efforts = model_value(
+                                "catalog-bad-efforts",
+                                "codex-bad-efforts-selector",
+                                "Bad efforts",
+                                false,
+                                "high",
+                                &["high"],
+                            );
+                            malformed_efforts["supportedReasoningEfforts"] =
+                                json!([{"reasoningEffort":"high"}]);
+                            let mut future = model_value(
+                                "catalog-future",
+                                "codex-future-selector",
+                                "Future",
+                                false,
+                                "future-effort",
+                                &["future-effort"],
+                            );
+                            future["providerOptionalField"] = json!({"version":2});
+                            future["supportedReasoningEfforts"][0]["providerOptionalField"] =
+                                json!(true);
+                            let mut empty_descriptions = model_value(
+                                "catalog-empty-descriptions",
+                                "codex-empty-descriptions-selector",
+                                "Empty descriptions",
+                                false,
+                                "medium",
+                                &["medium"],
+                            );
+                            empty_descriptions["description"] = json!("");
+                            empty_descriptions["supportedReasoningEfforts"][0]["description"] =
+                                json!("");
+                            respond(
+                                &mut stdout,
+                                id,
+                                json!({
+                                    "data":[
+                                        model_value("catalog-visible", "codex-visible-selector", "Visible", true, "high", &["low", "high"]),
+                                        hidden,
+                                        {"id":"catalog-incomplete"},
+                                        malformed_efforts,
+                                        future,
+                                        empty_descriptions
+                                    ],
+                                    "nextCursor":null,
+                                    "providerOptionalField":"kept-compatible"
+                                }),
+                            );
+                        }
+                        "models_all_non_actionable" => {
+                            let mut hidden = model_value(
+                                "catalog-hidden",
+                                "codex-hidden-selector",
+                                "Hidden",
+                                false,
+                                "medium",
+                                &["medium"],
+                            );
+                            hidden["hidden"] = json!(true);
+                            respond(
+                                &mut stdout,
+                                id,
+                                json!({
+                                    "data":[hidden,{"id":"catalog-incomplete"}],
+                                    "nextCursor":null
+                                }),
+                            );
+                        }
+                        "models_invalid_envelope" => respond(
+                            &mut stdout,
+                            id,
+                            json!({"data":{"not":"an array"},"nextCursor":null}),
+                        ),
+                        "models_page_oversized" => respond(
+                            &mut stdout,
+                            id,
+                            json!({
+                                "data":(0..=MODEL_PAGE_SIZE).map(|index| json!({"id":format!("invalid-{index}")})).collect::<Vec<_>>(),
+                                "nextCursor":null
+                            }),
+                        ),
+                        "models_invalid_cursor" => respond(
+                            &mut stdout,
+                            id,
+                            json!({
+                                "data":[model_value("catalog-a", "codex-test-exact-a", "Exact A", true, "high", &["high"])],
+                                "nextCursor":42
+                            }),
+                        ),
+                        "models_paginated"
+                        | "models_duplicate"
+                        | "models_duplicate_catalog"
+                        | "models_conflicting_defaults" => {
                             if cursor.is_null() {
                                 respond(
                                     &mut stdout,
@@ -2070,6 +2239,9 @@ mod tests {
                                 let (catalog_id, model, is_default) = match scenario {
                                     "models_duplicate" => {
                                         ("catalog-b", "codex-test-exact-a", false)
+                                    }
+                                    "models_duplicate_catalog" => {
+                                        ("catalog-a", "codex-test-exact-b", false)
                                     }
                                     "models_conflicting_defaults" => {
                                         ("catalog-b", "codex-test-exact-b", true)

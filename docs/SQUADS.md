@@ -73,7 +73,9 @@ therefore says **Agents done**, never automatically **Shipped**.
 Migration 26 adds Squad templates, Recipes, launch relations and an optional
 Operations attention reason. Existing operations, coding sessions, credentials
 and project memory retain their authorities. Template edits or deletion do not
-rewrite historical launches.
+rewrite historical launches. Deleting a template lists its dependent Recipes
+before confirmation. The native transaction verifies that the confirmed Recipe
+set and contents have not changed; otherwise deletion stops for a fresh review.
 
 Startup reconciles Operations against durable session evidence. It never
 automatically repeats an uncertain prompt. Interrupted or unavailable work stays

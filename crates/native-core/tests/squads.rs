@@ -69,6 +69,34 @@ fn squad(members: Vec<SquadMemberDefinition>) -> SquadDefinition {
     }
 }
 
+#[allow(clippy::expect_used)]
+fn assert_delete_rejected_without_catalog_writes(
+    store: &SquadsStore,
+    squad_id: &str,
+    expected_recipes: Vec<SquadRecipe>,
+    expected_code: &str,
+) {
+    let squads_before = store.list_squads().expect("squads before rejected delete");
+    let recipes_before = store
+        .list_recipes()
+        .expect("recipes before rejected delete");
+    assert_eq!(
+        store
+            .delete_squad_with_recipes(squad_id, Some(expected_recipes))
+            .expect_err("delete confirmation must be rejected")
+            .code,
+        expected_code
+    );
+    assert_eq!(
+        store.list_squads().expect("squads after rejected delete"),
+        squads_before
+    );
+    assert_eq!(
+        store.list_recipes().expect("recipes after rejected delete"),
+        recipes_before
+    );
+}
+
 #[test]
 fn launch_is_atomic_and_exactly_idempotent() {
     let data = tempfile::tempdir().expect("data");
@@ -737,6 +765,251 @@ fn templates_recipes_launches_and_operation_links_survive_restart() {
             .expect("idempotent replay after recipe edit")
             .id,
         launch_id
+    );
+}
+
+#[test]
+fn squad_delete_rejects_implicit_stale_duplicate_and_swapped_recipe_confirmations() {
+    let data = tempfile::tempdir().expect("data");
+    let core = open(data.path());
+    let account_id = account(&core, "codex", "Codex");
+    let store = SquadsStore::new(core);
+
+    let mut target_definition = squad(vec![member("target", "codex", &account_id)]);
+    target_definition.name = "Protected squad".into();
+    let target = store
+        .save_squad(target_definition)
+        .expect("save protected squad");
+    let mut other_definition = squad(vec![member("other", "codex", &account_id)]);
+    other_definition.name = "Other squad".into();
+    let other = store
+        .save_squad(other_definition)
+        .expect("save other squad");
+    let mut empty_definition = squad(vec![member("empty", "codex", &account_id)]);
+    empty_definition.name = "No recipe squad".into();
+    let empty = store
+        .save_squad(empty_definition)
+        .expect("save no-recipe squad");
+    store
+        .delete_squad(&empty.id)
+        .expect("compatibility delete allows a Squad without dependent Recipes");
+
+    let first = store
+        .save_recipe(
+            SquadRecipe {
+                id: uuid::Uuid::now_v7().to_string(),
+                name: "Protected first".into(),
+                squad_id: target.id.clone(),
+                goal: Some("First goal".into()),
+            },
+            None,
+        )
+        .expect("save first recipe");
+    let before_new_recipe = vec![first.clone()];
+    let second = store
+        .save_recipe(
+            SquadRecipe {
+                id: uuid::Uuid::now_v7().to_string(),
+                name: "Protected second".into(),
+                squad_id: target.id.clone(),
+                goal: Some("Second goal".into()),
+            },
+            None,
+        )
+        .expect("save second recipe");
+
+    let squads_before = store.list_squads().expect("squads before implicit delete");
+    let recipes_before = store
+        .list_recipes()
+        .expect("recipes before implicit delete");
+    assert_eq!(
+        store
+            .delete_squad(&target.id)
+            .expect_err("dependent Recipes require an exact confirmation")
+            .code,
+        "squad_recipes_require_confirmation"
+    );
+    assert_eq!(
+        store.list_squads().expect("squads preserved"),
+        squads_before
+    );
+    assert_eq!(
+        store.list_recipes().expect("recipes preserved"),
+        recipes_before
+    );
+
+    assert_delete_rejected_without_catalog_writes(
+        &store,
+        &target.id,
+        before_new_recipe,
+        "squad_recipe_confirmation_stale",
+    );
+
+    let before_modified_recipe = vec![first.clone(), second.clone()];
+    let mut modified_second = second.clone();
+    modified_second.goal = Some("Changed after confirmation".into());
+    let modified_second = store
+        .save_recipe(modified_second, None)
+        .expect("modify second recipe");
+    assert_delete_rejected_without_catalog_writes(
+        &store,
+        &target.id,
+        before_modified_recipe,
+        "squad_recipe_confirmation_stale",
+    );
+
+    assert_delete_rejected_without_catalog_writes(
+        &store,
+        &target.id,
+        vec![first.clone(), first.clone()],
+        "squad_recipe_confirmation_duplicate",
+    );
+
+    let foreign = store
+        .save_recipe(
+            SquadRecipe {
+                id: uuid::Uuid::now_v7().to_string(),
+                name: "Other recipe".into(),
+                squad_id: other.id,
+                goal: None,
+            },
+            None,
+        )
+        .expect("save foreign recipe");
+    assert_delete_rejected_without_catalog_writes(
+        &store,
+        &target.id,
+        vec![first, foreign],
+        "squad_recipe_confirmation_stale",
+    );
+    assert_eq!(
+        store
+            .resolve_recipe(&modified_second.id)
+            .expect("modified recipe"),
+        modified_second
+    );
+}
+
+#[test]
+fn exact_recipe_confirmation_deletes_template_but_preserves_launch_and_session_history() {
+    let data = tempfile::tempdir().expect("data");
+    let project = tempfile::tempdir().expect("project");
+    let core = open(data.path());
+    let workspace_id = workspace(&core, project.path());
+    let account_id = account(&core, "codex", "Codex");
+    let store = SquadsStore::new(core.clone());
+    let operations = OperationsStore::new(core.clone());
+
+    let saved = store
+        .save_squad(squad(vec![member("worker", "codex", &account_id)]))
+        .expect("save squad");
+    let first = store
+        .save_recipe(
+            SquadRecipe {
+                id: uuid::Uuid::now_v7().to_string(),
+                name: "Historical first".into(),
+                squad_id: saved.id.clone(),
+                goal: Some("Preserve this launch".into()),
+            },
+            None,
+        )
+        .expect("save first recipe");
+    let second = store
+        .save_recipe(
+            SquadRecipe {
+                id: uuid::Uuid::now_v7().to_string(),
+                name: "Historical second".into(),
+                squad_id: saved.id.clone(),
+                goal: None,
+            },
+            None,
+        )
+        .expect("save second recipe");
+    let launch = store
+        .launch_recipe(
+            "delete-history-request",
+            &first.id,
+            &workspace_id,
+            None,
+            None,
+        )
+        .expect("launch recipe");
+    let operation_id = launch.members[0].operation_id.clone();
+    let thread_id = uuid::Uuid::now_v7().to_string();
+    let cwd = project.path().to_string_lossy().into_owned();
+    core.transact(|tx| {
+        tx.execute(
+            "INSERT INTO threads (
+               id, name, provider_id, provider_name, model, account_label, workspace_id,
+               workspace_name, cwd, permission_mode, status, provider_session_id, created_at,
+               last_activity_at, provider_account_id, effort
+             ) VALUES (
+               ?1, 'Historical coding session', 'codex', 'Codex', 'test-model', 'Codex', ?2,
+               'Project', ?3, 'approve', 'active', 'synthetic-session',
+               '2026-10-06T12:00:00Z', '2026-10-06T12:00:01Z', ?4, 'high'
+             )",
+            params![thread_id, workspace_id, cwd, account_id],
+        )?;
+        Ok(((), Vec::new()))
+    })
+    .expect("create historical session");
+    operations
+        .claim(Some(&operation_id))
+        .expect("claim launched operation")
+        .expect("operation is claimable");
+    operations
+        .bind(
+            &operation_id,
+            None,
+            Some(&thread_id),
+            Some("feature/history"),
+            None,
+        )
+        .expect("bind historical coding session");
+
+    store
+        .delete_squad_with_recipes(&saved.id, Some(vec![second.clone(), first.clone()]))
+        .expect("exact unordered Recipe snapshot authorizes delete");
+
+    assert_eq!(
+        store
+            .resolve_squad(&saved.id)
+            .expect_err("template deleted")
+            .code,
+        "squad_not_found"
+    );
+    assert!(
+        store
+            .list_recipes()
+            .expect("recipes")
+            .iter()
+            .all(|recipe| recipe.squad_id != saved.id)
+    );
+    assert_eq!(
+        store.get_launch(&launch.id).expect("historical launch"),
+        launch
+    );
+    assert_eq!(
+        store
+            .get_member(&operation_id)
+            .expect("historical relation")
+            .expect("launch member")
+            .launch_id,
+        launch.id
+    );
+    let operation = operations.get(&operation_id).expect("historical operation");
+    assert_eq!(operation.thread_id.as_deref(), Some(thread_id.as_str()));
+    assert_eq!(operation.status, OperationStatus::Running);
+    assert_eq!(
+        core.read(|conn| {
+            Ok(conn.query_row(
+                "SELECT COUNT(*) FROM threads WHERE id = ?1 AND provider_session_id = 'synthetic-session'",
+                [&thread_id],
+                |row| row.get::<_, i64>(0),
+            )?)
+        })
+        .expect("historical session row"),
+        1
     );
 }
 
