@@ -111,7 +111,8 @@ an interactive thread headlessly (or the reverse) through a Hot-Swap handoff (HS
 | `UserPromptSubmit` | `Status(active)` | `active` |
 | `PreToolUse` (+ Trust Kernel decision) | `ToolRequested` + `Status(running_command \| editing \| running_tool)` | by tool |
 | `PermissionRequest` (the provider's own prompt is showing) | `Status(waiting_for_user, "Answer in Claude Code")` | `waiting_for_user`* |
-| `Notification` (permission prompt / idle prompt / elicitation / agent needs input) | `Status(waiting_for_user)` with a detail | `waiting_for_user`* |
+| `Notification` (permission prompt / elicitation / agent needs input) | `Status(waiting_for_user)` with a detail | `waiting_for_user`* |
+| `Notification` (idle prompt: Claude has sat idle at its prompt ~60 s after `Stop`) | none; handoff readiness unchanged | unchanged (`idle`) |
 | `PostToolUse` / `PostToolUseFailure` | `ToolCompleted { ok }`; `FileChanged` for edit/write tools | `active` |
 | `Stop` | `TurnCompleted { ok: true }` | `idle` |
 | `StopFailure` | `Error { recoverable }` (`Backoff` when the payload is structured) | unchanged / `recovering` |

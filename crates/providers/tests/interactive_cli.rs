@@ -1173,6 +1173,37 @@ fn cursor_validates_selected_model_against_the_actual_runtime_before_spawning() 
     pane.events_until(|event| matches!(event, AgentEvent::Exited { .. }));
 }
 
+/// A failed `cursor-agent models` probe is not proof the model is unavailable: the pane still
+/// launches with `--model` and Cursor validates it.
+#[test]
+fn cursor_launches_with_the_selected_model_when_model_discovery_fails() {
+    let rig = Rig::new(PaneCli::Cursor);
+    std::fs::write(
+        rig.dir.path().join("fake-provider.json"),
+        serde_json::json!({"cursorModelFailure": "Network temporarily unreachable"}).to_string(),
+    )
+    .expect("discovery failure scenario");
+    let mut config = rig.config(PermissionMode::Plan, None);
+    config.model = Some("unlisted-runtime-v1".into());
+    let thread_id = config.thread_id.clone();
+    let (sender, receiver) = mpsc::channel();
+    let session = rig
+        .provider
+        .start_session(
+            config,
+            Box::new(move |event: AgentEvent| {
+                let _ = sender.send(event);
+            }),
+        )
+        .expect("discovery failure does not refuse the launch");
+    let pane = rig
+        .attach_started(thread_id, session, receiver)
+        .expect("real pane");
+    assert_eq!(after(&rig.args(), "--model"), Some("unlisted-runtime-v1"));
+    pane.type_line("exit");
+    pane.events_until(|event| matches!(event, AgentEvent::Exited { .. }));
+}
+
 #[test]
 fn cursor_native_pane_preserves_tools_environment_and_real_terminal_identity() {
     let rig = Rig::new(PaneCli::Cursor);
