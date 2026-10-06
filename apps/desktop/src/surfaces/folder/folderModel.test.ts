@@ -1,6 +1,7 @@
-import type { EventEnvelope, StatusFile } from "@kalcode/protocol";
+import { type EventEnvelope, LAST_TURN_FAILED_ACTIVITY, type StatusFile } from "@kalcode/protocol";
 import { describe, expect, it } from "vitest";
-import { changeOf, fileSize, recentFilesFrom, splitPath } from "./folderModel.ts";
+import { ALL_STATUSES, thread } from "../dashboard/data/testing.ts";
+import { changeOf, fileSize, projectAgentCounts, recentFilesFrom, splitPath } from "./folderModel.ts";
 
 const status = (partial: Partial<StatusFile>): StatusFile => ({
   file: null,
@@ -58,5 +59,26 @@ describe("helpers", () => {
       ["a.ts", "modified"],
       ["b.ts", "created"],
     ]);
+  });
+});
+
+describe("project agent counts (the shared agent state, as the native rail counts)", () => {
+  it("counts starting, working and testing as Working and approvals or replies as Needs you", () => {
+    // 9 busy statuses; waiting_for_permission and waiting_for_user need you; failed, waiting on a
+    // dependency, idle, paused, done, stopped and offline count in neither.
+    expect(projectAgentCounts(ALL_STATUSES.map((status) => thread({ status })))).toEqual({ working: 9, needs: 2 });
+  });
+
+  it("never counts a failure as Needs you", () => {
+    expect(
+      projectAgentCounts([
+        thread({ status: "failed" }),
+        thread({ status: "idle", currentActivity: LAST_TURN_FAILED_ACTIVITY }),
+      ]),
+    ).toEqual({ working: 0, needs: 0 });
+  });
+
+  it("counts a working agent blocked on an approval as Needs you only", () => {
+    expect(projectAgentCounts([thread({ status: "editing", pendingApprovals: 1 })])).toEqual({ working: 0, needs: 1 });
   });
 });
