@@ -14,6 +14,7 @@ import {
   primaryUsageLabel,
   resetsIn,
   type UsageWindow,
+  usageFill,
   usagePercent,
   usageSummary,
   useAccountUsage,
@@ -95,7 +96,7 @@ function usageTitle(usage: AccountUsageState): string | undefined {
 }
 
 function percent(window: UsageWindow): number {
-  return window.remainingPercent;
+  return usageFill(window.remainingPercent);
 }
 
 /** A small weekly-remaining bar plus "64% left": the non-interactive form used inside rows. */

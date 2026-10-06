@@ -477,6 +477,29 @@ describe("restored accounts in the Code launcher", () => {
     expect(screen.getByText("Claude A is running low on its 5-hour limit. Use Claude B instead?")).toBeVisible();
   });
 
+  it("does not warn about another model's weekly limit (#284)", async () => {
+    const a = makeAccount("claude-a", "Claude A", true);
+    const b = makeAccount("claude-b", "Claude B", false);
+    const scoped = fresh(a.id, 73, "Max");
+    usage.map = new Map([
+      [
+        a.id,
+        {
+          ...scoped,
+          windows: [
+            ...scoped.windows,
+            { id: "weekly_fable", label: "Weekly Fable", remainingPercent: 2, resetsAt: null },
+          ],
+        },
+      ],
+      [b.id, fresh(b.id, 91, "Max")],
+    ]);
+    runtime.client = clientWith([a, b], async () => threadOptions(["claude-code"]));
+    render(dialog({}));
+    expect(await screen.findByRole("option", { name: /Claude A/ })).toHaveTextContent(/73% left/);
+    expect(screen.queryByText(/running low/)).not.toBeInTheDocument();
+  });
+
   it("never invents usage: unknown accounts say so", async () => {
     const a = makeAccount("claude-a", "Claude A", true);
     runtime.client = clientWith([a], async () => threadOptions(["claude-code"]));
