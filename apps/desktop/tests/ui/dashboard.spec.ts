@@ -541,17 +541,33 @@ test.describe("sidebar", () => {
     const inbox = needsYouButton(page);
     await expect(chip(page, "Needs you")).toHaveAccessibleName("Needs you, 3");
     await expect(activity).toHaveText("Activity");
-    // Busy fixture: the board's three needing-you agents, the failed one and two finished agents
-    // whose changes wait for review.
-    await expect(inbox).toHaveAccessibleName("Needs you, 6 waiting");
-    await expect(inbox).toHaveText("Needs you6");
+    // Busy fixture: the board's three needing-you agents, one ownership collision, the failed
+    // agent and Operation, and two finished agents whose changes wait for review.
+    await expect(inbox).toHaveAccessibleName("Needs you, 8 waiting");
+    await expect(inbox).toHaveText("Needs you8");
+    await inbox.click();
+    const needsYou = page.getByRole("dialog", { name: "Needs you" });
+    const live = needsYou.getByRole("region", { name: "Needs you now" });
+    const overlap = live.getByRole("listitem", {
+      name: /Blocked:\s*Fix flaky checkout test and Write invoices migration overlap/,
+    });
+    await expect(overlap).toContainText("apps/web/checkout/cart.ts");
+    await expect(overlap.getByRole("button")).toHaveText([
+      "Open Fix flaky checkout test",
+      "Open Write invoices migration",
+    ]);
+    const failedOperation = live.getByRole("listitem", { name: /Failed:\s*Package desktop failed/ });
+    await expect(failedOperation).toContainText("Operations");
+    await expect(failedOperation.getByRole("button", { name: "Open run: Operations" })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(needsYou).toHaveCount(0);
     // Pausing the thread that waits for permission takes it out of both.
     await card(page, "Refactor auth middleware")
       .getByRole("button", { name: "More actions for Refactor auth middleware" })
       .click();
     await page.getByRole("menuitem", { name: "Pause" }).click();
     await expect(chip(page, "Needs you")).toHaveAccessibleName("Needs you, 2");
-    await expect(inbox).toHaveAccessibleName("Needs you, 5 waiting");
+    await expect(inbox).toHaveAccessibleName("Needs you, 7 waiting");
   });
 
   test("Needs you shows no count when nothing needs you", async ({ page }) => {

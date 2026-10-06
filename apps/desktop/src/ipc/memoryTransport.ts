@@ -498,6 +498,7 @@ export function createMemoryTransport(
       expireForThread: (threadId) => permissions.expireForThread(threadId),
     },
     (accountId, providerId) => providerAccounts.resolve(accountId, providerId),
+    (accountId, providerId) => providerAccounts.modelIds(accountId, providerId),
   );
   const context = createContextMemory({
     getThread: (threadId) => threads.handlers.thread_get?.({ threadId }) as ThreadSummary,

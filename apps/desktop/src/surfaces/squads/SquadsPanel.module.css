@@ -207,7 +207,7 @@
 }
 
 .launchTitle h4 {
-  font-size: var(--text-base);
+  font-size: var(--text-lg);
 }
 
 .launchTime {
@@ -396,7 +396,7 @@
 }
 
 .squadTitle h4 {
-  font-size: var(--text-base);
+  font-size: var(--text-lg);
 }
 
 .squadTitle p {
@@ -578,7 +578,7 @@
 }
 
 .editorToolbar h3 {
-  font-size: var(--text-base);
+  font-size: var(--text-lg);
 }
 
 .memberEditors {

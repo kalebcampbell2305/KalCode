@@ -4,6 +4,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpat
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type {
+  IpcError,
   OperationRecord,
   OperationSpec,
   OperationsSnapshot,
@@ -45,16 +46,51 @@ test.skip(!existsSync(EXE) || !existsSync(FAKE) || !existsSync(HELPER), "Run bui
 const codeNav = (page: Page) =>
   page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Code", exact: true });
 
-function invoke<T>(page: Page, command: string, args: Record<string, unknown> = {}): Promise<T> {
-  return page.evaluate(
-    ([name, payload]) =>
-      (
-        window as unknown as {
-          __TAURI_INTERNALS__: { invoke: (command: string, args: unknown) => Promise<unknown> };
-        }
-      ).__TAURI_INTERNALS__.invoke(name, payload),
+async function invoke<T>(page: Page, command: string, args: Record<string, unknown> = {}): Promise<T> {
+  const result = await page.evaluate(
+    async ([name, payload]) => {
+      try {
+        const value = await (
+          window as unknown as {
+            __TAURI_INTERNALS__: { invoke: (command: string, args: unknown) => Promise<unknown> };
+          }
+        ).__TAURI_INTERNALS__.invoke(name, payload);
+        return { ok: true as const, value };
+      } catch (error) {
+        const candidate = typeof error === "object" && error !== null ? (error as Record<string, unknown>) : null;
+        const typed =
+          candidate &&
+          typeof candidate.category === "string" &&
+          typeof candidate.code === "string" &&
+          typeof candidate.message === "string" &&
+          typeof candidate.retryable === "boolean";
+        const failure: IpcError = typed
+          ? {
+              category: candidate.category as IpcError["category"],
+              code: candidate.code as string,
+              message: (candidate.message as string).slice(0, 512),
+              retryable: candidate.retryable as boolean,
+            }
+          : {
+              category: "internal",
+              code: "untyped_ipc_rejection",
+              message:
+                typeof error === "string"
+                  ? error.slice(0, 512)
+                  : "The native command rejected without a typed IPC error.",
+              retryable: false,
+            };
+        return { ok: false as const, error: failure };
+      }
+    },
     [command, args] as const,
-  ) as Promise<T>;
+  );
+  if (!result.ok) {
+    throw new Error(
+      `${command} failed [${result.error.category}/${result.error.code}; retryable=${result.error.retryable}]: ${result.error.message}`,
+    );
+  }
+  return result.value as T;
 }
 
 interface FixtureSelection {

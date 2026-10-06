@@ -12,6 +12,7 @@ import type {
   ProviderAccountUsage,
   ProviderUsageWindow,
 } from "@kalcode/protocol";
+import { providerCatalog } from "../memoryProviders.ts";
 import type { DashboardHandlers } from "./dashboard.ts";
 
 /** Mutable only in the ui-test runtime: tests supply discovery results, never a product model catalog. */
@@ -166,32 +167,21 @@ function fixtureModels(account: ProviderAccount): ProviderAccountModel[] {
       },
     ];
   }
-  if (account.providerId === "claude-code") {
-    return [
-      {
-        id: "default",
-        displayName: "Account default",
-        isDefault: true,
-        defaultEffort: null,
-        supportedEfforts: ["low", "medium", "high", "xhigh", "max"],
-      },
-    ];
-  }
-  return [
-    {
-      id: "auto",
-      displayName: "Auto (default)",
-      isDefault: true,
-      defaultEffort: null,
-      supportedEfforts: [],
-    },
-  ];
+  const providerModels =
+    providerCatalog().find((provider) => provider.id === account.providerId)?.capabilities.models ?? [];
+  return providerModels.map((model) => ({
+    ...model,
+    defaultEffort: null,
+    supportedEfforts: account.providerId === "claude-code" ? ["low", "medium", "high", "xhigh", "max"] : [],
+  }));
 }
 
 export interface ProviderAccountsMemory {
   handlers: DashboardHandlers;
   /** Resolves active public metadata for the fixture thread runtime. */
   resolve(accountId: string, providerId: string): ProviderAccount;
+  /** The same account-scoped exact model ids exposed by `provider_account_models`. */
+  modelIds(accountId: string, providerId: string): readonly string[];
   /** Deletes every binding scoped to a removed workspace (native `remove_workspace` does too). */
   forgetWorkspace(workspaceId: string): void;
 }
@@ -252,6 +242,9 @@ export function createProviderAccountsMemory(requireCore: () => void, empty = fa
 
   return {
     resolve,
+    modelIds(accountId, providerId) {
+      return fixtureModels(resolve(accountId, providerId)).map((model) => model.id);
+    },
     forgetWorkspace(workspaceId) {
       for (const [key, binding] of bindings) {
         if (binding.kind === "workspace" && binding.scopeId === workspaceId) bindings.delete(key);

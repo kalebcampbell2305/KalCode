@@ -1,5 +1,7 @@
 //! Read-only Codex app-server contract exposed by the no-network provider fixture.
 
+#![allow(clippy::expect_used)]
+
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};

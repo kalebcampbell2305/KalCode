@@ -285,7 +285,8 @@ export function NewAgentDialog({
   const selectedSession = account ? sessionOf(account) : null;
   const activeChoice: Choice | null = providerPending ? null : { providerId, accountId: account?.id ?? "" };
 
-  // Cursor models belong to the real account/runtime, never the static catalog or launch memory.
+  // Exact models belong to the real account/runtime, never another account's provider-wide
+  // catalog or launch memory.
   const cursorAccountId = providerId === "cursor" ? account?.id : undefined;
   const authenticationState = account?.authenticationState;
   const reportedIdentity = account?.providerReportedIdentity;
@@ -325,20 +326,21 @@ export function NewAgentDialog({
       : null;
 
   // Model: provider/account default first, then the exact models this provider reports.
+  // A signed-out account cannot be discovered yet. Keep any provider offer visible as a draft;
+  // the reconnect path still validates that exact choice before a pane starts. Authenticated
+  // accounts use only their account-scoped catalog, including while its first read is pending.
   const providerModels =
-    providerId === "cursor"
-      ? currentCursorModels?.error
-        ? null
-        : (currentCursorModels?.models ?? null)
-      : canonicalModels?.status === "available"
+    sharedSessions && authenticationState !== "not_authenticated"
+      ? canonicalModels?.status === "available"
         ? canonicalModels.items
-        : canonicalModels?.status === "checking"
-          ? canonicalModels.items.length > 0
-            ? canonicalModels.items
-            : null
-          : canonicalModels?.status === "unavailable"
-            ? null
-            : (models?.get(providerId) ?? null);
+        : canonicalModels?.status === "checking" && canonicalModels.items.length > 0
+          ? canonicalModels.items
+          : null
+      : providerId === "cursor"
+        ? currentCursorModels?.error
+          ? null
+          : (currentCursorModels?.models ?? null)
+        : (models?.get(providerId) ?? null);
   const defaultModel = providerModels?.find((m) => m.isDefault) ?? null;
   const rawModel =
     config.providerId === providerId && config.model !== undefined ? config.model : (remembered?.model ?? "");
@@ -853,7 +855,7 @@ export function NewAgentDialog({
                       ...current,
                       providerId,
                       model: next,
-                      effort: next ? effortForModel(providerId, nextModel, undefined) : "",
+                      effort: next ? effortForModel(providerId, nextModel, effort || undefined) : "",
                     }));
                   }}
                 />

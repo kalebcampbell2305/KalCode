@@ -60,10 +60,16 @@ async function expectNoSeriousA11yViolations(page: Page) {
 
 test("lists what finished, failed and needs permission, with an unread count", async ({ page }) => {
   await open(page);
-  // The sidebar counts what needs the person now (busy fixture: two approvals, a question, a
-  // failure and two finished agents with changes to review); the history keeps its unread count.
-  await expect(bell(page)).toHaveAccessibleName("Needs you, 6 waiting");
+  // The sidebar counts the canonical live state: two approvals, a question, one ownership
+  // collision, the failed agent and Operation, and two finished agents awaiting review.
+  await expect(bell(page)).toHaveAccessibleName("Needs you, 8 waiting");
   await bell(page).click();
+  const live = center(page).getByRole("region", { name: "Needs you now" });
+  await expect(live.getByRole("listitem")).toHaveCount(8);
+  await expect(
+    live.getByRole("listitem", { name: /Blocked:\s*Fix flaky checkout test and Write invoices migration overlap/ }),
+  ).toContainText("apps/web/checkout/cart.ts");
+  await expect(live.getByRole("listitem", { name: /Failed:\s*Package desktop failed/ })).toContainText("Operations");
   await expect(summary(page)).toContainText("4 unread updates");
   await expect(center(page).getByRole("article")).toHaveCount(4);
   await expect(item(page, "Refactor auth middleware needs your permission")).toContainText("Install zod");

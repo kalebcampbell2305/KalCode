@@ -915,8 +915,9 @@ describe("independent authentication and metadata in agent creation", () => {
     async (shared) => {
       const { login, onLaunch, onClose, connected } = expiredLauncher(undefined, shared);
       const user = userEvent.setup();
-      await user.click(await screen.findByRole("radio", { name: "GPT Code" }));
-      await user.click(screen.getByRole("radio", { name: "High" }));
+      await user.click(await screen.findByRole("radio", { name: "High" }));
+      // A compatible explicit effort remains the user's choice when they then choose a model.
+      await user.click(screen.getByRole("radio", { name: "GPT Code" }));
       await user.clear(screen.getByRole("spinbutton", { name: "Agents" }));
       await user.type(screen.getByRole("spinbutton", { name: "Agents" }), "3");
       expect(screen.getByText("Codex B needs to reconnect.")).toBeVisible();

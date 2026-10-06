@@ -2,11 +2,16 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, type Locator, type Page, test } from "@playwright/test";
 
 const OUT = new URL("../../qa/screenshots/", import.meta.url);
+const MOD = process.platform === "darwin" ? "Meta" : "Control";
 
 // Agent handoff is a MAX feature (packages/protocol/src/features.ts).
 async function open(page: Page, scenario = "account-ready-max") {
   await page.goto(`/?scenario=${scenario}`);
-  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
+  // The scenario can truthfully restore its active Code workspace before the Activity route wins
+  // startup. The primary navigation is the stable shell-ready boundary for either outcome.
+  await expect(
+    page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Code", exact: true }),
+  ).toBeVisible();
 }
 
 async function openWorkspace(page: Page, folder = "handoff-project") {
@@ -18,7 +23,12 @@ async function openWorkspace(page: Page, folder = "handoff-project") {
     ).__kalcodeMemory.queueFolders(name);
   }, folder);
   await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Code", exact: true }).click();
-  await page.getByRole("button", { name: "Open folder…" }).first().click();
+  // MAX restores a real existing workspace for the Squad fixture, so Open folder is reached from
+  // the canonical command palette instead of assuming Code starts empty.
+  await page.keyboard.press(`${MOD}+k`);
+  const palette = page.getByRole("dialog", { name: "Command palette" });
+  await palette.getByRole("combobox").fill("Open folder");
+  await palette.getByRole("option", { name: /Open folder/ }).click();
   await expect(page.getByRole("heading", { level: 1, name: folder })).toBeVisible();
 }
 
