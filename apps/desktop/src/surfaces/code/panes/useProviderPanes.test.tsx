@@ -91,6 +91,96 @@ it("retains restored terminal identity when pane metadata is initially unavailab
   expect(view.result.current.chatIds).toEqual([]);
 });
 
+it("publishes restored terminal identities before hydrating pane info with bounded concurrency", async () => {
+  const agents = Array.from({ length: 9 }, (_, index) => ({
+    ...agent,
+    id: `agent-${index}`,
+    createdAt: `2026-10-03T00:00:0${index}Z`,
+  }));
+  state.client.listThreads.mockResolvedValue(agents);
+  let release: () => void = () => {
+    throw new Error("The pane-info barrier was not initialized.");
+  };
+  const barrier = new Promise<void>((resolve) => {
+    release = () => resolve();
+  });
+  let inFlight = 0;
+  let maximumInFlight = 0;
+  state.client.transport.invoke.mockImplementation(async (command: string, args: { threadId: string }) => {
+    if (command !== "provider_pane_info") return null;
+    inFlight += 1;
+    maximumInFlight = Math.max(maximumInFlight, inFlight);
+    await barrier;
+    inFlight -= 1;
+    return { ...info, threadId: args.threadId };
+  });
+
+  const view = renderHook(() => useProviderPanes(workspace));
+  await waitFor(() => expect(state.client.listThreads).toHaveBeenCalledOnce());
+  await act(async () => Promise.resolve());
+  const identitiesBeforeInfo = view.result.current.panes.map((pane) => pane.thread.id);
+  const initialMaximum = maximumInFlight;
+
+  await act(async () => release());
+  await waitFor(() => expect(view.result.current.loaded).toBe(true));
+
+  expect(identitiesBeforeInfo).toEqual(agents.map(({ id }) => id));
+  expect(initialMaximum).toBe(4);
+  expect(maximumInFlight).toBe(4);
+  expect(view.result.current.panes.every((pane) => pane.info?.running === true)).toBe(true);
+});
+
+it("a superseded refresh stops its bounded queue after the four reads already in flight", async () => {
+  const agents = Array.from({ length: 9 }, (_, index) => ({
+    ...agent,
+    id: `agent-${index}`,
+    createdAt: `2026-10-03T00:00:0${index}Z`,
+  }));
+  state.client.listThreads.mockResolvedValue(agents);
+  const releases: Array<() => void> = [];
+  let infoCalls = 0;
+  let inFlight = 0;
+  let maximumInFlight = 0;
+  state.client.transport.invoke.mockImplementation(async (command: string, args: { threadId: string }) => {
+    if (command !== "provider_pane_info") return null;
+    const call = infoCalls++;
+    inFlight += 1;
+    maximumInFlight = Math.max(maximumInFlight, inFlight);
+    if (call < 8)
+      await new Promise<void>((resolve) => {
+        releases[call] = resolve;
+      });
+    inFlight -= 1;
+    return { ...info, threadId: args.threadId };
+  });
+  const infoReadCount = () =>
+    state.client.transport.invoke.mock.calls.filter(([command]) => command === "provider_pane_info").length;
+
+  const view = renderHook(() => useProviderPanes(workspace));
+  await waitFor(() => expect(infoReadCount()).toBe(4));
+  let supersedingRefresh: Promise<void> | undefined;
+  act(() => {
+    supersedingRefresh = view.result.current.refresh();
+  });
+  await waitFor(() => expect(infoReadCount()).toBe(8));
+
+  await act(async () => {
+    for (const release of releases.slice(0, 4)) release?.();
+    for (let turn = 0; turn < 10; turn += 1) await Promise.resolve();
+  });
+  expect(infoReadCount()).toBe(8);
+
+  await act(async () => {
+    for (const release of releases.slice(4, 8)) release?.();
+    await supersedingRefresh;
+  });
+  expect(infoReadCount()).toBe(13);
+  expect(maximumInFlight).toBe(8);
+  expect(view.result.current.loaded).toBe(true);
+  expect(view.result.current.error).toBeNull();
+  expect(view.result.current.panes.every((pane) => pane.info?.running === true)).toBe(true);
+});
+
 it("identifies legacy chat references without treating a failed metadata read as a chat", async () => {
   const chat = { ...agent, id: "chat", runtimeKind: "headless" };
   state.client.listThreads.mockResolvedValue([chat]);

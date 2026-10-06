@@ -22,12 +22,13 @@ import {
   useToast,
 } from "@kalcode/ui/components";
 import { FolderGit2, PlugZap } from "lucide-react";
-import { type FormEvent, useCallback, useEffect, useId, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useAccount } from "../../account/AccountProvider.tsx";
 import { PromptWarningDialog } from "../../context/PromptWarningDialog.tsx";
 import { usePromptConfirmation } from "../../context/usePromptConfirmation.ts";
 import type { CreateThreadInput } from "../../ipc/client.ts";
 import { type KalCodeError, toKalCodeError } from "../../ipc/errors.ts";
+import { usePersistentDraft } from "../../runtime/drafts.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
@@ -317,7 +318,14 @@ function NewThreadForm({
   const mode = chosenMode ?? defaultMode;
   // A saved default that is no longer offered (Approve, Auto, Custom): the form says why.
   const unstartableDefault = savedDefault !== null && chosenMode === null && !modes.includes(savedDefault);
-  const [task, setTask] = useState("");
+  const viewerId = account.snapshot.account?.id ?? null;
+  const taskDraftScope = useMemo(
+    () => (viewerId ? ({ kind: "new-thread", viewerId, workspaceId } as const) : null),
+    [viewerId, workspaceId],
+  );
+  const persistedTask = usePersistentDraft(taskDraftScope);
+  const task = persistedTask.text;
+  const setTask = persistedTask.setText;
   const [name, setName] = useState("");
   const [error, setError] = useState<KalCodeError | null>(null);
   const taskRef = useRef<HTMLTextAreaElement>(null);
@@ -381,6 +389,7 @@ function NewThreadForm({
     }
     if (!providerAccountId || !accountReady) return;
     setError(null);
+    const submittedTask = task;
     const input: CreateThreadInput = {
       providerId,
       providerAccountId,
@@ -413,6 +422,16 @@ function NewThreadForm({
             tone: "danger",
             title: "Workspace default wasn't saved",
             description: toKalCodeError(err).message,
+          });
+        }
+      }
+      if (thread.status !== "failed") {
+        const result = persistedTask.clearSubmitted(submittedTask);
+        if (result.problem) {
+          toast.show({
+            tone: "danger",
+            title: "Thread started, but its saved task wasn't cleared",
+            description: "It may reappear after restart. Delete it before starting another thread.",
           });
         }
       }
@@ -624,10 +643,15 @@ function NewThreadForm({
               setTask(event.target.value);
             }}
             placeholder="Describe what you want done"
-            aria-describedby={`${id}-task-hint`}
+            aria-describedby={persistedTask.problem ? `${id}-task-hint ${id}-task-draft-error` : `${id}-task-hint`}
             required
           />
         </Field>
+        {persistedTask.problem ? (
+          <p id={`${id}-task-draft-error`} className={styles.error} role="alert">
+            {persistedTask.problem.message}
+          </p>
+        ) : null}
 
         <Field htmlFor={`${id}-name`} label="Name" optional hint="Leave empty to name the thread from its task.">
           <TextInput

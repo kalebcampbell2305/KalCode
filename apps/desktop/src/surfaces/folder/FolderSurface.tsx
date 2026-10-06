@@ -630,7 +630,7 @@ function ThreadsPanel({ threads }: { threads: Loaded<ThreadSummary[]> }) {
       ) : (
         <ul className={styles.threads} aria-label="Threads in this workspace">
           {open.map((t) => {
-            const info = displayStatusOf(t.status);
+            const info = displayStatusOf(t.status, { resumable: t.resumable });
             return (
               <li key={t.id}>
                 <button
@@ -640,7 +640,7 @@ function ThreadsPanel({ threads }: { threads: Loaded<ThreadSummary[]> }) {
                 >
                   <ProviderMark provider={t.providerId} name={t.providerName} size="xs" hideName />
                   <span className={styles.threadName}>{t.name}</span>
-                  <StatusChip status={info.status} qualifier={info.qualifier} variant="inline" size="sm" />
+                  <StatusChip status={info.status} qualifier={info.qualifierLabel} variant="inline" size="sm" />
                   <span className={styles.age}>{relativeTime(t.lastActivityAt, now)}</span>
                 </button>
               </li>

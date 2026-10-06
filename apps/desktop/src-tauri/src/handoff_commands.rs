@@ -1629,6 +1629,7 @@ mod tests {
             error: None,
             archived_at: None,
             resumable: false,
+            restart_recoverable: None,
             permission_profile_id: None,
             runtime_kind: Some(ThreadRuntimeKind::InteractivePty),
             terminal_id: None,

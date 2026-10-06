@@ -61,7 +61,8 @@ export function presentStatus(status: ThreadStatus): StatusPresentation {
 /** The runtime's activity for an idle thread whose last turn failed (`LAST_TURN_FAILED_ACTIVITY`). */
 export const LAST_TURN_FAILED_ACTIVITY = "Last turn failed";
 
-type ThreadState = Pick<ThreadSummary, "status"> & Partial<Pick<ThreadSummary, "error" | "currentActivity">>;
+type ThreadState = Pick<ThreadSummary, "status"> &
+  Partial<Pick<ThreadSummary, "error" | "currentActivity" | "resumable">>;
 
 /** The kind of the thread's current problem, from its stable code; null without one. */
 export function threadErrorKind(thread: Pick<ThreadSummary, "error">): ThreadErrorKind | null {
@@ -116,6 +117,10 @@ export function presentThread(thread: ThreadState): StatusPresentation {
   const kind = threadErrorKind({ error: thread.error ?? null });
   if (thread.status === "interrupted" && kind === "resources_unavailable") {
     return { ...base, label: "Not started", tone: "waiting" };
+  }
+  if (thread.status === "interrupted" && typeof thread.resumable === "boolean") {
+    const label = displayStatusOf(thread.status, { resumable: thread.resumable }).qualifierLabel;
+    if (label) return { ...base, label: label.charAt(0).toUpperCase() + label.slice(1) };
   }
   if (thread.status === "idle" && thread.currentActivity === LAST_TURN_FAILED_ACTIVITY) {
     return { ...base, label: "Last turn failed", tone: "failed" };

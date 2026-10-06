@@ -299,6 +299,12 @@ pub struct ThreadSummary {
     /// provider session id is stored). `false`: resume starts a fresh provider session.
     #[serde(default)]
     pub resumable: bool,
+    /// This interactive coding-agent pane was interrupted because KalCode exited and is safe to
+    /// offer through startup recovery. The desktop stamps this only after it has established the
+    /// durable `interactive_pty` identity; core thread summaries default to `false`.
+    #[serde(default)]
+    #[ts(optional)]
+    pub restart_recoverable: Option<bool>,
     /// The Custom permission profile a Custom-mode thread uses (`threads.permission_profile_id`).
     #[serde(default)]
     pub permission_profile_id: Option<String>,
@@ -642,6 +648,7 @@ mod tests {
         assert_eq!(summary.provider_account_id, None);
         assert_eq!(summary.effort, None);
         assert!(!summary.resumable);
+        assert_eq!(summary.restart_recoverable, None);
         assert_eq!(summary.permission_profile_id, None);
         assert_eq!(summary.runtime_kind, None);
         let input: ThreadCreateInput = serde_json::from_value(serde_json::json!({

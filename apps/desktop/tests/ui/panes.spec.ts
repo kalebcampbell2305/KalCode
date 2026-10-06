@@ -3,7 +3,7 @@ import { expect, type Locator, type Page, test } from "@playwright/test";
 
 /**
  * The pane system (Z7-W1) against the in-memory runtime: splits, keyboard and pointer resizing,
- * focus traversal, maximize / collapse / close / reopen (processes keep running), tabs moved
+ * focus traversal, maximize / collapse / close, tabs moved
  * between panes, presets, saved layouts, per-workspace persistence, 20+ panes with offscreen
  * views suspended, the KalVoice shell slot, and axe in both themes (Z7-13, Z7-14, Z7-22, Z7-25).
  */
@@ -152,7 +152,7 @@ test.describe("splitting and resizing", () => {
   });
 });
 
-test.describe("maximize, collapse, close and reopen never stop a process", () => {
+test.describe("maximize and collapse preserve processes; close ends owned work", () => {
   test("maximize shows one pane; the others' views stay mounted but hidden and come back with their output", async ({
     page,
   }) => {
@@ -350,7 +350,7 @@ test.describe("content from other surfaces", () => {
     await expect(pane(page, 1).locator("[data-widget-pane]")).toBeVisible();
     await expectNoSeriousA11yViolations(page);
 
-    // A provider pane, hidden in the background, is brought back and focused by its focus request.
+    // A provider pane moved to the dock keeps running, then Agent Fleet brings it back and focuses it.
     await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     await page
       .getByRole("dialog", { name: "New agent" })
@@ -359,9 +359,11 @@ test.describe("content from other surfaces", () => {
     const provider = page.locator("[data-provider-pane]");
     await expect(provider).toBeVisible();
     const threadId = await provider.getAttribute("data-provider-pane");
-    await page.keyboard.press("Control+Alt+w");
-    await page.getByRole("button", { name: "Keep Running", exact: true }).click();
-    await expect(provider).toHaveCount(0);
+    const providerPane = page.locator("[data-pane-id]").filter({ has: provider });
+    await providerPane.getByRole("button", { name: /Actions for pane/ }).click();
+    await page.getByRole("menuitem", { name: "Move to the dock", exact: true }).click();
+    await expect(provider).toBeHidden();
+    await expect(page.getByRole("complementary", { name: "Dock" })).toBeVisible();
     await page
       .getByRole("navigation", { name: "Primary" })
       .getByRole("button", { name: "Activity", exact: true })
@@ -370,7 +372,8 @@ test.describe("content from other surfaces", () => {
     await expect(card).toBeVisible();
     await card.click({ position: { x: 6, y: 6 } });
     await expect(page.getByRole("heading", { level: 1, name: "kalcode-site" })).toBeVisible();
-    await expect(page.locator("[data-provider-pane]")).toBeVisible();
+    await expect(provider).toBeVisible();
+    await expect(page.getByRole("complementary", { name: "Dock" })).toHaveCount(0);
     await expect(page.locator("[data-pane-id][data-focused] [data-provider-pane]")).toHaveCount(1);
   });
 });

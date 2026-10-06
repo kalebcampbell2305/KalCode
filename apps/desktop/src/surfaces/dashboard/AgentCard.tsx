@@ -4,7 +4,6 @@ import {
   type ApprovalDecision,
   type ApprovalView,
   agentStateOf,
-  DISPLAY_QUALIFIER_LABEL,
   displayStatusOf,
   type ThreadSummary,
   type ThreadWorktreeState,
@@ -114,7 +113,7 @@ function activityLine(
   approval: ApprovalView | undefined,
   readiness: MergeReadiness | undefined,
 ): string {
-  const display = displayStatusOf(thread.status);
+  const display = displayStatusOf(thread.status, { resumable: thread.resumable });
   if (readiness?.ready) {
     return `${readiness.ahead} ${readiness.ahead === 1 ? "commit" : "commits"} ahead of ${readiness.base ?? "base"} · merges cleanly`;
   }
@@ -125,8 +124,8 @@ function activityLine(
   if (thread.currentActivity) return thread.currentActivity;
   // A launch held for system resources is not "waiting on another task": say what the runtime said.
   if (isWaitingForResources(thread) && thread.error) return thread.error.message;
-  if (display.qualifier) {
-    const text = DISPLAY_QUALIFIER_LABEL[display.qualifier];
+  if (display.qualifierLabel) {
+    const text = display.qualifierLabel;
     return text.charAt(0).toUpperCase() + text.slice(1);
   }
   return "No current activity reported";

@@ -1,12 +1,20 @@
 import { act, renderHook } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Destination } from "./navigation.tsx";
-import { initialHistory, navigationEntryLabel, visitLocation } from "./navigationHistory.ts";
+import {
+  initialHistory,
+  navigationEntryLabel,
+  navigationHistoryStorageKey,
+  visitLocation,
+} from "./navigationHistory.ts";
 import { useNavigationHistory } from "./useNavigationHistory.ts";
 
 const visible = new Set<Destination>(["code", "dashboard", "settings", "providers", "threads"]);
 
 describe("navigation history", () => {
+  beforeEach(() => localStorage.clear());
+  afterEach(() => localStorage.clear());
+
   it("refreshes a renamed run without creating a second navigation visit", () => {
     const location = {
       destination: "operations" as const,
@@ -222,5 +230,133 @@ describe("navigation history", () => {
     expect(result.current.current).toBe("code");
     expect(workspace).toBe("one");
     expect(focused).toEqual(["one", "one"]);
+  });
+
+  it("restores bounded recent navigation after a remount while exposing the previous session location", () => {
+    const key = "kalcode.test.navigation.account-a";
+    const first = renderHook(() => useNavigationHistory("dashboard", visible, key));
+    act(() => {
+      first.result.current.navigate("code");
+      first.result.current.navigate("settings");
+    });
+    first.unmount();
+
+    const restarted = renderHook(() => useNavigationHistory("dashboard", visible, key));
+    expect(restarted.result.current.current).toBe("dashboard");
+    expect(restarted.result.current.history.map((entry) => entry.destination)).toEqual([
+      "dashboard",
+      "code",
+      "settings",
+    ]);
+    expect(restarted.result.current.previousSessionLocation?.destination).toBe("settings");
+    expect(restarted.result.current.historyIndex).toBe(2);
+  });
+
+  it("validates untrusted storage, keeps only visible destinations and strips browser URLs", () => {
+    const key = "kalcode.test.navigation.untrusted";
+    localStorage.setItem(
+      key,
+      JSON.stringify({
+        version: 1,
+        index: 3,
+        nextId: 99,
+        entries: [
+          { id: 1, destination: "admin", label: "Hidden" },
+          { id: 2, destination: "providers", target: { kind: "provider", tab: "unknown" } },
+          {
+            id: 3,
+            destination: "code",
+            workspaceId: "workspace-one",
+            target: {
+              kind: "pane",
+              content: {
+                kind: "browser",
+                browserId: "browser-one",
+                url: "https://example.com/private?token=secret",
+                runtimeHandle: 747,
+              },
+            },
+            processId: 747,
+          },
+          { id: 4, destination: "threads", target: { kind: "thread", threadId: "thread-one" } },
+        ],
+      }),
+    );
+
+    const restored = renderHook(() => useNavigationHistory("dashboard", visible, key));
+    expect(restored.result.current.history).toEqual([
+      { id: 2, destination: "providers" },
+      {
+        id: 3,
+        destination: "code",
+        workspaceId: "workspace-one",
+        target: { kind: "pane", content: { kind: "browser", browserId: "browser-one", url: null } },
+      },
+      { id: 4, destination: "threads", target: { kind: "thread", threadId: "thread-one" } },
+    ]);
+    expect(JSON.stringify(restored.result.current.history)).not.toContain("example.com");
+    expect(JSON.stringify(restored.result.current.history)).not.toContain("runtimeHandle");
+    expect(restored.result.current.previousSessionLocation?.target).toEqual({
+      kind: "thread",
+      threadId: "thread-one",
+    });
+  });
+
+  it("persists Browser pane identity without persisting its raw URL", () => {
+    const key = "kalcode.test.navigation.browser";
+    const browser = renderHook(() => useNavigationHistory("code", visible, key));
+    act(() =>
+      browser.result.current.recordLocation({
+        destination: "code",
+        workspaceId: "workspace-one",
+        target: {
+          kind: "pane",
+          content: { kind: "browser", browserId: "browser-one", url: "https://example.com/?access_token=secret" },
+        },
+      }),
+    );
+
+    const raw = localStorage.getItem(key);
+    expect(raw).not.toContain("example.com");
+    expect(raw).not.toContain("secret");
+    expect(JSON.parse(raw ?? "{}").entries[0].target.content).toEqual({
+      kind: "browser",
+      browserId: "browser-one",
+      url: null,
+    });
+  });
+
+  it("falls back safely for malformed storage and does not persist without an explicit key", () => {
+    localStorage.setItem("kalcode.test.navigation.malformed", "{not-json");
+    const malformed = renderHook(() => useNavigationHistory("dashboard", visible, "kalcode.test.navigation.malformed"));
+    expect(malformed.result.current.history).toEqual([{ id: 0, destination: "dashboard" }]);
+    expect(malformed.result.current.previousSessionLocation).toBeNull();
+    malformed.unmount();
+
+    localStorage.clear();
+    const isolated = renderHook(() => useNavigationHistory("dashboard", visible));
+    act(() => isolated.result.current.navigate("code"));
+    expect(localStorage.length).toBe(0);
+  });
+
+  it("keeps navigation histories separated by KalCode account storage key", () => {
+    const accountAKey = navigationHistoryStorageKey("account/a");
+    const accountBKey = navigationHistoryStorageKey("account/b");
+    const accountA = renderHook(() => useNavigationHistory("dashboard", visible, accountAKey));
+    act(() => accountA.result.current.navigate("code"));
+    accountA.unmount();
+
+    const accountB = renderHook(() => useNavigationHistory("dashboard", visible, accountBKey));
+    act(() => accountB.result.current.navigate("providers"));
+    accountB.unmount();
+
+    const switched = renderHook(({ storageKey }) => useNavigationHistory("dashboard", visible, storageKey), {
+      initialProps: { storageKey: accountAKey },
+    });
+    expect(switched.result.current.history.map((entry) => entry.destination)).toEqual(["dashboard", "code"]);
+    switched.rerender({ storageKey: accountBKey });
+    expect(switched.result.current.history.map((entry) => entry.destination)).toEqual(["dashboard", "providers"]);
+    expect(switched.result.current.previousSessionLocation?.destination).toBe("providers");
+    expect(accountAKey).not.toBe(accountBKey);
   });
 });

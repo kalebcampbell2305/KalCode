@@ -256,6 +256,7 @@ pub fn thread(
         error: None,
         archived_at: None,
         resumable: false,
+        restart_recoverable: None,
         permission_profile_id: None,
         runtime_kind: None,
         terminal_id: None,

@@ -5,6 +5,250 @@ import { expect, it, vi } from "vitest";
 import { findLeaf, makeLeaf } from "./model.ts";
 import { usePaneController } from "./usePaneController.ts";
 
+it("keeps a transient load failure usable without overwriting the stored desk", async () => {
+  const initial: PaneLayout = {
+    schemaVersion: 1,
+    root: makeLeaf([terminal("fallback")], "fallback"),
+    dock: [],
+    maximizedPaneId: null,
+  };
+  const store = {
+    load: vi.fn().mockRejectedValue(new Error("layout database is busy")),
+    save: vi.fn().mockResolvedValue(undefined),
+  };
+  const view = renderHook(() =>
+    usePaneController({ scope: "load-error-no-write", store, initial: () => initial, titleOf: () => "Terminal" }),
+  );
+
+  await waitFor(() => expect(view.result.current.ready).toBe(true));
+  expect(view.result.current.loadError).toContain("layout database is busy");
+  act(() => view.result.current.show(terminal("temporary")));
+  view.unmount();
+  await act(async () => undefined);
+
+  expect(store.save).not.toHaveBeenCalled();
+});
+
+it("retries a failed load and enables persistence only after the canonical desk is read", async () => {
+  const fallback: PaneLayout = {
+    schemaVersion: 1,
+    root: makeLeaf([terminal("fallback")], "fallback"),
+    dock: [],
+    maximizedPaneId: null,
+  };
+  const stored: PaneLayout = {
+    schemaVersion: 1,
+    root: makeLeaf([terminal("stored")], "stored"),
+    dock: [],
+    maximizedPaneId: null,
+  };
+  const store = {
+    load: vi.fn().mockRejectedValueOnce(new Error("temporarily unavailable")).mockResolvedValueOnce(stored),
+    save: vi.fn().mockResolvedValue(undefined),
+  };
+  const view = renderHook(() =>
+    usePaneController({ scope: "load-error-retry", store, initial: () => fallback, titleOf: () => "Terminal" }),
+  );
+
+  await waitFor(() => expect(view.result.current.loadError).not.toBeNull());
+  await act(async () => view.result.current.retryLoad());
+  await waitFor(() => expect(view.result.current.ready).toBe(true));
+
+  expect(store.load).toHaveBeenCalledTimes(2);
+  expect(view.result.current.loadError).toBeNull();
+  expect(view.result.current.layout).toEqual(stored);
+  expect(store.save).not.toHaveBeenCalled();
+  act(() => view.result.current.show(terminal("after-retry")));
+  const edited = view.result.current.layout;
+  view.unmount();
+  await waitFor(() => expect(store.save).toHaveBeenCalledWith(edited));
+});
+
+it("replays the latest pane close after an immediate remount before the canonical save finishes", async () => {
+  localStorage.clear();
+  const initial: PaneLayout = {
+    schemaVersion: 1,
+    root: {
+      kind: "split",
+      axis: "horizontal",
+      ratios: [500, 500],
+      children: [makeLeaf([terminal("one")], "one"), makeLeaf([terminal("two")], "two")],
+    },
+    dock: [],
+    maximizedPaneId: null,
+  };
+  const store = {
+    load: vi.fn().mockResolvedValue(initial),
+    save: vi.fn(() => new Promise<void>(() => undefined)),
+  };
+  const options = {
+    scope: "close-immediate-remount",
+    store,
+    initial: () => initial,
+    titleOf: () => "Terminal",
+  };
+  const first = renderHook(() => usePaneController(options));
+  await waitFor(() => expect(first.result.current.ready).toBe(true));
+
+  act(() => first.result.current.close("two"));
+  const closedLayout = first.result.current.layout;
+  first.unmount();
+
+  const second = renderHook(() => usePaneController(options));
+  await waitFor(() => expect(second.result.current.ready).toBe(true));
+  expect(second.result.current.layout).toEqual(closedLayout);
+  expect(findLeaf(second.result.current.layout, "two")).toBeNull();
+  second.unmount();
+});
+
+it("keeps signed Browser locations out of the write-ahead record and restores them from the canonical desk", async () => {
+  localStorage.clear();
+  const secretUrl = "https://example.test/work?token=do-not-copy";
+  const initial: PaneLayout = {
+    schemaVersion: 1,
+    root: {
+      kind: "split",
+      axis: "horizontal",
+      ratios: [500, 500],
+      children: [
+        makeLeaf([{ kind: "browser", browserId: "browser", url: secretUrl }], "browser"),
+        makeLeaf([terminal("terminal")], "terminal"),
+      ],
+    },
+    dock: [],
+    maximizedPaneId: null,
+  };
+  const store = {
+    load: vi.fn().mockResolvedValue(initial),
+    save: vi.fn(() => new Promise<void>(() => undefined)),
+  };
+  const options = {
+    scope: "browser-url-write-ahead",
+    store,
+    initial: () => initial,
+    titleOf: () => "Pane",
+  };
+  const first = renderHook(() => usePaneController(options));
+  await waitFor(() => expect(first.result.current.ready).toBe(true));
+  act(() => first.result.current.close("terminal"));
+  first.unmount();
+
+  const savedBrowserData = Array.from({ length: localStorage.length }, (_, index) =>
+    localStorage.getItem(localStorage.key(index) ?? ""),
+  ).join("\n");
+  expect(savedBrowserData).not.toContain("do-not-copy");
+
+  const second = renderHook(() => usePaneController(options));
+  await waitFor(() => expect(second.result.current.ready).toBe(true));
+  expect(findLeaf(second.result.current.layout, "browser")?.tabs[0]).toEqual({
+    kind: "browser",
+    browserId: "browser",
+    url: secretUrl,
+  });
+  expect(findLeaf(second.result.current.layout, "terminal")).toBeNull();
+  second.unmount();
+});
+
+it("checkpoints Browser navigation immediately without copying its URL into the write-ahead record", async () => {
+  localStorage.clear();
+  const initial: PaneLayout = {
+    schemaVersion: 1,
+    root: makeLeaf([{ kind: "browser", browserId: "browser", url: "https://example.test/a" }], "browser"),
+    dock: [],
+    maximizedPaneId: null,
+  };
+  const navigated: PaneLayout = {
+    ...initial,
+    root: makeLeaf([{ kind: "browser", browserId: "browser", url: "https://example.test/b" }], "browser"),
+  };
+  let stored = initial;
+  let finishSave!: () => void;
+  const store = {
+    load: vi.fn(async () => stored),
+    save: vi.fn(
+      (next: PaneLayout) =>
+        new Promise<void>((resolve) => {
+          finishSave = () => {
+            stored = next;
+            resolve();
+          };
+        }),
+    ),
+  };
+  const options = {
+    scope: "browser-navigation-checkpoint",
+    store,
+    initial: () => initial,
+    titleOf: () => "Browser",
+  };
+  const first = renderHook(() => usePaneController(options));
+  await waitFor(() => expect(first.result.current.ready).toBe(true));
+
+  act(() => first.result.current.replace(navigated));
+  await act(async () => Promise.resolve());
+
+  expect(store.save).toHaveBeenCalledExactlyOnceWith(navigated);
+  const recoveryData = Array.from({ length: localStorage.length }, (_, index) =>
+    localStorage.getItem(localStorage.key(index) ?? ""),
+  ).join("\n");
+  expect(recoveryData).not.toContain("https://example.test/b");
+
+  await act(async () => finishSave());
+  first.unmount();
+  const second = renderHook(() => usePaneController(options));
+  await waitFor(() => expect(second.result.current.ready).toBe(true));
+  expect(second.result.current.layout).toEqual(navigated);
+  expect(store.save).toHaveBeenCalledTimes(1);
+  second.unmount();
+});
+
+it("an older save completion cannot clear a newer crash-recovery layout", async () => {
+  localStorage.clear();
+  const initial: PaneLayout = {
+    schemaVersion: 1,
+    root: makeLeaf([terminal("base")], "pane"),
+    dock: [],
+    maximizedPaneId: null,
+  };
+  let stored = initial;
+  let finishFirst!: () => void;
+  const store = {
+    load: vi.fn(async () => stored),
+    save: vi
+      .fn()
+      .mockImplementationOnce(
+        (layout: PaneLayout) =>
+          new Promise<void>((resolve) => {
+            finishFirst = () => {
+              stored = layout;
+              resolve();
+            };
+          }),
+      )
+      .mockImplementation(() => new Promise<void>(() => undefined)),
+  };
+  const options = {
+    scope: "stale-save-write-ahead",
+    store,
+    initial: () => initial,
+    titleOf: () => "Terminal",
+  };
+  const first = renderHook(() => usePaneController(options));
+  await waitFor(() => expect(first.result.current.ready).toBe(true));
+  act(() => first.result.current.show(terminal("first")));
+  await waitFor(() => expect(store.save).toHaveBeenCalledTimes(1), { timeout: 2_000 });
+  act(() => first.result.current.show(terminal("latest")));
+  const latest = first.result.current.layout;
+  first.unmount();
+  await act(async () => finishFirst());
+  await waitFor(() => expect(store.save).toHaveBeenCalledTimes(2));
+
+  const second = renderHook(() => usePaneController(options));
+  await waitFor(() => expect(second.result.current.ready).toBe(true));
+  expect(second.result.current.layout).toEqual(latest);
+  second.unmount();
+});
+
 it("Tidy is exactly reversible and never closes running work", async () => {
   const { result } = await setup();
   act(() => result.current.split("pane", "horizontal", terminal("other")));

@@ -4,4 +4,8 @@ import type { ThreadStatus } from "./ThreadStatus.ts";
 /**
  * One thread under a provider row.
  */
-export type RailThread = { id: string, name: string, status: ThreadStatus, lastActivityAt: string, pendingApprovals: number, };
+export type RailThread = { id: string, name: string, status: ThreadStatus,
+/**
+ * Whether the provider can resume its own historical conversation.
+ */
+resumable?: boolean, lastActivityAt: string, pendingApprovals: number, };

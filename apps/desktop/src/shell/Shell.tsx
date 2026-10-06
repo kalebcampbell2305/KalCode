@@ -10,6 +10,7 @@ import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { UiIntentsProvider } from "../runtime/uiIntents.tsx";
 import { WorkspaceProvider } from "../runtime/WorkspaceProvider.tsx";
 import { CodePage } from "../surfaces/code/CodePage.tsx";
+import { ContinueDeskNotice } from "../surfaces/code/DeskRecovery.tsx";
 import { KalTidyProvider } from "../surfaces/code/kaltidy/KalTidyProvider.tsx";
 import { useNewTerminalShortcut } from "../surfaces/code/useNewTerminalShortcut.ts";
 import { Dashboard } from "../surfaces/dashboard/Dashboard.tsx";
@@ -196,6 +197,7 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
                 aria-label={destinationMeta(current).label}
                 data-surface={current}
               >
+                <ContinueDeskNotice />
                 {current === "home" ? (
                   <HomeSurface />
                 ) : current === "folder" ? (

@@ -44,6 +44,12 @@ archivedAt: string | null,
  */
 resumable: boolean,
 /**
+ * This interactive coding-agent pane was interrupted because KalCode exited and is safe to
+ * offer through startup recovery. The desktop stamps this only after it has established the
+ * durable `interactive_pty` identity; core thread summaries default to `false`.
+ */
+restartRecoverable?: boolean,
+/**
  * The Custom permission profile a Custom-mode thread uses (`threads.permission_profile_id`).
  */
 permissionProfileId: string | null,
