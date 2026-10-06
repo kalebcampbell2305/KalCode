@@ -676,6 +676,11 @@ impl Core {
             "DELETE FROM provider_account_bindings WHERE kind = 'workspace' AND scope_id = ?1",
             [id],
         )?;
+        // Its pane layout too: `workspace_layouts` has no foreign key to cascade from.
+        tx.execute(
+            "DELETE FROM workspace_layouts WHERE workspace_id = ?1",
+            [id],
+        )?;
         if crate::db::meta_get(&tx, META_ACTIVE_WORKSPACE)?.as_deref() == Some(id) {
             tx.execute(
                 "DELETE FROM app_meta WHERE key = ?1",
@@ -2019,6 +2024,48 @@ mod tests {
             "only the removed workspace's own binding went"
         );
         assert_eq!(remaining, expected);
+    }
+
+    /// A removed workspace takes its saved pane layout with it; other layouts are kept.
+    #[test]
+    fn removing_a_workspace_deletes_only_its_layout() {
+        let data = tempfile::tempdir().expect("data");
+        let (gone, kept) = (
+            tempfile::tempdir().expect("gone"),
+            tempfile::tempdir().expect("kept"),
+        );
+        let core = Core::open(CoreConfig {
+            paths: Paths::new(data.path()),
+            app_version: "0.1.0-test".into(),
+            channel: BuildChannel::Development,
+        })
+        .expect("open");
+        let gone = core.open_workspace(gone.path()).expect("gone workspace");
+        let kept = core.open_workspace(kept.path()).expect("kept workspace");
+        {
+            let conn = core.conn();
+            for scope in [&gone.id, &kept.id] {
+                conn.execute(
+                    "INSERT INTO workspace_layouts (workspace_id, schema_version, layout, updated_at)
+                     VALUES (?1, 1, '{}', '2026-10-05T00:00:00Z')",
+                    [scope],
+                )
+                .expect("layout");
+            }
+        }
+
+        core.remove_workspace(&gone.id).expect("remove");
+        let remaining: Vec<String> = {
+            let conn = core.conn();
+            let mut stmt = conn
+                .prepare("SELECT workspace_id FROM workspace_layouts")
+                .expect("prepare");
+            stmt.query_map([], |r| r.get(0))
+                .expect("query")
+                .collect::<std::result::Result<_, _>>()
+                .expect("rows")
+        };
+        assert_eq!(remaining, [kept.id]);
     }
 
     /// Regression: an exit report from a session that Restart replaced must not end the tab's
