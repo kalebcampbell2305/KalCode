@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { normalizeGeneratedBindings } from "../../../tooling/gen-protocol-index.mjs";
 import { lowerLocalPriority } from "../../../tooling/local-priority.mjs";
 
 const GUARDIAN_BUILD = ["build", "-p", "kalcode-providers", "--bin", "kalcode-provider-guardian"];
@@ -66,7 +67,7 @@ export function cargoEnvironment(args, environment) {
   };
 }
 
-export function runCargo(args, environment = process.env, spawn = spawnSync) {
+export function runCargo(args, environment = process.env, spawn = spawnSync, normalize = normalizeGeneratedBindings) {
   const resolvedEnvironment = cargoEnvironment(args, environment);
   const options = {
     env: resolvedEnvironment,
@@ -79,6 +80,9 @@ export function runCargo(args, environment = process.env, spawn = spawnSync) {
     if (prerequisite.status !== 0) return prerequisite.status ?? 1;
   }
   const result = spawn("cargo", args, options);
+  // `cargo test` re-exports the ts-rs bindings. Normalize them even when a test fails, so a red
+  // test run never leaves the checkout dirty for the next gate check.
+  if (args[0] === "test") normalize();
   return result.status ?? 1;
 }
 
