@@ -1,5 +1,5 @@
-import AxeBuilder from "@axe-core/playwright";
 import { expect, type Locator, type Page, test } from "@playwright/test";
+import { expectNoSeriousA11yViolations } from "./a11y.ts";
 
 const OUT = new URL("../../qa/screenshots/", import.meta.url);
 
@@ -49,19 +49,6 @@ async function beginHandoff(page: Page, source: Locator) {
   await recipients.locator("label").click();
   await expect(recipients.getByRole("radio")).toBeChecked();
   return dialog;
-}
-
-async function expectNoSeriousA11yViolations(page: Page) {
-  const result = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze();
-  const serious = result.violations.filter((item) => item.impact === "serious" || item.impact === "critical");
-  expect(
-    serious,
-    JSON.stringify(
-      serious.map((item) => ({ id: item.id, nodes: item.nodes.map((node) => node.target) })),
-      null,
-      2,
-    ),
-  ).toEqual([]);
 }
 
 test.describe("agent handoff", () => {

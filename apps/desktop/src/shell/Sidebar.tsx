@@ -54,6 +54,8 @@ export function Sidebar({ collapsed, onOpenPalette }: SidebarProps) {
 
   return (
     <nav className={styles.sidebar} aria-label="Primary" data-collapsed={collapsed || undefined}>
+      {/* Decoration as inert elements, not pseudo-elements on the nav (see Sidebar.module.css). */}
+      <div className={styles.stars} aria-hidden="true" />
       {/* Command Deck: the brand, workspace and search live in the top bar. */}
       <ul className={styles.list}>
         {viewVisible("home", info.flags.features) ? <NavItem id="home" collapsed={collapsed} /> : null}
@@ -90,6 +92,7 @@ export function Sidebar({ collapsed, onOpenPalette }: SidebarProps) {
           </Tooltip>
         </div>
       </div>
+      <div className={styles.edgeGlow} aria-hidden="true" />
     </nav>
   );
 }

@@ -165,7 +165,13 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
     <DashboardDataBoundary>
       <DeckUiProvider>
         <DeckDataProvider>
-          <div className={styles.frame} data-space={spaceLevelOf(current)}>
+          <div className={styles.frame} data-space={spaceLevelOf(current)} data-app-shell="">
+            {/* The deep-space atmosphere: real, inert layers behind everything, never pseudo-elements
+                on the frame (axe's contrast check gives up on text under a large pseudo-element). */}
+            <div className={styles.atmosphere} aria-hidden="true">
+              <div className={styles.stars} />
+              <div className={styles.nebula} />
+            </div>
             <NavigationBridge />
             <a className={styles.skipLink} href="#main">
               Skip to content

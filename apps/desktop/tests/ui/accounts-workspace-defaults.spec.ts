@@ -1,5 +1,5 @@
-import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
+import { expectNoSeriousA11yViolations as expectA11y } from "./a11y.ts";
 import { goTo } from "./nav.ts";
 
 /**
@@ -81,9 +81,7 @@ async function expectNoSeriousA11yViolations(page: Page) {
   // Toasts are checked by their own suite; clear them so this checks the account UI.
   const dismiss = page.getByRole("button", { name: "Dismiss notification" });
   while ((await dismiss.count()) > 0) await dismiss.first().click();
-  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze();
-  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
-  expect(serious.map((v) => ({ id: v.id, nodes: v.nodes.map((n) => n.target) }))).toEqual([]);
+  await expectA11y(page);
 }
 
 test.describe("switch accounts: accounts view and workspace defaults", () => {

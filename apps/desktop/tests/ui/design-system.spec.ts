@@ -1,6 +1,6 @@
 import { mkdirSync } from "node:fs";
-import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
+import { expectNoSeriousA11yViolations } from "./a11y.ts";
 import { goTo } from "./nav.ts";
 
 /**
@@ -27,19 +27,6 @@ async function open(page: Page, scenario: string, theme: "dark" | "light") {
 
 /** Opens a place from the sidebar (Code and Activity directly, other surfaces through More). */
 const nav = (page: Page, name: string) => goTo(page, name);
-
-async function expectAxeClean(page: Page, where: string) {
-  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze();
-  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
-  expect(
-    serious,
-    `${where}: ${JSON.stringify(
-      serious.map((v) => ({ id: v.id, nodes: v.nodes.map((n) => n.target) })),
-      null,
-      2,
-    )}`,
-  ).toEqual([]);
-}
 
 type Scene = { name: string; run: (page: Page, theme: "dark" | "light") => Promise<void> };
 
@@ -142,7 +129,7 @@ test.describe("Z7-W0 design system accessibility", () => {
       await page.setViewportSize({ width: 1440, height: 900 });
       for (const scene of SCENES) {
         await scene.run(page, theme);
-        await expectAxeClean(page, `${scene.name} (${theme})`);
+        await expectNoSeriousA11yViolations(page, `${scene.name} (${theme})`);
       }
     });
   }
@@ -199,7 +186,7 @@ test.describe("appearance modes", () => {
       for (const scene of SCENES) {
         await scene.run(page, theme);
         await mode(page, { contrast: "more" });
-        await expectAxeClean(page, `${scene.name} (${theme}, high contrast)`);
+        await expectNoSeriousA11yViolations(page, `${scene.name} (${theme}, high contrast)`);
       }
     });
   }
@@ -210,7 +197,7 @@ test.describe("appearance modes", () => {
     for (const scene of SCENES) {
       await scene.run(page, "dark");
       await mode(page, { textSize: "larger" });
-      await expectAxeClean(page, `${scene.name} (larger text)`);
+      await expectNoSeriousA11yViolations(page, `${scene.name} (larger text)`);
     }
   });
 });
