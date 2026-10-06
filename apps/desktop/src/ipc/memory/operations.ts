@@ -77,16 +77,14 @@ function numberArg(value: unknown): number {
   return value;
 }
 
-function operationSpec(value: unknown): OperationSpec {
+/** Mirrors native normalization: only a Squad member may be a taskless coding terminal. */
+function operationSpec(value: unknown, squadMember = false): OperationSpec {
   if (typeof value !== "object" || value === null) {
     fail("ipc_rejected", "KalCode couldn't complete that request.");
   }
   const spec = value as OperationSpec;
-  if (
-    !spec.name?.trim() ||
-    !spec.workspaceId ||
-    (spec.kind !== "agent" && !spec.command?.trim() && !spec.prompt?.trim())
-  ) {
+  const tasklessAgent = squadMember && spec.kind === "agent";
+  if (!spec.name?.trim() || !spec.workspaceId || (!tasklessAgent && !spec.command?.trim() && !spec.prompt?.trim())) {
     fail("invalid_operation", "Name, workspace, and executable work are required.");
   }
   return clone(spec);
@@ -159,6 +157,7 @@ export function createOperationsMemory({ empty, workspaces, requireCore }: Opera
   let revision = 12;
   let paused = true;
   let nextId = 1;
+  const squadMembers = new Set<string>();
   let lastAction: string | null = null;
   let lastOpenedUrl: string | null = null;
 
@@ -719,7 +718,7 @@ export function createOperationsMemory({ empty, workspaces, requireCore }: Opera
       const id = stringArg(args.id);
       const current = record(id);
       if (!pending(current)) fail("operation_not_pending", "Only pending Operations tasks can be edited.");
-      const nextSpec = operationSpec(args.spec);
+      const nextSpec = operationSpec(args.spec, squadMembers.has(id));
       const updated: OperationRecord = { ...current, spec: nextSpec, workspaceName };
       items = items.map((candidate) => (candidate.id === id ? updated : candidate));
       touch("update");
@@ -948,10 +947,11 @@ export function createOperationsMemory({ empty, workspaces, requireCore }: Opera
       if (!id || items.some((candidate) => candidate.id === id)) {
         fail("operation_id_conflict", "That Squad member Operation already exists.");
       }
-      const nextSpec = operationSpec(itemSpec);
+      const nextSpec = operationSpec(itemSpec, true);
       if (nextSpec.kind !== "agent") {
         fail("invalid_operation", "Squad members must use coding-agent Operations.");
       }
+      squadMembers.add(id);
       const created = seedRecord(id, nextSpec, workspaceName, {
         accountLabel,
         branch: null,

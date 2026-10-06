@@ -8,7 +8,7 @@ use kalcode_contracts::operations::{
 use kalcode_contracts::threads::MessageRole;
 use kalcode_core::events::{Correlation, EventPayload, NewEvent};
 use kalcode_core::flags::BuildChannel;
-use kalcode_core::operations::{OperationsStore, normalize_spec};
+use kalcode_core::operations::{OperationsStore, normalize_spec, normalize_squad_member_spec};
 use kalcode_core::plans::{Limited, PlanTier};
 use kalcode_core::workspaces::{TerminalSize, TerminalStatus};
 use kalcode_core::{Core, CoreConfig, Paths};
@@ -598,6 +598,136 @@ fn agent_claims_are_parallel_and_do_not_consume_the_command_slot() {
             .code,
         "operation_slot_unavailable"
     );
+}
+
+#[test]
+fn a_build_claims_the_foreground_slot_while_agents_run_and_only_builds_contend() {
+    let data = tempfile::tempdir().expect("data");
+    let project = tempfile::tempdir().expect("project");
+    let core = open(data.path());
+    let workspace_id = workspace(&core, project.path());
+    let account_id = provider_account(&core, "Running agents");
+    let store = OperationsStore::new(core);
+    for index in 0..3 {
+        let agent = store
+            .enqueue(agent_spec(
+                &workspace_id,
+                &account_id,
+                &format!("Running agent {index}"),
+            ))
+            .expect("enqueue agent");
+        store
+            .claim(Some(&agent.id))
+            .expect("agent claim")
+            .expect("agent available");
+    }
+
+    let first = store
+        .enqueue(spec(&workspace_id, "First build"))
+        .expect("first build");
+    store
+        .claim(Some(&first.id))
+        .expect("running agents never take the foreground slot")
+        .expect("first build claimed");
+    let second = store
+        .enqueue(spec(&workspace_id, "Second build"))
+        .expect("second build");
+    assert_eq!(
+        store
+            .claim(Some(&second.id))
+            .expect_err("the first build owns the slot")
+            .code,
+        "operation_slot_unavailable"
+    );
+
+    // The refusal came from the first build, not the agents: finishing it frees the slot while
+    // all three agents are still running.
+    store
+        .finish(&first.id, OperationStatus::Succeeded, "Built.")
+        .expect("finish first build");
+    store
+        .claim(Some(&second.id))
+        .expect("second build claim")
+        .expect("second build takes the freed slot");
+}
+
+#[test]
+fn ordinary_agent_tasks_keep_a_selected_non_default_effort() {
+    let data = tempfile::tempdir().expect("data");
+    let project = tempfile::tempdir().expect("project");
+    let core = open(data.path());
+    let workspace_id = workspace(&core, project.path());
+    let account_id = provider_account(&core, "Effort account");
+    let store = OperationsStore::new(core);
+    let mut agent = agent_spec(&workspace_id, &account_id, "High effort review");
+    agent.effort = Some("high".into());
+    let queued = store
+        .enqueue(agent)
+        .expect("non-default effort is accepted");
+    assert_eq!(queued.spec.effort.as_deref(), Some("high"));
+    let mut edited = queued.spec.clone();
+    edited.effort = Some("low".into());
+    let revision = store.snapshot().expect("snapshot").0;
+    let updated = store
+        .update(&queued.id, edited, revision)
+        .expect("effort edit");
+    assert_eq!(updated.spec.effort.as_deref(), Some("low"));
+    assert_eq!(
+        store
+            .get(&queued.id)
+            .expect("persisted")
+            .spec
+            .effort
+            .as_deref(),
+        Some("low")
+    );
+}
+
+#[test]
+fn signed_out_provider_account_is_refused_at_claim_until_reconnected() {
+    let data = tempfile::tempdir().expect("data");
+    let project = tempfile::tempdir().expect("project");
+    let core = open(data.path());
+    let workspace_id = workspace(&core, project.path());
+    let account_id = provider_account(&core, "Signed out later");
+    let store = OperationsStore::new(Arc::clone(&core));
+    let agent = store
+        .enqueue(agent_spec(
+            &workspace_id,
+            &account_id,
+            "Needs a signed-in account",
+        ))
+        .expect("enqueue agent");
+    let set_auth = |state: &str| {
+        core.transact(|tx| {
+            tx.execute(
+                "UPDATE provider_accounts SET authentication_state = ?2 WHERE id = ?1",
+                params![account_id, state],
+            )?;
+            Ok(((), Vec::new()))
+        })
+        .expect("set authentication state");
+    };
+
+    set_auth("not_authenticated");
+    assert_eq!(
+        store
+            .claim(Some(&agent.id))
+            .expect_err("a signed-out account cannot start a provider")
+            .code,
+        "operation_provider_account_missing"
+    );
+    assert_eq!(
+        store.get(&agent.id).expect("agent").status,
+        OperationStatus::Queued,
+        "the task stays queued instead of failing a doomed launch"
+    );
+
+    set_auth("authenticated");
+    store
+        .claim(Some(&agent.id))
+        .expect("claim after reconnect")
+        .expect("reconnected account starts");
 }
 
 #[test]
@@ -1633,16 +1763,52 @@ fn execution_shape_is_validated_before_persistence_and_binding() {
     let project = tempfile::tempdir().expect("project");
     let core = open(data.path());
     let workspace_id = workspace(&core, project.path());
+    let core_for_shape = Arc::clone(&core);
     let store = OperationsStore::new(core);
 
     let mut agent = spec(&workspace_id, "Agent task");
     agent.kind = OperationKind::Agent;
     agent.command = None;
+    // Only a Squad member may be a taskless coding terminal. Ordinary agent tasks keep main's
+    // rule: they need a prompt, both when queued and when edited.
     assert_eq!(
         normalize_spec(agent.clone())
-            .expect("taskless agent")
+            .expect_err("prompt required")
+            .code,
+        "operation_prompt_required"
+    );
+    assert_eq!(
+        normalize_squad_member_spec(agent.clone())
+            .expect("taskless Squad member")
             .prompt,
         None
+    );
+    let mut blank = agent.clone();
+    blank.prompt = Some("   ".into());
+    assert_eq!(
+        normalize_spec(blank).expect_err("blank prompt").code,
+        "operation_prompt_required"
+    );
+    assert_eq!(
+        store
+            .enqueue(agent.clone())
+            .expect_err("taskless enqueue")
+            .code,
+        "operation_prompt_required"
+    );
+    let account_id = provider_account(&core_for_shape, "Shape account");
+    let queued = store
+        .enqueue(agent_spec(&workspace_id, &account_id, "Prompted agent"))
+        .expect("prompted agent");
+    let mut taskless_edit = queued.spec.clone();
+    taskless_edit.prompt = None;
+    let revision = store.snapshot().expect("snapshot").0;
+    assert_eq!(
+        store
+            .update(&queued.id, taskless_edit, revision)
+            .expect_err("taskless edit of an ordinary agent")
+            .code,
+        "operation_prompt_required"
     );
     agent.prompt = Some("  inspect the workspace  ".into());
     let normalized = normalize_spec(agent.clone()).expect("normalize agent");

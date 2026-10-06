@@ -2152,17 +2152,35 @@ mod tests {
     }
 
     #[test]
-    fn agent_operation_rejects_every_non_null_effort_without_fallback() {
-        for effort in [String::new(), "high".into()] {
-            let mut spec = agent_operation_spec();
-            spec.effort = Some(effort);
+    fn agent_operation_effort_is_normalized_per_provider_without_fallback() {
+        // Operations carries the selected effort (Squads and ordinary agent tasks alike); the
+        // provider adapter is the sole authority on which values exist. Nothing falls back.
+        let mut spec = agent_operation_spec();
+        spec.effort = Some("high".into());
+        validate_agent_operation(&spec).expect("effort is an accepted agent field");
+        assert_eq!(
+            operation_effort(ProviderId::CODEX, Some("high")).expect("codex effort"),
+            Some("high".into())
+        );
+        for provider_default in ["", "default"] {
             assert_eq!(
-                validate_agent_operation(&spec)
-                    .expect_err("unsupported effort")
-                    .code,
-                "operation_effort_unsupported"
+                operation_effort(ProviderId::CODEX, Some(provider_default))
+                    .expect("provider default"),
+                None
             );
         }
+        assert_eq!(
+            operation_effort(ProviderId::CODEX, Some("turbo"))
+                .expect_err("unknown effort")
+                .code,
+            "invalid_effort"
+        );
+        assert_eq!(
+            operation_effort(ProviderId::GEMINI_CLI, Some("high"))
+                .expect_err("provider without effort levels")
+                .code,
+            "invalid_effort"
+        );
     }
 
     #[test]

@@ -596,8 +596,14 @@ impl OperationsStore {
     /// Replaces editable task fields. A started or finished run is immutable.
     pub fn update(&self, id: &str, spec: OperationSpec, revision: u64) -> Result<OperationRecord> {
         validate_id(id)?;
-        let spec = normalize_spec(spec)?;
+        let spec = normalize_squad_member_spec(spec)?;
         self.write(|tx| {
+            if spec.kind == OperationKind::Agent
+                && spec.prompt.is_none()
+                && !is_squad_member(tx, id)?
+            {
+                return Err(prompt_required());
+            }
             require_revision(tx, revision)?;
             let status = operation_status(tx, id)?;
             if !is_pending(status) {
@@ -2388,6 +2394,14 @@ fn bump_revision(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn is_squad_member(conn: &Connection, id: &str) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM squad_launch_members WHERE operation_id = ?1)",
+        [id],
+        |row| row.get(0),
+    )?)
+}
+
 fn operation_status(conn: &Connection, id: &str) -> Result<OperationStatus> {
     dependency_status(conn, id)?.ok_or_else(not_found)
 }
@@ -2808,11 +2822,18 @@ fn validate_references(
 /// Canonicalizes and validates owner-authored Operations input before it is displayed for native
 /// confirmation. Callers persist and execute this exact returned value, never the raw request.
 pub fn normalize_spec(mut spec: OperationSpec) -> Result<OperationSpec> {
-    normalize_and_validate_spec(&mut spec)?;
+    normalize_and_validate_spec(&mut spec, false)?;
     Ok(spec)
 }
 
-fn normalize_and_validate_spec(spec: &mut OperationSpec) -> Result<()> {
+/// [`normalize_spec`] for a Squad member, which may be a real coding terminal that starts without
+/// a first task. Every ordinary agent task still requires its prompt.
+pub fn normalize_squad_member_spec(mut spec: OperationSpec) -> Result<OperationSpec> {
+    normalize_and_validate_spec(&mut spec, true)?;
+    Ok(spec)
+}
+
+fn normalize_and_validate_spec(spec: &mut OperationSpec, taskless_agent: bool) -> Result<()> {
     spec.name = spec.name.trim().to_owned();
     validate_text(&spec.name, 160, false, "invalid_operation_name")?;
     reject_secret(&spec.name)?;
@@ -2855,6 +2876,9 @@ fn normalize_and_validate_spec(spec: &mut OperationSpec) -> Result<()> {
     validate_optional_text(spec.effort.as_deref(), 32, "invalid_operation_effort")?;
     match spec.kind {
         OperationKind::Agent => {
+            if spec.prompt.is_none() && !taskless_agent {
+                return Err(prompt_required());
+            }
             if spec.command.is_some() {
                 return Err(KalError::validation(
                     "operation_command_not_allowed",
@@ -3246,6 +3270,13 @@ fn not_found() -> KalError {
     KalError::validation(
         "operation_not_found",
         "The Operations task no longer exists.",
+    )
+}
+
+fn prompt_required() -> KalError {
+    KalError::validation(
+        "operation_prompt_required",
+        "Enter a prompt for this agent task.",
     )
 }
 

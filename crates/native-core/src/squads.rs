@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 
 use crate::Core;
 use crate::error::{KalError, Result};
-use crate::operations::{OperationsStore, normalize_spec};
+use crate::operations::{OperationsStore, normalize_squad_member_spec};
 use crate::plans::PlanLimit;
 use crate::redact::secrets::{self, ScanContext};
 use crate::time::now_rfc3339;
@@ -382,7 +382,7 @@ impl SquadsStore {
                         .map(|key| operation_ids.get(key.as_str()).cloned().ok_or_else(corrupt))
                         .collect::<Result<_>>()?;
                     let prompt = member_prompt(&goal, member)?;
-                    let spec = normalize_spec(OperationSpec {
+                    let spec = normalize_squad_member_spec(OperationSpec {
                         name: member.name.clone(),
                         workspace_id: workspace_id.to_owned(),
                         kind: OperationKind::Agent,

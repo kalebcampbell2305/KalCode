@@ -279,6 +279,35 @@ describe("Operations memory runtime", () => {
     expect(memory.controls.snapshot().items.map((item) => item.id)).toEqual([id]);
   });
 
+  it("requires a prompt for ordinary agent tasks but lets a Squad member be a taskless terminal", () => {
+    const { memory, invoke } = setup(true);
+    const agent = {
+      name: "Ordinary agent",
+      workspaceId: workspace.id,
+      kind: "agent" as const,
+      command: null,
+      prompt: null,
+      providerId: "codex",
+      providerAccountId: "0192f3c4-0000-7000-8000-000000000201",
+      model: "gpt-5.6-sol",
+      effort: "high",
+      dependencies: [],
+      priority: 0,
+      lane: "next" as const,
+      environment: "local" as const,
+      urls: [],
+      envKeys: [],
+    };
+    expect(() => invoke("operations_enqueue", { spec: agent })).toThrow();
+
+    const member = "00000000-0000-4000-8000-00000000a031";
+    memory.agents.create(member, { ...agent, name: "Terminal member" });
+    const { revision } = invoke("operations_snapshot") as OperationsSnapshot;
+    expect(invoke("operations_update", { id: member, revision, spec: { ...agent, name: "Renamed member" } })).toEqual(
+      expect.objectContaining({ id: member, spec: expect.objectContaining({ prompt: null }) }),
+    );
+  });
+
   it("pauses only an unavailable squad member and keeps its actionable reason", () => {
     const { memory } = setup(true);
     const available = "00000000-0000-4000-8000-00000000a021";

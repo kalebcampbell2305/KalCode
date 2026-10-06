@@ -561,7 +561,8 @@ fn squad_claim_is_scoped_through_global_pause_and_restart_never_replays() {
             workspace_id: workspace_id.clone(),
             kind: kalcode_contracts::operations::OperationKind::Agent,
             command: None,
-            prompt: None,
+            // Ordinary (non-Squad) agent tasks still require a prompt.
+            prompt: Some("Inspect the workspace.".into()),
             provider_id: Some("codex".into()),
             provider_account_id: Some(account_id),
             model: None,
@@ -1057,4 +1058,50 @@ fn manager_reassignment_updates_only_the_worker_relation() {
             .map(|member| (member.key.clone(), member.operation_id.clone()))
             .collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn taskless_squad_members_launch_and_edit_without_a_prompt() {
+    let data = tempfile::tempdir().expect("data");
+    let project = tempfile::tempdir().expect("project");
+    let core = open(data.path());
+    let workspace_id = workspace(&core, project.path());
+    let account_id = account(&core, "codex", "Codex A");
+    let store = SquadsStore::new(core.clone());
+    let mut terminal = member("terminal", "codex", &account_id);
+    terminal.task = None;
+    let saved = store
+        .save_squad(squad(vec![
+            terminal,
+            member("worker", "codex", &account_id),
+        ]))
+        .expect("save squad");
+    let launch = store
+        .launch("taskless-request", &saved.id, &workspace_id, None, None)
+        .expect("launch");
+    let operations = OperationsStore::new(core.clone());
+    let id = |key: &str| {
+        launch
+            .members
+            .iter()
+            .find(|member| member.key == key)
+            .expect("member")
+            .operation_id
+            .clone()
+    };
+    let terminal = operations.get(&id("terminal")).expect("terminal member");
+    assert_eq!(
+        terminal.spec.prompt, None,
+        "a real coding terminal without a task"
+    );
+
+    // A Squad member may also be edited to a taskless terminal; ordinary agents may not.
+    let worker = operations.get(&id("worker")).expect("worker member");
+    let mut edit = worker.spec.clone();
+    edit.prompt = None;
+    let revision = operations.snapshot().expect("snapshot").0;
+    let updated = operations
+        .update(&worker.id, edit, revision)
+        .expect("taskless Squad member edit");
+    assert_eq!(updated.spec.prompt, None);
 }
