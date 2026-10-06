@@ -46,7 +46,8 @@ jobs:
     permissions:
       contents: write
     runs-on: [self-hosted, Windows, kalcode-desktop-qa]
-    timeout-minutes: 40
+    # 40 min of proof after up to 75 min waiting for in-flight gate halves on the second PC.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:
@@ -82,12 +83,20 @@ jobs:
           if ($env:CHANGES_DATA -eq 'true') { $packageArgs += '-ChangesData' }
           if ($env:RECOVER_PROFILE -eq 'true') { $packageArgs += '-RecoverPreservedProfile' }
           if ($env:CLEAN_PACKET_SHA256 -or $env:CLEAN_VERIFIER_SHA256) { $packageArgs += @('-CleanPacketSha256', $env:CLEAN_PACKET_SHA256, '-CleanVerifierSha256', $env:CLEAN_VERIFIER_SHA256) }
-          & powershell -NoProfile -ExecutionPolicy Bypass -File .github\scripts\win-desktop-update-from-feed.ps1 `
-            -LiveUrl $env:LIVE_URL -LiveSha256 $env:LIVE_SHA256 -LiveVersion $env:LIVE_VERSION `
-            -CandidateVersion $env:CANDIDATE_VERSION -CandidateSha256 $env:CANDIDATE_SHA256 -CandidateCommit $env:CANDIDATE_COMMIT `
-            @packageArgs `
-            -OutDir $out
-          if ($LASTEXITCODE -ne 0) { throw "desktop update check failed (exit $LASTEXITCODE)" }
+          # Exclusive on the second PC: waits for in-flight gate halves, and no gate half starts until it ends.
+          . .github\scripts\pc2-machine-lock.ps1
+          $lock = Enter-Pc2MachineLock -Mode Exclusive -TimeoutMinutes 75
+          try {
+            & powershell -NoProfile -ExecutionPolicy Bypass -File .github\scripts\win-desktop-update-from-feed.ps1 `
+              -LiveUrl $env:LIVE_URL -LiveSha256 $env:LIVE_SHA256 -LiveVersion $env:LIVE_VERSION `
+              -CandidateVersion $env:CANDIDATE_VERSION -CandidateSha256 $env:CANDIDATE_SHA256 -CandidateCommit $env:CANDIDATE_COMMIT `
+              @packageArgs `
+              -OutDir $out
+            $code = $LASTEXITCODE
+          } finally {
+            Exit-Pc2MachineLock $lock
+          }
+          if ($code -ne 0) { throw "desktop update check failed (exit $code)" }
       - name: Upload the receipt
         if: always()
         uses: actions/upload-artifact@v4

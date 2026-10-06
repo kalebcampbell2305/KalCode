@@ -514,8 +514,16 @@ jobs:
           if ($LASTEXITCODE -or $head -ne $env:GITHUB_SHA) { throw "Checkout does not match the immutable event SHA" }
           (Get-Process -Id $PID).PriorityClass = 'BelowNormal'
           if (-not $env:KALCODE_GATE_ONLY) { Write-Host 'gate: nothing selected for the second PC (the build PC runs the rest)'; exit 0 }
-          node tooling/release/ship.mjs gate --base $env:KALCODE_GATE_BASE --only $env:KALCODE_GATE_ONLY --jobs $env:KALCODE_GATE_JOBS --keep-going
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          # Shared with this PC's other gate runner; never alongside its Windows update proof, which has priority.
+          . .github/scripts/pc2-machine-lock.ps1
+          $lock = Enter-Pc2MachineLock -Mode Shared -TimeoutMinutes 60
+          try {
+            node tooling/release/ship.mjs gate --base $env:KALCODE_GATE_BASE --only $env:KALCODE_GATE_ONLY --jobs $env:KALCODE_GATE_JOBS --keep-going
+            $code = $LASTEXITCODE
+          } finally {
+            Exit-Pc2MachineLock $lock
+          }
+          if ($code) { exit $code }
       - name: Remove this run's portable Python
         if: steps.reuse.outputs.reused != 'true' && (always() && steps.python.outcome != 'skipped' && steps.python.outcome != '')
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
