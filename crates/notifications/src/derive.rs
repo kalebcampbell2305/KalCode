@@ -235,6 +235,24 @@ pub fn derive(event: &EventEnvelope, lookup: &dyn Lookup) -> Option<Derived> {
                 workspace_id: None,
             }))
         }
+        // The thread runtime leaves `waiting_for_permission` only once nothing is pending (or
+        // the thread ended). It lowers its pending count on its own event thread, after the
+        // `approval.*` event above may already have been derived with the old count, so this
+        // transition is what reliably settles the permission notice.
+        EventPayload::ThreadStatusChanged {
+            thread_id,
+            from,
+            to,
+            ..
+        } if *from == ThreadStatus::WaitingForPermission
+            && *to != ThreadStatus::WaitingForPermission =>
+        {
+            Some(Derived::Settle {
+                kind: NotificationKind::PermissionRequired,
+                entity_kind: NotificationEntityKind::Thread,
+                entity_id: thread_id.clone(),
+            })
+        }
         _ => None,
     }
 }
@@ -374,6 +392,46 @@ mod tests {
             })
         );
         assert_eq!(derive(&answered, &Fixed { pending: 1 }), None);
+    }
+
+    #[test]
+    fn leaving_waiting_for_permission_settles_the_permission_notice() {
+        let changed = |from, to| {
+            derive(
+                &envelope(
+                    EventSource::Core,
+                    EventPayload::ThreadStatusChanged {
+                        thread_id: "t1".into(),
+                        from,
+                        to,
+                        detail: None,
+                    },
+                ),
+                // A stale count: the runtime hasn't recorded the answer yet.
+                &Fixed { pending: 1 },
+            )
+        };
+        let settle = Some(Derived::Settle {
+            kind: NotificationKind::PermissionRequired,
+            entity_kind: NotificationEntityKind::Thread,
+            entity_id: "t1".into(),
+        });
+        assert_eq!(
+            changed(ThreadStatus::WaitingForPermission, ThreadStatus::Active),
+            settle
+        );
+        assert_eq!(
+            changed(
+                ThreadStatus::WaitingForPermission,
+                ThreadStatus::Interrupted
+            ),
+            settle
+        );
+        assert_eq!(
+            changed(ThreadStatus::Active, ThreadStatus::WaitingForPermission),
+            None
+        );
+        assert_eq!(changed(ThreadStatus::Thinking, ThreadStatus::Active), None);
     }
 
     #[test]
