@@ -356,6 +356,8 @@ export function FloatingAssistant() {
       ) : (
         <div className={styles.body}>
           <div className={styles.card}>
+            {/* The lit top edge on an inert element, not ::before (see FloatingAssistant.module.css). */}
+            <span className={styles.cardEdge} aria-hidden="true" />
             <header className={styles.header} {...dragProps}>
               <button
                 type="button"

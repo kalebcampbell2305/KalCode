@@ -432,10 +432,12 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
         >
           {providerPanes ? (
             <p>
-              Launch a <ProviderMark provider="claude-code" size="sm" />, <ProviderMark provider="codex" size="sm" />,{" "}
-              <ProviderMark provider="cursor" name="Cursor" size="sm" /> or{" "}
-              <ProviderMark provider="gemini-cli" name="Gemini" size="sm" /> agent from Code and it shows up here with
-              what it's doing and whether it needs you. A CLI you type into a plain terminal isn't tracked here.
+              Launch a <ProviderMark provider="claude-code" size="sm" className={styles.inlineMark} />,{" "}
+              <ProviderMark provider="codex" size="sm" className={styles.inlineMark} />,{" "}
+              <ProviderMark provider="cursor" name="Cursor" size="sm" className={styles.inlineMark} /> or{" "}
+              <ProviderMark provider="gemini-cli" name="Gemini" size="sm" className={styles.inlineMark} /> agent from
+              Code and it shows up here with what it's doing and whether it needs you. A CLI you type into a plain
+              terminal isn't tracked here.
             </p>
           ) : (
             <p>Coding agents aren't part of this build. Threads keep their own list in Threads.</p>
@@ -497,6 +499,8 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
     <section className={styles.board} aria-label="Agents" data-in-pane={inPane || undefined}>
       {ready ? (
         <div className={styles.head}>
+          {/* Decoration on inert elements, not pseudo-elements (see DashboardBoard.module.css). */}
+          <div className={styles.headGrid} aria-hidden="true" />
           <div className={styles.overview}>
             <p className={styles.total}>
               <span className={styles.totalCount}>{counts.all}</span>
@@ -698,6 +702,7 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
               </div>
             </div>
           ) : null}
+          <div className={styles.headHorizon} aria-hidden="true" />
         </div>
       ) : null}
       {body}

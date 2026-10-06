@@ -106,6 +106,8 @@ const AttentionCard = memo(function AttentionCard({
   const dismiss = item.actions.find((a) => a.id === "dismiss");
   return (
     <li className={styles.card} data-tone={meta.tone} data-kind={item.kind} aria-labelledby={titleId}>
+      {/* The tone bar on an inert element, not ::before (see AttentionList.module.css). */}
+      <span className={styles.toneBar} aria-hidden="true" />
       <span className={styles.glyph} data-tone={meta.tone} aria-hidden="true">
         <Icon />
       </span>

@@ -34,9 +34,10 @@
   box-shadow: var(--glow-active);
 }
 
-/* A lit bar on the left edge in the item's tone: what kind of attention, at a glance. */
-.card::before {
-  content: "";
+/* A lit bar on the left edge in the item's tone: what kind of attention, at a glance. An
+   aria-hidden element (first in the card), not ::before: axe's colour-contrast check reports
+   "incomplete" for text under an absolute pseudo-element with a background. */
+.card > .toneBar {
   position: absolute;
   top: var(--space-3);
   bottom: var(--space-3);
@@ -45,18 +46,18 @@
   border-radius: var(--radius-full);
   background: var(--status-muted-text);
 }
-.card[data-tone="waiting"]::before {
+.card[data-tone="waiting"] > .toneBar {
   background: var(--status-waiting);
   box-shadow: 0 0 10px var(--status-waiting-soft);
 }
-.card[data-tone="failed"]::before {
+.card[data-tone="failed"] > .toneBar {
   background: var(--status-failed-text);
   box-shadow: 0 0 10px var(--status-failed-soft);
 }
-.card[data-tone="recovering"]::before {
+.card[data-tone="recovering"] > .toneBar {
   background: var(--status-recovering-text);
 }
-.card[data-tone="done"]::before {
+.card[data-tone="done"] > .toneBar {
   background: var(--color-accent);
   box-shadow: 0 0 10px var(--color-glow);
 }

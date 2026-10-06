@@ -74,6 +74,10 @@ const STATUS_TONE: Record<HandoffStatus, "neutral" | "accent" | "success" | "wai
 /** Handoffs that can still change on their own (delivery, the receiver's progress). */
 const LIVE_STATUSES: ReadonlySet<HandoffStatus> = new Set(["queued", "delivered", "working", "needs_you"]);
 const POLL_MS = 2_500;
+/** Settled history shown under the live handoffs, newest first. Live handoffs are always shown. */
+const SETTLED_LIMIT = 8;
+/** A return in these states never reached the sender, so the findings can be returned again. */
+const RETURN_RETRYABLE: ReadonlySet<HandoffStatus> = new Set(["cancelled", "interrupted"]);
 /** The lowest plan that includes handoff, from the single placement table (never hard-coded copy). */
 const HANDOFF_PLAN = tierName(FEATURE_PLACEMENT.provider_handoff);
 const HANDOFF_PLAN_BOUNDARY = `Agent handoff is included with ${HANDOFF_PLAN} and above.`;
@@ -183,6 +187,20 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
 
   // Poll quietly only while a handoff can still move on its own; settled history needs no polling.
   const hasLiveRecord = records.some((record) => LIVE_STATUSES.has(record.status));
+  // Every live handoff keeps its actions visible; only settled history is trimmed.
+  const visibleRecords = useMemo(() => {
+    let settled = 0;
+    return records.filter((record) => LIVE_STATUSES.has(record.status) || settled++ < SETTLED_LIMIT);
+  }, [records]);
+  const returnedIds = useMemo(
+    () =>
+      new Set(
+        records.flatMap((record) =>
+          record.returnOfId && !RETURN_RETRYABLE.has(record.status) ? [record.returnOfId] : [],
+        ),
+      ),
+    [records],
+  );
   useEffect(() => {
     if (!open || !hasLiveRecord) return;
     const timer = window.setInterval(() => void loadRecords(true), POLL_MS);
@@ -267,6 +285,8 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
         retry: { label: "Prepare again", run: () => void prepare(draft, sentText, prior) },
         chooseAnother: true,
       });
+      // The send may have created a record before failing; show it so it isn't sent twice.
+      await loadRecords(true);
     } finally {
       setBusy(null);
     }
@@ -611,10 +631,11 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
               <p className={styles.activityEmpty}>No handoffs for this agent yet.</p>
             ) : (
               <div className={styles.recordList}>
-                {records.slice(0, 8).map((record) => (
+                {visibleRecords.map((record) => (
                   <HandoffRecordRow
                     key={record.id}
                     record={record}
+                    returned={returnedIds.has(record.id)}
                     currentThreadId={source.id}
                     onRefresh={() => loadRecords(true)}
                     onOpenAgent={openAgent}
@@ -633,6 +654,7 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
 
 function HandoffRecordRow({
   record,
+  returned,
   currentThreadId,
   onRefresh,
   onOpenAgent,
@@ -640,6 +662,8 @@ function HandoffRecordRow({
   returning,
 }: {
   record: HandoffRecord;
+  /** Its findings were already returned to the sender. */
+  returned: boolean;
   currentThreadId: string;
   onRefresh: () => Promise<void>;
   onOpenAgent: (threadId: string, workspaceId: string) => void;
@@ -758,23 +782,43 @@ function HandoffRecordRow({
               size="sm"
               variant="ghost"
               icon={<ExternalLink />}
+              aria-label={`Open receiver ${record.targetName}`}
               onClick={() => onOpenAgent(record.targetThreadId, record.targetWorkspaceId)}
             >
               Open receiver
             </Button>
           ) : null}
           {!incoming && record.status === "queued" ? (
-            <Button size="sm" variant="ghost" busy={busy} onClick={() => void cancel()}>
+            <Button
+              size="sm"
+              variant="ghost"
+              busy={busy}
+              aria-label={`Cancel queued handoff to ${record.targetName}`}
+              onClick={() => void cancel()}
+            >
               Cancel queued
             </Button>
           ) : null}
           {activeIncoming ? (
-            <Button size="sm" variant="primary" icon={<Check />} onClick={() => setReporting(true)}>
+            <Button
+              size="sm"
+              variant="primary"
+              icon={<Check />}
+              aria-label={`Report result for handoff from ${record.sourceName}`}
+              onClick={() => setReporting(true)}
+            >
               Report result
             </Button>
           ) : null}
-          {incoming && record.result && (record.status === "completed" || record.status === "failed") ? (
-            <Button size="sm" variant="ghost" icon={<RotateCcw />} busy={returning} onClick={() => onReturn(record)}>
+          {incoming && !returned && record.result && (record.status === "completed" || record.status === "failed") ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={<RotateCcw />}
+              busy={returning}
+              aria-label={`Return findings to ${record.sourceName}`}
+              onClick={() => onReturn(record)}
+            >
               Return findings
             </Button>
           ) : null}

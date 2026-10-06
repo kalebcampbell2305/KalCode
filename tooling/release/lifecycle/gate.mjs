@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { classifyChanges } from "./classify.mjs";
 import { isCheckOutput } from "./gate-evidence.mjs";
 import { runGatePool } from "./gate-pool.mjs";
+import { acquireMachineLock, MACHINE_LOCKED_GATES } from "./machine-lock.mjs";
 import { matchAny } from "./policy.mjs";
 import { stateDir, writeJsonAtomic } from "./status.mjs";
 
@@ -242,6 +243,8 @@ export async function runGates(plan, options) {
     evidence,
     capacity,
     report,
+    // { dir, timeoutMs?, acquire? }: machine-wide locks for MACHINE_LOCKED_GATES (gate pool only).
+    machineLock,
     ...execution
   } = options;
   const controller = new AbortController();
@@ -259,23 +262,41 @@ export async function runGates(plan, options) {
         const buffered = jobs > 1;
         const log = execution.log ?? (() => {});
         if (buffered) log(`..   ${gate.id}: started`);
-        const execute = async () =>
-          (
-            await runSerialGate([gate], {
-              ...execution,
-              signal: controller.signal,
-              ...(buffered
-                ? {
-                    log: (line) => {
-                      buffer += `${line}\n`;
-                    },
-                    output: (chunk) => {
-                      buffer += chunk;
-                    },
-                  }
-                : {}),
-            })
-          ).results[0];
+        const lockName = machineLock?.dir && gate.state === "selected" ? MACHINE_LOCKED_GATES[gate.id] : undefined;
+        const execute = async () => {
+          let release = null;
+          if (lockName) {
+            log(`..   ${gate.id}: waiting for the machine-wide ${lockName} lock`);
+            try {
+              release = await (machineLock.acquire ?? acquireMachineLock)(machineLock.dir, lockName, {
+                timeoutMs: machineLock.timeoutMs,
+              });
+            } catch (error) {
+              return { id: gate.id, state: "fail", why: error.message };
+            }
+            log(`..   ${gate.id}: holds the machine-wide ${lockName} lock`);
+          }
+          try {
+            return (
+              await runSerialGate([gate], {
+                ...execution,
+                signal: controller.signal,
+                ...(buffered
+                  ? {
+                      log: (line) => {
+                        buffer += `${line}\n`;
+                      },
+                      output: (chunk) => {
+                        buffer += chunk;
+                      },
+                    }
+                  : {}),
+              })
+            ).results[0];
+          } finally {
+            release?.();
+          }
+        };
         const result = evidence && gate.state === "selected" ? await evidence.run(gate, execute) : await execute();
         if (buffered)
           log(

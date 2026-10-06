@@ -227,6 +227,7 @@ function Project({ workspaceId }: { workspaceId: string }) {
             </Button>
           ) : null}
         </div>
+        <span className={styles.headerRule} aria-hidden="true" />
       </header>
 
       <StatGroup className={styles.stats}>

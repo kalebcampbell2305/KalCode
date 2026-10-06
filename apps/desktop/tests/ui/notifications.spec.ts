@@ -1,5 +1,5 @@
-import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
+import { expectNoSeriousA11yViolations } from "./a11y.ts";
 
 /**
  * Needs you: the notification history (Z7-W3) under the live attention items, against the
@@ -50,12 +50,6 @@ async function memory(page: Page, fn: string, ...args: unknown[]) {
     },
     [fn, args] as const,
   );
-}
-
-async function expectNoSeriousA11yViolations(page: Page) {
-  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze();
-  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
-  expect(serious.map((v) => ({ id: v.id, nodes: v.nodes.map((n) => n.target) }))).toEqual([]);
 }
 
 test("lists what finished, failed and needs permission, with an unread count", async ({ page }) => {

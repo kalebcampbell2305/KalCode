@@ -22,8 +22,9 @@
   position: relative;
 }
 
-.header::after {
-  content: "";
+/* An aria-hidden element (last in the header), not ::after: axe's colour-contrast check reports
+   "incomplete" for any text under an absolute pseudo-element with a background. */
+.headerRule {
   position: absolute;
   left: 0;
   bottom: -1px;

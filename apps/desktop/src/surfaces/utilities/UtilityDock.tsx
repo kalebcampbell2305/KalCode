@@ -358,6 +358,7 @@ export function UtilityDock({ api, openScratchTerminal }: UtilityDockProps) {
               </small>
             </div>
           </div>
+          <span className={styles.heroRule} aria-hidden="true" />
         </header>
         <div className={styles.layout}>
           <nav className={styles.rail} aria-label="Utility tools">

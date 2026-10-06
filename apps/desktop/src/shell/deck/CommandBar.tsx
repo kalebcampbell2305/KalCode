@@ -87,6 +87,8 @@ export function CommandBar({
         <Signals />
         <AccountUsageCenter />
       </div>
+      {/* Decoration on an inert element, not ::after on the bar (axe skips contrast under it). */}
+      <span className={styles.edge} aria-hidden="true" />
     </header>
   );
 }

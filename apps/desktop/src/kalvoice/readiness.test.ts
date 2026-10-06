@@ -1,7 +1,7 @@
 import type { ComponentProvisioning, KalVoiceStatus } from "@kalcode/protocol";
 import { describe, expect, it } from "vitest";
 import { createMemoryKalVoice } from "../ipc/memoryKalVoice.ts";
-import { pushToTalkReadiness, withTalkKeyState } from "./readiness.ts";
+import { pushToTalkReadiness, retryWhen, withTalkKeyState } from "./readiness.ts";
 
 function status(patch: Partial<KalVoiceStatus> = {}): KalVoiceStatus {
   const voice = createMemoryKalVoice(() => undefined, "");
@@ -245,5 +245,16 @@ describe("first-run disclosure and permanent failures", () => {
       expect(stopped.message).toContain(text);
       expect(stopped.message).not.toMatch(/retries/);
     }
+  });
+});
+
+describe("retry timing reads naturally", () => {
+  it("says minutes for short waits and hours for long ones", () => {
+    expect(retryWhen(undefined)).toBe("automatically");
+    expect(retryWhen(45)).toBe("automatically in about a minute");
+    expect(retryWhen(300)).toBe("automatically in about 5 minutes");
+    expect(retryWhen(3600)).toBe("automatically in about an hour");
+    expect(retryWhen(3500)).toBe("automatically in about an hour");
+    expect(retryWhen(7200)).toBe("automatically in about 2 hours");
   });
 });

@@ -3,7 +3,10 @@
   position: relative;
   z-index: var(--z-sticky);
   display: grid;
-  grid-template-columns: var(--deck-brand-w, var(--sidebar-w)) auto minmax(2rem, 1fr) auto;
+  /* The chips' column may shrink below its content (minmax(0, auto)) so that, in a window too
+     narrow for every chip, the chips ellipsize instead of spilling under the command field and
+     the signals (they did at the 960px minimum window). With room, it is exactly `auto`. */
+  grid-template-columns: var(--deck-brand-w, var(--sidebar-w)) minmax(0, auto) minmax(2rem, 1fr) auto;
   align-items: center;
   gap: var(--space-2);
   height: var(--titlebar-h);
@@ -20,9 +23,10 @@
   gap: var(--space-2);
 }
 
-/* A lit hairline along the bottom edge under the brand, fading right. */
-.bar::after {
-  content: "";
+/* A lit hairline along the bottom edge under the brand, fading right. An aria-hidden element
+   (CommandBar.tsx), last in the bar like the ::after it replaces: axe's colour-contrast check
+   reports "incomplete" for any text under an absolute pseudo-element with a background. */
+.edge {
   position: absolute;
   left: 0;
   bottom: -1px;
@@ -81,6 +85,7 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
+  min-width: 0;
   height: var(--control-h-md);
   max-width: 15rem;
   padding: 0 var(--space-2-5) 0 var(--space-2);
@@ -221,6 +226,7 @@
   display: flex;
   justify-content: center;
   min-width: 0;
+  container: deck-command / inline-size;
 }
 
 .command {
@@ -278,6 +284,15 @@
   color: var(--color-text-faint);
   font-family: var(--font-sans);
   font-size: var(--type-label);
+}
+
+/* When the chips and signals squeeze the field to its 2rem minimum (Larger text in a 1440px
+   window), the shortcut no longer fits: it spilled out of the field and over "0 working".
+   The field keeps its icon; the shortcut stays announced through aria-keyshortcuts. */
+@container deck-command (max-width: 8rem) {
+  .kbd {
+    display: none;
+  }
 }
 
 /* ---- Signals ---- */

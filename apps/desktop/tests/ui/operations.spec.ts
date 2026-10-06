@@ -1,6 +1,6 @@
 import { mkdirSync } from "node:fs";
-import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
+import { expectNoSeriousA11yViolations } from "./a11y.ts";
 import { goTo } from "./nav.ts";
 
 /** A row, not the favorite (pin/star) button beside it, whose label repeats the row's name (#235). */
@@ -21,21 +21,6 @@ async function openOperations(page: Page, scenario = "code") {
 
 async function tab(page: Page, name: "Runs" | "Queue" | "Squads" | "Services" | "Environments" | "Activity") {
   await page.getByRole("tablist", { name: "Operations views" }).getByRole("tab", { name, exact: true }).click();
-}
-
-async function expectNoSeriousA11yViolations(page: Page) {
-  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze();
-  const serious = results.violations.filter(
-    (violation) => violation.impact === "serious" || violation.impact === "critical",
-  );
-  expect(
-    serious,
-    JSON.stringify(
-      serious.map((violation) => ({ id: violation.id, nodes: violation.nodes.map((node) => node.target) })),
-      null,
-      2,
-    ),
-  ).toEqual([]);
 }
 
 test("Operations connects real run evidence, queue transitions, services, environments and activity", async ({

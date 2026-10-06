@@ -25,8 +25,9 @@
 }
 
 /* A lit hairline along the top of the sheet edge, fading down. */
-.sheet::before {
-  content: "";
+/* An aria-hidden element (first in the sheet), not ::before: axe's colour-contrast check reports
+   "incomplete" for any text under an absolute pseudo-element with a background, even a 1px one. */
+.edge {
   position: absolute;
   top: 0;
   left: -1px;

@@ -32,9 +32,10 @@
   color: var(--ink);
 }
 
-/* A lit hairline along the top edge, fading out at both ends. */
-.hero::before {
-  content: "";
+/* A lit hairline along the top edge, fading out at both ends. An aria-hidden element (first in the
+   hero), not ::before: axe's colour-contrast check reports "incomplete" for any text under an
+   absolute pseudo-element with a background. */
+.heroEdge {
   position: absolute;
   top: 0;
   left: 8%;

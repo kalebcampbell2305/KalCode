@@ -924,15 +924,15 @@
   box-shadow: var(--shadow-panel), var(--glow-subtle);
 }
 
-/* A thin lit horizon along the top edge, fading out: the bay's one accent line. */
-.codeWelcome::before {
+/* A thin lit horizon along the top edge, fading out: the bay's one accent line. EmptyState's
+   aria-hidden edge element ([data-empty-edge]), not a pseudo-element, so axe checks the copy. */
+.codeWelcome > [data-empty-edge] {
   position: absolute;
   top: 0;
   left: 8%;
   right: 8%;
   height: 1px;
   background: linear-gradient(90deg, transparent, var(--color-border-lit), transparent);
-  content: "";
   pointer-events: none;
 }
 

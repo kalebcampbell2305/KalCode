@@ -22,9 +22,10 @@
   padding-bottom: var(--space-4);
 }
 
-/* A hairline under the page header, lit at its start and fading out. */
-.header::after {
-  content: "";
+/* A hairline under the page header, lit at its start and fading out. An aria-hidden element (last
+   in the header, Page.tsx), not ::after: axe's colour-contrast check reports "incomplete" for any
+   text under an absolute pseudo-element with a background. */
+.rule {
   position: absolute;
   left: 0;
   right: 0;

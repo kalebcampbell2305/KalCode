@@ -49,6 +49,8 @@ function NeedsYouSheet() {
               panelReturnFocus();
             }}
           >
+            {/* The lit edge on an inert element, not ::before (see NotificationCenter.module.css). */}
+            <span className={styles.edge} aria-hidden="true" />
             <header className={styles.header}>
               <div>
                 <Dialog.Title className={styles.title}>Needs you</Dialog.Title>
@@ -222,6 +224,7 @@ const NotificationItem = memo(function NotificationItem({
       data-tone={meta.tone}
       data-notification-id={notification.id}
     >
+      {unread ? <span className={styles.unreadBar} aria-hidden="true" /> : null}
       <span className={styles.glyph} data-tone={meta.tone} aria-hidden="true">
         <Icon />
       </span>

@@ -80,7 +80,8 @@ export function routeVoice(kind: VoiceRouteKind, signal?: AbortSignal): void {
   if (typeof document === "undefined") return;
   let index = 0;
   const attempt = () => {
-    if (signal?.aborted) return;
+    // Retries run later: the document can be gone by then (a torn-down window or test env).
+    if (signal?.aborted || typeof document === "undefined") return;
     const el = routeDestination(kind);
     // A pane or focus route that can only find the page waits for its real destination first.
     const settled = el && (kind === "surface" || el.id !== "main" || index === FIND_DELAYS.length - 1);

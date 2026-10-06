@@ -31,9 +31,10 @@
   color: var(--kv-ink);
 }
 
-/* A lit hairline along the top edge, brightest over the orb. */
-.hero::before {
-  content: "";
+/* A lit hairline along the top edge, brightest over the orb. This and the tiles' edge are
+   aria-hidden elements (first in their box, KalVoicePage.tsx), not ::before: axe's colour-contrast
+   check reports "incomplete" for any text under an absolute pseudo-element with a background. */
+.heroEdge {
   position: absolute;
   top: 0;
   left: 4%;
@@ -93,8 +94,7 @@
 }
 
 /* The same lit top edge as the hero, so status reads as part of the KalVoice instrument. */
-.tile::before {
-  content: "";
+.tileEdge {
   position: absolute;
   top: 0;
   right: 16%;
