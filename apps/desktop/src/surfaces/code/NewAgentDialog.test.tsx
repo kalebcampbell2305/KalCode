@@ -84,6 +84,33 @@ beforeEach(() => {
 });
 
 describe("restored accounts in the Code launcher", () => {
+  it("opens reusable Squads directly from the launcher's Other actions", async () => {
+    const personal = makeAccount("personal", "Personal", true);
+    runtime.client = {
+      listProviderAccounts: vi.fn(async () => [personal]),
+      listProviderAccountBindings: vi.fn(async () => []),
+      threadOptions: vi.fn(() => new Promise<ThreadOptions>(() => {})),
+    } as unknown as KalCodeClient;
+    const onOpenSquads = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <NewAgentDialog
+        workspace={{ id: "ws", name: "Project" } as Workspace}
+        offered={[]}
+        initialProvider="claude-code"
+        busy={false}
+        error={null}
+        onLaunch={vi.fn(async () => true)}
+        onClose={onClose}
+        onOpenSquads={onOpenSquads}
+      />,
+    );
+
+    await userEvent.setup().click(screen.getByRole("button", { name: "Squads" }));
+    expect(onOpenSquads).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
   it("uses the sole account without a picker and launches its exact identity", async () => {
     const personal = makeAccount("personal", "Personal", true);
     runtime.client = {
@@ -199,6 +226,11 @@ describe("restored accounts in the Code launcher", () => {
       refreshClaudeAccount: vi.fn(async () => claude),
       refreshCodexAccount: vi.fn(),
       refreshGeminiAccount: vi.fn(),
+      providerAccountModels: vi.fn(async (accountId: string) => ({
+        accountId,
+        providerId: "claude-code" as const,
+        models: [],
+      })),
       listProviderAccountBindings: vi.fn(async () => []),
       threadOptions: vi.fn(
         async () =>
@@ -249,6 +281,11 @@ describe("restored accounts in the Code launcher", () => {
         return check.promise;
       }),
       refreshGeminiAccount: vi.fn(),
+      providerAccountModels: vi.fn(async (accountId: string) => ({
+        accountId,
+        providerId: "codex" as const,
+        models: [],
+      })),
       listProviderAccountBindings: vi.fn(async () => []),
       threadOptions: vi.fn(
         async () =>
@@ -299,6 +336,11 @@ describe("restored accounts in the Code launcher", () => {
       refreshClaudeAccount: vi.fn(),
       refreshCodexAccount: vi.fn(async () => codex),
       refreshGeminiAccount: vi.fn(),
+      providerAccountModels: vi.fn(async (accountId: string) => ({
+        accountId,
+        providerId: accountId === claude.id ? ("claude-code" as const) : ("codex" as const),
+        models: [],
+      })),
       listProviderAccountBindings: vi.fn(async () => []),
       threadOptions: vi.fn(
         async () =>
@@ -602,14 +644,31 @@ function clientWith(
   options: () => Promise<ThreadOptions>,
   bindings: unknown[] = [],
 ): KalCodeClient {
-  return {
+  const client = {
     listProviderAccounts: vi.fn(async () => accounts),
     refreshClaudeAccount: vi.fn(),
     refreshCodexAccount: vi.fn(async (id: string) => accounts.find((a) => a.id === id)),
     refreshGeminiAccount: vi.fn(),
     listProviderAccountBindings: vi.fn(async () => bindings),
     threadOptions: vi.fn(options),
+    providerAccountModels: vi.fn(async (accountId: string) => {
+      const available = await options();
+      const providerId = accounts.find((account) => account.id === accountId)?.providerId ?? available.providers[0]?.id;
+      if (!providerId) throw new Error("Provider unavailable");
+      const provider = available.providers.find((candidate) => candidate.id === providerId);
+      return {
+        accountId,
+        providerId,
+        models:
+          provider?.models.map((model) => ({
+            ...model,
+            defaultEffort: null,
+            supportedEfforts: [],
+          })) ?? [],
+      };
+    }),
   } as unknown as KalCodeClient;
+  return client;
 }
 
 function rememberAnything(accountId: string) {
@@ -636,6 +695,200 @@ function dialog(props: Partial<Parameters<typeof NewAgentDialog>[0]>) {
 }
 
 describe("independent authentication and metadata in agent creation", () => {
+  it.each([false, true])(
+    "keeps provider-default model and effort native when account models arrive before launch=%s",
+    async (resolveBeforeLaunch) => {
+      const account = makeAccount("codex-default", "Codex Default", true, "codex");
+      const discovered = deferred<{
+        accountId: string;
+        providerId: "codex";
+        models: {
+          id: string;
+          displayName: string;
+          isDefault: boolean;
+          defaultEffort: string;
+          supportedEfforts: string[];
+        }[];
+      }>();
+      window.localStorage.setItem(
+        "kalcode.agentLauncher.v1",
+        JSON.stringify({
+          last: null,
+          byProvider: {
+            codex: {
+              providerId: "codex",
+              accountId: account.id,
+              model: null,
+              modelName: null,
+              effort: null,
+              count: 1,
+              workspaceId: "ws",
+              boundAccountId: null,
+              at: "2026-10-05T00:00:00Z",
+            },
+          },
+        }),
+      );
+      runtime.client = {
+        ...clientWith([account], async () => threadOptions(["codex"])),
+        providerAccountModels: vi.fn(() => discovered.promise),
+      } as unknown as KalCodeClient;
+      const onLaunch = vi.fn(async () => true);
+      render(
+        <ProviderAccountSessionsProvider>
+          {dialog({ offered: ["codex"], initialProvider: "codex", onLaunch })}
+        </ProviderAccountSessionsProvider>,
+      );
+      const launch = await screen.findByRole("button", { name: "Launch Codex agent" });
+      await waitFor(() => expect(launch).toBeEnabled());
+      if (resolveBeforeLaunch) {
+        await act(async () => {
+          discovered.resolve({
+            accountId: account.id,
+            providerId: "codex",
+            models: [
+              {
+                id: "model-a",
+                displayName: "Model A",
+                isDefault: true,
+                defaultEffort: "high",
+                supportedEfforts: ["high"],
+              },
+            ],
+          });
+        });
+        expect(await screen.findByRole("radio", { name: /Provider default.*Model A/ })).toBeChecked();
+        expect(screen.getByRole("radio", { name: "Default" })).toBeChecked();
+      }
+      await userEvent.setup().click(launch);
+      expect(onLaunch).toHaveBeenCalledExactlyOnceWith({
+        providerId: "codex",
+        providerAccountId: account.id,
+        model: null,
+        effort: null,
+        count: 1,
+      });
+    },
+  );
+
+  it("uses account-reported efforts and applies a concrete model's default only after explicit selection", async () => {
+    const account = makeAccount("codex-models", "Codex Models", true, "codex");
+    runtime.client = {
+      ...clientWith([account], async () => threadOptions(["codex"])),
+      providerAccountModels: vi.fn(async () => ({
+        accountId: account.id,
+        providerId: "codex" as const,
+        models: [
+          {
+            id: "model-a",
+            displayName: "Model A",
+            isDefault: true,
+            defaultEffort: "high",
+            supportedEfforts: ["high"],
+          },
+          {
+            id: "model-b",
+            displayName: "Model B",
+            isDefault: false,
+            defaultEffort: "medium",
+            supportedEfforts: ["medium", "xhigh"],
+          },
+        ],
+      })),
+    } as unknown as KalCodeClient;
+    const onLaunch = vi.fn(async () => true);
+    render(
+      <ProviderAccountSessionsProvider>
+        {dialog({ offered: ["codex"], initialProvider: "codex", onLaunch })}
+      </ProviderAccountSessionsProvider>,
+    );
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("radio", { name: "Model B" }));
+    expect(screen.getByRole("radio", { name: "Medium" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "Extra high" })).toBeVisible();
+    expect(screen.queryByRole("radio", { name: "High" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Launch Codex agent" }));
+    expect(onLaunch).toHaveBeenCalledExactlyOnceWith({
+      providerId: "codex",
+      providerAccountId: account.id,
+      model: "model-b",
+      effort: "medium",
+      count: 1,
+    });
+  });
+
+  it("routes an incompatible recent provider-default effort into the picker instead of launching it", async () => {
+    const account = makeAccount("codex-recent", "Codex Recent", true, "codex");
+    const recent = {
+      providerId: "codex",
+      accountId: account.id,
+      model: null,
+      modelName: null,
+      effort: "high",
+      count: 1,
+      workspaceId: "ws",
+      boundAccountId: null,
+      at: "2026-10-05T00:00:00Z",
+    };
+    window.localStorage.setItem(
+      "kalcode.agentLauncher.v1",
+      JSON.stringify({ last: recent, byProvider: { codex: recent } }),
+    );
+    runtime.client = {
+      ...clientWith([account], async () => threadOptions(["codex"])),
+      providerAccountModels: vi.fn(async () => ({
+        accountId: account.id,
+        providerId: "codex" as const,
+        models: [
+          {
+            id: "model-b",
+            displayName: "Model B",
+            isDefault: true,
+            defaultEffort: "medium",
+            supportedEfforts: ["medium", "xhigh"],
+          },
+        ],
+      })),
+    } as unknown as KalCodeClient;
+    const onLaunch = vi.fn(async () => true);
+    render(
+      <ProviderAccountSessionsProvider>
+        {dialog({ offered: ["codex"], initialProvider: "codex", onLaunch })}
+      </ProviderAccountSessionsProvider>,
+    );
+    expect(await screen.findByText(/High effort is unavailable for Model B/)).toBeVisible();
+    await userEvent.setup().click(screen.getByRole("button", { name: /^Repeat last/ }));
+    expect(onLaunch).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Launch Codex agent" })).toBeDisabled();
+  });
+
+  it("finishes account-model checking truthfully when discovery fails and keeps provider default launchable", async () => {
+    const account = makeAccount("codex-model-error", "Codex Models", true, "codex");
+    runtime.client = {
+      ...clientWith([account], async () => threadOptions(["codex"])),
+      providerAccountModels: vi.fn(async () => {
+        throw {
+          category: "provider",
+          code: "provider_models_unavailable",
+          message: "Exact models are unavailable.",
+          retryable: true,
+        };
+      }),
+    } as unknown as KalCodeClient;
+    const onLaunch = vi.fn(async () => true);
+    render(
+      <ProviderAccountSessionsProvider>
+        {dialog({ offered: ["codex"], initialProvider: "codex", onLaunch })}
+      </ProviderAccountSessionsProvider>,
+    );
+    expect(await screen.findByText("Exact models are unavailable. Provider default remains available.")).toBeVisible();
+    expect(screen.getByRole("radiogroup", { name: "Model" })).not.toHaveAttribute("aria-busy");
+    const launch = screen.getByRole("button", { name: "Launch Codex agent" });
+    expect(launch).toBeEnabled();
+    await userEvent.setup().click(launch);
+    expect(onLaunch).toHaveBeenCalledWith(expect.objectContaining({ model: null, effort: null }));
+  });
+
   it.each(["claude-code", "codex", "cursor", "gemini-cli"] as const)(
     "%s launches its selected account when usage and plan are unavailable",
     async (providerId) => {
@@ -699,6 +952,7 @@ describe("independent authentication and metadata in agent creation", () => {
           }) as ThreadOptions,
       ),
       listProviderAccounts: vi.fn(async () => [account]),
+      refreshCodexAccount: vi.fn(async () => account),
       startCodexLogin: vi.fn(async () => ({ loginHandle: "codex-b-login" })),
       waitForCodexLogin: vi.fn(async () => {
         const connected = await login.promise;
@@ -718,8 +972,9 @@ describe("independent authentication and metadata in agent creation", () => {
     async (shared) => {
       const { login, onLaunch, onClose, connected } = expiredLauncher(undefined, shared);
       const user = userEvent.setup();
-      await user.click(await screen.findByRole("radio", { name: "GPT Code" }));
-      await user.click(screen.getByRole("radio", { name: "High" }));
+      await user.click(await screen.findByRole("radio", { name: "High" }));
+      // A compatible explicit effort remains the user's choice when they then choose a model.
+      await user.click(screen.getByRole("radio", { name: "GPT Code" }));
       await user.clear(screen.getByRole("spinbutton", { name: "Agents" }));
       await user.type(screen.getByRole("spinbutton", { name: "Agents" }), "3");
       expect(screen.getByText("Codex B needs to reconnect.")).toBeVisible();
@@ -842,11 +1097,25 @@ describe("independent authentication and metadata in agent creation", () => {
 describe("Cursor native runtime models", () => {
   const cursor = makeAccount("cursor-native", "Cursor A", true, "cursor");
   const mountCursor = (discovery: () => Promise<unknown>, initial = cursor, shared = false) => {
+    const discover = vi.fn(discovery);
     runtime.client = {
       listProviderAccounts: vi.fn(async () => [initial]),
       listProviderAccountBindings: vi.fn(async () => []),
       threadOptions: vi.fn(async () => ({ providers: [] })),
-      refreshCursorAccount: vi.fn(discovery),
+      refreshCursorAccount: discover,
+      providerAccountModels: vi.fn(async (accountId: string) => {
+        const state = (await discover()) as {
+          account: ProviderAccount;
+          models: { id: string; displayName: string; isDefault: boolean }[];
+          modelsError: string | null;
+        };
+        if (state.modelsError) throw new Error(state.modelsError);
+        return {
+          accountId,
+          providerId: state.account.providerId,
+          models: state.models.map((model) => ({ ...model, defaultEffort: null, supportedEfforts: [] })),
+        };
+      }),
     } as unknown as KalCodeClient;
     const onLaunch = vi.fn(async () => true);
     const launcher = (
@@ -877,7 +1146,8 @@ describe("Cursor native runtime models", () => {
       expect(onLaunch).toHaveBeenCalledWith(
         expect.objectContaining({ providerAccountId: cursor.id, providerId: "cursor" }),
       );
-      expect(runtime.client.refreshCursorAccount).toHaveBeenCalledTimes(1);
+      if (shared) expect(runtime.client.providerAccountModels).toHaveBeenCalledTimes(1);
+      else expect(runtime.client.refreshCursorAccount).toHaveBeenCalledTimes(1);
     },
   );
 

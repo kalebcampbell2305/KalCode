@@ -269,6 +269,18 @@ pub enum UiDirective {
         #[serde(default)]
         instances: Vec<LaunchThreadInstance>,
     },
+    /// Launches the uniquely resolved saved Squad through the same canonical command as the UI.
+    /// `query` is never treated as a new definition and member state remains canonical.
+    LaunchSquad {
+        query: String,
+        workspace_id: String,
+    },
+    /// Launches the uniquely resolved saved Recipe through the canonical Recipe command. The
+    /// Recipe then launches its referenced Squad; KalVoice does not expand or copy it.
+    LaunchRecipe {
+        query: String,
+        workspace_id: String,
+    },
     /// Applies a deterministic layout operation to the selected workspace.
     ControlPane {
         workspace_id: String,

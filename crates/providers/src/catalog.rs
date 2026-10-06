@@ -175,6 +175,18 @@ pub fn gemini_capabilities() -> ProviderCapabilities {
     }
 }
 
+/// Static capability metadata by canonical provider id. Account-aware adapters may replace the
+/// model list at runtime, while callers for documented-alias providers keep one shared path.
+pub fn capabilities(provider_id: &str) -> Option<ProviderCapabilities> {
+    match provider_id {
+        ProviderId::CLAUDE_CODE => Some(claude_capabilities()),
+        ProviderId::CODEX => Some(codex_capabilities()),
+        ProviderId::GEMINI_CLI => Some(gemini_capabilities()),
+        ProviderId::CURSOR => Some(crate::cursor::capabilities()),
+        _ => None,
+    }
+}
+
 fn tool(kind: ToolKind, name: &str, note: Option<&str>) -> ToolCapability {
     ToolCapability {
         kind,

@@ -179,6 +179,8 @@ interface Parsed {
   consequential?: boolean;
   /** "tell <session> to <prompt>": the session query and the verbatim prompt. */
   direct?: { query: string; prompt: string };
+  /** Saved Squad/Recipe launch awaiting the request's captured workspace identity. */
+  orchestrationLaunch?: { kind: "launch_squad" | "launch_recipe"; query: string };
 }
 
 /** Resolves a spoken session name the way `session_resolve` does. */
@@ -633,6 +635,22 @@ function understand(text: string): Parsed | null {
   const pane = paneCommand(t);
   if (pane) return pane;
   if (/\b(and|then)\b/.test(t)) return null;
+  const namedLaunch = t.match(/^(?:launch|start|run) (?:(squad|recipe) (.+)|(.+) (squad|recipe))$/);
+  const launchType = namedLaunch?.[1] ?? namedLaunch?.[4];
+  const rawLaunchQuery = namedLaunch?.[2] ?? namedLaunch?.[3];
+  const launchQuery = rawLaunchQuery?.replace(/^(?:the|my) /, "");
+  if (launchType && launchQuery) {
+    const kind = launchType === "squad" ? "launch_squad" : "launch_recipe";
+    return {
+      kind,
+      high: true,
+      outcome: {
+        kind: "completed",
+        summary: launchType === "squad" ? `Launching ${launchQuery} squad.` : `Launching ${launchQuery} recipe.`,
+      },
+      orchestrationLaunch: { kind, query: launchQuery },
+    };
+  }
   const agents = agentPhrase(t.replace(/\bthat's\b/g, "that is").replace(/ (?:right )?now$/, ""));
   if (agents) {
     if (agents.kind === "filter_agents") {
@@ -1111,6 +1129,12 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
         return failed("no_workspace", "Open a workspace before controlling the browser.", parsed.kind);
       }
       parsed.directive = { ...parsed.directive, workspaceId: request.workspaceId };
+    }
+    if (parsed.orchestrationLaunch) {
+      if (!request.workspaceId) {
+        return failed("no_workspace", "Open a workspace before launching a Squad or Recipe.", parsed.kind);
+      }
+      parsed.directive = { ...parsed.orchestrationLaunch, workspaceId: request.workspaceId };
     }
     if (parsed.kind === "submit_focused" || parsed.kind === "clear_focused") {
       // Like native: a raw terminal is never submitted or edited by voice.

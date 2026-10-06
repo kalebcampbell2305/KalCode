@@ -117,9 +117,9 @@ fn record_run(args: &[String]) {
 }
 
 /// Minimal deterministic Codex app-server used by managed-account persistence tests.
-/// It implements only the read-only handshake KalCode uses; it never reads credentials or
-/// contacts a provider. The first account read can be delayed so a launcher can prove it
-/// preempts background validation instead of waiting for it.
+/// It implements the read-only account and paginated model discovery calls KalCode uses; it
+/// never reads credentials or contacts a provider. The first account read can be delayed so a
+/// launcher can prove it preempts background validation instead of waiting for it.
 fn codex_app_server(config: &Value) -> ! {
     let Some(codex_home) = std::env::var_os("CODEX_HOME").map(PathBuf::from) else {
         exit(8);
@@ -185,6 +185,58 @@ fn codex_app_server(config: &Value) -> ! {
                     },
                     "requiresOpenaiAuth": true,
                 })
+            }
+            "model/list" => {
+                let params = request.get("params").and_then(Value::as_object);
+                if params
+                    .and_then(|value| value.get("includeHidden"))
+                    .and_then(Value::as_bool)
+                    != Some(false)
+                    || params
+                        .and_then(|value| value.get("limit"))
+                        .and_then(Value::as_u64)
+                        != Some(100)
+                {
+                    exit(8);
+                }
+                match params
+                    .and_then(|value| value.get("cursor"))
+                    .and_then(Value::as_str)
+                {
+                    None => serde_json::json!({
+                        "data": [{
+                            "id": "catalog-entry-a",
+                            "model": "codex-test-exact-a",
+                            "displayName": "Codex test exact A",
+                            "description": "Deterministic default model from the managed account fixture.",
+                            "defaultReasoningEffort": "high",
+                            "supportedReasoningEfforts": [
+                                {"reasoningEffort": "low", "description": "Fast fixture reasoning"},
+                                {"reasoningEffort": "high", "description": "Deep fixture reasoning"}
+                            ],
+                            "isDefault": true,
+                            "hidden": false
+                        }],
+                        "nextCursor": "page-2"
+                    }),
+                    Some("page-2") => serde_json::json!({
+                        "data": [{
+                            "id": "catalog-entry-b",
+                            "model": "codex-test-exact-b",
+                            "displayName": "Codex test exact B",
+                            "description": "Deterministic second-page model from the managed account fixture.",
+                            "defaultReasoningEffort": "medium",
+                            "supportedReasoningEfforts": [
+                                {"reasoningEffort": "medium", "description": "Balanced fixture reasoning"},
+                                {"reasoningEffort": "xhigh", "description": "Maximum fixture reasoning"}
+                            ],
+                            "isDefault": false,
+                            "hidden": false
+                        }],
+                        "nextCursor": null
+                    }),
+                    Some(_) => exit(8),
+                }
             }
             _ => continue,
         };

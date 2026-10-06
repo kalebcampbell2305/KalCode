@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-recipe-launch"
+description = "Enables the recipe_launch command without any pre-configured scope."
+commands.allow = ["recipe_launch"]
+
+[[permission]]
+identifier = "deny-recipe-launch"
+description = "Denies the recipe_launch command without any pre-configured scope."
+commands.deny = ["recipe_launch"]

@@ -308,6 +308,27 @@ fn the_local_interpreter_can_never_send_or_clear_prompt_text() {
 }
 
 #[test]
+fn the_local_interpreter_can_never_invent_a_squad_or_recipe_launch() {
+    let workspaces = vec![WorkspaceOption {
+        id: WORKSPACE_ID.into(),
+        name: "KalCode".into(),
+    }];
+    for intent in [
+        KalVoiceIntent::LaunchSquad {
+            query: "release train".into(),
+        },
+        KalVoiceIntent::LaunchRecipe {
+            query: "release verification".into(),
+        },
+    ] {
+        assert!(
+            validate_action(intent.clone(), &workspaces).is_err(),
+            "{intent:?}"
+        );
+    }
+}
+
+#[test]
 fn the_local_interpreter_can_never_set_a_workspace_account() {
     let workspaces = vec![WorkspaceOption {
         id: WORKSPACE_ID.into(),

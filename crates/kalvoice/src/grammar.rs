@@ -234,6 +234,10 @@ fn understand_rules(trimmed: &str, tokens: &[String], confidence: &mut Confidenc
     if core.is_empty() {
         return Understood::reasoning(trimmed);
     }
+    if !compound && let Some(understood) = named_orchestration_launch(core) {
+        *confidence = Confidence::High;
+        return understood;
+    }
     if !compound && let Some(intent) = memory_question(core) {
         *confidence = Confidence::High;
         return Understood::intent(intent);
@@ -304,6 +308,49 @@ fn understand_rules(trimmed: &str, tokens: &[String], confidence: &mut Confidenc
         return understood;
     }
     Understood::reasoning(trimmed)
+}
+
+/// "Launch Release Train squad" / "run recipe Release Verification". Only the saved
+/// definition's name or id crosses this boundary; the canonical Squad store resolves it and the
+/// canonical launch command owns every real coding-agent session it creates.
+fn named_orchestration_launch(tokens: &[String]) -> Option<Understood> {
+    let [verb, rest @ ..] = tokens else {
+        return None;
+    };
+    if !matches!(verb.as_str(), "launch" | "start" | "run") {
+        return None;
+    }
+
+    let (kind, name, suffix_form) = match rest {
+        [kind, name @ ..] if matches!(kind.as_str(), "squad" | "recipe") => {
+            (kind.as_str(), name, false)
+        }
+        [name @ .., kind] if matches!(kind.as_str(), "squad" | "recipe") => {
+            (kind.as_str(), name, true)
+        }
+        _ => return None,
+    };
+    let name = if suffix_form && name.len() > 1 && matches!(name[0].as_str(), "the" | "my") {
+        &name[1..]
+    } else {
+        name
+    };
+    if name.is_empty() {
+        return Some(Understood::Rejected {
+            code: if kind == "squad" {
+                "squad_name_missing"
+            } else {
+                "recipe_name_missing"
+            },
+            message: format!("Name the {kind} to launch."),
+        });
+    }
+    let query = name.join(" ");
+    Some(Understood::intent(if kind == "squad" {
+        KalVoiceIntent::LaunchSquad { query }
+    } else {
+        KalVoiceIntent::LaunchRecipe { query }
+    }))
 }
 
 /// Read-only questions with a clear project-knowledge subject. Generic questions remain on

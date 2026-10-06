@@ -74,6 +74,7 @@ const FINISHED = new Set<OperationRecord["status"]>(["succeeded", "failed", "can
 const TAB_LABELS: Record<OperationsTab, string> = {
   runs: "Runs",
   queue: "Queue",
+  squads: "Squads",
   services: "Services",
   environments: "Environments",
   activity: "Activity",
@@ -84,6 +85,10 @@ const TAB_ALIASES: Record<string, OperationsTab> = {
   run: "runs",
   runs: "runs",
   queue: "queue",
+  squad: "squads",
+  squads: "squads",
+  team: "squads",
+  teams: "squads",
   service: "services",
   services: "services",
   environment: "environments",
@@ -137,7 +142,7 @@ function serviceTarget(service: DevelopmentService): OperationsVoiceTarget {
 
 function navigationTab(spoken: string): OperationsTab | null {
   const direct = spoken.match(
-    /^(?:(?:open|show|show me|go to|take me to)(?: the)? )?(operations|runs?|queue|services?|environments?|activity)$/,
+    /^(?:(?:open|show|show me|go to|take me to)(?: the)? )?(operations|runs?|queue|squads?|teams?|services?|environments?|activity)$/,
   );
   return direct?.[1] ? (TAB_ALIASES[direct[1]] ?? null) : null;
 }

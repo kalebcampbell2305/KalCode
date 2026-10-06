@@ -37,7 +37,7 @@ effort: string | null,
 /**
  * Optional counted tasks. Missing on older payloads keeps the idle-session behavior.
  */
-assignments: Array<AgentLaunchAssignment>, } | { "kind": "create_provider_panes", groups: Array<ProviderPaneRequest>, workspaceId: string | null, } | { "kind": "configure_recent_launch", providerId: ProviderId, model: string, effort: string, } | { "kind": "control_pane", command: PaneControl, workspaceId: string | null, } | { "kind": "control_browser", command: BrowserControl, workspaceId: string | null, } | { "kind": "open_thread", query: string, } | { "kind": "pause_threads", scope: ThreadScope, } | { "kind": "resume_threads", scope: ThreadScope, } | { "kind": "stop_threads", scope: ThreadScope,
+assignments: Array<AgentLaunchAssignment>, } | { "kind": "create_provider_panes", groups: Array<ProviderPaneRequest>, workspaceId: string | null, } | { "kind": "launch_squad", query: string, } | { "kind": "launch_recipe", query: string, } | { "kind": "configure_recent_launch", providerId: ProviderId, model: string, effort: string, } | { "kind": "control_pane", command: PaneControl, workspaceId: string | null, } | { "kind": "control_browser", command: BrowserControl, workspaceId: string | null, } | { "kind": "open_thread", query: string, } | { "kind": "pause_threads", scope: ThreadScope, } | { "kind": "resume_threads", scope: ThreadScope, } | { "kind": "stop_threads", scope: ThreadScope,
 /**
  * When spoken (for example, "stop six active terminals"), execution proceeds only if
  * exactly this many provider sessions are live in the resolved scope. Older payloads

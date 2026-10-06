@@ -1,10 +1,10 @@
-import type { ModelInfo, ProviderAccount } from "@kalcode/protocol";
+import type { ProviderAccount, ProviderAccountModel } from "@kalcode/protocol";
 import { accountSessionState } from "./accountIdentity.ts";
 import type { AccountUsageState } from "./accountUsage.ts";
 
 export interface AccountModels {
   status: "checking" | "available" | "unavailable";
-  items: readonly ModelInfo[];
+  items: readonly ProviderAccountModel[];
   reason: string | null;
 }
 

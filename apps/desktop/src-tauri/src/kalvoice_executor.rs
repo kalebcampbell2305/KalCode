@@ -2520,6 +2520,20 @@ impl Executor for DesktopExecutor {
                     provider_hint.as_ref(),
                 )
                 .map(|_| ())?,
+            KalVoiceIntent::LaunchSquad { query } | KalVoiceIntent::LaunchRecipe { query } => {
+                if query.trim().is_empty() {
+                    return Err(ExecError::new(
+                        if matches!(intent, KalVoiceIntent::LaunchSquad { .. }) {
+                            "squad_name_missing"
+                        } else {
+                            "recipe_name_missing"
+                        },
+                        "Name the saved Squad or Recipe to launch.",
+                    ));
+                }
+                self.target_workspace(ctx.workspace_id.as_deref())
+                    .map(|_| ())?;
+            }
             KalVoiceIntent::ConfigureRecentLaunch {
                 provider_id,
                 model,
@@ -2595,6 +2609,19 @@ impl Executor for DesktopExecutor {
             } => self
                 .prepare_provider_panes(groups, workspace_id.as_deref(), None)
                 .map(|_| ()),
+            KalVoiceIntent::LaunchSquad { query } | KalVoiceIntent::LaunchRecipe { query } => {
+                if query.trim().is_empty() {
+                    return Err(ExecError::new(
+                        if matches!(intent, KalVoiceIntent::LaunchSquad { .. }) {
+                            "squad_name_missing"
+                        } else {
+                            "recipe_name_missing"
+                        },
+                        "Name the saved Squad or Recipe to launch.",
+                    ));
+                }
+                self.target_workspace(None).map(|_| ())
+            }
             KalVoiceIntent::ControlPane { workspace_id, .. } => {
                 self.target_workspace(workspace_id.as_deref()).map(|_| ())
             }
@@ -2839,6 +2866,26 @@ impl Executor for DesktopExecutor {
                 workspace_id.as_deref().or(ctx.workspace_id.as_deref()),
                 provider_hint.as_ref(),
             ),
+            KalVoiceIntent::LaunchSquad { query } => {
+                let workspace = self.target_workspace(ctx.workspace_id.as_deref())?;
+                Ok(Executed {
+                    summary: format!("Launching the \u{201c}{query}\u{201d} Squad."),
+                    directive: Some(UiDirective::LaunchSquad {
+                        query: query.clone(),
+                        workspace_id: workspace.id,
+                    }),
+                })
+            }
+            KalVoiceIntent::LaunchRecipe { query } => {
+                let workspace = self.target_workspace(ctx.workspace_id.as_deref())?;
+                Ok(Executed {
+                    summary: format!("Launching the \u{201c}{query}\u{201d} Recipe."),
+                    directive: Some(UiDirective::LaunchRecipe {
+                        query: query.clone(),
+                        workspace_id: workspace.id,
+                    }),
+                })
+            }
             KalVoiceIntent::ConfigureRecentLaunch {
                 provider_id,
                 model,
@@ -3654,6 +3701,67 @@ mod tests {
                 workspace_id: workspace.id,
                 command: BrowserControl::Reload { browser_id: None },
             })
+        );
+    }
+
+    #[test]
+    fn squad_and_recipe_voice_actions_bind_the_request_workspace_without_claiming_completion() {
+        let data = tempfile::tempdir().expect("data");
+        let project = tempfile::tempdir().expect("project");
+        let executor = executor(data.path());
+        let squad = KalVoiceIntent::LaunchSquad {
+            query: "release train".into(),
+        };
+        assert_eq!(
+            executor
+                .check_with_context(&squad, &ctx())
+                .map_err(|error| error.code),
+            Err("no_workspace".into())
+        );
+
+        let workspace = executor.core.open_workspace(project.path()).expect("open");
+        let context = ExecContext {
+            request_id: "voice-request".into(),
+            workspace_id: Some(workspace.id.clone()),
+            ..ctx()
+        };
+        let squad_done = executor.execute(&squad, &context).expect("squad directive");
+        assert_eq!(
+            squad_done.summary,
+            "Launching the \u{201c}release train\u{201d} Squad."
+        );
+        assert_eq!(
+            squad_done.directive,
+            Some(UiDirective::LaunchSquad {
+                query: "release train".into(),
+                workspace_id: workspace.id.clone(),
+            })
+        );
+
+        let recipe = KalVoiceIntent::LaunchRecipe {
+            query: "release verification".into(),
+        };
+        let recipe_done = executor
+            .execute(&recipe, &context)
+            .expect("recipe directive");
+        assert_eq!(
+            recipe_done.summary,
+            "Launching the \u{201c}release verification\u{201d} Recipe."
+        );
+        assert_eq!(
+            recipe_done.directive,
+            Some(UiDirective::LaunchRecipe {
+                query: "release verification".into(),
+                workspace_id: workspace.id,
+            })
+        );
+
+        let missing = KalVoiceIntent::LaunchSquad { query: "  ".into() };
+        assert_eq!(
+            executor
+                .check_with_context(&missing, &context)
+                .map_err(|error| error.code),
+            Err("squad_name_missing".into())
         );
     }
 
