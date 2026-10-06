@@ -7,6 +7,7 @@ import {
   isolatedWebviewEnvironment,
   OwnedApplicationRegistry,
   ownedChildIsTerminal,
+  releaseBrowserAfterExit,
   settleOwnedApplications,
   waitForExit,
 } from "../../tests/e2e/harness.ts";
@@ -127,6 +128,16 @@ describe("native E2E helper inventory", () => {
     const registry = new OwnedApplicationRegistry<string>();
     expect(() => registry.requireActive("missing-test")).toThrow("requires the harness test fixture");
     expect(registry.count("missing-test")).toBe(0);
+  });
+
+  it("a CDP disconnect that hangs after the owned app exited never fails cleanup", async () => {
+    // Gates 37529315873 / 37520284094: the app hosting the CDP endpoint was already killed and
+    // `browser.close()` hung on the dead socket, failing a passing suite with "did not close".
+    const hung = { close: () => new Promise<void>(() => {}) };
+    const exited = { exitCode: null, signalCode: "SIGKILL" as NodeJS.Signals, pid: 42 };
+    await expect(releaseBrowserAfterExit(hung, exited, 20)).resolves.toBeUndefined();
+    const alive = { exitCode: null, signalCode: null, pid: 42 };
+    await expect(releaseBrowserAfterExit(hung, alive, 20)).rejects.toThrow("did not close");
   });
 
   it("treats an already signaled owned child as terminal", () => {

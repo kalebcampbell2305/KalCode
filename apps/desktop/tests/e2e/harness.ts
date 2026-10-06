@@ -380,14 +380,14 @@ export async function closeGracefully(app: Running) {
   }
   if (!requested && !ownedChildIsTerminal(app.child)) app.child.kill();
   if (!(await waitForOwnedExit(app.child, 10_000))) await stopOwnedProcess(app.child, true);
-  await closeBrowserBounded(app.browser);
+  await releaseBrowserAfterExit(app.browser, app.child);
   ownedApplications.release(currentOwner(), app);
 }
 
 /** Simulates a desktop crash while preserving its independent process-cleanup guardian. */
 export async function killForcibly(app: Running): Promise<void> {
   await stopOwnedProcess(app.child, true);
-  await closeBrowserBounded(app.browser);
+  await releaseBrowserAfterExit(app.browser, app.child);
   ownedApplications.release(currentOwner(), app);
 }
 
@@ -414,15 +414,37 @@ async function waitForOwnedExit(child: ChildProcess, timeoutMs: number): Promise
   });
 }
 
-async function closeBrowserBounded(browser: Browser): Promise<void> {
+async function closeBrowserBounded(browser: Pick<Browser, "close">, timeoutMs = 5_000): Promise<void> {
   let handle: ReturnType<typeof setTimeout> | undefined;
   const timedOut = new Promise<never>((_, reject) => {
-    handle = setTimeout(() => reject(new Error("The owned E2E browser did not close within 5 seconds")), 5_000);
+    handle = setTimeout(
+      () => reject(new Error(`The owned E2E browser did not close within ${timeoutMs / 1000} seconds`)),
+      timeoutMs,
+    );
   });
   try {
     await Promise.race([browser.close(), timedOut]);
   } finally {
     if (handle !== undefined) clearTimeout(handle);
+  }
+}
+
+/**
+ * Disconnects the CDP browser of an owned app. The CDP endpoint lives inside the app process, so
+ * once that process has provably exited there is nothing left to leak: a disconnect that hangs on
+ * the dead socket under gate load (gates 37529315873, 37520284094) is logged, not a test failure.
+ * While the process is still alive, a hung disconnect remains a real cleanup failure.
+ */
+export async function releaseBrowserAfterExit(
+  browser: Pick<Browser, "close">,
+  child: Pick<ChildProcess, "exitCode" | "pid" | "signalCode">,
+  timeoutMs = 5_000,
+): Promise<void> {
+  try {
+    await closeBrowserBounded(browser, timeoutMs);
+  } catch (error) {
+    if (!ownedChildIsTerminal(child)) throw error;
+    console.warn(`[e2e] ${error instanceof Error ? error.message : String(error)} after the owned app exited; ignored`);
   }
 }
 
@@ -435,7 +457,7 @@ async function cleanupOwnedApplication(app: OwnedApplication): Promise<void> {
   }
   if (app.browser) {
     try {
-      await closeBrowserBounded(app.browser);
+      await releaseBrowserAfterExit(app.browser, app.child);
     } catch {
       failures.push("browser");
     }
