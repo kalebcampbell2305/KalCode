@@ -18,8 +18,8 @@ use crate::Error;
 /// Scheme and host of the pairing link.
 pub const PAIR_LINK_PREFIX: &str = "kalcode-remote://pair?";
 
-/// The QR code / pairing link contents.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// The QR code / pairing link contents. `Debug` never prints the code.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PairingPayload {
     pub v: u32,
     /// Workstation id (`ws_...`).
@@ -34,6 +34,20 @@ pub struct PairingPayload {
     pub addrs: Vec<String>,
     /// Expiry, Unix seconds.
     pub exp: i64,
+}
+
+impl fmt::Debug for PairingPayload {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PairingPayload")
+            .field("v", &self.v)
+            .field("wid", &self.wid)
+            .field("name", &self.name)
+            .field("pk", &self.pk)
+            .field("code", &"<redacted>")
+            .field("addrs", &self.addrs)
+            .field("exp", &self.exp)
+            .finish()
+    }
 }
 
 impl PairingPayload {
@@ -68,8 +82,8 @@ impl PairingPayload {
 // §3 Handshake payloads
 // ---------------------------------------------------------------------------------------------
 
-/// Payload of handshake message 1 (device → desktop).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Payload of handshake message 1 (device → desktop). `Debug` never prints the pairing code.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceHello {
     pub v: u32,
     /// Device name, e.g. "Kaleb's iPhone".
@@ -87,6 +101,35 @@ pub struct DeviceHello {
     pub ts: i64,
 }
 
+/// Longest `device`, `platform`, `model` or `app` string accepted in a [`DeviceHello`].
+pub const MAX_HELLO_FIELD: usize = 64;
+
+impl DeviceHello {
+    /// Whether the descriptive fields are at most [`MAX_HELLO_FIELD`] characters and free of
+    /// control characters (the handshake answers `invalid` otherwise).
+    pub fn fields_are_valid(&self) -> bool {
+        [&self.device, &self.platform, &self.model, &self.app]
+            .iter()
+            .all(|field| {
+                field.chars().count() <= MAX_HELLO_FIELD && !field.chars().any(char::is_control)
+            })
+    }
+}
+
+impl fmt::Debug for DeviceHello {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DeviceHello")
+            .field("v", &self.v)
+            .field("device", &self.device)
+            .field("platform", &self.platform)
+            .field("model", &self.model)
+            .field("app", &self.app)
+            .field("pair", &self.pair.as_ref().map(|_| "<redacted>"))
+            .field("ts", &self.ts)
+            .finish()
+    }
+}
+
 /// Why the desktop refused a handshake.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -97,6 +140,8 @@ pub enum RejectReason {
     NotEntitled,
     Busy,
     Version,
+    /// The handshake payload's fields are too long or contain control characters.
+    Invalid,
 }
 
 impl fmt::Display for RejectReason {
@@ -108,6 +153,7 @@ impl fmt::Display for RejectReason {
             Self::NotEntitled => "not_entitled",
             Self::Busy => "busy",
             Self::Version => "version",
+            Self::Invalid => "invalid",
         })
     }
 }
@@ -249,6 +295,8 @@ pub enum ByeReason {
     Disabled,
     Shutdown,
     NotEntitled,
+    /// The same device opened a newer session; this older one is closed.
+    Replaced,
 }
 
 /// The patch collections.

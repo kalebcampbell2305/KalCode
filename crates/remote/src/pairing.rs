@@ -138,8 +138,20 @@ impl Pairing {
         self.lock().as_ref().is_some_and(|w| now < w.expires_at)
     }
 
+    /// Checks `code` (standard base64) in constant time without spending it. The handshake
+    /// verifies at message 1 and burns with [`Self::redeem`] only after the device's encrypted
+    /// `hello`, so a replayed or abandoned handshake never spends the window.
+    pub fn verify(&self, code: &str) -> Result<(), PairingError> {
+        self.check(code, false)
+    }
+
     /// Checks `code` (standard base64) in constant time and burns the window on success.
+    /// Atomic: of several racing callers with the right code, exactly one succeeds.
     pub fn redeem(&self, code: &str) -> Result<(), PairingError> {
+        self.check(code, true)
+    }
+
+    fn check(&self, code: &str, burn: bool) -> Result<(), PairingError> {
         let presented = Zeroizing::new(STANDARD.decode(code.trim()).unwrap_or_default());
         let mut window = self.lock();
         let Some(open) = window.as_ref() else {
@@ -154,7 +166,9 @@ impl Pairing {
         if !matches {
             return Err(PairingError::Mismatch);
         }
-        *window = None;
+        if burn {
+            *window = None;
+        }
         Ok(())
     }
 }
@@ -200,6 +214,28 @@ mod tests {
         assert!(!pairing.is_open());
         assert_eq!(pairing.redeem(&ticket.code), Err(PairingError::Expired));
         assert_eq!(pairing.redeem(&ticket.code), Err(PairingError::NoWindow));
+    }
+
+    #[test]
+    fn verify_does_not_burn_and_only_one_racer_redeems() {
+        let (_, pairing) = setup();
+        let ticket = pairing.open().unwrap();
+        assert_eq!(pairing.verify(&ticket.code), Ok(()));
+        assert_eq!(pairing.verify(&ticket.code), Ok(()));
+        assert!(pairing.is_open());
+        let pairing = Arc::new(pairing);
+        let wins = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..8)
+                .map(|_| scope.spawn(|| pairing.redeem(&ticket.code).is_ok()))
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .filter(|won| *won)
+                .count()
+        });
+        assert_eq!(wins, 1);
+        assert_eq!(pairing.verify(&ticket.code), Err(PairingError::NoWindow));
     }
 
     #[test]

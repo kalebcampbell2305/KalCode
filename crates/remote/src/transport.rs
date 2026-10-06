@@ -5,9 +5,15 @@
 //! stream of application messages: a 4-byte big-endian length followed by UTF-8 JSON (max
 //! 8 MiB). A sender splits a message across as many frames as needed, each carrying at most
 //! [`MAX_FRAME_PLAINTEXT`] plaintext bytes.
+//!
+//! Handshake frames are capped at [`MAX_HANDSHAKE_FRAME`] and read without trusting the
+//! declared length. A [`NoiseReader`] refuses messages above its limit (the desktop sets
+//! [`MAX_INBOUND_MESSAGE`]); a [`NoiseWriter`] with a stall timeout fails with
+//! [`Error::PeerStalled`] when the peer stops reading.
 
 use std::io::ErrorKind;
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -25,6 +31,16 @@ pub const MAX_FRAME_PLAINTEXT: usize = MAX_NOISE_MESSAGE - TAG_LEN;
 
 /// Largest application message (JSON body, without its 4-byte length prefix).
 pub const MAX_APP_MESSAGE: usize = 8 * 1024 * 1024;
+
+/// Largest device → desktop application message the desktop accepts.
+pub const MAX_INBOUND_MESSAGE: usize = 256 * 1024;
+
+/// Largest handshake frame either side accepts. Real handshake messages are a few hundred
+/// bytes; the cap bounds what an unauthenticated peer can make the desktop buffer.
+pub const MAX_HANDSHAKE_FRAME: usize = 4096;
+
+/// A stalled write is detected per this many bytes.
+const WRITE_CHUNK: usize = 64 * 1024;
 
 /// Reads one wire frame into `buf`. A clean end of stream before a frame is [`Error::Closed`].
 pub async fn read_frame<R: AsyncRead + Unpin>(io: &mut R, buf: &mut Vec<u8>) -> Result<(), Error> {
@@ -47,27 +63,53 @@ pub async fn write_frame<W: AsyncWrite + Unpin>(io: &mut W, message: &[u8]) -> R
     Ok(())
 }
 
+/// Reads one wire frame of at most `max` bytes into `buf`, growing `buf` only as bytes arrive.
+async fn read_frame_capped<R: AsyncRead + Unpin>(
+    io: &mut R,
+    buf: &mut Vec<u8>,
+    max: usize,
+) -> Result<(), Error> {
+    let mut len = [0u8; 2];
+    io.read_exact(&mut len).await.map_err(eof_is_closed)?;
+    let len = usize::from(u16::from_be_bytes(len));
+    if len > max {
+        return Err(Error::MessageTooLarge(len));
+    }
+    buf.clear();
+    let read = (&mut *io)
+        .take(len as u64)
+        .read_to_end(buf)
+        .await
+        .map_err(eof_is_closed)?;
+    if read < len {
+        return Err(Error::Closed);
+    }
+    Ok(())
+}
+
 /// Writes the next handshake message carrying `payload`; returns the Noise message bytes.
 pub async fn write_handshake<W: AsyncWrite + Unpin>(
     io: &mut W,
     state: &mut HandshakeState,
     payload: &[u8],
 ) -> Result<Vec<u8>, Error> {
-    let mut message = vec![0u8; MAX_NOISE_MESSAGE];
+    // Ephemeral, encrypted static and two tags at most: 32 + 48 + 16 bytes of overhead.
+    let mut message = vec![0u8; (payload.len() + 128).min(MAX_NOISE_MESSAGE)];
     let len = state.write_message(payload, &mut message)?;
     message.truncate(len);
     write_frame(io, &message).await?;
     Ok(message)
 }
 
-/// Reads the next handshake message; returns its decrypted payload.
+/// Reads the next handshake message (at most [`MAX_HANDSHAKE_FRAME`] bytes); returns its
+/// decrypted payload.
 pub async fn read_handshake<R: AsyncRead + Unpin>(
     io: &mut R,
     state: &mut HandshakeState,
 ) -> Result<Vec<u8>, Error> {
     let mut frame = Vec::new();
-    read_frame(io, &mut frame).await?;
-    let mut payload = vec![0u8; MAX_NOISE_MESSAGE];
+    read_frame_capped(io, &mut frame, MAX_HANDSHAKE_FRAME).await?;
+    let mut payload = vec![0u8; frame.len()];
     let len = state.read_message(&frame, &mut payload)?;
     payload.truncate(len);
     Ok(payload)
@@ -86,10 +128,12 @@ pub fn split<S: AsyncRead + AsyncWrite>(
             transport: Arc::clone(&transport),
             frame: Vec::new(),
             plain: Vec::new(),
+            max_message: MAX_APP_MESSAGE,
         },
         NoiseWriter {
             io: write,
             transport,
+            stall_timeout: None,
         },
     )
 }
@@ -108,6 +152,15 @@ pub struct NoiseReader<R> {
     transport: Arc<Mutex<TransportState>>,
     frame: Vec<u8>,
     plain: Vec<u8>,
+    max_message: usize,
+}
+
+impl<R> NoiseReader<R> {
+    /// Caps incoming application messages at `max` bytes (at most [`MAX_APP_MESSAGE`]); a
+    /// larger declared length fails with [`Error::MessageTooLarge`] before it is buffered.
+    pub fn set_max_message(&mut self, max: usize) {
+        self.max_message = max.min(MAX_APP_MESSAGE);
+    }
 }
 
 impl<R: AsyncRead + Unpin> NoiseReader<R> {
@@ -137,7 +190,7 @@ impl<R: AsyncRead + Unpin> NoiseReader<R> {
             return Ok(None);
         };
         let len = u32::from_be_bytes(*prefix) as usize;
-        if len > MAX_APP_MESSAGE {
+        if len > self.max_message {
             return Err(Error::MessageTooLarge(len));
         }
         if self.plain.len() < 4 + len {
@@ -153,6 +206,15 @@ impl<R: AsyncRead + Unpin> NoiseReader<R> {
 pub struct NoiseWriter<W> {
     io: W,
     transport: Arc<Mutex<TransportState>>,
+    stall_timeout: Option<Duration>,
+}
+
+impl<W> NoiseWriter<W> {
+    /// Fails a send with [`Error::PeerStalled`] when any 64 KiB of it (or the flush) does not
+    /// drain within `timeout`. The stream is unusable after that; drop it.
+    pub fn set_stall_timeout(&mut self, timeout: Option<Duration>) {
+        self.stall_timeout = timeout;
+    }
 }
 
 impl<W: AsyncWrite + Unpin> NoiseWriter<W> {
@@ -177,8 +239,25 @@ impl<W: AsyncWrite + Unpin> NoiseWriter<W> {
                 wire.extend_from_slice(&message[..len]);
             }
         }
-        self.io.write_all(&wire).await.map_err(eof_is_closed)?;
-        self.io.flush().await.map_err(eof_is_closed)?;
+        self.write_wire(&wire).await
+    }
+
+    async fn write_wire(&mut self, wire: &[u8]) -> Result<(), Error> {
+        let Some(limit) = self.stall_timeout else {
+            self.io.write_all(wire).await.map_err(eof_is_closed)?;
+            self.io.flush().await.map_err(eof_is_closed)?;
+            return Ok(());
+        };
+        for chunk in wire.chunks(WRITE_CHUNK) {
+            tokio::time::timeout(limit, self.io.write_all(chunk))
+                .await
+                .map_err(|_| Error::PeerStalled)?
+                .map_err(eof_is_closed)?;
+        }
+        tokio::time::timeout(limit, self.io.flush())
+            .await
+            .map_err(|_| Error::PeerStalled)?
+            .map_err(eof_is_closed)?;
         Ok(())
     }
 
@@ -263,6 +342,52 @@ mod tests {
             dev_w.send_bytes(&too_big).await,
             Err(Error::MessageTooLarge(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn oversize_handshake_frame_is_refused_before_buffering() {
+        let host = StaticKeypair::generate().unwrap();
+        let mut r = responder(&host).unwrap();
+        let (mut a, mut b) = tokio::io::duplex(1 << 16);
+        // Declares 60 000 bytes but sends nothing more: refused on the length alone.
+        a.write_all(&60_000u16.to_be_bytes()).await.unwrap();
+        assert!(matches!(
+            read_handshake(&mut b, &mut r).await,
+            Err(Error::MessageTooLarge(60_000))
+        ));
+        // A short frame that ends early is Closed, not a hang.
+        let (mut a, mut b) = tokio::io::duplex(1 << 16);
+        a.write_all(&100u16.to_be_bytes()).await.unwrap();
+        a.write_all(&[0u8; 10]).await.unwrap();
+        drop(a);
+        let mut r = responder(&host).unwrap();
+        assert!(matches!(
+            read_handshake(&mut b, &mut r).await,
+            Err(Error::Closed)
+        ));
+    }
+
+    #[tokio::test]
+    async fn reader_limit_refuses_large_messages() {
+        let ((_, mut dev_w), (mut host_r, _)) = pair().await;
+        host_r.set_max_message(MAX_INBOUND_MESSAGE);
+        dev_w
+            .send_bytes(&vec![b'x'; MAX_INBOUND_MESSAGE + 1])
+            .await
+            .unwrap();
+        assert!(matches!(
+            host_r.recv_bytes().await,
+            Err(Error::MessageTooLarge(n)) if n == MAX_INBOUND_MESSAGE + 1
+        ));
+    }
+
+    #[tokio::test]
+    async fn stalled_writer_times_out() {
+        let ((_dev_r, _), (_, mut host_w)) = pair().await;
+        host_w.set_stall_timeout(Some(Duration::from_millis(50)));
+        // Nobody reads: the 1 MiB pipe fills and the write stalls.
+        let result = host_w.send_bytes(&vec![b'x'; 4 * 1024 * 1024]).await;
+        assert!(matches!(result, Err(Error::PeerStalled)), "{result:?}");
     }
 
     #[tokio::test]

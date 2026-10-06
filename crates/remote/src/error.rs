@@ -15,8 +15,10 @@ pub enum Error {
     Rejected(RejectReason),
     #[error("the handshake was invalid: {0}")]
     BadHandshake(String),
-    #[error("an application message of {0} bytes exceeds the 8 MiB limit")]
+    #[error("a message of {0} bytes exceeds the size limit")]
     MessageTooLarge(usize),
+    #[error("the peer stopped reading")]
+    PeerStalled,
     #[error("a message was malformed: {0}")]
     Malformed(String),
     #[error("the connection closed")]

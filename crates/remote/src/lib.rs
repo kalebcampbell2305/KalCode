@@ -20,11 +20,24 @@
 //! - [`server`]: [`server::accept`] (handshake + §3 accept/reject rules) and
 //!   [`server::serve_connection`] (snapshot, debounced patches, requests, notify, keepalive).
 //! - [`client`]: the initiator side, for tests, the dev host and tooling.
+//! - [`limits`] and [`admission`]: every resource limit and timeout, and the pre-auth
+//!   handshake cap the listener applies before reading a byte.
+//!
+//! ## Key material in memory (accepted risk)
+//!
+//! `snow` 0.10 does not zeroize its internal copies of the static private key, the ephemeral
+//! keys or the cipher states. This crate keeps its own copies in [`zeroize::Zeroizing`]
+//! storage ([`noise::StaticKeypair`], pairing codes) and avoids extra unscrubbed copies, but
+//! cannot scrub snow's. A process memory dump can therefore reveal session keys and the host
+//! key; that is outside the v1 threat model (an attacker with that access already controls
+//! the workstation).
 
+pub mod admission;
 pub mod client;
 pub mod dedupe;
 pub mod diff;
 mod error;
+pub mod limits;
 pub mod noise;
 pub mod ops;
 pub mod pairing;
