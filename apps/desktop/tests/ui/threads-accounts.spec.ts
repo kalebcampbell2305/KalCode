@@ -1,6 +1,6 @@
 import { mkdirSync } from "node:fs";
-import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
+import { expectNoSeriousA11yViolations } from "./a11y.ts";
 import { goTo } from "./nav.ts";
 
 /** A row, not the favorite (pin/star) button beside it, whose label repeats the row's name (#235). */
@@ -18,19 +18,6 @@ const list = (page: Page) => page.getByRole("list", { name: "Threads" });
 const detail = (page: Page) => page.getByRole("region", { name: "Thread", exact: true });
 const accountButton = (page: Page, label: string) =>
   detail(page).getByRole("button", { name: new RegExp(`^${label}, Gemini CLI account`) });
-
-async function expectNoSeriousA11yViolations(page: Page) {
-  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze();
-  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
-  expect(
-    serious,
-    JSON.stringify(
-      serious.map((v) => ({ id: v.id, nodes: v.nodes.map((n) => n.target) })),
-      null,
-      2,
-    ),
-  ).toEqual([]);
-}
 
 /**
  * Adds "Gemini B" and signs Personal in, then starts a Gemini thread on Personal and waits for its

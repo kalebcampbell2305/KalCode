@@ -500,6 +500,8 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
     <section className={styles.board} aria-label="Agents" data-in-pane={inPane || undefined}>
       {ready ? (
         <div className={styles.head}>
+          {/* Decoration on inert elements, not pseudo-elements (see DashboardBoard.module.css). */}
+          <div className={styles.headGrid} aria-hidden="true" />
           <div className={styles.overview}>
             <p className={styles.total}>
               <span className={styles.totalCount}>{counts.all}</span>
@@ -701,6 +703,7 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
               </div>
             </div>
           ) : null}
+          <div className={styles.headHorizon} aria-hidden="true" />
         </div>
       ) : null}
       {body}

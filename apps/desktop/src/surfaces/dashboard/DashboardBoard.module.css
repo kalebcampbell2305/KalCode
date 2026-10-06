@@ -30,9 +30,14 @@
   overflow: hidden;
 }
 
+/* The grid and the horizon are aria-hidden elements (DashboardBoard.tsx: .headGrid first,
+   .headHorizon last, the paint order of the ::before/::after they replace), not pseudo-elements:
+   axe's colour-contrast check reports "incomplete" for every text node under an absolute
+   pseudo-element with a background. The content above them is positioned (.head > * below), so
+   axe also sorts it above the grid. */
+
 /* A faint star-chart grid: depth, never noise. */
-.head::before {
-  content: "";
+.head > .headGrid {
   position: absolute;
   inset: 0;
   background-image:
@@ -45,8 +50,7 @@
 
 /* The bridge's lit horizon: one electric-blue hairline across the top edge, brightest where the
    fleet count sits. Static. */
-.head::after {
-  content: "";
+.head > .headHorizon {
   position: absolute;
   top: 0;
   left: 0;
@@ -531,8 +535,8 @@
   overflow: hidden;
 }
 
-.launch.launch::before {
-  content: "";
+/* The well's top edge (EmptyState's aria-hidden [data-empty-edge]), narrowed and brightened. */
+.launch.launch > [data-empty-edge] {
   position: absolute;
   top: 0;
   left: 20%;

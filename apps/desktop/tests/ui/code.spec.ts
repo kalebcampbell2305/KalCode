@@ -1,5 +1,5 @@
-import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
+import { expectNoSeriousA11yViolations } from "./a11y.ts";
 
 /**
  * Code surface (Z1) against the in-memory runtime: workspaces from the (fake) native folder
@@ -49,19 +49,6 @@ async function openFolderAndTerminal(page: Page, folder = "kalcode-site") {
   await page.getByRole("button", { name: /^New PowerShell 7 terminal$/ }).click();
   await expect(page.getByRole("tab", { name: /PowerShell 7/ })).toHaveAttribute("aria-selected", "true");
   await expect(visibleTerminal(page)).toContainText(`PS C:\\Users\\you\\Projects\\${folder}>`);
-}
-
-async function expectNoSeriousA11yViolations(page: Page) {
-  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze();
-  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
-  expect(
-    serious,
-    JSON.stringify(
-      serious.map((v) => ({ id: v.id, nodes: v.nodes.map((n) => n.target) })),
-      null,
-      2,
-    ),
-  ).toEqual([]);
 }
 
 test.describe("opening a workspace", () => {

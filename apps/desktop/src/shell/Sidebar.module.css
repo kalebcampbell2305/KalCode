@@ -13,10 +13,12 @@
   isolation: isolate;
 }
 
-/* Faint far stars in the sidebar's open middle only: masked away from the places and the footer,
+/* The sidebar's decoration lives on two aria-hidden elements (Sidebar.tsx), not on ::before and
+   ::after: axe's colour-contrast check reports "incomplete" for any text under a large absolute
+   pseudo-element, which silently stopped it checking the sidebar.
+   Faint far stars in the sidebar's open middle only: masked away from the places and the footer,
    so no label ever sits on a star. Static; high contrast and light theme have none. */
-.sidebar::before {
-  content: "";
+.stars {
   position: absolute;
   inset: 0;
   z-index: -1;
@@ -27,9 +29,9 @@
   pointer-events: none;
 }
 
-/* A lit hairline at the top of the rail edge, fading down: the only glow in the chrome. */
-.sidebar::after {
-  content: "";
+/* A lit hairline at the top of the rail edge, fading down: the only glow in the chrome. Last in
+   the nav, so it paints over the content like the ::after it replaces. */
+.edgeGlow {
   position: absolute;
   top: 0;
   right: -1px;
@@ -210,6 +212,9 @@
   margin-top: auto;
   padding-top: var(--space-3);
   border-top: 1px solid var(--color-border);
+  /* Its own stacking context (no visual change: nothing in it uses z-index): axe 4.13 otherwise
+     sorts the z-index -1 .stars above the footer's in-flow text and cannot check its contrast. */
+  isolation: isolate;
 }
 
 /* The Account Hub, then the collapse control; stacked when the sidebar is collapsed. */

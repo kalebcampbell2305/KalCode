@@ -96,6 +96,7 @@ export function PermissionPrompt<T extends string>({
       aria-labelledby={titleId}
       aria-describedby={reasonId}
     >
+      <span className={styles.rail} aria-hidden="true" />
       <header className={styles.header}>
         <span className={styles.icon} aria-hidden="true">
           <Icon />

@@ -1,5 +1,5 @@
-import AxeBuilder from "@axe-core/playwright";
 import { expect, type Locator, type Page, test } from "@playwright/test";
+import { expectNoSeriousA11yViolations } from "./a11y.ts";
 
 /**
  * The pane system (Z7-W1) against the in-memory runtime: splits, keyboard and pointer resizing,
@@ -46,19 +46,6 @@ async function box(locator: Locator) {
   const b = await locator.boundingBox();
   if (!b) throw new Error("not visible");
   return b;
-}
-
-async function expectNoSeriousA11yViolations(page: Page) {
-  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze();
-  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
-  expect(
-    serious,
-    JSON.stringify(
-      serious.map((v) => ({ id: v.id, nodes: v.nodes.map((n) => n.target) })),
-      null,
-      2,
-    ),
-  ).toEqual([]);
 }
 
 test.describe("splitting and resizing", () => {

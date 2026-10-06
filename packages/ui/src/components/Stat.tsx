@@ -42,6 +42,8 @@ export function Stat({
 }: StatProps) {
   const content = (
     <>
+      {/* The lit top edge on an inert element, not ::before (see Stat.module.css). */}
+      <span className={styles.edge} aria-hidden="true" />
       <span className={styles.top}>
         {icon ? (
           <span className={styles.icon} aria-hidden="true">
