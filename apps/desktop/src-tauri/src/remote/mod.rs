@@ -411,7 +411,9 @@ impl Inner {
                 failure("remote_key_failed", "KalCode couldn't open its Remote key.")
             })?
         };
-        let workstation_id = match lock(&self.settings).workstation_id.clone() {
+        // Bound first: a guard in the `match` scrutinee would live through `save_settings`.
+        let stored = lock(&self.settings).workstation_id.clone();
+        let workstation_id = match stored {
             Some(id) => id,
             None => {
                 let id = kalcode_remote::random_id("ws_").map_err(|_| {
@@ -754,15 +756,21 @@ async fn accept_loop(
     let Ok(listener) = tokio::net::TcpListener::from_std(socket) else {
         return;
     };
-    while let Ok((tcp, _peer)) = listener.accept().await {
+    while let Ok((tcp, peer)) = listener.accept().await {
         let Some(inner) = weak.upgrade() else {
             break;
+        };
+        // Pre-auth limits (all handshakes and per address) before a byte is read: over them,
+        // the socket is just dropped.
+        let Some(handshake) = inner.hub.admit(peer.ip()) else {
+            continue;
         };
         let _ = tcp.set_nodelay(true);
         let identity = identity.clone();
         let Ok(permit) = inner.connections.clone().try_acquire_owned() else {
             tauri::async_runtime::spawn(async move {
                 let _ = server::reject(tcp, &identity, RejectReason::Busy).await;
+                drop(handshake);
             });
             continue;
         };
@@ -777,7 +785,9 @@ async fn accept_loop(
             let pairing = inner.pairing.clone();
             let hub = inner.hub.clone();
             drop(inner);
-            let conn = match server::accept(tcp, &identity, &registry, &pairing, entitled).await {
+            let accepted = server::accept(tcp, &identity, &registry, &pairing, entitled).await;
+            drop(handshake);
+            let conn = match accepted {
                 Ok(conn) => conn,
                 Err(error) => {
                     tracing::debug!(event = "remote.handshake_refused", error = %error);
