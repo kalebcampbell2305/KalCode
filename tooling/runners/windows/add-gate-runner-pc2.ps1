@@ -31,7 +31,7 @@ $ErrorActionPreference = 'Stop'
 $repo = 'kalebcampbell2305/KalCode'
 $result = [ordered]@{ schema = 'kalcode-pc2-second-gate-runner/v1'; at = [DateTime]::UtcNow.ToString('o'); host = $env:COMPUTERNAME
     state = 'PREFLIGHT'; errorCode = $null; account = $Account; root = $Root; runner = $RunnerName; label = $Label
-    alreadyInstalled = $false; tokenSource = $null; service = $null; runnerId = $null; exclusions = @(); next = $null }
+    alreadyInstalled = $false; tokenSource = $null; service = $null; runnerId = $null; exclusions = @(); lockFolder = $null; next = $null }
 function Refuse([string]$Code) { $result.errorCode = $Code; throw "Second PC2 gate runner refused: $Code" }
 
 try {
@@ -78,6 +78,22 @@ try {
             $result.exclusions += $path
         }
     }
+
+    # A machine-wide lock folder for this PC: gate halves (both runners) and the Windows update proof
+    # (kalcode-win-desktop-qa) take OS file-handle locks here so the proof never overlaps a gate half.
+    # Every account that runs those jobs may create and open lock files; nothing else is stored here.
+    $locks = 'C:\ProgramData\KalCodePC2\locks'
+    New-Item -ItemType Directory -Force -Path $locks | Out-Null
+    $lockAccounts = @('kalcode-ci', $Account)
+    $qa = Get-CimInstance Win32_Service -Filter "Name LIKE 'actions.runner.%kalcode-win-desktop-qa'" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($qa -and $qa.StartName -match '^\.\\(.+)$') { $lockAccounts += $Matches[1] }
+    foreach ($name in ($lockAccounts | Select-Object -Unique)) {
+        $sid = (Get-LocalUser -Name $name -ErrorAction SilentlyContinue).SID.Value
+        if (-not $sid) { continue }
+        & icacls $locks /grant "*${sid}:(OI)(CI)M" | Out-Null
+        if ($LASTEXITCODE) { Refuse "lock_acl_$name" }
+    }
+    $result.lockFolder = [ordered]@{ path = $locks; accounts = @($lockAccounts | Select-Object -Unique) }
 
     $service = Get-CimInstance Win32_Service -Filter "Name='$serviceName'"
     if (-not $service) { Refuse 'runner_service_missing_after_setup' }
