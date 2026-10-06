@@ -532,7 +532,11 @@ export function createMemoryWorkspaces({
       const tab = tabOr404(requireId(args.terminalId));
       if (tab.info.shellId.startsWith("operation:"))
         fail(validation("terminal_operation_owned", "Stop this operation from Operations."));
-      if (status(tab) === "running") endSession(tab, 0, false);
+      if (status(tab) === "running") {
+        endSession(tab, 0, false);
+        // Like the native core: a user Stop records no exit code (the kill's code is no failure).
+        tab.info = { ...tab.info, exitCode: null };
+      }
       return tab.info;
     },
     terminal_write: (args) => {

@@ -215,7 +215,11 @@ impl TerminalRegistry {
             return (TerminalStatus::Running, None);
         };
         // Mirrors `on_terminal_exit`: a deliberately stopped operation is recorded as ended by
-        // the app, any other exit as exited.
+        // the app, a user Stop as exited without a code (the kill's code is not the shell's
+        // failure), any other exit as exited with its code.
+        if lock(&self.user_stopping).get(id) == Some(&generation) {
+            return (TerminalStatus::Exited, None);
+        }
         let stopped = lock(&self.operation_stopping).get(id) == Some(&generation);
         let status = if stopped {
             TerminalStatus::EndedByApp
@@ -670,6 +674,11 @@ impl Core {
         // so no binding dangles for an id that no longer exists (switch accounts).
         tx.execute(
             "DELETE FROM provider_account_bindings WHERE kind = 'workspace' AND scope_id = ?1",
+            [id],
+        )?;
+        // Its pane layout too: `workspace_layouts` has no foreign key to cascade from.
+        tx.execute(
+            "DELETE FROM workspace_layouts WHERE workspace_id = ?1",
             [id],
         )?;
         if crate::db::meta_get(&tx, META_ACTIVE_WORKSPACE)?.as_deref() == Some(id) {
@@ -1174,6 +1183,12 @@ impl Core {
         if !workspace.available {
             return Err(folder_missing());
         }
+        // The PTY silently falls back to the home folder for a missing start folder; a command
+        // meant for the saved folder must never run there instead.
+        let start = Path::new(&workspace.root_path);
+        if !start.is_absolute() || !start.is_dir() {
+            return Err(duplicate_directory_unavailable());
+        }
         let shell = self.shell(Some(&terminal.shell_id))?;
         let tx = conn.transaction()?;
         let (session, generation, envelope) =
@@ -1367,10 +1382,13 @@ impl Core {
                         } else {
                             "exited"
                         };
+                        // A user Stop ends the shell with the kill's code (1 on Windows, a
+                        // signal code on Unix), which is not the shell's own failure.
+                        let recorded_code = (!user_stopped).then_some(exit_code);
                         tx.execute(
                             "UPDATE terminals SET ended_at = ?1, exit_code = ?2, end_reason = ?3
                              WHERE id = ?4",
-                            params![now_rfc3339(), exit_code, end_reason, id],
+                            params![now_rfc3339(), recorded_code, end_reason, id],
                         )?;
                         let event = if exit.success || operation_stopped || user_stopped {
                             EventPayload::ShellCompleted {
@@ -2006,6 +2024,48 @@ mod tests {
             "only the removed workspace's own binding went"
         );
         assert_eq!(remaining, expected);
+    }
+
+    /// A removed workspace takes its saved pane layout with it; other layouts are kept.
+    #[test]
+    fn removing_a_workspace_deletes_only_its_layout() {
+        let data = tempfile::tempdir().expect("data");
+        let (gone, kept) = (
+            tempfile::tempdir().expect("gone"),
+            tempfile::tempdir().expect("kept"),
+        );
+        let core = Core::open(CoreConfig {
+            paths: Paths::new(data.path()),
+            app_version: "0.1.0-test".into(),
+            channel: BuildChannel::Development,
+        })
+        .expect("open");
+        let gone = core.open_workspace(gone.path()).expect("gone workspace");
+        let kept = core.open_workspace(kept.path()).expect("kept workspace");
+        {
+            let conn = core.conn();
+            for scope in [&gone.id, &kept.id] {
+                conn.execute(
+                    "INSERT INTO workspace_layouts (workspace_id, schema_version, layout, updated_at)
+                     VALUES (?1, 1, '{}', '2026-10-05T00:00:00Z')",
+                    [scope],
+                )
+                .expect("layout");
+            }
+        }
+
+        core.remove_workspace(&gone.id).expect("remove");
+        let remaining: Vec<String> = {
+            let conn = core.conn();
+            let mut stmt = conn
+                .prepare("SELECT workspace_id FROM workspace_layouts")
+                .expect("prepare");
+            stmt.query_map([], |r| r.get(0))
+                .expect("query")
+                .collect::<std::result::Result<_, _>>()
+                .expect("rows")
+        };
+        assert_eq!(remaining, [kept.id]);
     }
 
     /// Regression: an exit report from a session that Restart replaced must not end the tab's

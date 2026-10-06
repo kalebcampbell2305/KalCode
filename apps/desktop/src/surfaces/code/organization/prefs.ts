@@ -9,13 +9,26 @@ import { DEFAULT_PREFS, isAutoGroup, type OrgPrefs } from "./model.ts";
 
 const storageKey = (workspaceId: string) => `kalcode.code.organization.${workspaceId}`;
 
-const MAX_ITEMS = 500;
+/** Each list keeps its newest entries (appended last), so new pins and moves always survive. */
+export const MAX_ITEMS = 500;
 const MAX_GROUP_NAME = 40;
 
 const strings = (value: unknown): string[] =>
   Array.isArray(value)
-    ? [...new Set(value.filter((v): v is string => typeof v === "string" && v.length > 0))].slice(0, MAX_ITEMS)
+    ? [...new Set(value.filter((v): v is string => typeof v === "string" && v.length > 0))].slice(-MAX_ITEMS)
     : [];
+
+/** Bounds the stored lists to their newest `MAX_ITEMS` entries. */
+function capped(prefs: OrgPrefs): OrgPrefs {
+  const entries = Object.entries(prefs.groupOf);
+  return {
+    ...prefs,
+    collapsedGroups: prefs.collapsedGroups.slice(-MAX_ITEMS),
+    pinned: prefs.pinned.slice(-MAX_ITEMS),
+    groupOf: entries.length > MAX_ITEMS ? Object.fromEntries(entries.slice(-MAX_ITEMS)) : prefs.groupOf,
+    customGroups: prefs.customGroups.slice(-MAX_ITEMS),
+  };
+}
 
 /** A group name the person typed: trimmed, short, and never empty. */
 export function cleanGroupName(name: string): string | null {
@@ -36,7 +49,7 @@ export function parsePrefs(raw: string | null): OrgPrefs {
   const v = value as Record<string, unknown>;
   const groupOf: Record<string, string> = {};
   if (v.groupOf && typeof v.groupOf === "object") {
-    for (const [key, group] of Object.entries(v.groupOf as Record<string, unknown>).slice(0, MAX_ITEMS)) {
+    for (const [key, group] of Object.entries(v.groupOf as Record<string, unknown>).slice(-MAX_ITEMS)) {
       const name = typeof group === "string" ? cleanGroupName(group) : null;
       if (name) groupOf[key] = name;
     }
@@ -91,9 +104,9 @@ export function useOrgPrefs(workspaceId: string): OrgPrefsApi {
   const update = useCallback(
     (change: (current: OrgPrefs) => OrgPrefs) =>
       setPrefs((current) => {
-        const next = change(current);
-        write(workspaceId, next);
-        return next;
+        const bounded = capped(change(current));
+        write(workspaceId, bounded);
+        return bounded;
       }),
     [workspaceId],
   );
@@ -107,8 +120,9 @@ export function useOrgPrefs(workspaceId: string): OrgPrefsApi {
     (key: string, group: string | null) =>
       update((p) => {
         const groupOf = { ...p.groupOf };
-        if (group === null) delete groupOf[key];
-        else groupOf[key] = group;
+        // Re-added last, so the newest move is the one a bounded list keeps.
+        delete groupOf[key];
+        if (group !== null) groupOf[key] = group;
         return { ...p, groupOf };
       }),
     [update],

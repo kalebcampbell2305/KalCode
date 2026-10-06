@@ -69,6 +69,7 @@ describe("memory runtime: workspaces and terminals", () => {
     ).rejects.toMatchObject({ code: "invalid_terminal_title" });
     await expect(client.transport.invoke("terminal_stop", { terminalId: terminal.id })).resolves.toMatchObject({
       status: "exited",
+      exitCode: null,
       title: "Build logs",
     });
     const tabs = await client.listTerminals(workspace.id);
