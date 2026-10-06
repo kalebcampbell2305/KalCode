@@ -74,6 +74,39 @@ exclusions for `C:\kalcode-ci` and the gate account's `%TEMP%`, switches to the 
 plan, measures again and writes a receipt to `C:\kalcode-ci`. `-MeasureOnly` only measures; `-Undo`
 reverts.
 
+## Build PC stability (nonpaged-pool leak)
+
+Measured 2026-10-06 (two independent methods): the build PC's nonpaged pool reached 9.25 GB after
+~44 h and only cleared on reboot. The top pool tags were `NtFC` (15.2M outstanding, 4.1 GB) and `File`
+(5.6M, 2.2 GB), with the Filter Manager stream-context tags (`FMsl`/`FMsc`) tracking them. `NtFC` is
+NTFS's own File-Control-Block tag (present only in `ntfs.sys`) and `File` is the I/O manager's
+FILE_OBJECT tag: ~15M NTFS FCBs and ~5.6M file objects were being **pinned** in kernel pool, not
+leaked by any one process (process handles came to only ~246k). The pin scales with build file churn -
+`cargo`/`rustc`/`node` open and close millions of files per gate under `C:\kalcode-ci` and the `kc-*`
+worktrees - and Windows Defender's on-access scanner (`WdFilter`) holds a reference to each through its
+stream context. That exhausted pool is what produced `net::ERR_NO_BUFFER_SPACE` (WSAENOBUFS) and
+`Tcpip 4231` (ephemeral ports exhausted) during lane gates. `gameflt` is **not** the cause (it does not
+allocate `NtFC`); do not chase it.
+
+`windows/tune-build-pc.ps1` (one elevated run on the build PC, no gate job running) fixes this at the
+root by stopping the scan that pins the file objects, and widens the TCP ephemeral range the gates
+exhaust:
+
+- Defender **process** exclusions for the build toolchain (`rustc`, `cargo`, `rust-analyzer`, `link`,
+  `cl`, `mspdbsrv`, `node`). Process exclusions are location-independent, so they cover every
+  per-worktree `target\` and `node_modules` without naming the ~200 `kc-*` worktrees.
+- Defender **path** exclusions for the persistent build trees (the gate runner work roots, the Cargo
+  and rustup homes for the interactive user and each gate account, and each gate account's `%TEMP%`).
+- TCP: the IPv4/IPv6 dynamic port range to 20000-65534 and `TcpTimedWaitDelay=30` (both persist and
+  apply on the next reboot - the receipt reports `rebootRequired`).
+- The High performance power plan.
+
+It refuses while a gate or release job runs (changing Defender preferences mid-gate thrashes the scan
+cache), measures nonpaged pool before and after, and writes a receipt to `C:\kc-handoff\pool-trace`.
+`-MeasureOnly` only measures; `-Undo` reverts the exclusions, the TCP settings and the power plan. The
+same trade-off `tune-gate-pc2.ps1` makes on PC2 applies here: only build and gate work writes under the
+excluded paths, the gate account is low-privilege and only same-repository branches are gated.
+
 ## Workflows
 
 - `.github/workflows/gate.yml` runs `node tooling/release/ship.mjs gate` (the same gate agents run locally) on the gate runner. Fork PRs never run. The checkout keeps no GitHub token. The job uses dedicated ports so it never collides with an agent session on the same PC. The legacy macOS job stays disabled under the current owner policy.
