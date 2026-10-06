@@ -107,6 +107,31 @@ cache), measures nonpaged pool before and after, and writes a receipt to `C:\kc-
 same trade-off `tune-gate-pc2.ps1` makes on PC2 applies here: only build and gate work writes under the
 excluded paths, the gate account is low-privilege and only same-repository branches are gated.
 
+## Resource-aware scheduling across machines
+
+Many coding agents run alongside gates, releases and QA across three machines (the 64 GB build PC, the
+second Windows PC, and the Mac). Order of precedence, from the Resource Governor rule (AGENTS.md) and
+owner directives:
+
+1. **UI and user-requested coding agents first.** Never blocked or killed for high CPU alone; the
+   Resource Governor throttles optional background work first and only delays a user agent for genuine
+   hard resource pressure, showing the real reason.
+2. **Gates/builds distributed across machines.** The build PC runs `Gate (Windows)` + `Gate (Windows,
+   native)` on the BelowNormal worker pool (heavy native work also holds one of three file locks and
+   needs >=10 GiB free RAM); PC2 runs `Gate (Windows, PC2)` (JS/web) as `gate-split.mjs` assigns. Both
+   halves gate the exact SHA in parallel and both must be green to land.
+3. **Release QA.** PC2's desktop-QA runs the Windows update proofs (never while its gate half runs); the
+   Mac runs Mac release builds and notarization over SSH. One coordinator lands and releases.
+4. **Background maintenance lowest.**
+
+During a lane gate the box can still be starved by **other sessions'** heavy non-gate builds (e.g. a
+Codex `cargo test` compiling the same crate as the native job). The coordinator freezes those trees with
+`windows/freeze.ps1 suspend -Roots <pid>...` and resumes them (`freeze.ps1 resume`) once the gate's
+required jobs are green. Suspend is resumable (`NtSuspendProcess`) and never touches KalCode or the
+runner, so it honours the never-kill rule. Measured 2026-10-06: freezing a Codex cargo-test tree during a
+gate dropped the nonpaged-pool leak from ~90 to ~37 MB/min and CPU from 100% to 82%, and the native job
+then ran in a clean environment. Local agent builds already run BelowNormal (`tooling/local-priority.mjs`).
+
 ## Workflows
 
 - `.github/workflows/gate.yml` runs `node tooling/release/ship.mjs gate` (the same gate agents run locally) on the gate runner. Fork PRs never run. The checkout keeps no GitHub token. The job uses dedicated ports so it never collides with an agent session on the same PC. The legacy macOS job stays disabled under the current owner policy.
