@@ -45,7 +45,11 @@ final class AppModel {
     var pairingNonce = UUID()
     /// Name to show on the Removed screen when the client has none (fixtures only).
     var removedNameOverride: String?
-    private(set) var fixtureMode = false
+    /// True while exploring the in-app demo workstation (welcome → "Explore a demo workstation").
+    private(set) var isDemo = false
+    /// A simulated workstation is showing (the demo, or a DEBUG design-review fixture): every
+    /// operation is answered on this device and nothing connects anywhere.
+    var isSimulated: Bool { client.isSimulated }
 
     @ObservationIgnored private var toastTask: Task<Void, Never>?
     @ObservationIgnored private var linkTask: Task<Void, Never>?
@@ -66,7 +70,6 @@ final class AppModel {
         )
         #if DEBUG
         if let i = args.firstIndex(of: "-kc-fixture"), i + 1 < args.count {
-            fixtureMode = true
             Fixtures.load(args[i + 1], into: self)
         }
         // Design review: `-kc-tab <section>` and `-kc-open <link>` jump straight to a screen.
@@ -74,13 +77,35 @@ final class AppModel {
             router.section = section
         }
         if args.contains("-kc-launch") { router.showLaunch = true }
+        if args.contains("-kc-demo") { DispatchQueue.main.async { [weak self] in self?.enterDemo() } }
         if let i = args.firstIndex(of: "-kc-open"), i + 1 < args.count, let url = URL(string: args[i + 1]) {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.open(url) }
         }
         #endif
         client.onNotify = { [weak self] note in self?.post(note) }
         Notifier.shared.onOpen = { [weak self] link in self?.open(link) }
-        if !fixtureMode { client.start() }
+        if !isSimulated { client.start() }
+    }
+
+    // MARK: Demo
+
+    /// Runs the real interface against a simulated workstation, entirely on this device. Only
+    /// offered while unpaired; the pairing store and the network are never touched.
+    func enterDemo() {
+        guard client.workstation == nil, !isSimulated else { return }
+        Haptics.success()
+        DemoWorkstation.load(into: self)
+        router.reset()
+        withAnimation(Motion.standard) { isDemo = true }
+    }
+
+    func exitDemo() {
+        guard isDemo else { return }
+        Haptics.tap()
+        withAnimation(Motion.standard) { isDemo = false }
+        DemoResponder.reset()
+        client.endSimulation()
+        router.reset()
     }
 
     // MARK: Names
@@ -99,13 +124,11 @@ final class AppModel {
 
     // MARK: Requests
 
-    /// Every operation goes through here (fixture mode answers locally in DEBUG builds only).
+    /// Every operation goes through here (a simulated workstation answers locally).
     func call<T: Decodable>(_ op: String, _ args: [String: JSONValue] = [:], as type: T.Type = T.self) async throws -> T {
-        #if DEBUG
-        if fixtureMode, client.status.isOnline {
-            return try await FixtureResponder.respond(op, args, model: self, as: T.self)
+        if client.isSimulated, client.status.isOnline {
+            return try await DemoResponder.respond(op, args, model: self, as: T.self)
         }
-        #endif
         return try await client.request(op, args, as: T.self)
     }
 
@@ -175,6 +198,7 @@ final class AppModel {
 
     func finishPairing() {
         pairingPayload = nil
+        isDemo = false
         router.reset()
     }
 
@@ -204,7 +228,7 @@ final class AppModel {
             if let message = beginPairing(text) { show(message, style: .error) }
             return
         }
-        guard client.workstation != nil || fixtureMode else {
+        guard client.workstation != nil || isSimulated else {
             show("Pair with your workstation first.", style: .info)
             return
         }

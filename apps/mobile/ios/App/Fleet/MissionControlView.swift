@@ -51,7 +51,7 @@ struct MissionControlView: View {
         }
         .scrollIndicators(.hidden)
         .refreshable {
-            guard !model.fixtureMode else { return }
+            guard !model.isSimulated else { return }
             client.reconnectNow()
             try? await Task.sleep(nanoseconds: 700_000_000)
         }

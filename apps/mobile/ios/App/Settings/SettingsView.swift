@@ -100,16 +100,28 @@ struct SettingsView: View {
                     .card(padding: 14)
                 }
 
-                group("Pairing", footer: "Unpairing forgets \(model.workstationName) and this device's key. To use Remote again, pair with a new code.") {
-                    Button(role: .destructive) {
-                        Haptics.warning()
-                        confirmUnpair = true
-                    } label: {
-                        Label("Unpair this \(DeviceInfo.idiomNoun)", systemImage: "link.badge.plus")
-                            .labelStyle(.titleOnly)
+                if model.isDemo {
+                    group("Demo", footer: "You're exploring a simulated workstation on this \(DeviceInfo.idiomNoun) — nothing connects to your network. To use your own agents, install KalCode on your Windows PC or Mac and pair from the welcome screen.") {
+                        Button {
+                            model.exitDemo()
+                        } label: {
+                            Label("Exit demo", systemImage: "arrow.uturn.backward")
+                        }
+                        .buttonStyle(SecondaryButtonStyle())
+                        .accessibilityIdentifier("settings.exitDemo")
                     }
-                    .buttonStyle(DestructiveButtonStyle())
-                    .accessibilityIdentifier("settings.unpair")
+                } else {
+                    group("Pairing", footer: "Unpairing forgets \(model.workstationName) and this device's key. To use Remote again, pair with a new code.") {
+                        Button(role: .destructive) {
+                            Haptics.warning()
+                            confirmUnpair = true
+                        } label: {
+                            Label("Unpair this \(DeviceInfo.idiomNoun)", systemImage: "link.badge.plus")
+                                .labelStyle(.titleOnly)
+                        }
+                        .buttonStyle(DestructiveButtonStyle())
+                        .accessibilityIdentifier("settings.unpair")
+                    }
                 }
 
                 about
