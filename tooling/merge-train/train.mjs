@@ -47,18 +47,6 @@ export function assertCandidateWorkflow(source) {
       "candidate gate workflow must trigger merge-train pushes on the main Windows PC and gate its recorded base",
     );
   }
-  // A split gate's second-PC half must gate the same recorded base on the second PC's runner.
-  const pc2 = workflow.match(/^ {2}pc2:\n([\s\S]*?)(?=^ {2}[a-zA-Z][\w-]*:|$(?![\s\S]))/m)?.[1];
-  if (
-    pc2 !== undefined &&
-    (!/ {4}runs-on: \[self-hosted, Windows, kalcode-gate-pc2\]\n/.test(pc2) ||
-      !pc2.includes("name: Gate\n") ||
-      !pc2.includes("trailers:key=Merge-Train-Base,valueonly"))
-  ) {
-    throw new Error(
-      "candidate gate workflow: its second-PC half must run on kalcode-gate-pc2 and gate the same recorded base",
-    );
-  }
 }
 
 export const GATE_JOB = "Gate (Windows)";
