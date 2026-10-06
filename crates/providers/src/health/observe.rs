@@ -166,7 +166,15 @@ impl AgentSession for ObservedSession {
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(Instant::now());
         self.observer.monitor.input_sent(&self.observer.provider);
-        self.inner.send(input)
+        let result = self.inner.send(input);
+        if result.is_err() {
+            self.observer
+                .awaiting
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take();
+        }
+        result
     }
 
     fn interrupt(&self) -> Result<(), ProviderError> {
@@ -200,6 +208,78 @@ impl AgentSession for ObservedSession {
 impl Drop for ObservedSession {
     fn drop(&mut self) {
         self.observer.end();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct RefusingSession;
+
+    impl AgentSession for RefusingSession {
+        fn provider_session_id(&self) -> Option<String> {
+            None
+        }
+
+        fn send(&self, _input: AgentInput) -> Result<(), ProviderError> {
+            Err(ProviderError::Refused {
+                code: "provider_input_not_ready".into(),
+                message: "provider prompt is open".into(),
+            })
+        }
+
+        fn interrupt(&self) -> Result<(), ProviderError> {
+            Ok(())
+        }
+
+        fn terminate(&self) -> Result<(), ProviderError> {
+            Ok(())
+        }
+
+        fn respond_to_approval(
+            &self,
+            _request_id: &str,
+            _decision: ApprovalDecision,
+        ) -> Result<(), ProviderError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn refused_input_cannot_claim_later_native_output_as_task_latency() {
+        let monitor = Arc::new(HealthMonitor::new());
+        let provider = ProviderId::new(ProviderId::CODEX);
+        let observer = Arc::new(Observer {
+            provider: provider.clone(),
+            monitor: Arc::clone(&monitor),
+            awaiting: Mutex::new(None),
+            ended: AtomicBool::new(false),
+            exited: AtomicBool::new(false),
+        });
+        let session = ObservedSession {
+            inner: Box::new(RefusingSession),
+            observer: Arc::clone(&observer),
+        };
+
+        assert!(matches!(
+            session.send(AgentInput::Text {
+                text: "held Squad task".into(),
+            }),
+            Err(ProviderError::Refused { .. })
+        ));
+        observer.observe(&AgentEvent::MessageDelta {
+            message_id: "native-turn".into(),
+            text: "output from later terminal use".into(),
+        });
+
+        assert_eq!(
+            monitor
+                .get(&provider)
+                .expect("provider health")
+                .latency_samples,
+            0
+        );
     }
 }
 

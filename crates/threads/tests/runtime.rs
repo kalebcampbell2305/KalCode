@@ -2119,6 +2119,91 @@ fn idle_threads_start_without_a_task() {
     assert_eq!(status(&h, &named.id), ThreadStatus::Active);
 }
 
+#[test]
+fn a_refused_prepared_task_keeps_its_pane_and_never_resumes_implicitly() {
+    for (case, provider_error) in [
+        (
+            "refused",
+            ProviderError::Refused {
+                code: "provider_input_not_ready".into(),
+                message: "provider prompt is open".into(),
+            },
+        ),
+        ("unsupported", ProviderError::Unsupported),
+    ] {
+        let h = Harness::new();
+        let operation_id = new_id();
+        let prepared = h
+            .runtime
+            .create_idle_with_id_for_origin(
+                &operation_id,
+                idle_request(&h),
+                LaunchOrigin::Background,
+            )
+            .expect("prepared pane");
+        h.runtime
+            .wait_for_dependency(&prepared.id, "Waiting for dependencies")
+            .expect("dependency wait");
+        let first_session = h.provider.last_session();
+        first_session.fail_sends_with(1, provider_error);
+
+        let error = h
+            .runtime
+            .send_prepared_operation(&prepared.id, "implement the dependent task")
+            .expect_err("the refused task returns to an explicit Operations hold");
+        assert_eq!(
+            error.code, "operation_prepared_provider_not_ready",
+            "{case}"
+        );
+        assert_eq!(
+            status(&h, &prepared.id),
+            ThreadStatus::WaitingForDependency,
+            "{case}"
+        );
+        assert!(
+            !first_session.is_ended(),
+            "the native terminal must remain available to resolve its prompt: {case}"
+        );
+        assert!(
+            first_session
+                .calls()
+                .iter()
+                .all(|call| !matches!(call, Call::Send(_))),
+            "the provider refused before receiving bytes: {case}"
+        );
+        assert_eq!(
+            h.runtime
+                .messages(&prepared.id, 10, None)
+                .expect("history")
+                .into_iter()
+                .filter(|message| message.role == MessageRole::User)
+                .map(|message| message.content)
+                .collect::<Vec<_>>(),
+            ["implement the dependent task"],
+            "{case}"
+        );
+
+        assert_code(
+            h.runtime.resume(&prepared.id, None),
+            "thread_already_running",
+        );
+        assert!(
+            first_session.calls().is_empty(),
+            "Resume without a new task must not replay a failed Squad prompt: {case}"
+        );
+
+        first_session.admit_sends();
+        h.runtime
+            .send_prepared_operation(&prepared.id, "implement the dependent task")
+            .expect("an explicit Operations retry may deliver the task");
+        assert_eq!(
+            first_session.calls(),
+            [Call::Send("implement the dependent task".into())],
+            "{case}"
+        );
+    }
+}
+
 fn idle_request(h: &Harness) -> kalcode_threads::CreateIdleThread {
     kalcode_threads::CreateIdleThread {
         provider_id: "fake".into(),

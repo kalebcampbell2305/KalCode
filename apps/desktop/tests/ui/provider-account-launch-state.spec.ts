@@ -14,12 +14,13 @@ async function workspace(page: Page, metadata: "available" | "unavailable" | "pl
     transport.invoke = async (command: string, args: Record<string, unknown>) => {
       const result = await invoke(command, args);
       if (command === "thread_options") {
-        // The in-memory adapter's catalog must agree with the UI discovery fixture.
+        // A signed-out account cannot be discovered yet. Its provider offer mirrors the exact
+        // account-scoped model that the in-memory adapter returns after reconnect.
         const codex = result.providers.find((provider: { id: string }) => provider.id === "codex");
         if (codex)
           codex.models.splice(0, codex.models.length, {
-            id: "code-test-exact",
-            displayName: "Code test exact",
+            id: "codex-ui-test-exact",
+            displayName: "Codex exact model",
             isDefault: false,
           });
         return result;
@@ -129,8 +130,12 @@ test("expired Codex reconnect continues the preserved three-agent request in thi
     expect(record.workspaceId).toBe(sessions[0]?.record.workspaceId);
     expect(terminal).not.toBeNull();
   }
-  expect(selectedModel).toBe("Code test exact");
-  expect(sessions.map(({ record }) => record.model)).toEqual(["code-test-exact", "code-test-exact", "code-test-exact"]);
+  expect(selectedModel).toBe("Codex exact model");
+  expect(sessions.map(({ record }) => record.model)).toEqual([
+    "codex-ui-test-exact",
+    "codex-ui-test-exact",
+    "codex-ui-test-exact",
+  ]);
   await expect(page.getByText("Open in Threads", { exact: true })).toHaveCount(0);
   await page.screenshot({ path: "qa/screenshots/provider-launch-three-terminals.png" });
 });

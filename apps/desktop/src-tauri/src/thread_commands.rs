@@ -111,6 +111,18 @@ pub struct ThreadsState {
     streams: Mutex<HashMap<String, StreamId>>,
 }
 
+/// One reviewed Operations pane admission. Grouping the authority, identity, provider spec and
+/// worktree policy keeps the start and prepare paths on one contract as orchestration grows.
+pub(crate) struct OperationPaneRequest<'a> {
+    pub(crate) core: &'a Arc<Core>,
+    pub(crate) git: &'a kalcode_git::GitCore,
+    pub(crate) operation_id: &'a str,
+    pub(crate) spec: &'a OperationSpec,
+    pub(crate) origin: LaunchOrigin,
+    pub(crate) isolate: bool,
+    pub(crate) start_revision: Option<&'a str>,
+}
+
 /// The native adapter for a provider (Claude Code, Codex, Gemini CLI), observed by Provider
 /// Health (PROVIDERS-2) so its sessions feed the health model.
 struct AccountBoundProvider {
@@ -487,14 +499,17 @@ impl ThreadsState {
     /// modes that need an attached confirmation or profile conservatively use Approve.
     pub(crate) fn start_operation(
         &self,
-        core: &Arc<Core>,
-        git: &kalcode_git::GitCore,
-        operation_id: &str,
-        spec: &OperationSpec,
-        origin: LaunchOrigin,
-        isolate: bool,
-        start_revision: Option<&str>,
+        launch: OperationPaneRequest<'_>,
     ) -> kalcode_core::Result<ThreadSummary> {
+        let OperationPaneRequest {
+            core,
+            git,
+            operation_id,
+            spec,
+            origin,
+            isolate,
+            start_revision,
+        } = launch;
         let request = self.reviewed_operation_request(core, spec)?;
         let runtime = self.operation_runtime()?;
         if isolate {
@@ -542,14 +557,17 @@ impl ThreadsState {
     /// thread is later admitted by Operations after its dependencies succeed.
     pub(crate) fn prepare_operation(
         &self,
-        core: &Arc<Core>,
-        git: &kalcode_git::GitCore,
-        operation_id: &str,
-        spec: &OperationSpec,
-        origin: LaunchOrigin,
-        isolate: bool,
-        start_revision: Option<&str>,
+        launch: OperationPaneRequest<'_>,
     ) -> kalcode_core::Result<ThreadSummary> {
+        let OperationPaneRequest {
+            core,
+            git,
+            operation_id,
+            spec,
+            origin,
+            isolate,
+            start_revision,
+        } = launch;
         let request = self.reviewed_operation_request(core, spec)?;
         let runtime = self.operation_runtime()?;
         match runtime.get(operation_id) {

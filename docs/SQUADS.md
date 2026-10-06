@@ -81,6 +81,11 @@ visible with a recovery action. Retry an affected member from its canonical Queu
 when it is held before execution; keep independent members running. Completed,
 failed and interrupted runs retain their final history. Open the member's real
 terminal or use Handoff to continue its work; inspecting a run never replays it.
+If a prepared member encounters a native setup or permission prompt before its
+task is written, its terminal stays open and its Operation pauses with an
+actionable reason. Resolve the prompt in that terminal, then explicitly run the
+member again. Ordinary session resume does not resend the held task. An uncertain
+write remains an interrupted or failed attempt rather than an automatic retry.
 A repeated launch request returns the
 original launch instead of creating another team.
 

@@ -30,7 +30,7 @@ use crate::account::runtime::AccountRuntime;
 use crate::kalvoice_callbacks::{OperationAnnouncer, OperationCallback};
 use crate::native_confirm::TauriConfirmer;
 use crate::runtime_coordinator::{RuntimeAccess, RuntimeState};
-use crate::thread_commands::ThreadsState;
+use crate::thread_commands::{OperationPaneRequest, ThreadsState};
 
 const OBSERVATION_TTL: Duration = Duration::from_secs(5);
 const HISTORY_PAGE_SIZE: usize = 100;
@@ -573,15 +573,15 @@ impl OperationsState {
             execution_branch.as_deref(),
             revision.1.as_deref(),
         )?;
-        match self.threads.prepare_operation(
-            &self.core,
-            &self.git,
-            &row.id,
-            &row.spec,
-            consent.origin,
-            member.worktree,
-            revision.1.as_deref(),
-        ) {
+        match self.threads.prepare_operation(OperationPaneRequest {
+            core: &self.core,
+            git: &self.git,
+            operation_id: &row.id,
+            spec: &row.spec,
+            origin: consent.origin,
+            isolate: member.worktree,
+            start_revision: revision.1.as_deref(),
+        }) {
             Ok(thread) if operation_thread_matches(&thread, &row.spec, &row.id) => Ok(()),
             Ok(_) => Err(KalError::internal(
                 "operation_thread_identity_mismatch",
@@ -868,11 +868,7 @@ impl OperationsState {
     }
 
     fn launch(&self, row: OperationRecord, lease: &RuntimeState<Self>) -> Result<()> {
-        let consent = self
-            .authorized
-            .lock()
-            .map_err(|_| poisoned())?
-            .remove(&row.id);
+        let consent = self.take_authorization(&row.id)?;
         let revision = match self.authorization_revision(&row) {
             Ok(revision) => revision,
             Err(error) => {
@@ -936,15 +932,15 @@ impl OperationsState {
                         None => runtime.dependency_ready(&row.id),
                     }
                 } else {
-                    self.threads.start_operation(
-                        &self.core,
-                        &self.git,
-                        &row.id,
-                        &row.spec,
-                        consent.origin,
+                    self.threads.start_operation(OperationPaneRequest {
+                        core: &self.core,
+                        git: &self.git,
+                        operation_id: &row.id,
+                        spec: &row.spec,
+                        origin: consent.origin,
                         isolate,
-                        execution_version.as_deref(),
-                    )
+                        start_revision: execution_version.as_deref(),
+                    })
                 };
                 let thread = if prepared {
                     started?
@@ -1040,26 +1036,36 @@ impl OperationsState {
             Ok(())
         })();
         if let Err(error) = result {
-            if matches!(
-                error.code,
-                "operation_prepared_thread_busy" | "operation_prepared_thread_changed"
-            ) {
-                self.store
-                    .hold_starting_with_reason(&row.id, &safe(&error.message))?;
-                return Ok(());
-            }
-            if error.code == "operation_cleanup_unproven" {
-                let _ = self.store.set_paused(true);
-                return Err(error);
-            }
-            self.finish_run(
-                &row.id,
-                OperationStatus::Failed,
-                safe(&error.message).as_str(),
-            )?;
+            self.handle_launch_error(&row, error)?;
         }
         *self.observations.lock().map_err(|_| poisoned())? = None;
         Ok(())
+    }
+
+    fn take_authorization(&self, id: &str) -> Result<Option<Authorization>> {
+        Ok(self.authorized.lock().map_err(|_| poisoned())?.remove(id))
+    }
+
+    fn handle_launch_error(&self, row: &OperationRecord, error: KalError) -> Result<()> {
+        if matches!(
+            error.code,
+            "operation_prepared_thread_busy"
+                | "operation_prepared_thread_changed"
+                | "operation_prepared_provider_not_ready"
+        ) {
+            return self
+                .store
+                .hold_starting_with_reason(&row.id, &safe(&error.message));
+        }
+        if error.code == "operation_cleanup_unproven" {
+            let _ = self.store.set_paused(true);
+            return Err(error);
+        }
+        self.finish_run(
+            &row.id,
+            OperationStatus::Failed,
+            safe(&error.message).as_str(),
+        )
     }
 
     fn capture_output(&self, row: &OperationRecord) -> Result<()> {
@@ -2769,6 +2775,79 @@ mod tests {
         let mut changed = consent.spec.clone();
         changed.provider_account_id = Some("different account".into());
         assert!(!consent.matches(&changed));
+    }
+
+    #[test]
+    fn prepared_provider_refusal_consumes_authorization_and_becomes_attention_hold() {
+        let data = tempfile::tempdir().expect("data");
+        let project = tempfile::tempdir().expect("project");
+        let core = Arc::new(
+            Core::open(CoreConfig {
+                paths: Paths::new(data.path()),
+                app_version: "0.0.0-test".into(),
+                channel: BuildChannel::Development,
+            })
+            .expect("core"),
+        );
+        let workspace = core.open_workspace(project.path()).expect("workspace");
+        let (state, resources) = fixture(core.clone(), data.path());
+        let mut spec = observed_spec(
+            "Prepared reviewer".into(),
+            workspace.id,
+            OperationKind::Agent,
+        );
+        spec.prompt = Some("Review the dependency output".into());
+        spec.provider_id = Some("codex".into());
+        let queued = state.store.enqueue(spec.clone()).expect("enqueue");
+        let starting = state
+            .store
+            .claim(Some(&queued.id))
+            .expect("claim")
+            .expect("starting operation");
+        state.authorized.lock().expect("authorization lock").insert(
+            starting.id.clone(),
+            Authorization {
+                spec,
+                revision: (None, None),
+                expires: None,
+                origin: LaunchOrigin::User,
+                revision_bound: false,
+            },
+        );
+
+        assert!(
+            state
+                .take_authorization(&starting.id)
+                .expect("consume authorization")
+                .is_some()
+        );
+        state
+            .handle_launch_error(
+                &starting,
+                KalError::validation(
+                    "operation_prepared_provider_not_ready",
+                    "Codex is showing a native permission prompt. Answer it, then run this member again.",
+                ),
+            )
+            .expect("attention hold");
+
+        assert!(
+            state
+                .take_authorization(&starting.id)
+                .expect("authorization remains consumed")
+                .is_none(),
+            "a held prepared member must require a fresh explicit Run authorization"
+        );
+        let held = state.store.get(&starting.id).expect("held operation");
+        assert_eq!(held.status, OperationStatus::Paused);
+        assert_eq!(
+            held.attention_reason.as_deref(),
+            Some(
+                "Codex is showing a native permission prompt. Answer it, then run this member again."
+            )
+        );
+        assert!(resources.shutdown_checked());
+        core.shutdown();
     }
 
     #[test]

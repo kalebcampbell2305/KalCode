@@ -239,6 +239,9 @@ struct TurnInput {
     /// Delivering the recorded text later is the same message (no ephemeral context attached),
     /// so it may be kept as the thread's undelivered message.
     redeliverable: bool,
+    /// This is a dependency-gated Operations task for an already-live pane. A definite refusal
+    /// keeps that native terminal alive and returns the Operation to an explicit attention hold.
+    prepared_operation: bool,
 }
 
 impl TurnInput {
@@ -247,6 +250,7 @@ impl TurnInput {
             payload: text.clone(),
             record: Some(text),
             redeliverable: true,
+            prepared_operation: false,
         }
     }
 
@@ -255,6 +259,19 @@ impl TurnInput {
             payload: text,
             record: None,
             redeliverable: true,
+            prepared_operation: false,
+        }
+    }
+
+    /// A scheduler-owned prepared task is persisted for audit, but a refusal before the first
+    /// byte is still a terminal Operation attempt. Ordinary Resume must never replay it outside
+    /// that Operation; only explicit Run now may authorize a new attempt.
+    fn prepared(text: String) -> Self {
+        Self {
+            payload: text.clone(),
+            record: Some(text),
+            redeliverable: false,
+            prepared_operation: true,
         }
     }
 }
@@ -4005,6 +4022,7 @@ impl Inner {
             payload: provider_payload,
             record: Some(persisted_text),
             redeliverable,
+            prepared_operation: false,
         };
         self.deliver_locked(live, state, input, None)
     }
@@ -4070,6 +4088,31 @@ impl Inner {
             Err(error) => {
                 state.turn_in_flight = false;
                 tracing::warn!(event = "thread.send_failed", thread_id = %ctx.thread_id, error = %error);
+                if input.prepared_operation
+                    && matches!(
+                        error,
+                        ProviderError::Refused { .. } | ProviderError::Unsupported
+                    )
+                {
+                    // This is a definite pre-write refusal (native setup/permission/provider
+                    // prompt), so killing the real terminal would remove the very UI the person
+                    // needs to resolve it. Preserve the pane and require Operations Run now to
+                    // authorize another attempt; ordinary Resume has no undelivered task to send.
+                    state.dependency_wait = true;
+                    self.transition(
+                        ctx,
+                        ThreadStatus::WaitingForDependency,
+                        Some("Provider needs attention; Squad task remains held"),
+                    )?;
+                    let (_, message) = describe_provider_error(
+                        &error,
+                        self.row(&ctx.thread_id)?.provider_name.as_str(),
+                    );
+                    return Err(KalError::validation(
+                        "operation_prepared_provider_not_ready",
+                        message,
+                    ));
+                }
                 if never_delivered(&error) {
                     mark_undelivered(&recorded)?;
                 }
@@ -4166,7 +4209,7 @@ impl Inner {
         self.prompt_gate
             .verify(prompt.admission, &row_prompt_target(&row), &prompt.text)?;
         state.dependency_wait = false;
-        self.send_locked(&live, &mut state, prompt.text)
+        self.deliver_locked(&live, &mut state, TurnInput::prepared(prompt.text), None)
     }
 
     /// Interrupt (→ idle) or pause (→ paused) the current turn, keeping the session.
