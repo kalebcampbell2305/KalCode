@@ -17,15 +17,19 @@
 }
 
 .toast {
+  position: relative;
   display: grid;
   grid-template-columns: auto 1fr auto;
   align-items: start;
   gap: var(--space-3);
   padding: var(--space-3) var(--space-2) var(--space-3) var(--space-4);
-  border: 1px solid var(--color-border-strong);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius-lg);
-  background: var(--panel-sheen), var(--color-surface-3);
-  box-shadow: var(--shadow-xl);
+  background: var(--panel-sheen), var(--glass-bg);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.06),
+    var(--shadow-xl);
+  backdrop-filter: blur(var(--blur-glass)) saturate(1.3);
   pointer-events: auto;
   animation: enter var(--dur-base) var(--ease-emphasized);
 }
@@ -40,12 +44,39 @@
   height: 1rem;
 }
 
+/* A lit bar on the leading edge in the toast's tone: what kind of news, before reading it. */
+.toast::before {
+  position: absolute;
+  top: var(--space-3);
+  bottom: var(--space-3);
+  left: -1px;
+  width: 2px;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  box-shadow: 0 0 10px var(--color-glow);
+  content: "";
+}
+
+.success::before {
+  background: var(--status-working);
+  box-shadow: 0 0 10px var(--status-working-soft);
+}
+
 .success .icon {
   color: var(--status-working);
 }
 
 .danger {
   border-color: var(--status-failed-line);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.04),
+    var(--shadow-xl),
+    var(--glow-failed);
+}
+
+.danger::before {
+  background: var(--status-failed);
+  box-shadow: 0 0 10px var(--status-failed-soft);
 }
 
 .danger .icon {
