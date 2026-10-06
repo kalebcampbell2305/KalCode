@@ -937,8 +937,10 @@ export function createThreadsMemory(
     },
     // Agent Fleet: a fresh worktree is clean, level with main and merges cleanly; the agent's
     // edits show as uncommitted changes (the memory runtime doesn't commit).
-    thread_worktree_states: (args) => {
+    // Like native, the arguments arrive wrapped in `args` (`ThreadWorktreeStatesArgs`).
+    thread_worktree_states: (wrapped) => {
       requireCore();
+      const args = (wrapped.args ?? {}) as Record<string, unknown>;
       const ids = Array.isArray(args.threadIds) ? (args.threadIds as unknown[]) : [];
       if (ids.length > 64 || ids.some((id) => typeof id !== "string" || !UUID.test(id)))
         invalid("invalid_thread_ids", "Those thread references aren't valid.");
@@ -948,8 +950,9 @@ export function createThreadsMemory(
       });
     },
     // Like native: KalCode commits the isolated agent's changes on its branch, never while it works.
-    thread_worktree_commit: (args) => {
+    thread_worktree_commit: (wrapped) => {
       requireCore();
+      const args = (wrapped.args ?? {}) as Record<string, unknown>;
       const t = get(args);
       const message = typeof args.message === "string" ? args.message.trim() : "";
       if (!message || message.length > 2000) invalid("invalid_commit_message", "Write a commit message first.");
