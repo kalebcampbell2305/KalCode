@@ -231,6 +231,7 @@ test("a gate warns on a leaking kernel nonpaged pool and refuses before sockets 
   const healthy = run(Math.round(0.6 * GB));
   assert.equal(healthy.status, 0);
   assert.doesNotMatch(healthy.stdout, /::(warning|error)::/);
+  assert.match(healthy.stdout, /^Kernel nonpaged pool 0\.6 GB on GATE-PC\.$/m);
   const leaking = run(Math.round(3.78 * GB));
   assert.equal(leaking.status, 0, "a warning never fails the gate");
   assert.match(leaking.stdout, /::warning::GATE-PC's kernel nonpaged pool is 3\.78 GB/);
@@ -244,11 +245,19 @@ test("a gate warns on a leaking kernel nonpaged pool and refuses before sockets 
     encoding: "utf8",
     windowsHide: true,
   });
-  assert.match(
-    live.stdout,
-    /kernel nonpaged pool|Could not read/,
-    "the live counter is read (or skipped with a warning)",
-  );
+  // The live counter depends on the machine running this test (healthy on one gate PC, leaking on
+  // another; gate 37488419612 failed on a healthy second PC when only the warning wording matched),
+  // so any of the script's real outcomes is accepted, each with its exit code.
+  const outcome =
+    /^Kernel nonpaged pool [\d.]+ GB on .+\.$/m.test(live.stdout) ||
+    /::warning::.+'s kernel nonpaged pool is [\d.]+ GB \(warns at/.test(live.stdout) ||
+    /::warning::Could not read the kernel nonpaged pool size/.test(live.stdout)
+      ? 0
+      : /::error::.+'s kernel nonpaged pool is [\d.]+ GB \(limit/.test(live.stdout)
+        ? 1
+        : null;
+  assert.notEqual(outcome, null, `the live counter is read and reported: ${live.stdout}${live.stderr}`);
+  assert.equal(live.status, outcome, "its exit code matches the reported outcome");
 });
 
 test("selected-check outputs use Actions-compatible bytes on Windows PowerShell", {
