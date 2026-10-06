@@ -11,7 +11,20 @@ public struct HandshakeHello: Encodable, Sendable {
     public var ts: Int
 
     public init(device: String, model: String, app: String, pair: String?, ts: Int) {
-        self.device = device; self.model = model; self.app = app; self.pair = pair; self.ts = ts
+        self.device = Self.clean(device, fallback: "iPhone"); self.model = Self.clean(model, fallback: "iOS")
+        self.app = Self.clean(app, fallback: "1.0"); self.pair = pair; self.ts = ts
+    }
+
+    /// The desktop rejects hello fields over 64 characters or with control characters (`invalid`).
+    public static let maxFieldLength = 64
+
+    static func clean(_ value: String, fallback: String) -> String {
+        let scalars = value.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) }
+        var text = String(String.UnicodeScalarView(scalars)).trimmingCharacters(in: .whitespaces)
+        // Truncate by characters, then make sure the UTF-16/scalar count fits too.
+        if text.count > maxFieldLength { text = String(text.prefix(maxFieldLength)) }
+        while text.unicodeScalars.count > maxFieldLength { text.removeLast() }
+        return text.isEmpty ? fallback : text
     }
 }
 
@@ -36,7 +49,7 @@ public enum HandshakeRejection: String, Error, Sendable {
     case unpaired, revoked
     case pairingExpired = "pairing_expired"
     case notEntitled = "not_entitled"
-    case busy, version, unknown
+    case busy, version, invalid, unknown
 
     public init(code: String?) { self = HandshakeRejection(rawValue: code ?? "") ?? .unknown }
 
@@ -101,6 +114,9 @@ public enum InboundMessage: Sendable {
 
 /// Every device → desktop message.
 public enum OutboundMessage: Sendable {
+    /// Device → desktop messages are capped at 256 KiB (the desktop closes on larger ones).
+    public static let maxEncodedSize = 256 * 1024
+
     case hello
     case req(id: String, op: String, args: [String: JSONValue])
     case ping(n: Int)

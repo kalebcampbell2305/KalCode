@@ -196,6 +196,24 @@ final class LoopbackClientTests: XCTestCase {
         XCTAssertEqual(client.removedWorkstationName, "Loopback Workstation")
     }
 
+    func testByeReplacedGoesOfflineWithoutReconnectLoop() async throws {
+        let host = try LoopbackHost()
+        host.script = { _, s in
+            _ = try await s.expect("hello")
+            try s.host(loopbackSnapshot(rev: 1, agents: 1))
+            try await Task.sleep(nanoseconds: 200_000_000)
+            try s.host(["t": "bye", "reason": "replaced"])
+            try await Task.sleep(nanoseconds: 200_000_000)
+        }
+        let client = makeClient()
+        try await client.pair(with: host.pairingPayload())
+        try await until("offline replaced") { client.status == .offline(.replaced) }
+        try await Task.sleep(nanoseconds: 1_500_000_000)
+        XCTAssertEqual(host.connections, 1, "no reconnect loop after `replaced`")
+        XCTAssertNotNil(client.workstation, "still paired")
+        client.unpair()
+    }
+
     func testHandshakeRejectionSurfacesAndDoesNotPair() async throws {
         let host = try LoopbackHost()
         host.reject = "pairing_expired"

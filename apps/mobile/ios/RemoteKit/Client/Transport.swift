@@ -145,6 +145,7 @@ public final class SecureSession: @unchecked Sendable {
     /// Encrypts and sends one application message. Thread-safe; frames keep nonce order.
     public func send(_ message: OutboundMessage) throws {
         let json = try message.encoded()
+        guard json.count <= OutboundMessage.maxEncodedSize else { throw RemoteRequestError.tooLarge }
         sendLock.lock()
         defer { sendLock.unlock() }
         for chunk in try Framing.appMessageChunks(json) {

@@ -23,6 +23,8 @@ public enum OfflineReason: Equatable, Sendable {
     case disabled           // Remote was turned off on the workstation
     case notEntitled        // the plan doesn't include Remote
     case versionMismatch    // the desktop speaks a different protocol version
+    case replaced           // a newer session from this device took over (max 2 per device)
+    case invalidHello       // the desktop refused this device's hello fields
 }
 
 public enum RemovedReason: Equatable, Sendable {
@@ -41,6 +43,14 @@ public enum RemoteRequestError: Error, Equatable, Sendable {
     case connectionLost
     case timeout
     case invalidResponse
+    /// Over the 256 KiB device → desktop message cap.
+    case tooLarge
+
+    /// The desktop's per-device rate limit (`refused` / "rate limited"). Never auto-retried.
+    public var isRateLimited: Bool {
+        if case let .remote(code, message) = self { return code == "refused" && (message ?? "").lowercased().contains("rate limit") }
+        return false
+    }
 
     public var code: String? { if case .remote(let code, _) = self { return code }; return nil }
 }
@@ -87,6 +97,8 @@ public final class RemoteClient {
     public static let silenceTimeout: TimeInterval = 35
     public static let offlineAfter: TimeInterval = 30
     public static let requestTimeout: TimeInterval = 30
+    /// The desktop answers `unavailable` beyond 16 requests in flight per connection.
+    public static let maxInFlight = 16
 
     private struct Pending {
         let op: String
@@ -141,6 +153,13 @@ public final class RemoteClient {
             pairing.clear()
             throw error
         }
+        do {
+            try session.send(.hello)
+        } catch {
+            session.close()
+            pairing.clear()
+            throw error
+        }
         let record = PairedWorkstation(
             wid: session.reply.wid ?? payload.wid,
             name: session.reply.name ?? payload.name,
@@ -155,14 +174,14 @@ public final class RemoteClient {
         removedWorkstationName = nil
         fleet.reset()
         status = .connecting
-        launchLoop(initial: session)
+        launchLoop(initial: session, helloSent: true)
     }
 
-    private func launchLoop(initial: SecureSession?) {
+    private func launchLoop(initial: SecureSession?, helloSent: Bool = false) {
         loopGeneration += 1
         let generation = loopGeneration
         loopTask = Task { [weak self] in
-            await self?.runLoop(initial: initial)
+            await self?.runLoop(initial: initial, helloSent: helloSent)
             guard let self, self.loopGeneration == generation else { return }
             self.loopTask = nil
         }
@@ -222,6 +241,10 @@ public final class RemoteClient {
     }
 
     private func sendNow(id: String, op: String, args: [String: JSONValue]) async throws -> Data {
+        // Stay under the desktop's in-flight cap instead of earning `unavailable`.
+        while pending.count >= Self.maxInFlight, session != nil {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
         guard let session else { throw RemoteRequestError.notConnected }
         return try await withCheckedThrowingContinuation { continuation in
             let timeout = Task { [weak self] in
@@ -284,8 +307,21 @@ public final class RemoteClient {
             guard let waiter = queueWaiters.removeValue(forKey: item.id) else { continue }
             Task { [weak self] in
                 guard let self else { return }
-                do { waiter.resume(returning: try await self.sendNow(id: item.id, op: item.op, args: item.args)) }
-                catch { waiter.resume(throwing: error) }
+                var attempt = 0
+                while true {
+                    do {
+                        waiter.resume(returning: try await self.sendNow(id: item.id, op: item.op, args: item.args))
+                        return
+                    } catch let error as RemoteRequestError where error.code == "conflict" && attempt < 5 {
+                        // The desktop is still running the first copy of this id; its stored
+                        // result becomes available when it finishes. Never send a new id.
+                        attempt += 1
+                        try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    } catch {
+                        waiter.resume(throwing: error)
+                        return
+                    }
+                }
             }
         }
     }
@@ -321,7 +357,8 @@ public final class RemoteClient {
         }
     }
 
-    private func runLoop(initial: SecureSession? = nil) async {
+    private func runLoop(initial: SecureSession? = nil, helloSent: Bool = false) async {
+        var initialHelloSent = helloSent
         var backoff = Backoff()
         var next = initial
         while !Task.isCancelled, let ws = workstation {
@@ -340,7 +377,9 @@ public final class RemoteClient {
                 }
                 if Task.isCancelled { session.close(); return }
                 backoff.reset()
-                try await run(session)
+                let skipHello = initialHelloSent
+                initialHelloSent = false
+                try await run(session, helloSent: skipHello)
             } catch let rejection as HandshakeRejection {
                 if handle(rejection) { return }
             } catch let bye as ByeReceived {
@@ -359,7 +398,7 @@ public final class RemoteClient {
     private struct Silence: Error {}
 
     /// Runs one live session until it ends. Throws why it ended.
-    private func run(_ session: SecureSession) async throws {
+    private func run(_ session: SecureSession, helloSent: Bool = false) async throws {
         self.session = session
         defer {
             session.close()
@@ -372,7 +411,7 @@ public final class RemoteClient {
             workstation = ws
         }
         lastInbound = env.now()
-        try session.send(.hello)
+        if !helloSent { try session.send(.hello) }
 
         let keepalive = Task { [weak self] in
             while !Task.isCancelled {
@@ -479,6 +518,10 @@ public final class RemoteClient {
             status = .offline(.versionMismatch)
             failQueue(with: .notConnected)
             return true
+        case .invalid:
+            status = .offline(.invalidHello)
+            failQueue(with: .notConnected)
+            return true
         case .pairingExpired, .busy, .unknown:
             return false
         }
@@ -491,6 +534,13 @@ public final class RemoteClient {
             return true
         case "disabled":
             status = .offline(.disabled)
+        case "replaced":
+            // Another session from this device took over; don't fight it with a reconnect loop.
+            status = .offline(.replaced)
+            disconnectedSince = env.now()
+            failQueue(with: .notConnected)
+            failPending()
+            return true
         case "not_entitled":
             status = .offline(.notEntitled)
         default:

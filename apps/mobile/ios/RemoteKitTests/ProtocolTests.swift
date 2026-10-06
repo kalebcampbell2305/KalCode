@@ -100,6 +100,21 @@ final class MessageTests: XCTestCase {
         XCTAssertEqual(diff.files[0].hunks[0].lines.map(\.kind), [.delete, .add, .context, .add])
     }
 
+    func testHelloFieldsAreSanitizedToTheDesktopLimits() throws {
+        let hello = HandshakeHello(device: "Kaleb's\u{0007} " + String(repeating: "📱", count: 80), model: "iPhone17,1\n", app: "", pair: nil, ts: 1)
+        XCTAssertLessThanOrEqual(hello.device.unicodeScalars.count, 64)
+        XCTAssertFalse(hello.device.unicodeScalars.contains { CharacterSet.controlCharacters.contains($0) })
+        XCTAssertEqual(hello.model, "iPhone17,1")
+        XCTAssertEqual(hello.app, "1.0")
+    }
+
+    func testSizeCapAndRateLimitClassification() throws {
+        let big = String(repeating: "x", count: OutboundMessage.maxEncodedSize)
+        XCTAssertGreaterThan(try OutboundMessage.req(id: "x", op: "agent.prompt", args: ["text": .string(big)]).encoded().count, OutboundMessage.maxEncodedSize)
+        XCTAssertTrue(RemoteRequestError.remote(code: "refused", message: "rate limited").isRateLimited)
+        XCTAssertFalse(RemoteRequestError.remote(code: "refused", message: "agent has an open approval").isRateLimited)
+    }
+
     func testOutboundEncoding() throws {
         let req = try OutboundMessage.req(id: "x", op: "agent.prompt", args: ["agentId": "thr_1", "text": "hi"]).encoded()
         XCTAssertEqual(String(data: req, encoding: .utf8), #"{"args":{"agentId":"thr_1","text":"hi"},"id":"x","op":"agent.prompt","t":"req"}"#)
