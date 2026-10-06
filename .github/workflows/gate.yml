@@ -63,13 +63,37 @@ jobs:
       # no code under test sees the token.
       - name: Reuse the merge-train gate of this exact commit
         id: reuse
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && startsWith(github.head_ref, 'release/website-'))
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' }
           $api = "$env:GITHUB_API_URL/repos/$env:GITHUB_REPOSITORY/actions"
+          # The release kit's website-record PR (release/website-*) changes only the release record and
+          # release notes, the paths the train treats as evidence-preserving (merge-train/train.mjs
+          # isReleaseRecordPath). The kit gates it itself before merging (exact diff set, check:releases,
+          # website typecheck/unit/build/e2e), so gating it here only held pool workers lanes needed. A PR
+          # that changes, renames or removes anything else gates as usual.
+          if ($env:GITHUB_EVENT_NAME -eq 'pull_request') {
+            $record = { param($path) $path -eq 'apps/website/src/data/releases.json' -or ($path -is [string] -and $path.StartsWith('docs/releases/')) }
+            try {
+              $files = @(); $page = 1
+              do {
+                $batch = @(Invoke-RestMethod -Headers $headers -Uri "$env:GITHUB_API_URL/repos/$env:GITHUB_REPOSITORY/pulls/$env:PR_NUMBER/files?per_page=100&page=$page")
+                $files += $batch; $page++
+              } while ($batch.Count -eq 100 -and $page -le 30)
+              $other = @($files | Where-Object { -not (& $record $_.filename) -or ($_.previous_filename -and -not (& $record $_.previous_filename)) })
+              if ($files.Count -gt 0 -and $other.Count -eq 0) {
+                Write-Output "Release-record PR #$($env:PR_NUMBER): only the release record and notes changed; the release kit gates it."
+                Add-Content -Path $env:GITHUB_OUTPUT -Encoding ascii -Value 'reused=true'
+              }
+            } catch {
+              Write-Output "::warning::Could not list the PR's files ($($_.Exception.Message)); gating."
+            }
+            exit 0
+          }
           try {
             $runs = (Invoke-RestMethod -Headers $headers -Uri "$api/workflows/gate.yml/runs?head_sha=$env:GITHUB_SHA&per_page=20").workflow_runs
             foreach ($run in $runs) {
@@ -311,13 +335,37 @@ jobs:
       # no code under test sees the token.
       - name: Reuse the merge-train gate of this exact commit
         id: reuse
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && startsWith(github.head_ref, 'release/website-'))
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' }
           $api = "$env:GITHUB_API_URL/repos/$env:GITHUB_REPOSITORY/actions"
+          # The release kit's website-record PR (release/website-*) changes only the release record and
+          # release notes, the paths the train treats as evidence-preserving (merge-train/train.mjs
+          # isReleaseRecordPath). The kit gates it itself before merging (exact diff set, check:releases,
+          # website typecheck/unit/build/e2e), so gating it here only held pool workers lanes needed. A PR
+          # that changes, renames or removes anything else gates as usual.
+          if ($env:GITHUB_EVENT_NAME -eq 'pull_request') {
+            $record = { param($path) $path -eq 'apps/website/src/data/releases.json' -or ($path -is [string] -and $path.StartsWith('docs/releases/')) }
+            try {
+              $files = @(); $page = 1
+              do {
+                $batch = @(Invoke-RestMethod -Headers $headers -Uri "$env:GITHUB_API_URL/repos/$env:GITHUB_REPOSITORY/pulls/$env:PR_NUMBER/files?per_page=100&page=$page")
+                $files += $batch; $page++
+              } while ($batch.Count -eq 100 -and $page -le 30)
+              $other = @($files | Where-Object { -not (& $record $_.filename) -or ($_.previous_filename -and -not (& $record $_.previous_filename)) })
+              if ($files.Count -gt 0 -and $other.Count -eq 0) {
+                Write-Output "Release-record PR #$($env:PR_NUMBER): only the release record and notes changed; the release kit gates it."
+                Add-Content -Path $env:GITHUB_OUTPUT -Encoding ascii -Value 'reused=true'
+              }
+            } catch {
+              Write-Output "::warning::Could not list the PR's files ($($_.Exception.Message)); gating."
+            }
+            exit 0
+          }
           try {
             $runs = (Invoke-RestMethod -Headers $headers -Uri "$api/workflows/gate.yml/runs?head_sha=$env:GITHUB_SHA&per_page=20").workflow_runs
             foreach ($run in $runs) {
