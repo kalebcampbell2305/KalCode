@@ -45,6 +45,10 @@ const CODEX_TRUTH_TTL: Duration = Duration::from_secs(5 * 60);
 // Cancellation must allow the observer's 500 ms termination grace plus Windows'
 // bounded 5 s process-tree reap before treating the account as still busy.
 const ACCOUNT_VALIDATION_PREEMPT_TIMEOUT: Duration = Duration::from_secs(6);
+// Account model discovery is informational and starts asynchronously from the UI. Give an exact
+// account's startup refresh time to publish its auth truth instead of leaking that internal
+// single-flight as a user-visible error. This never cancels the incumbent validation.
+const ACCOUNT_CATALOG_VALIDATION_WAIT: Duration = Duration::from_secs(6);
 const MAX_PENDING_LOGINS: usize = 8;
 const AUTH_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -535,6 +539,50 @@ impl ProviderRuntimeAuthority {
             key,
             canceled,
         })
+    }
+
+    /// Waits for one exact account validation and takes its slot atomically. Catalog reads are
+    /// allowed to follow a startup refresh, but must never cancel it or race another refresh into
+    /// the gap between observing a free slot and claiming it.
+    fn begin_account_catalog_validation(
+        &self,
+        provider: &str,
+        account_id: &str,
+        timeout: Duration,
+    ) -> Result<AccountValidation, RuntimeAuthError> {
+        let key = (provider.to_owned(), account_id.to_owned());
+        let started = Instant::now();
+        let deadline = started.checked_add(timeout).unwrap_or(started);
+        let mut active = self
+            .inner
+            .active_validations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        loop {
+            if !active.contains_key(&key) {
+                let canceled = Arc::new(AtomicBool::new(false));
+                active.insert(key.clone(), Arc::clone(&canceled));
+                return Ok(AccountValidation {
+                    runtime: self.clone(),
+                    key,
+                    canceled,
+                });
+            }
+
+            let now = Instant::now();
+            if now >= deadline {
+                return Err(RuntimeAuthError::Busy);
+            }
+            let waited = self
+                .inner
+                .validation_changed
+                .wait_timeout(active, deadline.saturating_duration_since(now))
+                .unwrap_or_else(PoisonError::into_inner);
+            active = waited.0;
+            if waited.1.timed_out() && active.contains_key(&key) {
+                return Err(RuntimeAuthError::Busy);
+            }
+        }
     }
 
     /// Supersedes one exact background validation before a foreground Codex plan read. The
@@ -1077,7 +1125,11 @@ impl ProviderRuntimeAuthority {
         account_id: &str,
         allow_config_repair: bool,
     ) -> Result<Vec<ProviderAccountModel>, RuntimeAuthError> {
-        let validation = self.begin_account_validation(ProviderId::CODEX, account_id)?;
+        let validation = self.begin_account_catalog_validation(
+            ProviderId::CODEX,
+            account_id,
+            ACCOUNT_CATALOG_VALIDATION_WAIT,
+        )?;
         let cancellation = validation.cancellation();
         let manager = self
             .inner
@@ -3036,6 +3088,162 @@ mod tests {
             .runtime
             .begin_account_validation(ProviderId::CODEX, &fixture.account.id)
             .expect("exact validation registry released");
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn account_model_catalog_waits_for_the_exact_validation_then_acquires_it() {
+        let mut fixture = Fixture::new();
+        install_read_only_codex_app_server(&mut fixture, "pro", false, false);
+        let validation = fixture
+            .runtime
+            .begin_account_validation(ProviderId::CODEX, &fixture.account.id)
+            .expect("startup validation");
+        let cancellation = validation.cancellation();
+        let runtime = fixture.runtime.clone();
+        let account_id = fixture.account.id.clone();
+        let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(0);
+        let (result_tx, result_rx) = std::sync::mpsc::sync_channel(0);
+        let catalog = std::thread::spawn(move || {
+            entered_tx.send(()).expect("catalog entered");
+            result_tx
+                .send(runtime.account_models(&account_id))
+                .expect("catalog result received");
+        });
+
+        entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("catalog entered");
+        assert!(
+            result_rx.recv_timeout(Duration::from_millis(100)).is_err(),
+            "catalog discovery must wait instead of surfacing a transient busy error"
+        );
+        assert!(
+            !cancellation.load(Ordering::Acquire),
+            "catalog discovery must not cancel the startup refresh"
+        );
+
+        drop(validation);
+        let result = result_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("catalog resumes after validation release")
+            .expect("catalog succeeds");
+        assert_eq!(result.models[0].id, "codex-test-exact");
+        catalog.join().expect("catalog joins");
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn account_model_catalog_timeout_never_cancels_the_incumbent_validation() {
+        let fixture = Fixture::new();
+        let validation = fixture
+            .runtime
+            .begin_account_validation(ProviderId::CODEX, &fixture.account.id)
+            .expect("startup validation");
+        let cancellation = validation.cancellation();
+
+        assert!(matches!(
+            fixture.runtime.begin_account_catalog_validation(
+                ProviderId::CODEX,
+                &fixture.account.id,
+                Duration::from_millis(25),
+            ),
+            Err(RuntimeAuthError::Busy)
+        ));
+        assert!(
+            !cancellation.load(Ordering::Acquire),
+            "a catalog timeout must leave the foreground validation untouched"
+        );
+        assert!(matches!(
+            fixture
+                .runtime
+                .begin_account_validation(ProviderId::CODEX, &fixture.account.id),
+            Err(RuntimeAuthError::Busy)
+        ));
+        drop(validation);
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn account_model_catalog_validation_does_not_wait_for_another_account() {
+        let fixture = Fixture::new();
+        let other = fixture
+            .runtime
+            .account_store()
+            .create(ProviderId::CODEX, "Other")
+            .expect("other account");
+        let validation = fixture
+            .runtime
+            .begin_account_validation(ProviderId::CODEX, &fixture.account.id)
+            .expect("startup validation");
+        let cancellation = validation.cancellation();
+
+        let catalog = fixture
+            .runtime
+            .begin_account_catalog_validation(ProviderId::CODEX, &other.id, Duration::ZERO)
+            .expect("another account claims its independent slot immediately");
+        assert!(!cancellation.load(Ordering::Acquire));
+        assert!(!catalog.cancellation().load(Ordering::Acquire));
+        drop(catalog);
+        drop(validation);
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn same_account_catalog_validations_serialize_without_overlap() {
+        let fixture = Fixture::new();
+        let first = fixture
+            .runtime
+            .begin_account_catalog_validation(
+                ProviderId::CODEX,
+                &fixture.account.id,
+                Duration::ZERO,
+            )
+            .expect("first catalog validation");
+        let runtime = fixture.runtime.clone();
+        let account_id = fixture.account.id.clone();
+        let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(0);
+        let (acquired_tx, acquired_rx) = std::sync::mpsc::sync_channel(0);
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(0);
+        let second = std::thread::spawn(move || {
+            entered_tx.send(()).expect("second entered");
+            let validation = runtime
+                .begin_account_catalog_validation(
+                    ProviderId::CODEX,
+                    &account_id,
+                    Duration::from_secs(2),
+                )
+                .expect("second catalog validation");
+            acquired_tx.send(()).expect("second acquired");
+            release_rx.recv().expect("second released");
+            drop(validation);
+        });
+
+        entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("second entered");
+        assert!(
+            acquired_rx
+                .recv_timeout(Duration::from_millis(100))
+                .is_err(),
+            "the second catalog validation cannot overlap the first"
+        );
+        drop(first);
+        acquired_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("second acquires after first releases");
+        assert!(matches!(
+            fixture
+                .runtime
+                .begin_account_validation(ProviderId::CODEX, &fixture.account.id),
+            Err(RuntimeAuthError::Busy)
+        ));
+        release_tx.send(()).expect("release second");
+        second.join().expect("second joins");
+        let _released = fixture
+            .runtime
+            .begin_account_validation(ProviderId::CODEX, &fixture.account.id)
+            .expect("second released exact account slot");
     }
 
     #[cfg(any(windows, target_os = "macos"))]
