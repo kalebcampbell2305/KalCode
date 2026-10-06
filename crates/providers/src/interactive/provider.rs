@@ -178,9 +178,10 @@ impl PaneRegistry {
         shared.write(data)
     }
 
-    /// Voice input stays in the ordinary pane PTY but holds the registry generation and provider
-    /// lifecycle locks through the write. This prevents a replacement session or native prompt
-    /// transition from receiving a trusted Enter.
+    /// Voice input stays in the ordinary pane PTY of exactly the observed provider instance and
+    /// holds that provider's lifecycle lock through the write, so a native prompt transition
+    /// can't receive a trusted Enter. A replacement session is a different instance with its own
+    /// PTY, so the registry lock is released before writing and never blocks resize/attach.
     pub fn write_voice(
         &self,
         thread_id: &str,
@@ -190,8 +191,7 @@ impl PaneRegistry {
         if data.len() > super::session::MAX_WRITE_BYTES {
             return Err(PaneVoiceWriteError::Io);
         }
-        let panes = lock(&self.panes);
-        let shared = panes
+        let shared = self
             .get(thread_id)
             .ok_or(PaneVoiceWriteError::SessionEnded)?;
         if shared.instance_id() != instance_id {
@@ -202,10 +202,13 @@ impl PaneRegistry {
 
     /// Delivers one automated handoff to exactly the observed provider instance.
     ///
-    /// The registry generation lock and provider lifecycle lock cover the final readiness check,
-    /// `before_write`, and the single bracketed-paste + Enter write. `before_write` is where the
-    /// caller durably claims a queued handoff; it must not re-enter this registry. It is never
-    /// called for a stale, busy, prompted, unverified, dirty, or ended target.
+    /// The provider lifecycle lock covers the final readiness check, `before_write`, and the
+    /// single bracketed-paste + Enter write. `before_write` is where the caller durably claims a
+    /// queued handoff; it must not re-enter this pane. It is never called for a stale, busy,
+    /// prompted, unverified, dirty, or ended target. The registry lock is released once the
+    /// exact instance is resolved: a replacement is a different instance with its own PTY, and a
+    /// stopping or reconfiguring instance is refused under its lifecycle lock, so the claim and
+    /// up-to-5 s acknowledged write never block resize, attach, or detach on the main thread.
     pub fn deliver_handoff<F>(
         &self,
         thread_id: &str,
@@ -216,8 +219,7 @@ impl PaneRegistry {
     where
         F: FnOnce() -> Result<(), HandoffDeliveryError>,
     {
-        let panes = lock(&self.panes);
-        let shared = panes
+        let shared = self
             .get(thread_id)
             .ok_or(HandoffDeliveryError::SessionEnded)?;
         if shared.instance_id() != expected_instance_id {
@@ -227,7 +229,7 @@ impl PaneRegistry {
     }
 
     /// Advisory readiness check for queue backoff. Delivery always repeats the same checks while
-    /// holding the registry and lifecycle locks before the durable claim.
+    /// holding the provider lifecycle lock before the durable claim.
     pub fn handoff_readiness(
         &self,
         thread_id: &str,
