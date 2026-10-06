@@ -334,6 +334,48 @@ fn adapter(
     Some(adapter)
 }
 
+fn sync_cached_provider_statuses<F>(
+    providers: &ProviderRegistry,
+    statuses: Vec<ProviderStatus>,
+    usable: &[ProviderId],
+    mut make_provider: F,
+) where
+    F: FnMut(&ProviderStatus) -> Option<Arc<dyn AgentProvider>>,
+{
+    for status in statuses {
+        if status.adapter != AdapterState::Implemented {
+            continue;
+        }
+        if usable.contains(&status.id) {
+            if providers.get(&status.id).is_none()
+                && let Some(provider) = make_provider(&status)
+            {
+                providers.register(provider);
+                tracing::info!(
+                    event = "threads.provider_registered",
+                    provider_id = status.id.as_str()
+                );
+            }
+        } else if providers.unregister(&status.id) {
+            tracing::info!(
+                event = "threads.provider_unregistered",
+                provider_id = status.id.as_str()
+            );
+        }
+    }
+}
+
+fn ensure_cached_provider_registry<D, S>(never_detected: bool, detect: D, sync: S)
+where
+    D: FnOnce(),
+    S: FnOnce(),
+{
+    if never_detected {
+        detect();
+    }
+    sync();
+}
+
 impl ThreadsState {
     /// Starts the thread runtime over `core`.
     ///
@@ -418,39 +460,20 @@ impl ThreadsState {
     /// rest. Threads already running keep their sessions. Uses the cached detection.
     pub fn sync_providers(&self) {
         let usable = self.detection.usable();
-        for status in self.detection.list() {
-            if status.adapter != AdapterState::Implemented {
-                continue;
-            }
-            if usable.contains(&status.id) {
-                if self.providers.get(&status.id).is_none()
-                    && let Some(runtime) = &self.provider_runtime
-                    && let Some(provider) = adapter(
-                        &status,
-                        runtime.clone(),
-                        &self.routes,
-                        self.health.as_ref(),
-                        self.resources.clone(),
-                    )
-                {
-                    self.providers.register(Arc::new(
-                        crate::unified_memory_commands::MemoryProvider {
-                            inner: provider,
-                            memory: self.memory.clone(),
-                        },
-                    ));
-                    tracing::info!(
-                        event = "threads.provider_registered",
-                        provider_id = status.id.as_str()
-                    );
-                }
-            } else if self.providers.unregister(&status.id) {
-                tracing::info!(
-                    event = "threads.provider_unregistered",
-                    provider_id = status.id.as_str()
-                );
-            }
-        }
+        sync_cached_provider_statuses(&self.providers, self.detection.list(), &usable, |status| {
+            let runtime = self.provider_runtime.as_ref()?;
+            let provider = adapter(
+                status,
+                runtime.clone(),
+                &self.routes,
+                self.health.as_ref(),
+                self.resources.clone(),
+            )?;
+            Some(Arc::new(crate::unified_memory_commands::MemoryProvider {
+                inner: provider,
+                memory: self.memory.clone(),
+            }))
+        });
     }
 
     /// Before the first thread operation of a session, detects providers once (read-only:
@@ -462,10 +485,18 @@ impl ThreadsState {
             .list()
             .iter()
             .all(|status| status.detection.is_none());
-        if never_detected {
-            detect_once_and_record(core, &self.detection);
-            self.sync_providers();
-        }
+        ensure_cached_provider_registry(
+            never_detected,
+            || {
+                detect_once_and_record(core, &self.detection);
+            },
+            || {
+                // Detection and the thread runtime have separate process-local registries.
+                // Startup can finish before the cached provider check does, so every consumer
+                // must project the latest cached truth even when it did not run detection itself.
+                self.sync_providers();
+            },
+        );
     }
 
     /// Validates an Operations agent task and resolves the exact provider/account/model selection
@@ -932,12 +963,14 @@ fn validate_creation_account(
 #[tauri::command(async)]
 pub fn thread_list(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    app: State<'_, AppState>,
     state: crate::runtime_coordinator::RuntimeState<ThreadsState>,
     panes: crate::runtime_coordinator::RuntimeState<ProviderPanesState>,
     workspace_id: Option<String>,
     include_archived: Option<bool>,
 ) -> Result<Vec<ThreadSummary>, IpcError> {
     _runtime_access.revalidate()?;
+    state.ensure_providers(app.core.as_ref());
     let mut threads = state
         .runtime()?
         .list(workspace_id.as_deref(), include_archived.unwrap_or(false))
@@ -952,11 +985,13 @@ pub fn thread_list(
 #[tauri::command(async)]
 pub fn thread_get(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    app: State<'_, AppState>,
     state: crate::runtime_coordinator::RuntimeState<ThreadsState>,
     panes: crate::runtime_coordinator::RuntimeState<ProviderPanesState>,
     thread_id: String,
 ) -> Result<ThreadSummary, IpcError> {
     _runtime_access.revalidate()?;
+    state.ensure_providers(app.core.as_ref());
     let mut thread = state
         .runtime()?
         .get(&thread_id)
@@ -1738,6 +1773,50 @@ mod tests {
         }
     }
 
+    struct CapabilitySpy {
+        id: ProviderId,
+        display_name: String,
+        detection: ProviderDetection,
+        capabilities: ProviderCapabilities,
+    }
+
+    impl CapabilitySpy {
+        fn from_status(status: &ProviderStatus) -> Self {
+            Self {
+                id: status.id.clone(),
+                display_name: status.display_name.clone(),
+                detection: status.detection.clone().expect("cached detection"),
+                capabilities: status.capabilities.clone(),
+            }
+        }
+    }
+
+    impl AgentProvider for CapabilitySpy {
+        fn id(&self) -> ProviderId {
+            self.id.clone()
+        }
+
+        fn display_name(&self) -> &str {
+            &self.display_name
+        }
+
+        fn detect(&self) -> ProviderDetection {
+            self.detection.clone()
+        }
+
+        fn capabilities(&self) -> ProviderCapabilities {
+            self.capabilities.clone()
+        }
+
+        fn start_session(
+            &self,
+            _config: SessionConfig,
+            _sink: Box<dyn AgentEventSink>,
+        ) -> Result<Box<dyn AgentSession>, ProviderError> {
+            Err(ProviderError::Unsupported)
+        }
+    }
+
     fn session_config(provider_account_id: Option<String>) -> SessionConfig {
         SessionConfig {
             thread_id: kalcode_contracts::ids::new_id(),
@@ -1980,6 +2059,147 @@ mod tests {
                 false,
             )
         }
+    }
+
+    #[test]
+    fn cached_provider_capabilities_are_synced_before_recovery_summaries() {
+        let fixture = AccountFixture::new();
+        let providers = Arc::new(ProviderRegistry::new());
+        let runtime = ThreadRuntime::new(
+            fixture.core.clone(),
+            providers.clone(),
+            Arc::new(CoreWorkspaces::new(fixture.core.clone())),
+            Arc::new(kalcode_contracts::permissions::AskUnlessReadGate),
+        )
+        .expect("runtime");
+
+        let mut resumable_status = kalcode_providers::catalog::statuses()
+            .into_iter()
+            .find(|status| status.capabilities.resume)
+            .expect("catalog provider with resume support");
+        resumable_status.detection = Some(ProviderDetection {
+            provider_id: resumable_status.id.clone(),
+            display_name: resumable_status.display_name.clone(),
+            state: DetectionState::Installed,
+            display_path: None,
+            version: None,
+            minimum_version: None,
+            auth: AuthState::Authenticated,
+            message: None,
+            checked_at: "cached".into(),
+        });
+        let mut no_resume_status = resumable_status.clone();
+        no_resume_status.id = ProviderId::new("no-resume-fixture");
+        no_resume_status.display_name = "No resume fixture".into();
+        no_resume_status.capabilities.resume = false;
+        no_resume_status.detection = Some(ProviderDetection {
+            provider_id: no_resume_status.id.clone(),
+            display_name: no_resume_status.display_name.clone(),
+            ..no_resume_status
+                .detection
+                .clone()
+                .expect("cached detection")
+        });
+
+        let resumable_id = kalcode_contracts::ids::new_id();
+        let missing_session_id = kalcode_contracts::ids::new_id();
+        let unsupported_id = kalcode_contracts::ids::new_id();
+        let now = kalcode_core::time::now_rfc3339();
+        let cwd = fixture._temp.path().join("workspace").display().to_string();
+        fixture
+            .core
+            .transact(|tx| {
+                for (id, status, session_id) in [
+                    (&resumable_id, &resumable_status, Some("provider-session")),
+                    (&missing_session_id, &resumable_status, None),
+                    (&unsupported_id, &no_resume_status, Some("provider-session")),
+                ] {
+                    kalcode_threads::store::insert_thread(
+                        tx,
+                        &kalcode_threads::store::NewThreadRow {
+                            id,
+                            name: "Recovery fixture",
+                            provider_id: &status.id,
+                            provider_name: &status.display_name,
+                            model: None,
+                            effort: None,
+                            provider_account_id: None,
+                            account_label: None,
+                            workspace_id: &fixture.workspace_id,
+                            workspace_name: "Fixture",
+                            cwd: &cwd,
+                            permission_mode: PermissionMode::Approve,
+                            now: &now,
+                        },
+                    )?;
+                    kalcode_threads::store::set_status(
+                        tx,
+                        id,
+                        ThreadStatus::Interrupted,
+                        Some(kalcode_threads::runtime::SHUTDOWN_ACTIVITY),
+                        &now,
+                    )?;
+                    if let Some(session_id) = session_id {
+                        kalcode_threads::store::set_provider_session(tx, id, session_id, None)?;
+                    }
+                }
+                Ok(((), Vec::new()))
+            })
+            .expect("durable recovery rows");
+
+        assert!(
+            !runtime.get(&resumable_id).expect("cold summary").resumable,
+            "a cold process-local registry cannot claim resume before cached capabilities sync"
+        );
+        let statuses = vec![resumable_status.clone(), no_resume_status.clone()];
+        let usable = statuses
+            .iter()
+            .map(|status| status.id.clone())
+            .collect::<Vec<_>>();
+        sync_cached_provider_statuses(&providers, statuses, &usable, |status| {
+            Some(Arc::new(CapabilitySpy::from_status(status)))
+        });
+
+        assert!(
+            runtime
+                .get(&resumable_id)
+                .expect("synced summary")
+                .resumable
+        );
+        assert!(
+            !runtime
+                .get(&missing_session_id)
+                .expect("missing session summary")
+                .resumable
+        );
+        assert!(
+            !runtime
+                .get(&unsupported_id)
+                .expect("unsupported summary")
+                .resumable
+        );
+        runtime.shutdown();
+    }
+
+    #[test]
+    fn provider_registry_sync_always_runs_after_optional_detection() {
+        let detections = std::cell::Cell::new(0);
+        let syncs = std::cell::Cell::new(0);
+        ensure_cached_provider_registry(
+            false,
+            || detections.set(detections.get() + 1),
+            || syncs.set(syncs.get() + 1),
+        );
+        assert_eq!(detections.get(), 0, "cached status must skip detection");
+        assert_eq!(syncs.get(), 1, "cached status must still sync");
+
+        ensure_cached_provider_registry(
+            true,
+            || detections.set(detections.get() + 1),
+            || syncs.set(syncs.get() + 1),
+        );
+        assert_eq!(detections.get(), 1, "empty status must run detection once");
+        assert_eq!(syncs.get(), 2, "fresh detection must sync before summaries");
     }
 
     #[test]

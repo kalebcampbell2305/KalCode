@@ -26,6 +26,12 @@ Review reproduced stale recovery banners after successful resume, false resumabl
 
 Independent reviewer found no remaining blocker in the final TypeScript/UI scope. Native and release verification remain separate facts.
 
+The subsequent real native close/relaunch test exposed a startup dependency missed by the unit fixtures: a durable provider session was reported non-resumable while the process-local thread adapter registry was empty. The persisted session and shutdown classification were intact. Session reads now use existing single-flight installation detection and synchronize the canonical adapter registry before summarizing. This runs off the UI thread, skips authentication probes and reuses cached results. Two native regressions pass; final native restart remains a separate gate.
+
+Review also reproduced a late-availability gap after transient detection failure. Provider events now refresh pane summaries; automatic recovery admits newly eligible IDs once, and a real manual Continue click retains intent for late providers. Failed launches require explicit retry. Root reproof passed 26 focused tests and all five rendered recovery flows.
+
+The combined layout-retry review additionally found that interim fallback interactions needed reconciliation with the later canonical read: a close could reappear, a focus-only change could replace saved topology, and keeping the entire edited fallback could delete previously unseen saved panes. Recovery now applies explicit content removals, additions and Browser changes to the canonical desk by stable identity, preserves unseen content, structurally closes all corresponding closed panes, and maps focus across regenerated pane IDs. Regressions include multi-tab panes split across restored leaves and a moved tab followed by closing its former pane.
+
 ## Local validation receipts
 
 - Desktop and protocol TypeScript checks: pass.
@@ -33,9 +39,12 @@ Independent reviewer found no remaining blocker in the final TypeScript/UI scope
 - Root recovery/pane/context focused run: 4 files, 38 tests passed before the added context-source test; context-source regression then failed as intended and passed after implementation.
 - Root latest status/pane/hydration run: 7 files, 93 tests passed.
 - Root layout controller checkpoint run: 18 tests passed.
+- Root combined automatic/manual layout-retry run: 21 tests passed, including authoritative-null recovery and stale-workspace cancellation. This preserves the intent of queued PR #287 alongside the write-ahead and Browser checkpoint safeguards.
+- Final root retry/reconciliation, recovery queue, late-capability and pane-refresh run: 4 files, 52 tests passed. Desktop typecheck, whole-repository Biome and diff checks passed on that settled source.
 - Root draft/navigation/startup run: 5 files, 37 tests passed.
 - Independent continuity review: 13 files, 151 tests passed; worker neighbor coverage includes drafts 48, navigation 28, locator 68.
 - Root native resume integration tests: 7 passed; independent stop-vs-resume race reproof: 1 passed.
+- Root native cold-registry capability and cached-sync regressions: 2 passed, 0 failed, 0 ignored.
 - Native context-source tests: 3 passed; fresh identity test: 1 passed; restart classification test: 1 passed. Neighboring create, pause/resume and resource-admission tests passed.
 - Rendered recovery suite: 5 passed, including Settings persistence, manual continuation, unsupported resume, failed-load retry, and actual Custom fresh-session launch. Accessibility check found no serious/critical violations on the recovery surface. Screenshots were visually inspected.
 - Updated Close/Dock flows: 3 targeted rendered tests passed.

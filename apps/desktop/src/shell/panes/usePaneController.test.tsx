@@ -1,9 +1,13 @@
 import type { PaneContent, PaneLayout } from "@kalcode/protocol";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { StrictMode } from "react";
-import { expect, it, vi } from "vitest";
-import { findLeaf, makeLeaf } from "./model.ts";
-import { usePaneController } from "./usePaneController.ts";
+import { afterEach, expect, it, vi } from "vitest";
+import { findContent, findLeaf, makeLeaf } from "./model.ts";
+import { LOAD_RETRY_MS, SAVE_DEBOUNCE_MS, usePaneController } from "./usePaneController.ts";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 it("keeps a transient load failure usable without overwriting the stored desk", async () => {
   const initial: PaneLayout = {
@@ -62,6 +66,397 @@ it("retries a failed load and enables persistence only after the canonical desk 
   const edited = view.result.current.layout;
   view.unmount();
   await waitFor(() => expect(store.save).toHaveBeenCalledWith(edited));
+});
+
+it("automatically retries a failed load without saving the fallback over the canonical desk", async () => {
+  vi.useFakeTimers();
+  const fallback: PaneLayout = {
+    schemaVersion: 1,
+    root: makeLeaf([terminal("fallback")], "fallback"),
+    dock: [],
+    maximizedPaneId: null,
+  };
+  const stored: PaneLayout = {
+    schemaVersion: 1,
+    root: makeLeaf([terminal("stored")], "stored"),
+    dock: [],
+    maximizedPaneId: null,
+  };
+  const store = {
+    load: vi.fn<() => Promise<PaneLayout | null>>().mockRejectedValue(new Error("runtime not ready")),
+    save: vi.fn().mockResolvedValue(undefined),
+  };
+  const view = renderHook(() =>
+    usePaneController({ scope: "automatic-load-retry", store, initial: () => fallback, titleOf: () => "Terminal" }),
+  );
+  await act(() => vi.advanceTimersByTimeAsync(0));
+
+  expect(view.result.current.ready).toBe(true);
+  expect(view.result.current.loadError).toContain("runtime not ready");
+  expect(view.result.current.layout).toEqual(fallback);
+  await act(() => vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS * 2));
+  expect(store.save).not.toHaveBeenCalled();
+
+  store.load.mockResolvedValue(stored);
+  await act(() => vi.advanceTimersByTimeAsync(LOAD_RETRY_MS));
+  expect(store.load).toHaveBeenCalledTimes(2);
+  expect(view.result.current.loadError).toBeNull();
+  expect(view.result.current.layout).toEqual(stored);
+  expect(store.save).not.toHaveBeenCalled();
+
+  act(() => view.result.current.show(terminal("after-retry")));
+  const edited = view.result.current.layout;
+  await act(() => vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS));
+  expect(store.save).toHaveBeenCalledExactlyOnceWith(edited);
+  view.unmount();
+});
+
+it("keeps visible edits when a retry returns the production-shaped default layout", async () => {
+  vi.useFakeTimers();
+  const fallback: PaneLayout = {
+    schemaVersion: 1,
+    root: {
+      kind: "split",
+      axis: "horizontal",
+      ratios: [500, 500],
+      children: [makeLeaf([terminal("left")], "left"), makeLeaf([terminal("right")], "right")],
+    },
+    dock: [],
+    maximizedPaneId: null,
+  };
+  const generatedDefault: PaneLayout = {
+    ...fallback,
+    root: {
+      kind: "split",
+      axis: "vertical",
+      ratios: [400, 600],
+      children: [makeLeaf([terminal("left")], "generated-left"), makeLeaf([terminal("right")], "generated-right")],
+    },
+  };
+  const store = {
+    load: vi.fn<() => Promise<PaneLayout | null>>().mockRejectedValue(new Error("runtime not ready")),
+    save: vi.fn().mockResolvedValue(undefined),
+  };
+  const view = renderHook(() =>
+    usePaneController({ scope: "empty-load-retry", store, initial: () => fallback, titleOf: () => "Terminal" }),
+  );
+  await act(() => vi.advanceTimersByTimeAsync(0));
+  act(() => view.result.current.close("left"));
+  expect(store.save).not.toHaveBeenCalled();
+
+  // CodeCanvas generates a fresh default (including fresh pane IDs) when layout_get has no row.
+  store.load.mockResolvedValue(generatedDefault);
+  await act(() => vi.advanceTimersByTimeAsync(LOAD_RETRY_MS));
+  expect(view.result.current.loadError).toBeNull();
+  expect(view.result.current.layout.root.kind).toBe("leaf");
+  expect(findLeaf(view.result.current.layout, "generated-left")).toBeNull();
+  expect(findLeaf(view.result.current.layout, "generated-right")?.tabs).toEqual([terminal("right")]);
+  expect(store.save).not.toHaveBeenCalled();
+
+  const reconciled = view.result.current.layout;
+  await act(() => vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS));
+  expect(store.save).toHaveBeenCalledExactlyOnceWith(reconciled);
+  view.unmount();
+});
+
+it("applies fallback removals without replacing unseen canonical content or topology", async () => {
+  vi.useFakeTimers();
+  const fallback: PaneLayout = {
+    schemaVersion: 1,
+    root: {
+      kind: "split",
+      axis: "horizontal",
+      ratios: [500, 500],
+      children: [makeLeaf([terminal("a")], "fallback-a"), makeLeaf([terminal("b")], "fallback-b")],
+    },
+    dock: [],
+    maximizedPaneId: null,
+  };
+  const browser: PaneContent = { kind: "browser", browserId: "canonical-browser", url: "https://example.test" };
+  const widget: PaneContent = { kind: "widget", widgetId: "canonical-widget" };
+  const stored: PaneLayout = {
+    schemaVersion: 1,
+    root: {
+      kind: "split",
+      axis: "vertical",
+      ratios: [350, 650],
+      children: [makeLeaf([terminal("a"), browser], "stored-top"), makeLeaf([terminal("b"), widget], "stored-bottom")],
+    },
+    dock: [],
+    maximizedPaneId: null,
+  };
+  const store = {
+    load: vi
+      .fn<() => Promise<PaneLayout | null>>()
+      .mockRejectedValueOnce(new Error("runtime not ready"))
+      .mockResolvedValue(stored),
+    save: vi.fn().mockResolvedValue(undefined),
+  };
+  const view = renderHook(() =>
+    usePaneController({ scope: "merge-fallback-delta", store, initial: () => fallback, titleOf: () => "Pane" }),
+  );
+  await act(() => vi.advanceTimersByTimeAsync(0));
+  act(() => view.result.current.close("fallback-a"));
+  act(() => view.result.current.show(terminal("new")));
+
+  await act(() => vi.advanceTimersByTimeAsync(LOAD_RETRY_MS));
+  expect(view.result.current.layout.root.kind).toBe("split");
+  expect(view.result.current.layout.root.kind === "split" && view.result.current.layout.root.axis).toBe("vertical");
+  expect(findLeaf(view.result.current.layout, "stored-top")?.tabs).toContainEqual(browser);
+  expect(findLeaf(view.result.current.layout, "stored-bottom")?.tabs).toEqual([terminal("b"), widget]);
+  expect(findContent(view.result.current.layout, "terminal:new")).not.toBeNull();
+
+  const reconciled = view.result.current.layout;
+  await act(() => vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS));
+  expect(store.save).toHaveBeenCalledExactlyOnceWith(reconciled);
+  view.unmount();
+});
+
+it("structurally closes every canonical pane containing only a closed fallback pane's tabs", async () => {
+  vi.useFakeTimers();
+  const fallback: PaneLayout = {
+    schemaVersion: 1,
+    root: {
+      kind: "split",
+      axis: "horizontal",
+      ratios: [500, 500],
+      children: [makeLeaf([terminal("a"), terminal("b")], "fallback-work"), makeLeaf([terminal("d")], "fallback-safe")],
+    },
+    dock: [],
+    maximizedPaneId: null,
+  };
+  const widget: PaneContent = { kind: "widget", widgetId: "canonical-widget" };
+  const stored: PaneLayout = {
+    schemaVersion: 1,
+    root: {
+      kind: "split",
+      axis: "horizontal",
+      ratios: [300, 700],
+      children: [
+        makeLeaf([terminal("a")], "stored-a"),
+        {
+          kind: "split",
+          axis: "vertical",
+          ratios: [400, 600],
+          children: [makeLeaf([terminal("b")], "stored-b"), makeLeaf([terminal("d"), widget], "stored-safe")],
+        },
+      ],
+    },
+    dock: [],
+    maximizedPaneId: null,
+  };
+  const store = {
+    load: vi
+      .fn<() => Promise<PaneLayout | null>>()
+      .mockRejectedValueOnce(new Error("runtime not ready"))
+      .mockResolvedValue(stored),
+    save: vi.fn().mockResolvedValue(undefined),
+  };
+  const view = renderHook(() =>
+    usePaneController({ scope: "multi-pane-close-retry", store, initial: () => fallback, titleOf: () => "Pane" }),
+  );
+  await act(() => vi.advanceTimersByTimeAsync(0));
+  act(() => view.result.current.close("fallback-work"));
+
+  await act(() => vi.advanceTimersByTimeAsync(LOAD_RETRY_MS));
+  expect(findLeaf(view.result.current.layout, "stored-a")).toBeNull();
+  expect(findLeaf(view.result.current.layout, "stored-b")).toBeNull();
+  expect(findLeaf(view.result.current.layout, "stored-safe")?.tabs).toEqual([terminal("d"), widget]);
+  const reconciled = view.result.current.layout;
+  await act(() => vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS));
+  expect(store.save).toHaveBeenCalledExactlyOnceWith(reconciled);
+  view.unmount();
+});
+
+it("closes only removed tabs after another tab moved out of the fallback pane", async () => {
+  vi.useFakeTimers();
+  const fallback: PaneLayout = {
+    schemaVersion: 1,
+    root: {
+      kind: "split",
+      axis: "horizontal",
+      ratios: [500, 500],
+      children: [makeLeaf([terminal("a"), terminal("b")], "fallback-work"), makeLeaf([terminal("d")], "fallback-safe")],
+    },
+    dock: [],
+    maximizedPaneId: null,
+  };
+  const widget: PaneContent = { kind: "widget", widgetId: "canonical-widget" };
+  const stored: PaneLayout = {
+    schemaVersion: 1,
+    root: {
+      kind: "split",
+      axis: "horizontal",
+      ratios: [250, 250, 500],
+      children: [
+        makeLeaf([terminal("a")], "stored-a"),
+        makeLeaf([terminal("b")], "stored-b"),
+        makeLeaf([terminal("d"), widget], "stored-safe"),
+      ],
+    },
+    dock: [],
+    maximizedPaneId: null,
+  };
+  const store = {
+    load: vi
+      .fn<() => Promise<PaneLayout | null>>()
+      .mockRejectedValueOnce(new Error("runtime not ready"))
+      .mockResolvedValue(stored),
+    save: vi.fn().mockResolvedValue(undefined),
+  };
+  const view = renderHook(() =>
+    usePaneController({ scope: "move-then-close-retry", store, initial: () => fallback, titleOf: () => "Pane" }),
+  );
+  await act(() => vi.advanceTimersByTimeAsync(0));
+  act(() => view.result.current.moveTab("fallback-work", 0, "fallback-safe", "center"));
+  act(() => view.result.current.close("fallback-work"));
+
+  await act(() => vi.advanceTimersByTimeAsync(LOAD_RETRY_MS));
+  expect(findLeaf(view.result.current.layout, "stored-a")?.tabs).toEqual([terminal("a")]);
+  expect(findLeaf(view.result.current.layout, "stored-b")).toBeNull();
+  expect(findLeaf(view.result.current.layout, "stored-safe")?.tabs).toEqual([terminal("d"), widget]);
+  view.unmount();
+});
+
+it("accepts a differing canonical desk after focus-only activity and preserves a surviving focus", async () => {
+  vi.useFakeTimers();
+  localStorage.clear();
+  const fallback: PaneLayout = {
+    schemaVersion: 1,
+    root: {
+      kind: "split",
+      axis: "horizontal",
+      ratios: [500, 500],
+      children: [makeLeaf([terminal("fallback")], "fallback"), makeLeaf([terminal("shared")], "shared")],
+    },
+    dock: [],
+    maximizedPaneId: null,
+  };
+  const stored: PaneLayout = {
+    ...fallback,
+    root: {
+      kind: "split",
+      axis: "vertical",
+      ratios: [300, 700],
+      children: [makeLeaf([terminal("stored")], "stored"), makeLeaf([terminal("shared")], "stored-shared")],
+    },
+  };
+  const store = {
+    load: vi
+      .fn<() => Promise<PaneLayout | null>>()
+      .mockRejectedValueOnce(new Error("runtime not ready"))
+      .mockResolvedValue(stored),
+    save: vi.fn().mockResolvedValue(undefined),
+  };
+  const view = renderHook(() =>
+    usePaneController({ scope: "focus-only-load-retry", store, initial: () => fallback, titleOf: () => "Terminal" }),
+  );
+  await act(() => vi.advanceTimersByTimeAsync(0));
+  act(() => view.result.current.focusPane("shared", false));
+
+  await act(() => vi.advanceTimersByTimeAsync(LOAD_RETRY_MS));
+  expect(view.result.current.layout).toEqual(stored);
+  expect(view.result.current.focusedPaneId).toBe("stored-shared");
+  await act(() => vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS));
+  expect(store.save).not.toHaveBeenCalled();
+  view.unmount();
+});
+
+it("checkpoints a Browser navigation as soon as a retry confirms the canonical desk", async () => {
+  localStorage.clear();
+  vi.useFakeTimers();
+  const initialBrowser: PaneContent = { kind: "browser", browserId: "browser", url: "https://example.test/a" };
+  const initial: PaneLayout = {
+    schemaVersion: 1,
+    root: makeLeaf([initialBrowser], "browser"),
+    dock: [],
+    maximizedPaneId: null,
+  };
+  const navigated: PaneLayout = {
+    ...initial,
+    root: makeLeaf([{ kind: "browser", browserId: "browser", url: "https://example.test/b" }], "browser"),
+  };
+  const widget: PaneContent = { kind: "widget", widgetId: "canonical-widget" };
+  const canonical: PaneLayout = {
+    ...initial,
+    root: {
+      kind: "split",
+      axis: "vertical",
+      ratios: [600, 400],
+      children: [makeLeaf([initialBrowser], "stored-browser"), makeLeaf([widget], "stored-widget")],
+    },
+  };
+  let finishSave!: () => void;
+  const store = {
+    load: vi
+      .fn<() => Promise<PaneLayout | null>>()
+      .mockRejectedValueOnce(new Error("runtime not ready"))
+      .mockResolvedValue(canonical),
+    save: vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishSave = resolve;
+        }),
+    ),
+  };
+  const view = renderHook(() =>
+    usePaneController({ scope: "browser-retry-checkpoint", store, initial: () => initial, titleOf: () => "Browser" }),
+  );
+  await act(() => vi.advanceTimersByTimeAsync(0));
+  act(() => view.result.current.replace(navigated));
+  expect(store.save).not.toHaveBeenCalled();
+
+  await act(() => vi.advanceTimersByTimeAsync(LOAD_RETRY_MS));
+  expect(view.result.current.layout.root.kind).toBe("split");
+  expect(findLeaf(view.result.current.layout, "stored-browser")?.tabs[0]).toEqual({
+    kind: "browser",
+    browserId: "browser",
+    url: "https://example.test/b",
+  });
+  expect(findLeaf(view.result.current.layout, "stored-widget")?.tabs).toEqual([widget]);
+  expect(store.save).toHaveBeenCalledExactlyOnceWith(view.result.current.layout);
+  const recoveryData = Array.from({ length: localStorage.length }, (_, index) =>
+    localStorage.getItem(localStorage.key(index) ?? ""),
+  ).join("\n");
+  expect(recoveryData).not.toContain("https://example.test/b");
+
+  await act(async () => finishSave());
+  view.unmount();
+  expect(store.save).toHaveBeenCalledTimes(1);
+});
+
+it("cancels a failed workspace load retry when the controller changes scope", async () => {
+  vi.useFakeTimers();
+  const fallback: PaneLayout = {
+    schemaVersion: 1,
+    root: makeLeaf([terminal("fallback")], "fallback"),
+    dock: [],
+    maximizedPaneId: null,
+  };
+  const next: PaneLayout = { ...fallback, root: makeLeaf([terminal("next")], "next") };
+  const firstStore = {
+    load: vi.fn<() => Promise<PaneLayout | null>>().mockRejectedValue(new Error("runtime not ready")),
+    save: vi.fn().mockResolvedValue(undefined),
+  };
+  const secondStore = {
+    load: vi.fn<() => Promise<PaneLayout | null>>().mockResolvedValue(next),
+    save: vi.fn().mockResolvedValue(undefined),
+  };
+  const view = renderHook(
+    ({ scope, store }) => usePaneController({ scope, store, initial: () => fallback, titleOf: () => "Terminal" }),
+    { initialProps: { scope: "retry-first", store: firstStore } },
+  );
+  await act(() => vi.advanceTimersByTimeAsync(0));
+  expect(firstStore.load).toHaveBeenCalledTimes(1);
+
+  view.rerender({ scope: "retry-second", store: secondStore });
+  await act(() => vi.advanceTimersByTimeAsync(0));
+  expect(view.result.current.layout).toEqual(next);
+  await act(() => vi.advanceTimersByTimeAsync(LOAD_RETRY_MS * 4));
+
+  expect(firstStore.load).toHaveBeenCalledTimes(1);
+  expect(secondStore.load).toHaveBeenCalledTimes(1);
+  view.unmount();
 });
 
 it("replays the latest pane close after an immediate remount before the canonical save finishes", async () => {

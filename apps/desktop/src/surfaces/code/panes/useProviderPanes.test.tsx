@@ -5,6 +5,12 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useProviderPanes } from "./useProviderPanes.ts";
 
 const state = vi.hoisted(() => {
+  let events: Array<{
+    seq: number;
+    type: string;
+    correlation: { threadId: string | null; workspaceId: string | null };
+  }> = [];
+  const listeners = new Set<() => void>();
   const client = {
     getPermissionSettings: vi.fn(),
     listThreads: vi.fn(),
@@ -13,7 +19,21 @@ const state = vi.hoisted(() => {
   };
   return {
     client,
-    feed: { getSnapshot: () => ({ events: [] }), subscribe: () => () => undefined },
+    feed: {
+      getSnapshot: () => ({ events }),
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    },
+    emit(event: (typeof events)[number]) {
+      events = [event, ...events];
+      for (const listener of listeners) listener();
+    },
+    resetFeed() {
+      events = [];
+      listeners.clear();
+    },
   };
 });
 vi.mock("../../../runtime/RuntimeProvider.tsx", () => ({
@@ -36,12 +56,34 @@ afterEach(() => {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  state.resetFeed();
   state.client.getPermissionSettings.mockResolvedValue({ defaultMode: "auto" });
   state.client.listThreads.mockResolvedValue([]);
   state.client.threadOptions.mockResolvedValue({ providers: [] });
   state.client.transport.invoke.mockImplementation(async (command: string) =>
     command === "provider_pane_create" ? agent : info,
   );
+});
+
+it("refreshes pane summaries when an uncorrelated provider event changes capabilities", async () => {
+  const unavailable = { ...agent, status: "interrupted", restartRecoverable: true, resumable: false } as ThreadSummary;
+  const available = { ...unavailable, resumable: true };
+  state.client.listThreads.mockResolvedValue([unavailable]);
+  state.client.transport.invoke.mockResolvedValue(null);
+  const view = renderHook(() => useProviderPanes(workspace));
+  await waitFor(() => expect(view.result.current.panes[0]?.thread.resumable).toBe(false));
+
+  state.client.listThreads.mockResolvedValue([available]);
+  act(() => {
+    state.emit({
+      seq: 1,
+      type: "provider.detected",
+      correlation: { threadId: null, workspaceId: null },
+    });
+  });
+
+  await waitFor(() => expect(state.client.listThreads).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(view.result.current.panes[0]?.thread.resumable).toBe(true));
 });
 
 it("registers the created terminal directly even when the list snapshot lags behind creation", async () => {

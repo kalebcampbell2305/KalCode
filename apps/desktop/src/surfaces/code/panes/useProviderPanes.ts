@@ -280,7 +280,9 @@ export function useProviderPanes(workspace: Workspace, { active = true }: Provid
       lastSeq = Math.max(lastSeq, events[0]?.seq ?? 0);
       const provider = fresh.find((e) => e.type.startsWith("provider."));
       if (provider) setProviderSeq(provider.seq);
-      let scope: RefreshScope | null = null;
+      // Provider detection can make a persisted session newly resumable without naming a
+      // workspace or thread. Re-read summaries so recovery sees that capability transition.
+      let scope: RefreshScope | null = provider ? "all" : null;
       for (const e of fresh) {
         const threadId = e.correlation.threadId;
         if (threadId !== null && (paneIds.current.has(threadId) || e.correlation.workspaceId === workspace.id))

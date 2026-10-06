@@ -6,6 +6,8 @@ KalCode restores its existing workspace, layout and provider-session authorities
 
 Settings → Continue where I left off controls automatic restoration per KalCode account. Automatic restoration opens the saved Code desk after workspace hydration. When disabled, Activity offers **Continue where I left off**. User navigation during startup wins.
 
+A failed saved-layout read leaves a usable shell and keeps the stored layout untouched. A shared retry path backs off from one second to thirty seconds and also supports immediate manual retry. Background attempts preserve the visible shell; workspace changes cancel stale attempts.
+
 Canonical workspace/layout stores preserve stable panes, tab order, geometry, terminal names, Browser locations and widgets. The existing focused-pane preference restores focus. Provider identities appear before runtime metadata. Heavy pane bodies hydrate progressively: focused content first, then two visible panes per animation frame. Hidden mounted panes retain identity. Provider-info reads are bounded to four concurrent requests; superseded queues stop claiming work.
 
 Layout mutations write a bounded local recovery journal before the debounced native write. It excludes Browser URLs and clears only after its exact native write succeeds. Failed layout reads leave the saved authority untouched and expose **Retry restore**. Native Browser state owns URLs and its existing retry path.

@@ -319,14 +319,13 @@ test("Continue where I left off restores one recoverable desk without reviving e
     app = null;
     await expect.poll(() => processesMatching(bin), { timeout: 30_000 }).toEqual([]);
 
-    // Relaunch paints the saved shell first. Manual mode must not start a provider on its own.
+    // Manual mode restores the lightweight Activity shell and offers the saved desk without
+    // starting a provider. The one entry-point click opens the exact desk and starts recovery.
     app = await launch(dataDir, env);
     page = app.page;
-    await expect(page.getByRole("heading", { level: 1, name: "saved-desk" })).toBeVisible();
-    await expect(visiblePanes(page)).toHaveCount(3);
-    expect(await paneIds(page)).toEqual(savedPaneIds);
-    await expect(page.locator(`[data-pane-id="${savedFocus}"]`)).toHaveAttribute("data-focused", "true");
-    expect(await page.evaluate((key) => window.localStorage.getItem(key), focusStorageKey)).toBe(savedFocus);
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
+    const recovery = page.getByRole("region", { name: "Desk recovery" });
+    await expect(recovery.getByText("saved-desk is where you left it", { exact: true })).toBeVisible();
     expect((await invoke<WorkspaceLayout>(page, "layout_get", { workspaceId: workspace.id })).layout).toEqual(
       savedLayout,
     );
@@ -334,19 +333,13 @@ test("Continue where I left off restores one recoverable desk without reviving e
     expect(claudeLaunches(bin)).toHaveLength(2);
     expect(processesMatching(bin)).toEqual([]);
 
-    const restoredBrowser = page.locator(`[data-browser-id="${browserId}"]`);
-    await expect(restoredBrowser).toBeVisible();
-    await expect(restoredBrowser.getByLabel("Web address")).toHaveValue(web.url);
-    await expect.poll(async () => (await browserState(page, browserId))?.url ?? null).toBe(web.url);
-    const restoredTerminal = (await invoke<TerminalInfo[]>(page, "terminal_list", { workspaceId: workspace.id })).find(
-      ({ id }) => id === buildTerminal?.id,
-    );
-    expect(restoredTerminal).toMatchObject({
-      exitCode: 0,
-      status: "exited",
-      title: "Release build finished",
-    });
-
+    // Provider capability/session validation hydrates in the background after the shell. The
+    // persisted thread must become resumable before the manual entry point can recover it.
+    await expect
+      .poll(async () => (await invoke<RestartThread>(page, "thread_get", { threadId: recoverableId })).resumable, {
+        timeout: 30_000,
+      })
+      .toBe(true);
     const afterRestart = await listThreads(page, workspace.id);
     expect(afterRestart.find(({ id }) => id === stoppedId)).toMatchObject({
       currentActivity: "Stopped by you",
@@ -363,10 +356,28 @@ test("Continue where I left off restores one recoverable desk without reviving e
       status: "interrupted",
     });
 
-    // One click resumes the provider-native session once. A runtime handle is never reused.
-    const recovery = page.getByRole("region", { name: "Desk recovery" });
-    await expect(recovery.getByText("1 saved agent can resume.", { exact: true })).toBeVisible();
+    // One click restores every lightweight pane and resumes the provider-native session once.
+    // A runtime handle is never reused as durable session truth.
     await recovery.getByRole("button", { name: "Continue where I left off", exact: true }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "saved-desk" })).toBeVisible();
+    await expect(visiblePanes(page)).toHaveCount(3);
+    expect(await paneIds(page)).toEqual(savedPaneIds);
+    await expect(page.locator(`[data-pane-id="${savedFocus}"]`)).toHaveAttribute("data-focused", "true");
+    expect(await page.evaluate((key) => window.localStorage.getItem(key), focusStorageKey)).toBe(savedFocus);
+
+    const restoredBrowser = page.locator(`[data-browser-id="${browserId}"]`);
+    await expect(restoredBrowser).toBeVisible();
+    await expect(restoredBrowser.getByLabel("Web address")).toHaveValue(web.url);
+    await expect.poll(async () => (await browserState(page, browserId))?.url ?? null).toBe(web.url);
+    const restoredTerminal = (await invoke<TerminalInfo[]>(page, "terminal_list", { workspaceId: workspace.id })).find(
+      ({ id }) => id === buildTerminal?.id,
+    );
+    expect(restoredTerminal).toMatchObject({
+      exitCode: 0,
+      status: "exited",
+      title: "Release build finished",
+    });
+
     await expect.poll(() => claudeLaunches(bin).length, { timeout: 30_000 }).toBe(3);
     await expect.poll(() => processesMatching(bin).length, { timeout: 30_000 }).toBe(1);
     const resumedLaunch = claudeLaunches(bin)[2];
@@ -406,6 +417,103 @@ test("Continue where I left off restores one recoverable desk without reviving e
     expect(freshSessionId).toBeTruthy();
     expect(freshSessionId).not.toBe(originalSessionId);
     await expect.poll(() => processesMatching(bin).length, { timeout: 30_000 }).toBe(2);
+    await expect
+      .poll(async () => (await invoke<RestartThread>(page, "thread_get", { threadId: fresh?.id ?? "" })).resumable, {
+        timeout: 30_000,
+      })
+      .toBe(true);
+    const freshInstance = await invoke<PaneInfo>(page, "provider_pane_info", { threadId: fresh.id });
+    expect(freshInstance.running).toBe(true);
+    expect(freshInstance.instanceId).toBeTruthy();
+
+    // Exercise the real Settings control, then prove default automatic recovery with two agents.
+    await page
+      .getByRole("navigation", { name: "Primary" })
+      .getByRole("button", { name: "Settings", exact: true })
+      .click();
+    await expect(page.getByRole("heading", { level: 1, name: "Settings" })).toBeVisible();
+    await page.getByRole("radio", { name: "Automatically", exact: true }).click();
+    await expect(page.getByRole("radio", { name: "Automatically", exact: true })).toBeChecked();
+    expect(await page.evaluate((key) => window.localStorage.getItem(key), restorePreferenceKey)).toBe("automatic");
+    await codeNav(page).click();
+    await expect(page.getByRole("heading", { level: 1, name: "saved-desk" })).toBeVisible();
+
+    const automaticLayout = (await invoke<WorkspaceLayout>(page, "layout_get", { workspaceId: workspace.id })).layout;
+    const automaticLayoutJson = JSON.stringify(automaticLayout);
+    const automaticPaneIds = await paneIds(page);
+    const automaticFocus = await focusedPaneId(page);
+    if (!automaticFocus) throw new Error("The automatic desk did not retain a focused pane id.");
+    expect(automaticLayoutJson).toContain(recoverableId);
+    expect(automaticLayoutJson).toContain(fresh.id);
+    expect(automaticLayoutJson).toContain(buildTerminal.id);
+    expect(automaticLayoutJson).toContain(browserId);
+    expect(automaticLayoutJson).not.toContain(stoppedId);
+
+    await closeGracefully(app);
+    app = null;
+    await expect.poll(() => processesMatching(bin), { timeout: 30_000 }).toEqual([]);
+
+    // Automatic startup paints Code and resumes both saved-open agents exactly once each.
+    app = await launch(dataDir, env);
+    page = app.page;
+    await expect(page.getByRole("heading", { level: 1, name: "saved-desk" })).toBeVisible();
+    await expect(visiblePanes(page)).toHaveCount(automaticPaneIds.length);
+    expect(await paneIds(page)).toEqual(automaticPaneIds);
+    await expect(page.locator(`[data-pane-id="${automaticFocus}"]`)).toHaveAttribute("data-focused", "true");
+    expect((await invoke<WorkspaceLayout>(page, "layout_get", { workspaceId: workspace.id })).layout).toEqual(
+      automaticLayout,
+    );
+    expect(await page.evaluate((key) => window.localStorage.getItem(key), restorePreferenceKey)).toBe("automatic");
+
+    await expect.poll(() => claudeLaunches(bin).length, { timeout: 30_000 }).toBe(6);
+    await expect.poll(() => processesMatching(bin).length, { timeout: 30_000 }).toBe(2);
+    const automaticResumes = claudeLaunches(bin).slice(4);
+    expect(automaticResumes).toHaveLength(2);
+    expect(automaticResumes.every(({ args }) => args.includes("--resume") && !args.includes("--session-id"))).toBe(
+      true,
+    );
+    expect(new Set(automaticResumes.map(({ args }) => argAfter(args, "--resume")))).toEqual(
+      new Set([originalSessionId, freshSessionId]),
+    );
+
+    await expect
+      .poll(
+        async () => {
+          const [original, created] = await Promise.all([
+            invoke<PaneInfo>(page, "provider_pane_info", { threadId: recoverableId }),
+            invoke<PaneInfo>(page, "provider_pane_info", { threadId: fresh?.id ?? "" }),
+          ]);
+          return [original.running, created.running];
+        },
+        { timeout: 30_000 },
+      )
+      .toEqual([true, true]);
+    const [automaticOriginal, automaticFresh] = await Promise.all([
+      invoke<PaneInfo>(page, "provider_pane_info", { threadId: recoverableId }),
+      invoke<PaneInfo>(page, "provider_pane_info", { threadId: fresh.id }),
+    ]);
+    expect(automaticOriginal.instanceId).toBeTruthy();
+    expect(automaticOriginal.instanceId).not.toBe(resumedInstance.instanceId);
+    expect(automaticFresh.instanceId).toBeTruthy();
+    expect(automaticFresh.instanceId).not.toBe(freshInstance.instanceId);
+
+    const automaticThreads = await listThreads(page, workspace.id);
+    expect(automaticThreads.find(({ id }) => id === stoppedId)).toMatchObject({
+      currentActivity: "Stopped by you",
+      restartRecoverable: false,
+      status: "interrupted",
+    });
+    expect(
+      JSON.stringify((await invoke<WorkspaceLayout>(page, "layout_get", { workspaceId: workspace.id })).layout),
+    ).not.toContain(stoppedId);
+    expect(
+      (await invoke<TerminalInfo[]>(page, "terminal_list", { workspaceId: workspace.id })).find(
+        ({ id }) => id === buildTerminal?.id,
+      ),
+    ).toMatchObject({ exitCode: 0, status: "exited", title: "Release build finished" });
+    await expect(page.locator(`[data-browser-id="${browserId}"]`).getByLabel("Web address")).toHaveValue(web.url);
+    await page.waitForTimeout(1_000);
+    expect(claudeLaunches(bin)).toHaveLength(6);
 
     await closeGracefully(app);
     app = null;

@@ -56,7 +56,7 @@ export function DeskRecovery({
 }) {
   const { client } = useRuntime();
   const workspace = useWorkspaces().active;
-  const { automatic, request } = useDeskRestore(workspace?.id);
+  const { automatic, continueDesk, request } = useDeskRestore(workspace?.id);
   const { navigate } = useNavigation();
   const [busy, setBusy] = useState(false);
   const [failures, setFailures] = useState<string[]>([]);
@@ -81,14 +81,22 @@ export function DeskRecovery({
     );
   }, []);
   const restoring = useRef(false);
+  const admitted = useRef(new Set<string>());
+  const manualAdmission = useRef(new Map<string, number>());
   const recover = useCallback(
-    async (retry = false) => {
-      if (restoring.current) return;
+    async (requestedIds: readonly string[], retryIds: readonly string[] = [], manualRevision?: number) => {
+      if (restoring.current) return false;
+      const eligible = new Set(candidates().map((thread) => thread.id));
+      const ids = [...new Set(requestedIds)].filter((id) => eligible.has(id));
+      if (ids.length === 0) return false;
       restoring.current = true;
+      for (const id of ids) admitted.current.add(id);
+      if (manualRevision !== undefined) {
+        for (const id of retryIds) manualAdmission.current.set(id, manualRevision);
+      }
       setBusy(true);
       const queue = restoreQueue(client);
-      const ids = candidates().map((thread) => thread.id);
-      if (retry) queue.retry(ids);
+      queue.retry(retryIds.filter((id) => eligible.has(id)));
       try {
         const failed = await queue.restore(
           ids,
@@ -103,7 +111,10 @@ export function DeskRecovery({
             if (updated.status === "failed" || updated.status === "offline") throw new Error("Restore failed");
           },
         );
-        if (mounted.current) setFailures(failed);
+        if (mounted.current) {
+          const attempted = new Set(ids);
+          setFailures((previous) => [...previous.filter((id) => !attempted.has(id)), ...failed]);
+        }
       } finally {
         restoring.current = false;
         if (mounted.current) {
@@ -111,26 +122,27 @@ export function DeskRecovery({
           void latest.current.panes.refresh();
         }
       }
+      return true;
     },
     [client, candidates],
   );
-  const autoAttempted = useRef(false);
-  const manualRequest = useRef(0);
+  const candidateKey = candidates()
+    .map((thread) => thread.id)
+    .join("\u0000");
   useEffect(() => {
-    if (!active || !controller.ready || controller.loadError || !panes.loaded) return;
-    const manual = request > manualRequest.current;
-    if (!manual && (!automatic || autoAttempted.current)) return;
-    autoAttempted.current = true;
-    manualRequest.current = request;
+    if (!active || !controller.ready || controller.loadError || !panes.loaded || busy) return;
+    const candidateIds = candidateKey ? candidateKey.split("\u0000") : [];
+    const manualIds = candidateIds.filter((id) => request > (manualAdmission.current.get(id) ?? 0));
+    const freshIds =
+      automatic || request > 0 ? candidateIds.filter((id) => !admitted.current.has(id)) : ([] as string[]);
+    const ids = [...new Set([...manualIds, ...freshIds])];
+    if (ids.length === 0) return;
     // Let the entire saved shell paint before any heavy provider startup.
     const frame = requestAnimationFrame(() => {
-      void recover(manual);
+      void recover(ids, manualIds, request > 0 ? request : undefined);
     });
-    return () => {
-      cancelAnimationFrame(frame);
-      autoAttempted.current = false;
-    };
-  }, [active, automatic, request, controller.ready, controller.loadError, panes.loaded, recover]);
+    return () => cancelAnimationFrame(frame);
+  }, [active, automatic, request, controller.ready, controller.loadError, panes.loaded, busy, candidateKey, recover]);
 
   const pending = candidates().length;
   const openIds = new Set(
@@ -188,7 +200,13 @@ export function DeskRecovery({
             variant="primary"
             icon={unresolvedFailures.length ? <RotateCcw /> : <Play />}
             busy={busy}
-            onClick={() => void recover(true)}
+            onClick={() => {
+              // The in-Code action carries the same durable app-lifetime intent as Home's
+              // Continue button, so a provider that validates later joins this recovery pass.
+              continueDesk();
+              const ids = candidates().map((thread) => thread.id);
+              void recover(ids, ids, request + 1);
+            }}
           >
             {unresolvedFailures.length ? "Retry recovery" : "Continue where I left off"}
           </Button>

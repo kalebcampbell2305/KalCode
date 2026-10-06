@@ -1,5 +1,5 @@
 import type { ThreadSummary } from "@kalcode/protocol";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import { emptyLayout, makeLeaf } from "../../shell/panes/model.ts";
 import type { PaneController } from "../../shell/panes/usePaneController.ts";
@@ -9,6 +9,7 @@ import type { ProviderPanes } from "./panes/useProviderPanes.ts";
 const state = vi.hoisted(() => ({
   automatic: true,
   request: 0,
+  continueDesk: vi.fn(),
   client: { getThread: vi.fn(), resumeThread: vi.fn() },
 }));
 vi.mock("../../runtime/deskRestore.ts", () => ({ useDeskRestore: () => state }));
@@ -31,6 +32,9 @@ let panes: ProviderPanes;
 beforeEach(() => {
   state.automatic = true;
   state.request = 0;
+  state.continueDesk.mockImplementation(() => {
+    state.request += 1;
+  });
   state.client = {
     getThread: vi.fn().mockResolvedValue(agent),
     resumeThread: vi.fn().mockResolvedValue({ ...agent, status: "idle" }),
@@ -61,6 +65,49 @@ it("manual restore waits for one click and retains the saved layout", async () =
   expect(controller.layout).toEqual(layout);
 });
 
+it("an in-Code Continue click also admits a provider that becomes available later", async () => {
+  state.automatic = false;
+  const late = { ...agent, id: "late-provider", resumable: false };
+  const twoAgentLayout = {
+    ...emptyLayout(),
+    root: makeLeaf([
+      { kind: "agent", agentId: agent.id },
+      { kind: "agent", agentId: late.id },
+    ]),
+  } as const;
+  const twoAgentController = { ...controller, layout: twoAgentLayout } as PaneController;
+  const initialPanes = {
+    ...panes,
+    panes: [
+      { thread: agent, info: null },
+      { thread: late, info: null },
+    ],
+  } as ProviderPanes;
+  state.client.getThread.mockImplementation(async (id: string) => ({ ...agent, id }));
+
+  const view = render(<DeskRecovery controller={twoAgentController} panes={initialPanes} active />);
+  fireEvent.click(screen.getByRole("button", { name: "Continue where I left off" }));
+  await waitFor(() => expect(state.client.resumeThread).toHaveBeenCalledWith(agent.id));
+  expect(state.continueDesk).toHaveBeenCalledOnce();
+  expect(state.client.resumeThread).not.toHaveBeenCalledWith(late.id);
+
+  view.rerender(
+    <DeskRecovery
+      controller={twoAgentController}
+      panes={{
+        ...initialPanes,
+        panes: [
+          { thread: agent, info: null },
+          { thread: { ...late, resumable: true }, info: null },
+        ],
+      }}
+      active
+    />,
+  );
+  await waitFor(() => expect(state.client.resumeThread).toHaveBeenCalledWith(late.id));
+  expect(state.client.resumeThread).toHaveBeenCalledTimes(2);
+});
+
 it("a native explicit stop during restoration wins over the cached eligibility", async () => {
   state.client.getThread.mockResolvedValue({ ...agent, restartRecoverable: false, currentActivity: "Stopped by you" });
   render(<DeskRecovery controller={controller} panes={panes} active />);
@@ -82,6 +129,57 @@ it("does not pretend an unsupported conversation resumed", () => {
   render(<DeskRecovery controller={controller} panes={panes} active />);
   expect(screen.getByText(/Some agents need a fresh start/)).toBeVisible();
   expect(state.client.resumeThread).not.toHaveBeenCalled();
+});
+
+it("automatically admits a saved agent once when provider capability becomes available later", async () => {
+  const unavailable = { ...agent, resumable: false };
+  const view = render(
+    <DeskRecovery controller={controller} panes={{ ...panes, panes: [{ thread: unavailable, info: null }] }} active />,
+  );
+  await act(async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+  expect(state.client.resumeThread).not.toHaveBeenCalled();
+
+  view.rerender(<DeskRecovery controller={controller} panes={panes} active />);
+  await waitFor(() => expect(state.client.resumeThread).toHaveBeenCalledTimes(1));
+
+  view.rerender(<DeskRecovery controller={{ ...controller }} panes={{ ...panes }} active />);
+  await waitFor(() => expect(panes.refresh).toHaveBeenCalled());
+  expect(state.client.resumeThread).toHaveBeenCalledTimes(1);
+});
+
+it("keeps a prior manual Continue intent until a provider capability becomes available", async () => {
+  state.automatic = false;
+  state.request = 1;
+  const unavailable = { ...agent, resumable: false };
+  const view = render(
+    <DeskRecovery controller={controller} panes={{ ...panes, panes: [{ thread: unavailable, info: null }] }} active />,
+  );
+  await act(async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+  expect(state.client.resumeThread).not.toHaveBeenCalled();
+
+  view.rerender(<DeskRecovery controller={controller} panes={panes} active />);
+  await waitFor(() => expect(state.client.resumeThread).toHaveBeenCalledTimes(1));
+});
+
+it("does not recover a late-capability agent in manual mode without a Continue intent", async () => {
+  state.automatic = false;
+  const unavailable = { ...agent, resumable: false };
+  const view = render(
+    <DeskRecovery controller={controller} panes={{ ...panes, panes: [{ thread: unavailable, info: null }] }} active />,
+  );
+  view.rerender(<DeskRecovery controller={controller} panes={panes} active />);
+  await waitFor(() => expect(panes.panes[0]?.thread.resumable).toBe(true));
+  expect(state.client.resumeThread).not.toHaveBeenCalled();
+});
+
+it("does not automatically retry a failed agent when its pane summary is republished", async () => {
+  state.client.resumeThread.mockRejectedValue(new Error("Provider session expired"));
+  const view = render(<DeskRecovery controller={controller} panes={panes} active />);
+  await screen.findByRole("button", { name: "Retry recovery" });
+
+  view.rerender(<DeskRecovery controller={{ ...controller }} panes={{ ...panes }} active />);
+  await waitFor(() => expect(panes.refresh).toHaveBeenCalled());
+  expect(state.client.resumeThread).toHaveBeenCalledTimes(1);
 });
 
 it.each(["resumed", "closed"])("clears the recovery warning when the failed agent is %s", async (action) => {
