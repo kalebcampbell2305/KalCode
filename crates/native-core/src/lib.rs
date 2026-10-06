@@ -18,6 +18,7 @@ pub mod protected_file;
 pub mod redact;
 pub mod runtime;
 pub mod settings;
+pub mod squads;
 pub mod time;
 pub mod workspaces;
 

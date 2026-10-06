@@ -2,6 +2,7 @@ import type { AgentEvent, EventEnvelope, KalVoiceSignal } from "@kalcode/protoco
 import type { DoctorInvoke } from "./doctor";
 import type { HandoffsCommandName } from "./handoffs";
 import type { OperationsCommandName } from "./operations";
+import type { SquadsCommandName } from "./squads";
 import type { UtilityCommandName } from "./utilities";
 
 /** Every command the native runtime exposes (mirrors src-tauri/build.rs). */
@@ -16,6 +17,7 @@ export type CommandName =
   | "integration_dispatch"
   | HandoffsCommandName
   | OperationsCommandName
+  | SquadsCommandName
   | "boot"
   | "window_ready"
   | "settings_get"

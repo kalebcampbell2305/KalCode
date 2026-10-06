@@ -21,6 +21,7 @@ import { dismissAttention } from "./useAttention.ts";
 const KIND: Record<AttentionKind, { icon: LucideIcon; tone: string; label: string }> = {
   question: { icon: MessageCircleQuestion, tone: "waiting", label: "Question" },
   approval: { icon: ShieldAlert, tone: "waiting", label: "Approval" },
+  blocked: { icon: ShieldAlert, tone: "waiting", label: "Blocked" },
   failed: { icon: CircleX, tone: "failed", label: "Failed" },
   auth: { icon: PlugZap, tone: "waiting", label: "Sign-in" },
   stalled: { icon: Hourglass, tone: "recovering", label: "Stalled" },
@@ -63,7 +64,7 @@ export function AttentionList({ items, ready, compact = false, emptyHint }: Atte
           <p className={styles.emptyTitle}>Nothing needs you</p>
           <p className={styles.emptyText}>
             {emptyHint ??
-              "Questions, failures, sign-outs, stalled agents and finished work to review show up here, and only those."}
+              "Questions, blocked or failed work, sign-outs, stalled agents and finished work to review show up here."}
           </p>
         </div>
       </div>
@@ -91,8 +92,14 @@ const AttentionCard = memo(function AttentionCard({
   const Icon = meta.icon;
   const [busy, setBusy] = useState<string | null>(null);
   const titleId = `attention-${item.key}`;
+  const actionKey = (action: AttentionAction) => {
+    if ("agentId" in action) return `${action.id}:${action.agentId}`;
+    if ("operationId" in action) return `${action.id}:${action.operationId}`;
+    if ("providerId" in action) return `${action.id}:${action.providerId}`;
+    return action.id;
+  };
   const run = (action: AttentionAction) => {
-    setBusy(action.id);
+    setBusy(actionKey(action));
     void actions.runAttention(item, action).finally(() => setBusy(null));
   };
   const visible = item.actions.filter((a) => a.id !== "dismiss");
@@ -118,10 +125,10 @@ const AttentionCard = memo(function AttentionCard({
         <div className={styles.actions}>
           {visible.map((action, index) => (
             <Button
-              key={action.id}
+              key={actionKey(action)}
               size="sm"
               variant={index === 0 ? "primary" : "secondary"}
-              busy={busy === action.id}
+              busy={busy === actionKey(action)}
               onClick={() => run(action)}
               aria-label={`${action.label}: ${item.source}`}
             >

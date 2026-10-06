@@ -130,16 +130,16 @@ describe("Stable Dashboard", () => {
     expect(count).toBeGreaterThan(0);
 
     // Activity carries no duplicate count. The sidebar's one inbox, Needs you, counts what
-    // genuinely needs the person: the board's needs-you agents, the failed one, and the two
-    // finished agents whose changes are waiting for review (busy fixture).
+    // genuinely needs the person: the board's needs-you agents, one overlapping-edit pair, the
+    // failed agent and Operation, and the two finished agents waiting for review (busy fixture).
     const nav = dashboardNav();
     expect(nav.textContent).toBe("Activity");
     expect(nav).not.toHaveAttribute("aria-describedby");
     expect(count).toBe(3);
     expect(agents.getByRole("button", { name: "Failed, 1" })).toBeInTheDocument();
     const inbox = needsYouNav();
-    await waitFor(() => expect(inbox).toHaveAccessibleName("Needs you, 6 waiting"));
-    expect(inbox.textContent).toBe("Needs you6");
+    await waitFor(() => expect(inbox).toHaveAccessibleName("Needs you, 8 waiting"));
+    expect(inbox.textContent).toBe("Needs you8");
     // Every card shows how long its agent has run.
     for (const card of agents.getAllByRole("article")) {
       expect(card.querySelector('time[data-kind="elapsed"]')?.textContent).toMatch(/^Running time /);
@@ -153,19 +153,25 @@ describe("Stable Dashboard", () => {
       "Approval: Needs your permission",
       "Approval: Needs your permission",
       "Question: Asked you a question",
+      "Blocked: Fix flaky checkout test and Write invoices migration overlap",
       "Failed: Failed",
+      "Failed: Package desktop failed",
       "Review: Finished · 12 files changed",
       "Review: Finished · 9 files changed",
     ]);
   });
 
-  it("the Sidebar shows no count when nothing needs you", async () => {
-    await mount("archived");
+  it("counts a failed Operation even when no coding agent needs attention", async () => {
+    const { user } = await mount("archived");
     await board().findByRole("heading", { name: "All 3 agents are archived" });
     expect(dashboardNav().textContent).toBe("Activity");
     const inbox = needsYouNav();
-    await waitFor(() => expect(inbox).toHaveAccessibleName("Needs you, nothing waiting"));
-    expect(inbox.textContent).toBe("Needs you");
+    await waitFor(() => expect(inbox).toHaveAccessibleName("Needs you, 1 waiting"));
+    expect(inbox.textContent).toBe("Needs you1");
+    await user.click(inbox);
+    const sheet = within(await screen.findByRole("dialog", { name: "Needs you" }));
+    const item = sheet.getByRole("listitem", { name: /Failed:\s*Package desktop failed/ });
+    expect(within(item).getByText("Operations")).toBeInTheDocument();
   });
 });
 

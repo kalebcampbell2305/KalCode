@@ -16,6 +16,20 @@ KalCode hosts supported provider CLIs in real terminals. Provider-native authent
 
 This table describes integration mechanisms, not certification of every upstream extension or model. Provider policy can disable a native feature; KalCode must show the real limitation and must not fabricate status or availability.
 
+## Squad and queued-agent launches
+
+Squads, Recipes and agent Operations use the same provider-pane adapter as Code's
+New agent action. Each launched member has a real PTY and canonical coding session;
+the selected account, exact model, supported effort, native configuration and
+worktree flow through that adapter. KalVoice calls the same Squad launch command.
+No provider-specific Squad executor or headless replacement limits native tools.
+
+Provider adapters determine interactive support and effort mapping. A provider
+without the requested capability produces an actionable member-level failure;
+independent members continue. Deterministic native tests prove orchestration and
+terminal identity without claiming that a paid upstream request was exercised.
+See [Squads](../SQUADS.md) for dependencies, recovery and ownership behavior.
+
 ## Parity rule and verification
 
 AGENTS.md, "Permanent native provider parity rule": a provider inside KalCode must keep every

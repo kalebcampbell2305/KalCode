@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use kalcode_contracts::operations::{
     OperationEnvironmentKind, OperationKind, OperationLane, OperationSpec, OperationStatus,
 };
+use kalcode_contracts::threads::MessageRole;
 use kalcode_core::events::{Correlation, EventPayload, NewEvent};
 use kalcode_core::flags::BuildChannel;
 use kalcode_core::operations::{OperationsStore, normalize_spec};
@@ -541,6 +542,65 @@ fn claims_are_atomic_and_enforce_execution_slots() {
 }
 
 #[test]
+fn agent_claims_are_parallel_and_do_not_consume_the_command_slot() {
+    let data = tempfile::tempdir().expect("data");
+    let project = tempfile::tempdir().expect("project");
+    let core = open(data.path());
+    let workspace_id = workspace(&core, project.path());
+    let account_id = provider_account(&core, "Parallel Codex");
+    let store = Arc::new(OperationsStore::new(core));
+    let agents = (0..8)
+        .map(|index| {
+            store
+                .enqueue(agent_spec(
+                    &workspace_id,
+                    &account_id,
+                    &format!("Agent {index}"),
+                ))
+                .expect("enqueue agent")
+        })
+        .collect::<Vec<_>>();
+    let build = store
+        .enqueue(spec(&workspace_id, "Concurrent build"))
+        .expect("enqueue build");
+    store
+        .claim(Some(&build.id))
+        .expect("build claim")
+        .expect("build available");
+
+    let barrier = Arc::new(Barrier::new(agents.len()));
+    let handles = agents
+        .into_iter()
+        .map(|agent| {
+            let store = store.clone();
+            let barrier = barrier.clone();
+            thread::spawn(move || {
+                barrier.wait();
+                store.claim(Some(&agent.id)).expect("agent claim")
+            })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        handles
+            .into_iter()
+            .filter_map(|handle| handle.join().expect("claim thread"))
+            .count(),
+        8,
+        "Operations never serializes real coding agents"
+    );
+    let another_build = store
+        .enqueue(spec(&workspace_id, "Second build"))
+        .expect("second build");
+    assert_eq!(
+        store
+            .claim(Some(&another_build.id))
+            .expect_err("command pool remains bounded")
+            .code,
+        "operation_slot_unavailable"
+    );
+}
+
+#[test]
 fn service_slots_do_not_starve_the_single_foreground_slot() {
     let data = tempfile::tempdir().expect("data");
     let project = tempfile::tempdir().expect("project");
@@ -866,6 +926,201 @@ fn reserved_agent_thread_recovers_exactly_once_from_the_first_completion() {
         thread_count, 1,
         "recovery never duplicates or relaunches a thread"
     );
+}
+
+#[test]
+fn prepared_agent_stays_pending_and_keeps_exact_identity_through_claim_and_hold() {
+    let data = tempfile::tempdir().expect("data");
+    let project = tempfile::tempdir().expect("project");
+    let core = open(data.path());
+    let workspace_id = workspace(&core, project.path());
+    let account_id = provider_account(&core, "Prepared agent account");
+    let store = OperationsStore::new(core);
+    let operation = store
+        .enqueue(agent_spec(
+            &workspace_id,
+            &account_id,
+            "Prepared dependency member",
+        ))
+        .expect("enqueue agent");
+
+    store
+        .prepare_agent_thread(&operation.id, Some("kal/prepared"), Some("revision-1"))
+        .expect("prepare exact thread");
+    store
+        .prepare_agent_thread(&operation.id, Some("kal/prepared"), Some("revision-1"))
+        .expect("preparation replay");
+    store
+        .prepare_agent_thread(&operation.id, Some("main"), Some("revision-2"))
+        .expect("prepared shared-workspace revision refresh");
+    let prepared = store.get(&operation.id).expect("prepared operation");
+    assert_eq!(prepared.status, OperationStatus::Queued);
+    assert_eq!(prepared.thread_id.as_deref(), Some(operation.id.as_str()));
+    assert_eq!(prepared.branch.as_deref(), Some("main"));
+    assert_eq!(prepared.version.as_deref(), Some("revision-2"));
+    assert_eq!(
+        prepared.current_action.as_deref(),
+        Some("Waiting for dependencies")
+    );
+    assert!(prepared.started_at.is_none());
+
+    store
+        .claim(Some(&operation.id))
+        .expect("claim")
+        .expect("claimable");
+    store
+        .reserve_agent_thread(&operation.id, Some("main"), Some("revision-3"))
+        .expect("prepared identity accepts actual shared-workspace start revision");
+    store
+        .hold_starting_with_reason(&operation.id, "The prepared pane is already working.")
+        .expect("actionable hold");
+    let held = store.get(&operation.id).expect("held operation");
+    assert_eq!(held.status, OperationStatus::Paused);
+    assert_eq!(held.thread_id.as_deref(), Some(operation.id.as_str()));
+    assert_eq!(
+        held.attention_reason.as_deref(),
+        Some("The prepared pane is already working.")
+    );
+    assert!(held.started_at.is_none());
+}
+
+#[test]
+fn restart_holds_prepared_agent_only_before_the_durable_task_attempt() {
+    for attempted in [false, true] {
+        let data = tempfile::tempdir().expect("data");
+        let project = tempfile::tempdir().expect("project");
+        let core = open(data.path());
+        let workspace_id = workspace(&core, project.path());
+        let account_id = provider_account(&core, "Prepared recovery account");
+        let store = OperationsStore::new(Arc::clone(&core));
+        let operation = store
+            .enqueue(agent_spec(
+                &workspace_id,
+                &account_id,
+                "Prepared restart boundary",
+            ))
+            .expect("enqueue agent");
+        store
+            .prepare_agent_thread(&operation.id, Some("kal/prepared"), Some("revision-1"))
+            .expect("prepare thread");
+        insert_agent_thread(
+            &core,
+            &operation.id,
+            &workspace_id,
+            Some(&account_id),
+            Some("gpt-test"),
+            "bypass",
+            "waiting_for_dependency",
+        );
+        store
+            .claim(Some(&operation.id))
+            .expect("claim")
+            .expect("available");
+        store
+            .reserve_agent_thread(&operation.id, Some("main"), Some("revision-2"))
+            .expect("reserve prepared thread");
+        if attempted {
+            core.emit(
+                NewEvent::core(EventPayload::AgentMessage {
+                    thread_id: operation.id.clone(),
+                    message_id: uuid::Uuid::now_v7().to_string(),
+                    role: MessageRole::User,
+                })
+                .with_correlation(Correlation {
+                    workspace_id: Some(workspace_id.clone()),
+                    thread_id: Some(operation.id.clone()),
+                    provider_id: Some("codex".into()),
+                    ..Correlation::default()
+                }),
+            )
+            .expect("persist task-attempt boundary before provider write");
+        }
+
+        store.recover().expect("recover");
+        let recovered = store.get(&operation.id).expect("recovered operation");
+        if attempted {
+            assert_eq!(recovered.status, OperationStatus::Interrupted);
+            assert!(recovered.started_at.is_some());
+            assert!(recovered.attention_reason.is_none());
+        } else {
+            assert_eq!(recovered.status, OperationStatus::Paused);
+            assert!(recovered.started_at.is_none());
+            assert!(recovered.ended_at.is_none());
+            assert!(recovered.outcome.is_none());
+            assert!(
+                recovered
+                    .attention_reason
+                    .as_deref()
+                    .is_some_and(|reason| reason.contains("task was sent"))
+            );
+        }
+        assert_eq!(recovered.thread_id.as_deref(), Some(operation.id.as_str()));
+    }
+}
+
+#[test]
+fn restart_recovers_a_completed_bound_agent_with_its_native_permission() {
+    for prepared in [false, true] {
+        let data = tempfile::tempdir().expect("data");
+        let project = tempfile::tempdir().expect("project");
+        let core = open(data.path());
+        let workspace_id = workspace(&core, project.path());
+        let account_id = provider_account(&core, "Bound completed account");
+        let store = OperationsStore::new(Arc::clone(&core));
+        let operation = store
+            .enqueue(agent_spec(
+                &workspace_id,
+                &account_id,
+                "Bound completed turn",
+            ))
+            .expect("enqueue agent");
+        if prepared {
+            store
+                .prepare_agent_thread(&operation.id, Some("kal/prepared"), Some("revision-1"))
+                .expect("prepare thread");
+        }
+        insert_agent_thread(
+            &core,
+            &operation.id,
+            &workspace_id,
+            Some(&account_id),
+            Some("gpt-test"),
+            "bypass",
+            "completed",
+        );
+        store
+            .claim(Some(&operation.id))
+            .expect("claim")
+            .expect("available");
+        store
+            .reserve_agent_thread(&operation.id, Some("kal/prepared"), Some("revision-1"))
+            .expect("reserve exact thread");
+        core.emit(
+            NewEvent::core(EventPayload::AgentMessage {
+                thread_id: operation.id.clone(),
+                message_id: uuid::Uuid::now_v7().to_string(),
+                role: MessageRole::User,
+            })
+            .with_correlation(Correlation {
+                workspace_id: Some(workspace_id.clone()),
+                thread_id: Some(operation.id.clone()),
+                provider_id: Some("codex".into()),
+                ..Correlation::default()
+            }),
+        )
+        .expect("persist first task boundary");
+        emit_agent_completion(&core, &workspace_id, &operation.id, true, false);
+
+        store.recover().expect("recover");
+        let recovered = store.get(&operation.id).expect("recovered operation");
+        assert_eq!(recovered.status, OperationStatus::Succeeded, "{prepared}");
+        assert_eq!(
+            recovered.thread_id.as_deref(),
+            Some(operation.id.as_str()),
+            "{prepared}"
+        );
+        assert!(recovered.attention_reason.is_none());
+    }
 }
 
 #[test]
@@ -1289,8 +1544,8 @@ fn operation_inputs_are_bounded_and_never_persist_secret_values() {
     unnamed.urls = vec!["https://example.test/dashboard".into()];
     unnamed.effort = Some("high".into());
     assert_eq!(
-        store.enqueue(unnamed).expect_err("unsupported effort").code,
-        "unsupported_operation_effort"
+        store.enqueue(unnamed).expect_err("command effort").code,
+        "operation_agent_fields_not_allowed"
     );
 
     let mut public_env = spec(&workspace_id, "Public environment name");
@@ -1385,9 +1640,9 @@ fn execution_shape_is_validated_before_persistence_and_binding() {
     agent.command = None;
     assert_eq!(
         normalize_spec(agent.clone())
-            .expect_err("prompt required")
-            .code,
-        "operation_prompt_required"
+            .expect("taskless agent")
+            .prompt,
+        None
     );
     agent.prompt = Some("  inspect the workspace  ".into());
     let normalized = normalize_spec(agent.clone()).expect("normalize agent");

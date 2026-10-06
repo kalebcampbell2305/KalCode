@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use kalcode_contracts::agent::{
-    AgentEvent, AgentEventSink, AgentProvider, AgentSession, AuthState, ProviderCapabilities,
-    ProviderDetection, ProviderError, ProviderId, SessionConfig,
+    AgentEvent, AgentEventSink, AgentProvider, AgentSession, AuthState, LaunchOrigin,
+    ProviderCapabilities, ProviderDetection, ProviderError, ProviderId, SessionConfig,
 };
 use kalcode_contracts::context::PromptReview;
 use kalcode_contracts::operations::{OperationKind, OperationSpec};
@@ -28,8 +28,8 @@ use kalcode_providers::managed::ManagedProfiles;
 use kalcode_providers::model::{AdapterState, ProviderStatus};
 use kalcode_providers::{ClaudeCodeProvider, CodexProvider, DetectEnv, GeminiProvider};
 use kalcode_threads::{
-    CoreWorkspaces, CreateThread, ProviderErrorObserver, ProviderRegistry, StreamId, ThreadOptions,
-    ThreadRuntime, ToolCallRecord,
+    CoreWorkspaces, CreateIdleThread, CreateThread, ProviderErrorObserver, ProviderRegistry,
+    StreamId, ThreadOptions, ThreadRuntime, ToolCallRecord,
 };
 use tauri::ipc::Channel;
 use tauri::{State, Webview};
@@ -488,20 +488,128 @@ impl ThreadsState {
     pub(crate) fn start_operation(
         &self,
         core: &Arc<Core>,
+        git: &kalcode_git::GitCore,
         operation_id: &str,
         spec: &OperationSpec,
+        origin: LaunchOrigin,
+        isolate: bool,
+        start_revision: Option<&str>,
     ) -> kalcode_core::Result<ThreadSummary> {
         let request = self.reviewed_operation_request(core, spec)?;
-        if request.provider_id == ProviderId::CURSOR {
-            let runtime = self.operation_runtime()?;
+        let runtime = self.operation_runtime()?;
+        if isolate {
+            let root = crate::git_commands::workspace_root_in(core, &request.workspace_id)?;
             return self
                 .routes
                 .create_operation_pane(runtime, operation_id, |id| {
-                    runtime.create_reviewed_for_operation(id, request, None)
+                    create_operation_in_worktree(
+                        core,
+                        git,
+                        runtime,
+                        &root,
+                        id,
+                        request,
+                        spec.prompt.is_some(),
+                        origin,
+                        start_revision,
+                    )
                 });
         }
-        self.operation_runtime()?
-            .create_reviewed_for_operation(operation_id, request, None)
+        self.routes
+            .create_operation_pane(runtime, operation_id, |id| {
+                if spec.prompt.is_some() {
+                    runtime.create_reviewed_for_operation_with_origin(id, request, None, origin)
+                } else {
+                    runtime.create_idle_with_id_for_origin(
+                        id,
+                        CreateIdleThread {
+                            provider_id: request.provider_id,
+                            provider_account_id: request.provider_account_id,
+                            account_label: request.account_label,
+                            workspace_id: request.workspace_id,
+                            model: request.model,
+                            effort: request.effort,
+                            permission_mode: request.permission_mode,
+                            name: request.name,
+                        },
+                        origin,
+                    )
+                }
+            })
+    }
+
+    /// Starts a Squad member's real provider pane without sending its task. The same canonical
+    /// thread is later admitted by Operations after its dependencies succeed.
+    pub(crate) fn prepare_operation(
+        &self,
+        core: &Arc<Core>,
+        git: &kalcode_git::GitCore,
+        operation_id: &str,
+        spec: &OperationSpec,
+        origin: LaunchOrigin,
+        isolate: bool,
+        start_revision: Option<&str>,
+    ) -> kalcode_core::Result<ThreadSummary> {
+        let request = self.reviewed_operation_request(core, spec)?;
+        let runtime = self.operation_runtime()?;
+        match runtime.get(operation_id) {
+            Ok(existing) => {
+                if !operation_thread_request_matches(&existing, &request, operation_id) {
+                    return Err(KalError::internal(
+                        "operation_thread_identity_mismatch",
+                        "This Squad member's provider pane no longer matches its reviewed configuration.",
+                    ));
+                }
+                if matches!(
+                    existing.status,
+                    ThreadStatus::Paused
+                        | ThreadStatus::Completed
+                        | ThreadStatus::Failed
+                        | ThreadStatus::Interrupted
+                        | ThreadStatus::Offline
+                ) {
+                    runtime.resume(operation_id, None)?;
+                }
+                return runtime.wait_for_dependency(operation_id, "Waiting for dependencies");
+            }
+            Err(error) if error.code == "thread_not_found" => {}
+            Err(error) => return Err(error),
+        }
+
+        let idle_request = CreateIdleThread {
+            provider_id: request.provider_id.clone(),
+            provider_account_id: request.provider_account_id.clone(),
+            account_label: request.account_label.clone(),
+            workspace_id: request.workspace_id.clone(),
+            model: request.model.clone(),
+            effort: request.effort.clone(),
+            permission_mode: request.permission_mode,
+            name: request.name.clone(),
+        };
+        if isolate {
+            let root = crate::git_commands::workspace_root_in(core, &request.workspace_id)?;
+            return self
+                .routes
+                .create_operation_pane(runtime, operation_id, |id| {
+                    create_operation_in_worktree(
+                        core,
+                        git,
+                        runtime,
+                        &root,
+                        id,
+                        request,
+                        false,
+                        origin,
+                        start_revision,
+                    )?;
+                    runtime.wait_for_dependency(id, "Waiting for dependencies")
+                });
+        }
+        self.routes
+            .create_operation_pane(runtime, operation_id, |id| {
+                runtime.create_idle_with_id_for_origin(id, idle_request, origin)?;
+                runtime.wait_for_dependency(id, "Waiting for dependencies")
+            })
     }
 
     fn reviewed_operation_request(
@@ -519,7 +627,10 @@ impl ThreadsState {
             None => DEFAULT_CODING_PERMISSION_MODE,
         };
         let request = operation_request(core, runtime, spec, permission_mode)?;
-        review_operation_prompt(runtime, &request)?;
+        validate_operation_account_authenticated(core, &request)?;
+        if spec.prompt.is_some() {
+            review_operation_prompt(runtime, &request)?;
+        }
         Ok(request)
     }
 
@@ -613,7 +724,7 @@ impl ThreadsState {
     }
 }
 
-fn validate_agent_operation(spec: &OperationSpec) -> kalcode_core::Result<(&str, &str)> {
+fn validate_agent_operation(spec: &OperationSpec) -> kalcode_core::Result<(&str, Option<&str>)> {
     if spec.kind != OperationKind::Agent {
         return Err(KalError::validation(
             "operation_kind_unsupported",
@@ -624,12 +735,6 @@ fn validate_agent_operation(spec: &OperationSpec) -> kalcode_core::Result<(&str,
         return Err(KalError::validation(
             "operation_agent_command_invalid",
             "Agent tasks use a prompt and cannot also include a shell command.",
-        ));
-    }
-    if spec.effort.is_some() {
-        return Err(KalError::validation(
-            "operation_effort_unsupported",
-            "This KalCode build does not support effort selection for agent tasks.",
         ));
     }
     let provider_id = spec
@@ -645,13 +750,7 @@ fn validate_agent_operation(spec: &OperationSpec) -> kalcode_core::Result<(&str,
     let prompt = spec
         .prompt
         .as_deref()
-        .filter(|prompt| !prompt.trim().is_empty())
-        .ok_or_else(|| {
-            KalError::validation(
-                "operation_prompt_required",
-                "Enter a prompt for this agent task.",
-            )
-        })?;
+        .filter(|prompt| !prompt.trim().is_empty());
     Ok((provider_id, prompt))
 }
 
@@ -702,16 +801,26 @@ fn operation_request(
             format!("That model isn't available for {}.", provider.display_name),
         ));
     }
-    resolved_create_request(
+    let mut request = resolved_create_request(
         core,
         provider_id.0,
         spec.provider_account_id.clone(),
         spec.workspace_id.clone(),
         model,
         permission_mode,
-        prompt.to_owned(),
+        prompt.unwrap_or_default().to_owned(),
         Some(spec.name.clone()),
-    )
+    )?;
+    request.effort = operation_effort(&request.provider_id, spec.effort.as_deref())?;
+    Ok(request)
+}
+
+fn operation_effort(
+    provider_id: &str,
+    effort: Option<&str>,
+) -> kalcode_core::Result<Option<String>> {
+    kalcode_providers::interactive::normalize_effort(provider_id, effort)
+        .map_err(|message| KalError::validation("invalid_effort", message))
 }
 
 fn canonical_operation_spec(spec: &OperationSpec, request: &CreateThread) -> OperationSpec {
@@ -719,7 +828,21 @@ fn canonical_operation_spec(spec: &OperationSpec, request: &CreateThread) -> Ope
     canonical.provider_id = Some(request.provider_id.clone());
     canonical.provider_account_id = request.provider_account_id.clone();
     canonical.model = request.model.clone();
+    canonical.effort = request.effort.clone();
     canonical
+}
+
+fn operation_thread_request_matches(
+    thread: &ThreadSummary,
+    request: &CreateThread,
+    operation_id: &str,
+) -> bool {
+    thread.id == operation_id
+        && thread.provider_id.as_str() == request.provider_id
+        && thread.provider_account_id == request.provider_account_id
+        && thread.workspace_id == request.workspace_id
+        && thread.model == request.model
+        && thread.effort == request.effort
 }
 
 fn review_operation_prompt(
@@ -927,6 +1050,25 @@ fn validate_creation_account(
         ));
     }
     Ok(account)
+}
+
+fn validate_operation_account_authenticated(
+    core: &Arc<Core>,
+    request: &CreateThread,
+) -> kalcode_core::Result<()> {
+    let Some(account_id) = request.provider_account_id.as_deref() else {
+        return Ok(());
+    };
+    let account = AccountStore::new(core.clone()).get(account_id)?;
+    if account.authentication_state == AuthState::NotAuthenticated {
+        Err(KalError::new(
+            ErrorCategory::Authentication,
+            "provider_account_not_authenticated",
+            "That provider account needs to be reconnected before this agent can start.",
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 #[tauri::command(async)]
@@ -1145,6 +1287,10 @@ fn thread_branch_name(name: Option<&str>, thread_id: &str) -> String {
     format!("kal/{slug}-{suffix}")
 }
 
+pub(crate) fn operation_branch_name(name: Option<&str>, operation_id: &str) -> String {
+    thread_branch_name(name, operation_id)
+}
+
 /// Creates a thread that runs in its own KalCode-managed Git worktree on a new branch from the
 /// workspace's HEAD, so parallel agents never share a folder. The checkout happens only after
 /// the runtime admitted the prompt and validated the provider, model and workspace; the worktree
@@ -1193,6 +1339,220 @@ pub(crate) fn create_thread_in_worktree(
         Err(error) => {
             if let Some(new) = made.into_inner()
                 && runtime.get(&thread_id).is_err()
+            {
+                roll_back_thread_worktree(core, exe, &repo, &new, recorded.into_inner().as_deref());
+            }
+            Err(error)
+        }
+    }
+}
+
+/// Creates one Operations-owned coding agent in its own managed worktree while preserving the
+/// reserved Operation/thread id. The membership relation decides isolation; the canonical
+/// thread worktree store remains the sole folder/branch authority and survives restart.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn create_operation_in_worktree(
+    core: &Arc<Core>,
+    git: &kalcode_git::GitCore,
+    runtime: &ThreadRuntime,
+    root: &kalcode_git::WorkspaceRoot,
+    operation_id: &str,
+    request: CreateThread,
+    has_prompt: bool,
+    origin: LaunchOrigin,
+    start_revision: Option<&str>,
+) -> kalcode_core::Result<ThreadSummary> {
+    use kalcode_git::store as git_store;
+    use kalcode_git::types::WorktreePurpose;
+    use kalcode_git::worktree;
+
+    let exe = git.git()?;
+    let repo = git.repo(root)?.ok_or_else(worktree_unavailable)?;
+    let branch = thread_branch_name(request.name.as_deref(), operation_id);
+    let made = std::cell::RefCell::new(None);
+    let recorded = std::cell::RefCell::new(None);
+    let prepare = || {
+        use kalcode_git::types::WorktreeStatus;
+
+        if let Some((row, old_path)) =
+            core.read(|conn| git_store::latest_thread_worktree(conn, operation_id))?
+        {
+            if row.workspace_id != root.id()
+                || row.branch != branch
+                || row.purpose != WorktreePurpose::Thread
+                || row.owner_ref.as_deref() != Some(operation_id)
+                || start_revision.is_some_and(|revision| row.base_commit != revision)
+            {
+                return Err(KalError::internal(
+                    "operation_worktree_identity_mismatch",
+                    "This Squad member's saved worktree does not match its reviewed launch.",
+                ));
+            }
+            if row.status == WorktreeStatus::Active && old_path.is_dir() {
+                return thread_folder(&repo, &old_path);
+            }
+            if old_path.exists() {
+                return Err(KalError::internal(
+                    "operation_worktree_recovery_required",
+                    "This Squad member's saved worktree has conflicting recovery state. Inspect it before retrying.",
+                ));
+            }
+            worktree::forget_missing(exe, &repo, &old_path)?;
+            let new = worktree::attach_managed(
+                exe,
+                &repo,
+                git.worktrees_root(),
+                &branch,
+                WorktreePurpose::Thread,
+                Some(operation_id.to_owned()),
+            )?;
+            let (new_row, _) = core.write_with_events(|tx| {
+                if row.status == WorktreeStatus::Active {
+                    git_store::set_worktree_status(tx, &row.id, WorktreeStatus::Removed)?;
+                }
+                Ok((git_store::insert_worktree(tx, &new)?, Vec::new()))
+            })?;
+            *made.borrow_mut() = Some(new.clone());
+            *recorded.borrow_mut() = Some(new_row.id);
+            return thread_folder(&repo, &new.path);
+        }
+
+        // A crash can occur after `git worktree add` but before its SQLite row. Recover only the
+        // exact deterministic branch inside KalCode's managed worktree root, with the reviewed
+        // base commit, then establish the missing canonical row before creating the thread.
+        let expected_root = git.worktrees_root().join(root.id());
+        let mut discovered = worktree::list(exe, &repo)?
+            .into_iter()
+            .filter(|item| item.branch.as_deref() == Some(branch.as_str()))
+            .collect::<Vec<_>>();
+        if discovered.len() > 1 {
+            return Err(KalError::internal(
+                "operation_worktree_recovery_ambiguous",
+                "More than one worktree matches this Squad member's branch. Inspect them before retrying.",
+            ));
+        }
+        let new = if let Some(found) = discovered.pop() {
+            let managed_root = std::fs::canonicalize(&expected_root).map_err(|error| {
+                KalError::new(
+                    ErrorCategory::Filesystem,
+                    "operation_worktree_recovery_unavailable",
+                    "KalCode couldn't verify the recovered worktree folder.",
+                )
+                .with_source(error)
+            })?;
+            let recovered_path = std::fs::canonicalize(&found.path).map_err(|error| {
+                KalError::new(
+                    ErrorCategory::Filesystem,
+                    "operation_worktree_recovery_unavailable",
+                    "KalCode couldn't verify the recovered worktree folder.",
+                )
+                .with_source(error)
+            })?;
+            let id = recovered_path
+                .file_name()
+                .and_then(std::ffi::OsStr::to_str)
+                .filter(|id| kalcode_contracts::ids::is_valid_id(id))
+                .ok_or_else(|| {
+                    KalError::internal(
+                        "operation_worktree_recovery_untrusted",
+                        "The recovered worktree is not a KalCode-managed folder.",
+                    )
+                })?;
+            let head = found.head.ok_or_else(|| {
+                KalError::internal(
+                    "operation_worktree_recovery_unverified",
+                    "The recovered worktree revision could not be verified.",
+                )
+            })?;
+            if !recovered_path.starts_with(&managed_root)
+                || start_revision.is_some_and(|revision| revision != head)
+            {
+                return Err(KalError::internal(
+                    "operation_worktree_recovery_untrusted",
+                    "The recovered worktree did not match this Squad member's reviewed revision.",
+                ));
+            }
+            worktree::NewWorktree {
+                id: id.to_owned(),
+                workspace_id: root.id().to_owned(),
+                path: recovered_path,
+                branch: branch.clone(),
+                base_commit: head,
+                purpose: WorktreePurpose::Thread,
+                owner_ref: Some(operation_id.to_owned()),
+            }
+        } else {
+            match worktree::attach_managed(
+                exe,
+                &repo,
+                git.worktrees_root(),
+                &branch,
+                WorktreePurpose::Thread,
+                Some(operation_id.to_owned()),
+            ) {
+                Ok(attached) => {
+                    if start_revision.is_some_and(|revision| revision != attached.base_commit) {
+                        let _ = worktree::remove(
+                            exe,
+                            &repo,
+                            &attached.path,
+                            worktree::RemoveMode::Safe,
+                        );
+                        return Err(KalError::internal(
+                            "operation_worktree_recovery_untrusted",
+                            "The recovered branch did not match this Squad member's reviewed revision.",
+                        ));
+                    }
+                    attached
+                }
+                Err(error) if error.code == "branch_missing" => worktree::create_managed(
+                    exe,
+                    &repo,
+                    git.worktrees_root(),
+                    &branch,
+                    start_revision,
+                    WorktreePurpose::Thread,
+                    Some(operation_id.to_owned()),
+                )?,
+                Err(error) => return Err(error),
+            }
+        };
+        *made.borrow_mut() = Some(new.clone());
+        let (row, _) =
+            core.write_with_events(|tx| Ok((git_store::insert_worktree(tx, &new)?, Vec::new())))?;
+        tracing::info!(
+            event = "operation.worktree_created",
+            operation_id,
+            worktree_id = %row.id
+        );
+        *recorded.borrow_mut() = Some(row.id);
+        thread_folder(&repo, &new.path)
+    };
+    let created = if has_prompt {
+        runtime.create_reviewed_in_with_origin(operation_id, request, None, origin, prepare)
+    } else {
+        let cwd = prepare()?;
+        runtime.create_idle_with_id_in_directory_for_origin(
+            operation_id,
+            CreateIdleThread {
+                provider_id: request.provider_id,
+                provider_account_id: request.provider_account_id,
+                account_label: request.account_label,
+                workspace_id: request.workspace_id,
+                model: request.model,
+                effort: request.effort,
+                permission_mode: request.permission_mode,
+                name: request.name,
+            },
+            cwd,
+            origin,
+        )
+    };
+    match created {
+        Ok(summary) => Ok(summary),
+        Err(error) => {
+            if let Some(new) = made.into_inner()
+                && runtime.get(operation_id).is_err()
             {
                 roll_back_thread_worktree(core, exe, &repo, &new, recorded.into_inner().as_deref());
             }
@@ -2158,6 +2518,51 @@ mod tests {
     }
 
     #[test]
+    fn direct_creation_preserves_native_sign_in_while_operations_require_a_connected_account() {
+        let fixture = AccountFixture::new();
+        let account = fixture.store.create("codex", "Codex").expect("account");
+        assert!(
+            fixture
+                .resolve("codex", Some(&account.id), None)
+                .expect("unknown auth preserves native launch parity")
+                .is_some()
+        );
+        fixture
+            .store
+            .mark_authentication(&account.id, AuthState::NotAuthenticated, None, None)
+            .expect("mark signed out");
+        let resolved = fixture
+            .resolve("codex", Some(&account.id), None)
+            .expect("direct native pane can present provider sign-in")
+            .expect("resolved account");
+        assert_eq!(resolved.authentication_state, AuthState::NotAuthenticated);
+        let operation_request = CreateThread {
+            provider_id: "codex".into(),
+            provider_account_id: Some(account.id.clone()),
+            account_label: Some(account.display_name.clone()),
+            workspace_id: fixture.workspace_id.clone(),
+            model: None,
+            effort: None,
+            permission_mode: PermissionMode::Approve,
+            prompt: "work".into(),
+            name: None,
+        };
+        assert_eq!(
+            validate_operation_account_authenticated(&fixture.core, &operation_request)
+                .expect_err("orchestrated launch requires reconnect")
+                .code,
+            "provider_account_not_authenticated"
+        );
+        fixture
+            .store
+            .mark_authentication(&account.id, AuthState::Authenticated, None, None)
+            .expect("reconnect");
+        assert!(
+            validate_operation_account_authenticated(&fixture.core, &operation_request).is_ok()
+        );
+    }
+
+    #[test]
     fn creation_account_label_query_is_exact_and_ambiguity_fails_closed() {
         let fixture = AccountFixture::new();
         fixture.store.create("codex", "Äccount").expect("upper");
@@ -2971,6 +3376,74 @@ mod tests {
         assert_eq!(state.conflicts, Some(false));
         std::fs::write(cwd.join("new.txt"), "agent").expect("write");
         assert_eq!(fixture.states(&thread.id)[0].untracked, 1);
+    }
+
+    #[test]
+    fn prepared_operation_adopts_its_canonical_worktree_after_a_pre_thread_crash() {
+        use kalcode_git::types::WorktreePurpose;
+
+        let fixture = FleetFixture::new(true);
+        let operation_id = kalcode_contracts::ids::new_id();
+        let request = fixture.request(Some("Crash recovery"), None);
+        let branch = operation_branch_name(request.name.as_deref(), &operation_id);
+        let head =
+            String::from_utf8(git_output(fixture.root.path(), &["rev-parse", "HEAD"]).stdout)
+                .expect("head utf8")
+                .trim()
+                .to_owned();
+        let repo = fixture
+            .git
+            .repo(&fixture.root)
+            .expect("repo lookup")
+            .expect("repository");
+        let new = kalcode_git::worktree::create_managed(
+            fixture.git.git().expect("git"),
+            &repo,
+            fixture.git.worktrees_root(),
+            &branch,
+            Some(&head),
+            WorktreePurpose::Thread,
+            Some(operation_id.clone()),
+        )
+        .expect("pre-crash worktree");
+        let saved = fixture
+            .accounts
+            .core
+            .write_with_events(|tx| {
+                Ok((kalcode_git::store::insert_worktree(tx, &new)?, Vec::new()))
+            })
+            .expect("canonical worktree row")
+            .0;
+        assert!(
+            fixture.runtime.get(&operation_id).is_err(),
+            "the crash fixture has no thread yet"
+        );
+
+        let thread = create_operation_in_worktree(
+            &fixture.accounts.core,
+            &fixture.git,
+            &fixture.runtime,
+            &fixture.root,
+            &operation_id,
+            request,
+            false,
+            LaunchOrigin::User,
+            Some(&head),
+        )
+        .expect("resume prepared operation");
+
+        assert_eq!(thread.id, operation_id);
+        assert_eq!(thread.worktree_id.as_deref(), Some(saved.id.as_str()));
+        assert_eq!(fixture.worktrees().len(), 1, "no duplicate worktree row");
+        let starts = fixture.spy.starts();
+        assert_eq!(starts.len(), 1);
+        assert_eq!(
+            kalcode_core::workspaces::canonical_folder(std::path::Path::new(
+                &starts[0].working_directory
+            ))
+            .expect("started cwd"),
+            kalcode_core::workspaces::canonical_folder(&new.path).expect("saved worktree cwd")
+        );
     }
 
     #[test]

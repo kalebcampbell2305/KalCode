@@ -68,6 +68,7 @@ import {
 import { useOptionalAccount } from "../../account/AccountProvider.tsx";
 import { type AccountTier, planTier, tierName } from "../../ipc/account.ts";
 import type { OperationsApi } from "../../ipc/operations.ts";
+import type { SquadsApi } from "../../ipc/squads.ts";
 import {
   type OperationsVoiceFocusLease,
   type OperationsVoiceTarget,
@@ -82,6 +83,7 @@ import { useOpenInPane } from "../../shell/panes/useOpenInPane.ts";
 import { PERMISSION_MODE_HINTS, PERMISSION_MODE_LABELS } from "../dashboard/data/format.ts";
 import { focusSection } from "../dashboard/useNow.ts";
 import { accountFullLabel, accountName, accountSignIn, sortAccounts } from "../providers/accountIdentity.ts";
+import { SquadsPanel } from "../squads/SquadsPanel.tsx";
 import {
   type ActivityRange,
   activityLevel,
@@ -104,6 +106,7 @@ import { useOperations } from "./useOperations.ts";
 
 export interface OperationsPageProps {
   client: OperationsApi;
+  squads?: SquadsApi;
   threadOptions: () => Promise<ThreadOptions>;
   providerAccounts?: () => Promise<ProviderAccount[]>;
 }
@@ -238,7 +241,7 @@ function Metadata({ record }: { record: OperationRecord }) {
   );
 }
 
-export function OperationsPage({ client, threadOptions, providerAccounts }: OperationsPageProps) {
+export function OperationsPage({ client, squads, threadOptions, providerAccounts }: OperationsPageProps) {
   const state = useOperations(client);
   const toast = useToast();
   const workspaces = useWorkspaces();
@@ -528,6 +531,11 @@ export function OperationsPage({ client, threadOptions, providerAccounts }: Oper
           <TabsTrigger value="queue" data-operations-tab="queue">
             Queue
           </TabsTrigger>
+          {squads ? (
+            <TabsTrigger value="squads" data-operations-tab="squads">
+              Squads
+            </TabsTrigger>
+          ) : null}
           <TabsTrigger value="services" data-operations-tab="services">
             Services
           </TabsTrigger>
@@ -563,6 +571,18 @@ export function OperationsPage({ client, threadOptions, providerAccounts }: Oper
             onRun={showRun}
           />
         </TabsContent>
+        {squads ? (
+          <TabsContent value="squads">
+            <SquadsPanel
+              client={squads}
+              operations={client}
+              workspaceId={workspaceId || workspaces.active?.id || ""}
+              threadOptions={threadOptions}
+              providerAccounts={providerAccounts}
+              onOperationsChanged={() => void state.refresh()}
+            />
+          </TabsContent>
+        ) : null}
         <TabsContent value="services">
           <ServicesView
             snapshot={snapshot}

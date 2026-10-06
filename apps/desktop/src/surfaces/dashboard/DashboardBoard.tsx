@@ -43,13 +43,12 @@ import {
   groupThreads,
   type ThreadGroup,
 } from "./data/board.ts";
-import { useArchivedCodingAgents, useCodingAgents } from "./data/DashboardData.tsx";
+import { useAgentWorktreeStates, useArchivedCodingAgents, useCodingAgents } from "./data/DashboardData.tsx";
 import { canDismiss, useAgentCleanup } from "./fleet/agentCleanup.ts";
 import { isFolded, useFleetLayout } from "./fleet/fleetLayout.ts";
 import { type MergeReadiness, mergeReadiness } from "./fleet/fleetModel.ts";
 import { morphIntoAgent } from "./fleet/morph.ts";
 import { useAgentOverlaps } from "./fleet/useAgentOverlaps.ts";
-import { useWorktreeStates } from "./fleet/useWorktreeStates.ts";
 import { useVirtualRows } from "./useVirtualRows.ts";
 
 /** Card sizing: a card never gets narrower than this; wider boards get more columns. */
@@ -255,7 +254,7 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
     [intents, navigate],
   );
 
-  const { states: worktrees, apply: applyWorktree } = useWorktreeStates(threads);
+  const { states: worktrees, apply: applyWorktree } = useAgentWorktreeStates();
   const overlaps = useAgentOverlaps({ threads: threads ?? NO_THREADS, states: worktrees }).byAgent;
   const onReviewApprovals = useCallback(() => permissions.setPanelOpen(true), [permissions.setPanelOpen]);
   const onDismiss = useCallback((thread: ThreadSummary) => void cleanup.dismissAgent(thread.id), [cleanup]);

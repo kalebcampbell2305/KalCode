@@ -2135,7 +2135,7 @@ impl Shared {
 /// Exact, bounded terminal-emulator replies generated in response to a provider query. These
 /// bytes are written through xterm's ordinary input callback but are not human input. The
 /// classification is deliberately narrow and does not include keys, paste framing, or text.
-fn terminal_protocol_reply(data: &[u8]) -> bool {
+pub fn terminal_protocol_reply(data: &[u8]) -> bool {
     if data.len() < 3 || data.len() > 256 || data[0] != 0x1b {
         return false;
     }

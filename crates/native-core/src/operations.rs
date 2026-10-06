@@ -64,6 +64,7 @@ const OPERATION_COLUMNS: &str = "
     o.started_at,
     o.ended_at,
     o.current_action,
+    o.attention_reason,
     o.outcome,
     o.position";
 
@@ -353,6 +354,76 @@ impl OperationsStore {
         self.core.read(|conn| load_record(conn, id))
     }
 
+    /// Loads exact Operations identities in first-seen input order. Duplicate ids collapse to
+    /// one record. Queries are chunked below SQLite's host-parameter limit and dependency status
+    /// projection is shared across the batch, avoiding one connection lock/query per Squad
+    /// member in large launch snapshots.
+    pub fn get_many(&self, ids: &[String]) -> Result<Vec<OperationRecord>> {
+        let mut seen = HashSet::with_capacity(ids.len());
+        let mut ordered = Vec::with_capacity(ids.len());
+        for id in ids {
+            validate_id(id)?;
+            if seen.insert(id.as_str()) {
+                ordered.push(id.clone());
+            }
+        }
+        self.core.read(|conn| {
+            let mut stored = Vec::with_capacity(ordered.len());
+            for chunk in ordered.chunks(400) {
+                let placeholders = std::iter::repeat_n("?", chunk.len())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                stored.extend(load_stored_rows(
+                    conn,
+                    &format!(
+                        "SELECT {OPERATION_COLUMNS} FROM operations o
+                         JOIN workspaces w ON w.id = o.workspace_id
+                         WHERE o.id IN ({placeholders})"
+                    ),
+                    params_from_iter(chunk.iter()),
+                )?);
+            }
+            if stored.len() != ordered.len() {
+                return Err(not_found());
+            }
+            let records = records_from_stored(conn, stored, false)?;
+            let mut by_id = records
+                .into_iter()
+                .map(|record| (record.id.clone(), record))
+                .collect::<HashMap<_, _>>();
+            ordered
+                .iter()
+                .map(|id| by_id.remove(id).ok_or_else(not_found))
+                .collect()
+        })
+    }
+
+    /// Returns the subset of exact Operation ids that belong to a Squad launch, using bounded
+    /// batch queries for projection copy and other orchestration-aware views.
+    pub fn squad_member_ids(&self, ids: &[String]) -> Result<HashSet<String>> {
+        for id in ids {
+            validate_id(id)?;
+        }
+        self.core.read(|conn| {
+            let mut members = HashSet::new();
+            for chunk in ids.chunks(400) {
+                let placeholders = std::iter::repeat_n("?", chunk.len())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let mut stmt = conn.prepare(&format!(
+                    "SELECT operation_id FROM squad_launch_members
+                     WHERE operation_id IN ({placeholders})"
+                ))?;
+                for id in stmt.query_map(params_from_iter(chunk.iter()), |row| {
+                    row.get::<_, String>(0)
+                })? {
+                    members.insert(id?);
+                }
+            }
+            Ok(members)
+        })
+    }
+
     pub fn detail(&self, id: &str) -> Result<OperationDetail> {
         validate_id(id)?;
         self.core.read(|conn| {
@@ -637,7 +708,7 @@ impl OperationsStore {
             let changed = match (held, status) {
                 (true, OperationStatus::Queued | OperationStatus::Blocked) => {
                     tx.execute(
-                        "UPDATE operations SET status = 'paused' WHERE id = ?1",
+                        "UPDATE operations SET status = 'paused', attention_reason = NULL WHERE id = ?1",
                         [id],
                     )?;
                     append_moment(tx, id, "paused", "Task paused before starting.")?;
@@ -645,7 +716,7 @@ impl OperationsStore {
                 }
                 (false, OperationStatus::Paused) => {
                     tx.execute(
-                        "UPDATE operations SET status = 'queued' WHERE id = ?1",
+                        "UPDATE operations SET status = 'queued', attention_reason = NULL WHERE id = ?1",
                         [id],
                     )?;
                     refresh_blocked(tx)?;
@@ -669,15 +740,298 @@ impl OperationsStore {
         })
     }
 
+    /// Clears only an actionable orchestration hold after successful provider/account
+    /// revalidation. This can recover both launch-time `blocked` rows and runtime `paused` rows;
+    /// dependency projection is recomputed without erasing real failed-dependency blockers.
+    pub fn clear_attention_hold(&self, id: &str) -> Result<bool> {
+        validate_id(id)?;
+        self.write(|tx| {
+            let (status, attention): (String, Option<String>) = tx
+                .query_row(
+                    "SELECT status, attention_reason FROM operations WHERE id = ?1",
+                    [id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?
+                .ok_or_else(not_found)?;
+            if attention.is_none() {
+                return Ok(false);
+            }
+            if !matches!(
+                parse_status(&status)?,
+                OperationStatus::Paused | OperationStatus::Blocked
+            ) {
+                return Err(invalid_state(
+                    "operation_not_pending",
+                    "Only pending Operations attention can be cleared.",
+                ));
+            }
+            tx.execute(
+                "UPDATE operations SET status = 'queued', attention_reason = NULL WHERE id = ?1",
+                [id],
+            )?;
+            refresh_blocked(tx)?;
+            append_moment(
+                tx,
+                id,
+                "resumed",
+                "Provider and account selection revalidated.",
+            )?;
+            auto_order(tx)?;
+            bump_revision(tx)?;
+            Ok(true)
+        })
+    }
+
+    /// Pauses one pending task and records the specific safe reason that needs attention.
+    /// Batch launchers use this to isolate one unavailable member while the rest continue.
+    pub fn hold_with_reason(&self, id: &str, reason: &str) -> Result<()> {
+        validate_id(id)?;
+        validate_text(reason, 512, false, "invalid_operation_action")?;
+        reject_secret(reason)?;
+        self.write(|tx| {
+            let status = operation_status(tx, id)?;
+            if !matches!(
+                status,
+                OperationStatus::Queued | OperationStatus::Blocked | OperationStatus::Paused
+            ) {
+                return Err(invalid_state(
+                    "operation_not_pending",
+                    "Only pending Operations tasks can be paused.",
+                ));
+            }
+            tx.execute(
+                "UPDATE operations SET status = 'paused', current_action = NULL,
+                    attention_reason = ?2 WHERE id = ?1",
+                params![id, reason],
+            )?;
+            append_moment(tx, id, "paused", reason)?;
+            auto_order(tx)?;
+            bump_revision(tx)?;
+            Ok(())
+        })
+    }
+
+    /// Durably consumes the one-shot user intent associated with a newly-created Squad member.
+    /// The authorization itself remains process-local; this marker only prevents a duplicate IPC
+    /// or restart from replaying the provider launch. A crash after this marker leaves an
+    /// ordinary queued task that the user can explicitly Run now.
+    pub fn mark_squad_authorized(&self, id: &str) -> Result<bool> {
+        validate_id(id)?;
+        self.write(|tx| {
+            if operation_status(tx, id)? != OperationStatus::Queued {
+                return Ok(false);
+            }
+            let already: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM operation_moments
+                  WHERE operation_id = ?1 AND kind = 'squad_authorized')",
+                [id],
+                |row| row.get(0),
+            )?;
+            if already {
+                return Ok(false);
+            }
+            append_moment(
+                tx,
+                id,
+                "squad_authorized",
+                "Squad launch authorized this member once.",
+            )?;
+            bump_revision(tx)?;
+            Ok(true)
+        })
+    }
+
+    /// Makes unstarted Squad work explicitly recoverable after process restart without replaying
+    /// the launch intent. Already user-paused work and an existing actionable hold are preserved.
+    pub fn hold_unstarted_squad_members_after_restart(&self) -> Result<usize> {
+        const REASON: &str =
+            "KalCode restarted before this member started. Run now to revalidate and start it.";
+        self.write(|tx| {
+            let mut stmt = tx.prepare(
+                "SELECT o.id FROM operations o
+                 WHERE o.status IN ('queued', 'blocked')
+                   AND o.attention_reason IS NULL
+                   AND EXISTS (
+                     SELECT 1 FROM squad_launch_members m WHERE m.operation_id = o.id
+                   )",
+            )?;
+            let ids = stmt
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            drop(stmt);
+            for id in &ids {
+                tx.execute(
+                    "UPDATE operations SET status = 'paused', current_action = NULL,
+                        attention_reason = ?2 WHERE id = ?1",
+                    params![id, REASON],
+                )?;
+                append_moment(tx, id, "paused", REASON)?;
+            }
+            if !ids.is_empty() {
+                auto_order(tx)?;
+                bump_revision(tx)?;
+            }
+            Ok(ids.len())
+        })
+    }
+
     /// Atomically reserves one runnable task as `starting`. `Some(id)` is Run now; it can
     /// promote Later work but cannot bypass pause, dependency, hold, or execution-slot policy.
     pub fn claim(&self, id: Option<&str>) -> Result<Option<OperationRecord>> {
+        self.claim_with_pause_policy(id, false)
+    }
+
+    /// Claims one explicitly user-launched Squad coding agent even while the general Operations
+    /// queue is paused. The bypass is identity- and kind-bound: unrelated queued work, commands,
+    /// and non-Squad agents retain the global pause.
+    pub fn claim_user_squad_agent(&self, id: &str) -> Result<Option<OperationRecord>> {
+        self.claim_with_pause_policy(Some(id), true)
+    }
+
+    /// Connects a dependency-bound Squad member to the real provider pane that is already
+    /// waiting for its task. The Operation deliberately remains pending: dependency success is
+    /// still the sole authority that permits the first task turn.
+    pub fn prepare_agent_thread(
+        &self,
+        id: &str,
+        branch: Option<&str>,
+        version: Option<&str>,
+    ) -> Result<()> {
+        validate_id(id)?;
+        validate_optional_text(branch, 256, "invalid_operation_branch")?;
+        validate_optional_text(version, 128, "invalid_operation_version")?;
+        self.write(|tx| {
+            let stored = load_stored(tx, id)?;
+            if parse_kind(&stored.kind)? != OperationKind::Agent {
+                return Err(invalid_state(
+                    "operation_agent_required",
+                    "Only an agent Operation can prepare a provider pane.",
+                ));
+            }
+            if !matches!(
+                parse_status(&stored.status)?,
+                OperationStatus::Queued | OperationStatus::Blocked
+            ) {
+                return Err(invalid_state(
+                    "operation_not_pending",
+                    "Only a pending agent Operation can prepare its provider pane.",
+                ));
+            }
+            let unchanged = stored.thread_id.as_deref() == Some(id)
+                && stored.terminal_id.is_none()
+                && stored.branch.as_deref() == branch
+                && stored.version.as_deref() == version;
+            if unchanged {
+                return Ok(());
+            }
+            let prepared: bool = stored.thread_id.as_deref() == Some(id)
+                && stored.terminal_id.is_none()
+                && tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM operation_moments
+                      WHERE operation_id = ?1 AND kind = 'thread_prepared')",
+                    [id],
+                    |row| row.get(0),
+                )?;
+            if prepared {
+                tx.execute(
+                    "UPDATE operations SET branch = ?2, version = ?3,
+                        current_action = 'Waiting for dependencies'
+                     WHERE id = ?1 AND status IN ('queued', 'blocked') AND thread_id = id",
+                    params![id, branch, version],
+                )?;
+                append_moment(
+                    tx,
+                    id,
+                    "thread_prepared_refreshed",
+                    "Prepared shared-workspace pane revalidated against the current revision.",
+                )?;
+                bump_revision(tx)?;
+                return Ok(());
+            }
+            if stored.thread_id.is_some() || stored.terminal_id.is_some() {
+                return Err(invalid_state(
+                    "operation_execution_already_bound",
+                    "This Operation already has a different execution identity.",
+                ));
+            }
+            tx.execute(
+                "UPDATE operations SET thread_id = id, branch = ?2, version = ?3,
+                    current_action = 'Waiting for dependencies'
+                 WHERE id = ?1 AND status IN ('queued', 'blocked')",
+                params![id, branch, version],
+            )?;
+            append_moment(
+                tx,
+                id,
+                "thread_prepared",
+                "Provider pane is ready; the task remains withheld until dependencies succeed.",
+            )?;
+            bump_revision(tx)?;
+            Ok(())
+        })
+    }
+
+    /// Rolls back a pending preparation reservation only when no provider thread was created.
+    /// The caller proves absence through the canonical thread runtime before using this method.
+    pub fn clear_prepared_agent_thread(&self, id: &str) -> Result<()> {
+        validate_id(id)?;
+        self.write(|tx| {
+            let stored = load_stored(tx, id)?;
+            if !matches!(
+                parse_status(&stored.status)?,
+                OperationStatus::Queued | OperationStatus::Blocked
+            ) || stored.thread_id.as_deref() != Some(id)
+                || stored.terminal_id.is_some()
+            {
+                return Err(invalid_state(
+                    "operation_preparation_changed",
+                    "This Operation's prepared execution identity changed.",
+                ));
+            }
+            tx.execute(
+                "UPDATE operations SET thread_id = NULL, branch = NULL, version = NULL,
+                    current_action = NULL WHERE id = ?1",
+                [id],
+            )?;
+            append_moment(
+                tx,
+                id,
+                "thread_preparation_released",
+                "Provider pane preparation did not start a thread.",
+            )?;
+            bump_revision(tx)?;
+            Ok(())
+        })
+    }
+
+    fn claim_with_pause_policy(
+        &self,
+        id: Option<&str>,
+        allow_user_squad_agent: bool,
+    ) -> Result<Option<OperationRecord>> {
         if let Some(id) = id {
             validate_id(id)?;
         }
         self.write(|tx| {
             let (_, paused) = state(tx)?;
-            if paused {
+            let scoped_pause_bypass = if paused && allow_user_squad_agent {
+                match id {
+                    Some(id) => tx.query_row(
+                        "SELECT EXISTS(
+                           SELECT 1 FROM operations o
+                           JOIN squad_launch_members m ON m.operation_id = o.id
+                           WHERE o.id = ?1 AND o.kind = 'agent'
+                         )",
+                        [id],
+                        |row| row.get::<_, bool>(0),
+                    )?,
+                    None => false,
+                }
+            } else {
+                false
+            };
+            if paused && !scoped_pause_bypass {
                 return match id {
                     Some(_) => Err(invalid_state(
                         "operations_paused",
@@ -739,7 +1093,8 @@ impl OperationsStore {
             let started_at = now_rfc3339();
             let updated = tx.execute(
                 "UPDATE operations SET status = 'starting', started_at = ?2,
-                    ended_at = NULL, current_action = 'Starting', outcome = NULL
+                    ended_at = NULL, current_action = 'Starting', attention_reason = NULL,
+                    outcome = NULL
                  WHERE id = ?1 AND status = 'queued'",
                 params![id, started_at],
             )?;
@@ -789,6 +1144,29 @@ impl OperationsStore {
             if unchanged {
                 return Ok(());
             }
+            let prepared: bool = stored.thread_id.as_deref() == Some(id)
+                && stored.terminal_id.is_none()
+                && tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM operation_moments
+                      WHERE operation_id = ?1 AND kind = 'thread_prepared')",
+                    [id],
+                    |row| row.get(0),
+                )?;
+            if prepared {
+                tx.execute(
+                    "UPDATE operations SET branch = ?2, version = ?3
+                     WHERE id = ?1 AND status = 'starting' AND thread_id = id",
+                    params![id, branch, version],
+                )?;
+                append_moment(
+                    tx,
+                    id,
+                    "thread_reserved",
+                    "Reserved the prepared agent pane for this run.",
+                )?;
+                bump_revision(tx)?;
+                return Ok(());
+            }
             if stored.thread_id.is_some() || stored.terminal_id.is_some() {
                 return Err(invalid_state(
                     "operation_execution_already_bound",
@@ -806,6 +1184,31 @@ impl OperationsStore {
                 "thread_reserved",
                 "Reserved the exact agent thread identity before launch.",
             )?;
+            bump_revision(tx)?;
+            Ok(())
+        })
+    }
+
+    /// Returns a just-claimed prepared member to an actionable hold without discarding its pane.
+    /// This is used when a user started work in that pane before dependency admission completed.
+    pub fn hold_starting_with_reason(&self, id: &str, reason: &str) -> Result<()> {
+        validate_id(id)?;
+        validate_text(reason, 512, false, "invalid_operation_action")?;
+        reject_secret(reason)?;
+        self.write(|tx| {
+            if operation_status(tx, id)? != OperationStatus::Starting {
+                return Err(invalid_state(
+                    "operation_not_starting",
+                    "Only a starting Operation can return to an attention hold.",
+                ));
+            }
+            tx.execute(
+                "UPDATE operations SET status = 'paused', started_at = NULL, ended_at = NULL,
+                    current_action = NULL, attention_reason = ?2, outcome = NULL WHERE id = ?1",
+                params![id, reason],
+            )?;
+            append_moment(tx, id, "paused", reason)?;
+            auto_order(tx)?;
             bump_revision(tx)?;
             Ok(())
         })
@@ -1058,7 +1461,7 @@ impl OperationsStore {
             let active = {
                 let mut stmt = tx.prepare(
                     "SELECT id, workspace_id, kind, provider_id, provider_account_id, model,
-                            terminal_id, thread_id, started_at
+                            effort, terminal_id, thread_id, started_at
                      FROM operations WHERE status IN ('starting', 'running') ORDER BY created_at",
                 )?;
                 stmt.query_map([], |row| {
@@ -1069,9 +1472,10 @@ impl OperationsStore {
                         provider_id: row.get(3)?,
                         provider_account_id: row.get(4)?,
                         model: row.get(5)?,
-                        terminal_id: row.get(6)?,
-                        thread_id: row.get(7)?,
-                        started_at: row.get(8)?,
+                        effort: row.get(6)?,
+                        terminal_id: row.get(7)?,
+                        thread_id: row.get(8)?,
+                        started_at: row.get(9)?,
                     })
                 })?
                     .collect::<std::result::Result<Vec<_>, _>>()?
@@ -1083,6 +1487,17 @@ impl OperationsStore {
             )?;
             let ended_at = now_rfc3339();
             for active_run in &active {
+                if prepared_agent_has_no_task_attempt(tx, active_run)? {
+                    const REASON: &str = "KalCode restarted before this prepared member's task was sent. Run now to revalidate and continue.";
+                    tx.execute(
+                        "UPDATE operations SET status = 'paused', started_at = NULL,
+                            ended_at = NULL, current_action = NULL, attention_reason = ?2,
+                            outcome = NULL WHERE id = ?1",
+                        params![active_run.id, REASON],
+                    )?;
+                    append_moment(tx, &active_run.id, "paused", REASON)?;
+                    continue;
+                }
                 let recovered = recovery_outcome(tx, active_run)?;
                 if recovered.link_terminal {
                     tx.execute(
@@ -1374,6 +1789,7 @@ struct RecoveryActive {
     provider_id: Option<String>,
     provider_account_id: Option<String>,
     model: Option<String>,
+    effort: Option<String>,
     terminal_id: Option<String>,
     thread_id: Option<String>,
     started_at: Option<String>,
@@ -1447,6 +1863,15 @@ fn recovery_outcome(conn: &Connection, active: &RecoveryActive) -> Result<Recove
     let mut link_thread = false;
     let thread_id = if kind == OperationKind::Agent {
         match active.thread_id.as_deref() {
+            // Modern Operations reserve their exact thread id before provider launch and may use
+            // any native startable permission. Legacy unbound adoption remains approve-only: a
+            // coincidental thread row must never acquire an Operation after restart.
+            Some(thread_id)
+                if thread_id == active.id
+                    && exact_prepared_agent_thread(conn, active, thread_id)? =>
+            {
+                Some(thread_id)
+            }
             Some(thread_id) if exact_agent_thread(conn, active, thread_id)? => Some(thread_id),
             Some(_) => None,
             None if exact_agent_thread(conn, active, &active.id)? => {
@@ -1508,7 +1933,62 @@ fn recovery_outcome(conn: &Connection, active: &RecoveryActive) -> Result<Recove
     })
 }
 
+/// A prepared pane is the one active-state exception that restart can safely return to a hold.
+/// Operations persists the user task and its `agent.message` event in one transaction before the
+/// provider stdin write, so absence of that exact event proves the scheduler made no task attempt.
+fn prepared_agent_has_no_task_attempt(conn: &Connection, active: &RecoveryActive) -> Result<bool> {
+    if parse_kind(&active.kind)? != OperationKind::Agent
+        || active.thread_id.as_deref() != Some(active.id.as_str())
+        || active.started_at.is_none()
+        || !exact_prepared_agent_thread(conn, active, &active.id)?
+    {
+        return Ok(false);
+    }
+    if !has_prepared_agent_moment(conn, &active.id)? {
+        return Ok(false);
+    }
+    let attempted: bool = conn.query_row(
+        "SELECT EXISTS(
+           SELECT 1 FROM events
+           WHERE type = 'agent.message'
+             AND thread_id = ?1
+             AND occurred_at >= ?2
+             AND json_extract(payload, '$.threadId') = ?1
+             AND json_extract(payload, '$.role') = 'user'
+         )",
+        params![active.id, active.started_at],
+        |row| row.get(0),
+    )?;
+    Ok(!attempted)
+}
+
+fn has_prepared_agent_moment(conn: &Connection, operation_id: &str) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM operation_moments
+          WHERE operation_id = ?1 AND kind = 'thread_prepared')",
+        [operation_id],
+        |row| row.get(0),
+    )?)
+}
+
 fn exact_agent_thread(conn: &Connection, active: &RecoveryActive, thread_id: &str) -> Result<bool> {
+    exact_agent_thread_permission(conn, active, thread_id, false)
+}
+
+fn exact_prepared_agent_thread(
+    conn: &Connection,
+    active: &RecoveryActive,
+    thread_id: &str,
+) -> Result<bool> {
+    exact_agent_thread_permission(conn, active, thread_id, true)
+}
+
+fn exact_agent_thread_permission(
+    conn: &Connection,
+    active: &RecoveryActive,
+    thread_id: &str,
+    prepared: bool,
+) -> Result<bool> {
     Ok(conn.query_row(
         "SELECT EXISTS(
             SELECT 1 FROM threads
@@ -1517,7 +1997,9 @@ fn exact_agent_thread(conn: &Connection, active: &RecoveryActive, thread_id: &st
               AND provider_id IS ?3
               AND provider_account_id IS ?4
               AND model IS ?5
-              AND permission_mode = 'approve'
+              AND effort IS ?6
+              AND ((?7 = 0 AND permission_mode = 'approve')
+                OR (?7 = 1 AND permission_mode != 'custom'))
          )",
         params![
             thread_id,
@@ -1525,6 +2007,8 @@ fn exact_agent_thread(conn: &Connection, active: &RecoveryActive, thread_id: &st
             active.provider_id,
             active.provider_account_id,
             active.model,
+            active.effort,
+            prepared,
         ],
         |row| row.get(0),
     )?)
@@ -1568,6 +2052,7 @@ struct StoredOperation {
     started_at: Option<String>,
     ended_at: Option<String>,
     current_action: Option<String>,
+    attention_reason: Option<String>,
     outcome: Option<String>,
     position: i64,
 }
@@ -1602,6 +2087,7 @@ fn stored_from_row(row: &Row<'_>) -> rusqlite::Result<StoredOperation> {
         started_at: row.get("started_at")?,
         ended_at: row.get("ended_at")?,
         current_action: row.get("current_action")?,
+        attention_reason: row.get("attention_reason")?,
         outcome: row.get("outcome")?,
         position: row.get("position")?,
     })
@@ -1864,6 +2350,7 @@ fn stored_to_record(
         started_at: stored.started_at,
         ended_at: stored.ended_at,
         current_action: stored.current_action,
+        attention_reason: stored.attention_reason,
         outcome: stored.outcome,
         position: stored.position,
         blockers,
@@ -2040,7 +2527,7 @@ fn refresh_blocked(conn: &Connection) -> Result<bool> {
         let candidates = {
             let mut stmt = conn.prepare(
                 "SELECT id, status, dependencies FROM operations
-                 WHERE status IN ('queued', 'blocked')",
+                 WHERE status IN ('queued', 'blocked') AND attention_reason IS NULL",
             )?;
             stmt.query_map([], |row| {
                 Ok((
@@ -2141,6 +2628,7 @@ fn provider_account_available(
         "SELECT EXISTS(
             SELECT 1 FROM provider_accounts
             WHERE id = ?1 AND provider_id = ?2 AND archived_at IS NULL
+              AND authentication_state <> 'not_authenticated'
          )",
         params![account_id, provider_id],
         |row| row.get(0),
@@ -2178,10 +2666,15 @@ fn has_failed_dependency(conn: &Connection, dependencies: &[String]) -> Result<b
 }
 
 fn slot_available(conn: &Connection, kind: OperationKind) -> Result<bool> {
+    // Real coding agents are governed by provider/OS availability and the Resource Governor.
+    // Operations must not impose a hidden global concurrency ceiling on user-requested squads.
+    if kind == OperationKind::Agent {
+        return Ok(true);
+    }
     let (services, foreground): (i64, i64) = conn.query_row(
         "SELECT
             COALESCE(SUM(CASE WHEN kind = 'service' THEN 1 ELSE 0 END), 0),
-            COALESCE(SUM(CASE WHEN kind <> 'service' THEN 1 ELSE 0 END), 0)
+            COALESCE(SUM(CASE WHEN kind NOT IN ('service', 'agent') THEN 1 ELSE 0 END), 0)
          FROM operations WHERE status IN ('starting', 'running')",
         [],
         |row| Ok((row.get(0)?, row.get(1)?)),
@@ -2360,24 +2853,8 @@ fn normalize_and_validate_spec(spec: &mut OperationSpec) -> Result<()> {
     }
     validate_optional_text(spec.model.as_deref(), 128, "invalid_operation_model")?;
     validate_optional_text(spec.effort.as_deref(), 32, "invalid_operation_effort")?;
-    if spec
-        .effort
-        .as_deref()
-        .is_some_and(|effort| effort != "default")
-    {
-        return Err(KalError::validation(
-            "unsupported_operation_effort",
-            "This runtime currently supports provider-default effort only.",
-        ));
-    }
     match spec.kind {
         OperationKind::Agent => {
-            if spec.prompt.is_none() {
-                return Err(KalError::validation(
-                    "operation_prompt_required",
-                    "Enter a prompt for this agent task.",
-                ));
-            }
             if spec.command.is_some() {
                 return Err(KalError::validation(
                     "operation_command_not_allowed",

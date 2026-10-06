@@ -30,6 +30,29 @@ export interface OperationsControls {
 export interface OperationsMemory {
   handlers: DashboardHandlers;
   controls: OperationsControls;
+  /** Test-only bridge used by Squads to keep member execution in canonical Operations rows. */
+  agents: AgentOperationHooks;
+}
+
+export interface AgentOperationHooks {
+  create(id: string, spec: OperationSpec, accountLabel?: string | null): OperationRecord;
+  bind(
+    id: string,
+    runtime: Pick<OperationRecord, "threadId" | "terminalId" | "branch" | "accountLabel">,
+  ): OperationRecord;
+  prepare(
+    id: string,
+    runtime: Pick<OperationRecord, "threadId" | "terminalId" | "branch" | "accountLabel">,
+  ): OperationRecord;
+  activate(id: string, hasTask: boolean): OperationRecord;
+  wait(id: string, blockers: readonly string[]): OperationRecord;
+  block(id: string, blockers: readonly string[], reason: string): OperationRecord;
+  unavailable(id: string, accountLabel?: string | null): OperationRecord;
+  queue(id: string): OperationRecord;
+  hold(id: string, reason: string): OperationRecord;
+  attention(id: string, reason: string): OperationRecord;
+  finish(id: string, status: "succeeded" | "failed", outcome: string): OperationRecord;
+  exact(ids: readonly string[]): OperationRecord[];
 }
 
 function clone<T>(value: T): T {
@@ -59,7 +82,11 @@ function operationSpec(value: unknown): OperationSpec {
     fail("ipc_rejected", "KalCode couldn't complete that request.");
   }
   const spec = value as OperationSpec;
-  if (!spec.name?.trim() || !spec.workspaceId || (!spec.command?.trim() && !spec.prompt?.trim())) {
+  if (
+    !spec.name?.trim() ||
+    !spec.workspaceId ||
+    (spec.kind !== "agent" && !spec.command?.trim() && !spec.prompt?.trim())
+  ) {
     fail("invalid_operation", "Name, workspace, and executable work are required.");
   }
   return clone(spec);
@@ -730,8 +757,9 @@ export function createOperationsMemory({ empty, workspaces, requireCore }: Opera
       const current = record(id);
       if (!pending(current)) fail("operation_not_pending", "Only pending Operations tasks can be paused or resumed.");
       const status = args.paused ? "paused" : current.blockers.length > 0 ? "blocked" : "queued";
+      const { attentionReason: _attentionReason, ...withoutAttention } = current;
       items = items.map((item) =>
-        item.id === id ? { ...item, status, currentAction: args.paused ? "Held by user" : null } : item,
+        item.id === id ? { ...withoutAttention, status, currentAction: args.paused ? "Held by user" : null } : item,
       );
       touch(args.paused ? "hold" : "resume_task");
     },
@@ -899,8 +927,176 @@ export function createOperationsMemory({ empty, workspaces, requireCore }: Opera
     },
   };
 
+  const replaceAgent = (id: string, update: (current: OperationRecord) => OperationRecord): OperationRecord => {
+    const current = items.find((candidate) => candidate.id === id);
+    if (current?.spec.kind !== "agent") {
+      fail("operation_not_found", "That Squad member Operation no longer exists.");
+    }
+    const next = update(current);
+    items = items.map((candidate) => (candidate.id === id ? next : candidate));
+    touch("squad_agent");
+    return clone(next);
+  };
+  const clearAttention = (current: OperationRecord): OperationRecord => {
+    const { attentionReason: _attentionReason, ...rest } = current;
+    return rest;
+  };
+
+  const agents: AgentOperationHooks = {
+    create(id, itemSpec, accountLabel = null) {
+      requireCore();
+      if (!id || items.some((candidate) => candidate.id === id)) {
+        fail("operation_id_conflict", "That Squad member Operation already exists.");
+      }
+      const nextSpec = operationSpec(itemSpec);
+      if (nextSpec.kind !== "agent") {
+        fail("invalid_operation", "Squad members must use coding-agent Operations.");
+      }
+      const created = seedRecord(id, nextSpec, workspaceName, {
+        accountLabel,
+        branch: null,
+        createdAt: new Date().toISOString(),
+        position: items.filter(pending).length,
+      });
+      items = [...items, created];
+      touch("squad_agent_create");
+      return clone(created);
+    },
+    bind(id, runtime) {
+      return replaceAgent(
+        id,
+        (current) =>
+          ({
+            ...clearAttention(current),
+            ...runtime,
+            status: "running",
+            startedAt: current.startedAt ?? new Date().toISOString(),
+            endedAt: null,
+            currentAction: current.spec.prompt ? "Agent is working" : "Agent is ready",
+            outcome: null,
+            blockers: [],
+          }) as OperationRecord,
+      );
+    },
+    prepare(id, runtime) {
+      return replaceAgent(
+        id,
+        (current) =>
+          ({
+            ...clearAttention(current),
+            ...runtime,
+            status: "queued",
+            startedAt: null,
+            endedAt: null,
+            currentAction: "Waiting for dependencies",
+            outcome: null,
+          }) as OperationRecord,
+      );
+    },
+    activate(id, hasTask) {
+      return replaceAgent(
+        id,
+        (current) =>
+          ({
+            ...clearAttention(current),
+            status: "running",
+            startedAt: current.startedAt ?? new Date().toISOString(),
+            endedAt: null,
+            currentAction: hasTask ? "Agent is working" : "Agent is ready",
+            outcome: null,
+            blockers: [],
+          }) as OperationRecord,
+      );
+    },
+    wait(id, blockers) {
+      return replaceAgent(
+        id,
+        (current) =>
+          ({
+            ...clearAttention(current),
+            status: "queued",
+            currentAction: "Waiting for dependencies",
+            blockers: [...blockers],
+          }) as OperationRecord,
+      );
+    },
+    block(id, blockers, reason) {
+      return replaceAgent(
+        id,
+        (current) =>
+          ({
+            ...clearAttention(current),
+            status: "blocked",
+            currentAction: reason,
+            blockers: [...blockers],
+          }) as OperationRecord,
+      );
+    },
+    unavailable(id, accountLabel = null) {
+      const attentionReason =
+        "This Squad member's selected provider account is unavailable. Reconnect it or assign another account.";
+      return replaceAgent(
+        id,
+        (current) =>
+          ({
+            ...current,
+            status: "blocked",
+            accountLabel,
+            currentAction: "Reconnect provider account",
+            attentionReason,
+            blockers: [],
+          }) as OperationRecord,
+      );
+    },
+    queue(id) {
+      return replaceAgent(
+        id,
+        (current) =>
+          ({ ...clearAttention(current), status: "queued", currentAction: null, blockers: [] }) as OperationRecord,
+      );
+    },
+    hold(id, reason) {
+      return replaceAgent(
+        id,
+        (current) =>
+          ({
+            ...current,
+            status: "paused",
+            currentAction: reason,
+            attentionReason: reason,
+            blockers: [],
+          }) as OperationRecord,
+      );
+    },
+    attention(id, reason) {
+      return replaceAgent(
+        id,
+        (current) => ({ ...current, currentAction: reason, attentionReason: reason }) as OperationRecord,
+      );
+    },
+    finish(id, status, outcome) {
+      return replaceAgent(
+        id,
+        (current) =>
+          ({
+            ...clearAttention(current),
+            status,
+            endedAt: new Date().toISOString(),
+            currentAction: null,
+            outcome,
+            blockers: [],
+          }) as OperationRecord,
+      );
+    },
+    exact(ids) {
+      requireCore();
+      return ids.map((id) => clone(record(id)));
+    },
+  };
+
   return {
     handlers,
+    agents,
     controls: {
       snapshot: () => snapshot(),
       lastAction: () => lastAction,

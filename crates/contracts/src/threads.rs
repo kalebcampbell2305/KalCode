@@ -87,8 +87,8 @@ impl ThreadStatus {
 
     /// The normalized display status (ADVANCED.md §16.3), a pure function of the runtime status.
     /// `interrupted` shows as IDLE with a qualifier (there is no STOPPED display status).
-    /// `waiting_for_dependency` shows as WAITING, never IDLE: its provider process has not
-    /// started (owner directive 2026-10-04). Mirrored by `displayStatusOf` in `packages/protocol`.
+    /// `waiting_for_dependency` shows as WAITING, never IDLE: a Squad provider pane may already
+    /// be live while its first task remains withheld. Mirrored by `displayStatusOf` in protocol.
     pub fn display(self) -> (DisplayStatus, Option<DisplayQualifier>) {
         use DisplayStatus as D;
         match self {

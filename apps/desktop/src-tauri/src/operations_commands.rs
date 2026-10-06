@@ -8,6 +8,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
+use kalcode_contracts::agent::LaunchOrigin;
 use kalcode_contracts::events::{
     CorrelationFilter, EventEnvelope, EventPayload, EventQuery, SeqOrder,
 };
@@ -15,7 +16,8 @@ use kalcode_contracts::operations::*;
 use kalcode_contracts::threads::{ThreadStatus, ThreadSummary};
 use kalcode_core::confirm::{NativeConfirmation, confirm};
 use kalcode_core::operations::{ACTIVITY_MOMENT_LIMIT, OperationsStore};
-use kalcode_core::plans::{Limited, PlanLimit};
+use kalcode_core::plans::{Limited, PlanLimit, PlanTier};
+use kalcode_core::squads::SquadsStore;
 use kalcode_core::workspaces::{TerminalInfo, TerminalSize, TerminalStatus};
 use kalcode_core::{Core, IpcError, KalError, Result};
 use kalcode_git::GitCore;
@@ -210,12 +212,18 @@ fn merge_history(
 struct Authorization {
     spec: OperationSpec,
     revision: (Option<String>, Option<String>),
-    expires: Instant,
+    expires: Option<Instant>,
+    origin: LaunchOrigin,
+    revision_bound: bool,
 }
 
 impl Authorization {
     fn matches(&self, spec: &OperationSpec) -> bool {
-        Instant::now() < self.expires && &self.spec == spec
+        self.expires.is_none_or(|expires| Instant::now() < expires) && &self.spec == spec
+    }
+
+    fn revision_matches(&self, revision: &(Option<String>, Option<String>)) -> bool {
+        !self.revision_bound || &self.revision == revision
     }
 }
 
@@ -253,6 +261,7 @@ impl OperationsState {
     ) -> Result<Arc<Self>> {
         let store = OperationsStore::new(core.clone());
         store.recover()?;
+        store.hold_unstarted_squad_members_after_restart()?;
         let state = Arc::new(Self {
             core,
             store,
@@ -320,6 +329,80 @@ impl OperationsState {
         )
     }
 
+    pub(crate) fn core(&self) -> &Arc<Core> {
+        &self.core
+    }
+
+    pub(crate) fn queue_limit(&self) -> Option<PlanLimit> {
+        self.plan_limit(Limited::QueuedTasks)
+    }
+
+    pub(crate) fn plan_tier(&self) -> PlanTier {
+        self.account.as_ref().map_or_else(
+            || AccountSnapshot::signed_out().plan_tier(),
+            |account| account.snapshot().plan_tier(),
+        )
+    }
+
+    /// Authorizes the newly-created, still-queued members of one explicit Squad launch. A
+    /// provider/account failure pauses only that member with a durable actionable reason; all
+    /// compatible siblings remain authorized. Replayed launch IPC cannot reauthorize an active,
+    /// paused, blocked, interrupted, cancelled, or completed operation.
+    pub(crate) fn authorize_squad_members(
+        &self,
+        app: &AppHandle,
+        operation_ids: &[String],
+    ) -> Result<()> {
+        let _gate = self.gate.lock().map_err(|_| poisoned())?;
+        for id in operation_ids {
+            let row = self.store.detail(id)?.run;
+            if row.status != OperationStatus::Queued {
+                continue;
+            }
+            if self
+                .authorized
+                .lock()
+                .map_err(|_| poisoned())?
+                .get(id)
+                .is_some_and(|consent| consent.matches(&row.spec))
+            {
+                continue;
+            }
+            if !self.store.mark_squad_authorized(id)? {
+                continue;
+            }
+            match self.prepare_authorization(&row.spec, LaunchOrigin::User, false) {
+                Ok(consent) => {
+                    let row = if consent.spec != row.spec {
+                        let (revision, _, _) = self.store.snapshot()?;
+                        self.store.update(id, consent.spec.clone(), revision)?
+                    } else {
+                        row
+                    };
+                    self.authorized
+                        .lock()
+                        .map_err(|_| poisoned())?
+                        .insert(row.id, consent);
+                }
+                Err(error) => {
+                    let reason = safe(&error.message);
+                    self.store.hold_with_reason(id, &reason)?;
+                    tracing::warn!(
+                        event = "operations.squad_member_authorization_held",
+                        operation_id = id,
+                        code = error.code
+                    );
+                }
+            }
+        }
+        self.stop.1.notify_all();
+        // The user asked for a Squad now. Run one scoped scheduler pass before returning so every
+        // available member has either started or owns its real dependency-waiting pane.
+        let lease = RuntimeState::<OperationsState>::from_app(app).map_err(|_| unavailable())?;
+        lease.revalidate_core()?;
+        self.tick(&lease)
+    }
+
     fn terminal_limit(&self) -> Option<PlanLimit> {
         self.plan_limit(Limited::OpenTerminals)
     }
@@ -348,10 +431,50 @@ impl OperationsState {
         self.reconcile()?;
         let (_, paused, rows) = self.store.snapshot()?;
         self.prune_finished_terminals(&rows)?;
-        if paused {
-            return Ok(());
-        }
         let authorized = self.authorized.lock().map_err(|_| poisoned())?.clone();
+        // Dependency-bound Squad members are real agents from the moment the Squad launches.
+        // Prepare their canonical panes without a prompt; dependency admission below remains the
+        // only path that can deliver the first task.
+        for row in &rows {
+            let Some(consent) = authorized.get(&row.id) else {
+                continue;
+            };
+            if consent.origin != LaunchOrigin::User
+                || row.spec.kind != OperationKind::Agent
+                || !matches!(
+                    row.status,
+                    OperationStatus::Queued | OperationStatus::Blocked
+                )
+                || (row.thread_id.is_none() && row.blockers.is_empty())
+                || !consent.matches(&row.spec)
+            {
+                continue;
+            }
+            if SquadsStore::new(self.core.clone())
+                .get_member(&row.id)?
+                .is_none()
+            {
+                continue;
+            }
+            lease.revalidate_core()?;
+            if let Err(error) = self.prepare_squad_member(row, consent) {
+                if error.code == "operation_cleanup_unproven" {
+                    return Err(error);
+                }
+                self.authorized
+                    .lock()
+                    .map_err(|_| poisoned())?
+                    .remove(&row.id);
+                let reason = safe(&error.message);
+                self.store.hold_with_reason(&row.id, &reason)?;
+                tracing::warn!(
+                    event = "operations.squad_member_preparation_held",
+                    operation_id = row.id,
+                    code = error.code
+                );
+            }
+        }
+        let (_, _, rows) = self.store.snapshot()?;
         // Store snapshot is dependency/priority ordered. Only native-confirmed Next tasks can
         // auto-start. One-use consent is consumed before launch, including failed launches.
         for row in rows {
@@ -361,10 +484,11 @@ impl OperationsState {
                     .is_some_and(|consent| consent.matches(&row.spec))
                 || row.status != OperationStatus::Queued
                 || !row.blockers.is_empty()
+                || (paused && authorized[&row.id].origin != LaunchOrigin::User)
             {
                 continue;
             }
-            if authorized[&row.id].revision != self.revision(&row.spec.workspace_id)? {
+            if !authorized[&row.id].revision_matches(&self.authorization_revision(&row)?) {
                 self.authorized
                     .lock()
                     .map_err(|_| poisoned())?
@@ -372,24 +496,111 @@ impl OperationsState {
                 continue;
             }
             lease.revalidate_core()?;
-            match self.store.claim(Some(&row.id)) {
+            let claim = if paused && authorized[&row.id].origin == LaunchOrigin::User {
+                self.store.claim_user_squad_agent(&row.id)
+            } else {
+                self.store.claim(Some(&row.id))
+            };
+            match claim {
                 Ok(Some(claimed)) => {
                     self.launch(claimed, lease)?;
-                    break;
                 }
                 Ok(None) => {}
-                Err(error)
-                    if matches!(
-                        error.code,
-                        "operation_slot_unavailable" | "operation_provider_account_missing"
-                    ) =>
-                {
+                Err(error) if error.code == "operation_slot_unavailable" => {
+                    continue;
+                }
+                Err(error) if error.code == "operation_provider_account_missing" => {
+                    self.authorized
+                        .lock()
+                        .map_err(|_| poisoned())?
+                        .remove(&row.id);
+                    self.store
+                        .hold_with_reason(&row.id, &safe(&error.message))?;
                     continue;
                 }
                 Err(error) => return Err(error),
             }
         }
         Ok(())
+    }
+
+    fn prepare_squad_member(&self, row: &OperationRecord, consent: &Authorization) -> Result<()> {
+        let runtime = self.threads.runtime_handle().ok_or_else(unavailable)?;
+        if row.thread_id.as_deref() == Some(row.id.as_str()) {
+            match runtime.get(&row.id) {
+                Ok(thread)
+                    if thread.status == ThreadStatus::WaitingForDependency
+                        && operation_thread_matches(&thread, &row.spec, &row.id) =>
+                {
+                    return Ok(());
+                }
+                Ok(_) => {}
+                Err(error) if error.code == "thread_not_found" => {}
+                Err(error) => return Err(error),
+            }
+        }
+        let member = SquadsStore::new(self.core.clone())
+            .get_member(&row.id)?
+            .ok_or_else(|| {
+                KalError::internal(
+                    "squad_member_missing",
+                    "This Squad member is no longer linked to its Operation.",
+                )
+            })?;
+        let revision = if member.worktree && row.thread_id.as_deref() == Some(row.id.as_str()) {
+            (row.branch.clone(), row.version.clone())
+        } else {
+            self.revision(&row.spec.workspace_id)?
+        };
+        if !consent.revision_matches(&revision) {
+            return Err(KalError::validation(
+                "operation_authorization_changed",
+                "This member's workspace changed before its provider pane could start. Run it again to revalidate.",
+            ));
+        }
+        let execution_branch = if member.worktree {
+            row.branch.clone().or_else(|| {
+                Some(crate::thread_commands::operation_branch_name(
+                    Some(&row.spec.name),
+                    &row.id,
+                ))
+            })
+        } else {
+            revision.0.clone()
+        };
+        self.store.prepare_agent_thread(
+            &row.id,
+            execution_branch.as_deref(),
+            revision.1.as_deref(),
+        )?;
+        match self.threads.prepare_operation(
+            &self.core,
+            &self.git,
+            &row.id,
+            &row.spec,
+            consent.origin,
+            member.worktree,
+            revision.1.as_deref(),
+        ) {
+            Ok(thread) if operation_thread_matches(&thread, &row.spec, &row.id) => Ok(()),
+            Ok(_) => Err(KalError::internal(
+                "operation_thread_identity_mismatch",
+                "The prepared provider pane did not match its Squad member.",
+            )),
+            Err(start_error) => match runtime.get(&row.id) {
+                Err(error) if error.code == "thread_not_found" => {
+                    self.store.clear_prepared_agent_thread(&row.id)?;
+                    Err(start_error)
+                }
+                Ok(thread) if operation_thread_matches(&thread, &row.spec, &row.id) => {
+                    Err(start_error)
+                }
+                Ok(_) | Err(_) => Err(KalError::internal(
+                    "operation_cleanup_unproven",
+                    "The prepared provider pane identity could not be verified. Scheduling is paused; inspect the member before continuing.",
+                )),
+            },
+        }
     }
 
     fn prune_finished_terminals(&self, rows: &[OperationRecord]) -> Result<()> {
@@ -662,7 +873,7 @@ impl OperationsState {
             .lock()
             .map_err(|_| poisoned())?
             .remove(&row.id);
-        let revision = match self.revision(&row.spec.workspace_id) {
+        let revision = match self.authorization_revision(&row) {
             Ok(revision) => revision,
             Err(error) => {
                 self.finish_run(
@@ -673,46 +884,94 @@ impl OperationsState {
                 return Err(error);
             }
         };
-        if !consent
-            .is_some_and(|consent| consent.matches(&row.spec) && consent.revision == revision)
-        {
+        let Some(consent) = consent
+            .filter(|consent| consent.matches(&row.spec) && consent.revision_matches(&revision))
+        else {
             self.finish_run(
                 &row.id,
                 OperationStatus::Interrupted,
                 "Execution consent expired. Queue the task again.",
             )?;
             return Ok(());
-        }
+        };
         let result = (|| {
             lease.revalidate_core()?;
-            let (branch, version) = revision;
+            let (branch, version) = self.revision(&row.spec.workspace_id)?;
             if row.spec.kind == OperationKind::Agent {
+                let squad_member = SquadsStore::new(self.core.clone()).get_member(&row.id)?;
+                let isolate = squad_member.as_ref().is_some_and(|member| member.worktree);
+                let prepared = row.thread_id.as_deref() == Some(row.id.as_str());
+                let (execution_branch, execution_version) = if isolate {
+                    (
+                        row.branch.clone().or_else(|| {
+                            Some(crate::thread_commands::operation_branch_name(
+                                Some(&row.spec.name),
+                                &row.id,
+                            ))
+                        }),
+                        row.version.clone().or(version.clone()),
+                    )
+                } else {
+                    (branch.clone(), version.clone())
+                };
                 // Reserve the canonical thread identity durably before provider execution. The
                 // thread runtime then inserts this exact id, so restart recovery never depends on
                 // in-process state and never relaunches an uncertain task.
-                self.store
-                    .reserve_agent_thread(&row.id, branch.as_deref(), version.as_deref())?;
+                self.store.reserve_agent_thread(
+                    &row.id,
+                    execution_branch.as_deref(),
+                    execution_version.as_deref(),
+                )?;
                 let runtime = self.threads.runtime_handle().ok_or_else(unavailable)?;
-                let thread = match self.threads.start_operation(&self.core, &row.id, &row.spec) {
-                    Ok(thread) => thread,
-                    Err(start_error) => match runtime.get(&row.id) {
-                        Err(error) if error.code == "thread_not_found" => return Err(start_error),
-                        Ok(thread) if operation_thread_matches(&thread, &row.spec, &row.id) => {
-                            if runtime.stop(&row.id).is_ok() {
+                let started = if prepared {
+                    let thread = runtime.get(&row.id)?;
+                    if !operation_thread_matches(&thread, &row.spec, &row.id) {
+                        return Err(KalError::internal(
+                            "operation_thread_identity_mismatch",
+                            "The prepared provider pane did not match its Squad member.",
+                        ));
+                    }
+                    match row.spec.prompt.as_deref() {
+                        Some(prompt) => runtime.send_prepared_operation(&row.id, prompt),
+                        None => runtime.dependency_ready(&row.id),
+                    }
+                } else {
+                    self.threads.start_operation(
+                        &self.core,
+                        &self.git,
+                        &row.id,
+                        &row.spec,
+                        consent.origin,
+                        isolate,
+                        execution_version.as_deref(),
+                    )
+                };
+                let thread = if prepared {
+                    started?
+                } else {
+                    match started {
+                        Ok(thread) => thread,
+                        Err(start_error) => match runtime.get(&row.id) {
+                            Err(error) if error.code == "thread_not_found" => {
                                 return Err(start_error);
                             }
-                            return Err(KalError::internal(
-                                "operation_cleanup_unproven",
-                                "Execution may have started and could not be stopped. Scheduling is paused; inspect the thread before continuing.",
-                            ));
-                        }
-                        Ok(_) | Err(_) => {
-                            return Err(KalError::internal(
-                                "operation_cleanup_unproven",
-                                "Execution identity could not be verified after launch failed. Scheduling is paused; inspect the thread before continuing.",
-                            ));
-                        }
-                    },
+                            Ok(thread) if operation_thread_matches(&thread, &row.spec, &row.id) => {
+                                if runtime.stop(&row.id).is_ok() {
+                                    return Err(start_error);
+                                }
+                                return Err(KalError::internal(
+                                    "operation_cleanup_unproven",
+                                    "Execution may have started and could not be stopped. Scheduling is paused; inspect the thread before continuing.",
+                                ));
+                            }
+                            Ok(_) | Err(_) => {
+                                return Err(KalError::internal(
+                                    "operation_cleanup_unproven",
+                                    "Execution identity could not be verified after launch failed. Scheduling is paused; inspect the thread before continuing.",
+                                ));
+                            }
+                        },
+                    }
                 };
                 if !operation_thread_matches(&thread, &row.spec, &row.id) {
                     return Err(KalError::internal(
@@ -724,8 +983,8 @@ impl OperationsState {
                     &row.id,
                     None,
                     Some(&row.id),
-                    branch.as_deref(),
-                    version.as_deref(),
+                    execution_branch.as_deref(),
+                    execution_version.as_deref(),
                 ) {
                     if runtime.stop(&row.id).is_ok() {
                         return Err(error);
@@ -781,6 +1040,14 @@ impl OperationsState {
             Ok(())
         })();
         if let Err(error) = result {
+            if matches!(
+                error.code,
+                "operation_prepared_thread_busy" | "operation_prepared_thread_changed"
+            ) {
+                self.store
+                    .hold_starting_with_reason(&row.id, &safe(&error.message))?;
+                return Ok(());
+            }
             if error.code == "operation_cleanup_unproven" {
                 let _ = self.store.set_paused(true);
                 return Err(error);
@@ -884,7 +1151,20 @@ impl OperationsState {
         let (revision, paused, mut rows) = self.store.snapshot()?;
         let linked_terminals: HashSet<_> =
             rows.iter().filter_map(|r| r.terminal_id.clone()).collect();
-        let authorized = self.authorized.lock().map_err(|_| poisoned())?;
+        let authorized = self.authorized.lock().map_err(|_| poisoned())?.clone();
+        let unauthorized = rows
+            .iter()
+            .filter(|row| {
+                matches!(
+                    row.status,
+                    OperationStatus::Queued | OperationStatus::Blocked | OperationStatus::Paused
+                ) && !authorized
+                    .get(&row.id)
+                    .is_some_and(|consent| consent.matches(&row.spec))
+            })
+            .map(|row| row.id.clone())
+            .collect::<Vec<_>>();
+        let squad_members = self.store.squad_member_ids(&unauthorized)?;
         for row in &mut rows {
             if matches!(
                 row.status,
@@ -893,10 +1173,13 @@ impl OperationsState {
                 .get(&row.id)
                 .is_some_and(|consent| consent.matches(&row.spec))
             {
-                row.blockers.push("Run now to authorize this task. Consent expires after 30 minutes or a workspace revision change.".into());
+                row.blockers.push(if squad_members.contains(&row.id) {
+                    "Resume to authorize this member after restart.".into()
+                } else {
+                    "Run now to authorize this task. Consent expires after 30 minutes or a workspace revision change.".into()
+                });
             }
         }
-        drop(authorized);
         if let Some(runtime) = self.threads.runtime_handle() {
             let mut threads = runtime
                 .list(None, true)?
@@ -1588,11 +1871,30 @@ impl OperationsState {
     }
 
     fn authorize(&self, app: &AppHandle, spec: &OperationSpec) -> Result<Authorization> {
-        let mut spec = kalcode_core::operations::normalize_spec(spec.clone())?;
-        if spec.kind == OperationKind::Agent {
-            spec = self.threads.canonicalize_operation(&self.core, &spec)?;
+        self.authorize_with_origin(app, spec, LaunchOrigin::Background)
+    }
+
+    fn authorize_with_origin(
+        &self,
+        app: &AppHandle,
+        spec: &OperationSpec,
+        origin: LaunchOrigin,
+    ) -> Result<Authorization> {
+        self.authorize_with_origin_at_revision(app, spec, origin, None)
+    }
+
+    fn authorize_with_origin_at_revision(
+        &self,
+        app: &AppHandle,
+        spec: &OperationSpec,
+        origin: LaunchOrigin,
+        exact_revision: Option<(Option<String>, Option<String>)>,
+    ) -> Result<Authorization> {
+        let mut authorization = self.prepare_authorization(spec, origin, true)?;
+        if let Some(revision) = exact_revision {
+            authorization.revision = revision;
         }
-        let spec = kalcode_core::operations::normalize_spec(spec)?;
+        let spec = &authorization.spec;
         let workspace = self
             .core
             .workspaces()?
@@ -1606,31 +1908,16 @@ impl OperationsState {
             .as_deref()
             .or(spec.prompt.as_deref())
             .unwrap_or("");
-        if content.len() > 8192 || safe(content) != content {
-            return Err(KalError::validation(
-                "operations_sensitive_input",
-                "Use environment variable references instead of secret values.",
-            ));
-        }
-        if spec
-            .effort
-            .as_deref()
-            .is_some_and(|effort| effort != "default")
-        {
-            return Err(KalError::validation(
-                "operations_effort_unsupported",
-                "This provider uses its default effort; per-task effort is not supported.",
-            ));
-        }
-        let revision = self.revision(&spec.workspace_id)?;
+        let revision = &authorization.revision;
         let context = format!(
-            "Environment: {:?}\nProvider: {}\nAccount: {}\nModel: {}\nEffort: provider default\nBranch: {}\nRevision: {}\nConsent expires after 30 minutes or a workspace revision change.\n\nCommand / prompt:\n{}",
+            "Environment: {:?}\nProvider: {}\nAccount: {}\nModel: {}\nEffort: {}\nBranch: {}\nRevision: {}\nConsent expires after 30 minutes or a workspace revision change.\n\nCommand / prompt:\n{}",
             spec.environment,
             spec.provider_id.as_deref().unwrap_or("local shell"),
             spec.provider_account_id
                 .as_deref()
                 .unwrap_or("not applicable"),
             spec.model.as_deref().unwrap_or("not applicable"),
+            spec.effort.as_deref().unwrap_or("provider default"),
             revision.0.as_deref().unwrap_or("not available"),
             revision.1.as_deref().unwrap_or("not available"),
             content
@@ -1645,10 +1932,57 @@ impl OperationsState {
             ),
         )
         .map_err(|_| KalError::validation("confirmation_declined", "Nothing was authorized."))?;
+        Ok(authorization)
+    }
+
+    /// An isolated prepared pane remains bound to the exact reviewed worktree base even when the
+    /// root workspace advances while its dependencies run. Shared-workspace members intentionally
+    /// revalidate the current root revision because their pane observes those new files.
+    fn authorization_revision(
+        &self,
+        row: &OperationRecord,
+    ) -> Result<(Option<String>, Option<String>)> {
+        if row.thread_id.as_deref() == Some(row.id.as_str())
+            && SquadsStore::new(self.core.clone())
+                .get_member(&row.id)?
+                .is_some_and(|member| member.worktree)
+        {
+            return Ok((row.branch.clone(), row.version.clone()));
+        }
+        self.revision(&row.spec.workspace_id)
+    }
+
+    fn prepare_authorization(
+        &self,
+        spec: &OperationSpec,
+        origin: LaunchOrigin,
+        revision_bound: bool,
+    ) -> Result<Authorization> {
+        let mut spec = kalcode_core::operations::normalize_spec(spec.clone())?;
+        if spec.kind == OperationKind::Agent {
+            spec = self.threads.canonicalize_operation(&self.core, &spec)?;
+        }
+        let spec = kalcode_core::operations::normalize_spec(spec)?;
+        self.core
+            .workspaces()?
+            .into_iter()
+            .find(|w| w.id == spec.workspace_id)
+            .ok_or_else(|| {
+                KalError::validation("workspace_not_found", "Select an existing workspace.")
+            })?;
+        let content = spec
+            .command
+            .as_deref()
+            .or(spec.prompt.as_deref())
+            .unwrap_or("");
+        validate_authorization_content(content)?;
+        let revision = self.revision(&spec.workspace_id)?;
         Ok(Authorization {
             spec,
             revision,
-            expires: Instant::now() + Duration::from_secs(30 * 60),
+            expires: revision_bound.then(|| Instant::now() + Duration::from_secs(30 * 60)),
+            origin,
+            revision_bound,
         })
     }
 
@@ -1676,6 +2010,15 @@ impl OperationsState {
             self.store
                 .finish(id, OperationStatus::Cancelled, outcome.as_str())?;
         } else {
+            if let Some(thread) = &row.thread_id {
+                let runtime = self.threads.runtime_handle().ok_or_else(unavailable)?;
+                match runtime.stop(thread) {
+                    Ok(_) => {}
+                    Err(error)
+                        if matches!(error.code, "thread_not_running" | "thread_not_found") => {}
+                    Err(error) => return Err(error),
+                }
+            }
             self.store.cancel_pending(id)?;
         }
         self.authorized.lock().map_err(|_| poisoned())?.remove(id);
@@ -1701,6 +2044,17 @@ fn poisoned() -> KalError {
 }
 fn safe(text: &str) -> String {
     kalcode_core::redact::redact_log_line(text).into_owned()
+}
+
+fn validate_authorization_content(content: &str) -> Result<()> {
+    if safe(content) == content {
+        Ok(())
+    } else {
+        Err(KalError::validation(
+            "operations_sensitive_input",
+            "Use environment variable references instead of secret values.",
+        ))
+    }
 }
 
 fn full_safe(text: &str) -> String {
@@ -1802,6 +2156,7 @@ fn operation_thread_matches(
         && (spec.model.as_deref() == thread.model.as_deref()
             || (thread.provider_id.as_str() == kalcode_contracts::agent::ProviderId::CURSOR
                 && spec.model.is_none()))
+        && spec.effort.as_deref() == thread.effort.as_deref()
         && thread.permission_mode.is_confirm_free_start()
 }
 
@@ -1924,6 +2279,7 @@ fn observed_thread(thread: ThreadSummary) -> OperationRecord {
         started_at: Some(thread.created_at),
         ended_at: ended.then_some(thread.last_activity_at),
         current_action: thread.current_activity.map(|s| safe(&s)),
+        attention_reason: None,
         outcome: thread
             .error
             .map(|_| "Provider reported a failure. Open the thread for details.".into()),
@@ -1957,6 +2313,7 @@ fn observed_terminal(terminal: TerminalInfo, workspace_name: &str) -> OperationR
         current_action: Some(
             "Terminal session; individual shell commands are not instrumented.".into(),
         ),
+        attention_reason: None,
         outcome,
         position: 0,
         blockers: Vec::new(),
@@ -2123,17 +2480,59 @@ pub async fn operations_run_now(
     blocking(state, move |s| {
         let _gate = s.gate.lock().map_err(|_| poisoned())?;
         let row = s.store.detail(&id)?.run;
-        let consent = s.authorize(&app, &row.spec)?;
+        let squad_member = SquadsStore::new(s.core.clone()).get_member(&id)?;
+        let exact_revision = squad_member
+            .as_ref()
+            .filter(|member| member.worktree && row.thread_id.as_deref() == Some(row.id.as_str()))
+            .map(|_| (row.branch.clone(), row.version.clone()));
+        let consent = match s.authorize_with_origin_at_revision(
+            &app,
+            &row.spec,
+            LaunchOrigin::User,
+            exact_revision,
+        ) {
+            Ok(consent) => consent,
+            Err(error) => {
+                if row.attention_reason.is_some() {
+                    s.store.hold_with_reason(&id, &safe(&error.message))?;
+                }
+                return Err(error);
+            }
+        };
         s.revalidate_core()?;
         if consent.spec != row.spec {
             let (revision, _, _) = s.store.snapshot()?;
             s.store.update(&id, consent.spec.clone(), revision)?;
         }
+        let is_squad_member = squad_member.is_some();
+        if is_squad_member
+            && let Some(runtime) = s.threads.runtime_handle()
+            && let Err(error) = runtime.rearm_prepared_pane(&id)
+        {
+            let reason = safe(&error.message);
+            s.store.hold_with_reason(&id, &reason)?;
+            return Err(error);
+        }
+        if row.attention_reason.is_some() {
+            s.store.clear_attention_hold(&id)?;
+        } else if is_squad_member && row.status == OperationStatus::Paused {
+            s.store.hold(&id, false)?;
+        }
         s.authorized
             .lock()
             .map_err(|_| poisoned())?
             .insert(id.clone(), consent);
-        let row = s.store.claim(Some(&id))?.ok_or_else(|| {
+        if is_squad_member {
+            // Scoped Squad retry prepares or resumes the member's real pane and, when its
+            // dependencies are ready, admits its first task. The global queue pause is unchanged.
+            return s.tick(s);
+        }
+        let armed = s.store.detail(&id)?.run;
+        if armed.status == OperationStatus::Blocked || !armed.blockers.is_empty() {
+            return Ok(());
+        }
+        let claim = s.store.claim(Some(&id));
+        let row = claim?.ok_or_else(|| {
             KalError::validation(
                 "operation_blocked",
                 "Resume the queue and resolve this task's blockers before running it.",
@@ -2245,6 +2644,7 @@ mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
     use kalcode_contracts::permissions::PermissionMode;
+    use kalcode_contracts::squads::{SquadDefinition, SquadMemberDefinition};
     use kalcode_core::{CoreConfig, Paths, flags::BuildChannel};
 
     fn fixture(
@@ -2354,19 +2754,165 @@ mod tests {
         let consent = Authorization {
             spec: spec.clone(),
             revision: (Some("main".into()), Some("commit".into())),
-            expires: Instant::now() + Duration::from_secs(10),
+            expires: Some(Instant::now() + Duration::from_secs(10)),
+            origin: LaunchOrigin::Background,
+            revision_bound: true,
         };
         assert!(consent.matches(&spec));
         spec.command = Some("echo different".into());
         assert!(!consent.matches(&spec));
         let expired = Authorization {
-            expires: Instant::now() - Duration::from_secs(1),
+            expires: Some(Instant::now() - Duration::from_secs(1)),
             ..consent.clone()
         };
         assert!(!expired.matches(&consent.spec));
         let mut changed = consent.spec.clone();
         changed.provider_account_id = Some("different account".into());
         assert!(!consent.matches(&changed));
+    }
+
+    #[test]
+    fn prepared_squad_revision_policy_survives_root_head_advance() {
+        let data = tempfile::tempdir().expect("data");
+        let project = tempfile::tempdir().expect("project");
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(project.path())
+                .args(args)
+                .output()
+                .expect("spawn git");
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["config", "user.name", "Test User"]);
+        git(&["config", "user.email", "test@example.invalid"]);
+        git(&["config", "commit.gpgSign", "false"]);
+        std::fs::write(project.path().join("README.md"), "one\n").expect("readme");
+        git(&["add", "README.md"]);
+        git(&["commit", "-q", "--no-verify", "-m", "one"]);
+
+        let core = Arc::new(
+            Core::open(CoreConfig {
+                paths: Paths::new(data.path()),
+                app_version: "0.0.0-test".into(),
+                channel: BuildChannel::Development,
+            })
+            .expect("core"),
+        );
+        let workspace = core.open_workspace(project.path()).expect("workspace");
+        let account_id = kalcode_contracts::ids::new_id();
+        core.transact(|tx| {
+            tx.execute(
+                "INSERT INTO provider_accounts (
+                   id, provider_id, display_name, authentication_state, is_default, created_at
+                 ) VALUES (?1, 'codex', 'Codex test', 'authenticated', 0,
+                   '2026-10-05T12:00:00.000Z')",
+                [&account_id],
+            )?;
+            Ok(((), Vec::new()))
+        })
+        .expect("provider account");
+        let members = [("isolated", true), ("shared", false)]
+            .into_iter()
+            .map(|(key, worktree)| SquadMemberDefinition {
+                key: key.into(),
+                name: format!("{key} member"),
+                provider_id: "codex".into(),
+                provider_account_id: account_id.clone(),
+                model: "gpt-test".into(),
+                effort: "high".into(),
+                role: "implementation".into(),
+                task: Some(format!("Implement {key}.")),
+                worktree,
+                depends_on: Vec::new(),
+                manager_key: None,
+                owned_paths: vec![format!("{key}/")],
+            })
+            .collect();
+        let squads = SquadsStore::new(core.clone());
+        let saved = squads
+            .save_squad(SquadDefinition {
+                id: kalcode_contracts::ids::new_id(),
+                name: "Revision crew".into(),
+                goal: "Verify revision recovery".into(),
+                members,
+            })
+            .expect("save squad");
+        let launch = squads
+            .launch(
+                "revision-policy-request",
+                &saved.id,
+                &workspace.id,
+                None,
+                None,
+            )
+            .expect("launch squad");
+        let (state, resources) = fixture(core.clone(), data.path());
+        let initial = state.revision(&workspace.id).expect("initial revision");
+        for launched in &launch.members {
+            let member = squads
+                .get_member(&launched.operation_id)
+                .expect("member lookup")
+                .expect("member relation");
+            let branch = member
+                .worktree
+                .then(|| {
+                    crate::thread_commands::operation_branch_name(
+                        Some("isolated member"),
+                        &launched.operation_id,
+                    )
+                })
+                .or_else(|| initial.0.clone());
+            state
+                .store
+                .prepare_agent_thread(
+                    &launched.operation_id,
+                    branch.as_deref(),
+                    initial.1.as_deref(),
+                )
+                .expect("prepare member");
+        }
+
+        std::fs::write(project.path().join("README.md"), "two\n").expect("advance readme");
+        git(&["add", "README.md"]);
+        git(&["commit", "-q", "--no-verify", "-m", "two"]);
+        let advanced = state.revision(&workspace.id).expect("advanced revision");
+        assert_ne!(advanced.1, initial.1);
+        for launched in &launch.members {
+            let row = state.store.get(&launched.operation_id).expect("operation");
+            let member = squads
+                .get_member(&launched.operation_id)
+                .expect("member lookup")
+                .expect("member relation");
+            let authorized = state
+                .authorization_revision(&row)
+                .expect("authorization revision");
+            if member.worktree {
+                assert_eq!(authorized.1, initial.1, "isolated base stays exact");
+                assert_eq!(authorized.0, row.branch);
+            } else {
+                assert_eq!(authorized, advanced, "shared pane follows the root");
+            }
+        }
+        assert!(resources.shutdown_checked());
+    }
+
+    #[test]
+    fn squad_authorization_accepts_bounded_tasks_larger_than_confirmation_copy() {
+        let task = "x".repeat(64 * 1024);
+        validate_authorization_content(&task).expect("64 KiB squad task");
+        let secret = format!("token={}", "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8");
+        assert_eq!(
+            validate_authorization_content(&secret)
+                .expect_err("secret-shaped task")
+                .code,
+            "operations_sensitive_input"
+        );
     }
 
     #[test]
@@ -2528,6 +3074,7 @@ mod tests {
             started_at: Some(created_at.into()),
             ended_at: Some(created_at.into()),
             current_action: None,
+            attention_reason: None,
             outcome: None,
             position: 0,
             blockers: Vec::new(),

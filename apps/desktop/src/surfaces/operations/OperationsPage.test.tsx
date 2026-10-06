@@ -12,6 +12,7 @@ import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AccountPhase, AccountTier } from "../../ipc/account.ts";
 import type { OperationsApi } from "../../ipc/operations.ts";
+import type { SquadsApi } from "../../ipc/squads.ts";
 import { focusOperationsTarget } from "../../kalvoice/sceneOperations.ts";
 import { FAVORITES_STORAGE_KEY } from "../../shell/favorites/store.ts";
 import { OperationsPage } from "./OperationsPage.tsx";
@@ -54,6 +55,9 @@ vi.mock("../../shell/navigation.tsx", () => ({
   useNavigation: () => ({ current: "operations", navigate: seams.navigate }),
 }));
 vi.mock("../../account/AccountProvider.tsx", () => ({ useOptionalAccount: () => seams.account }));
+vi.mock("../squads/SquadsPanel.tsx", () => ({
+  SquadsPanel: ({ workspaceId }: { workspaceId: string }) => <div>Squads for {workspaceId}</div>,
+}));
 
 function queued(id: string, position: number): OperationRecord {
   return {
@@ -162,15 +166,24 @@ function account(id: string, displayName: string, extra: Partial<ProviderAccount
   };
 }
 
-function page(client: OperationsApi) {
+function page(client: OperationsApi, squads?: SquadsApi) {
   return (
     <ToastProvider>
-      <OperationsPage client={client} threadOptions={async () => options} />
+      <OperationsPage client={client} squads={squads} threadOptions={async () => options} />
     </ToastProvider>
   );
 }
 
 describe("OperationsPage", () => {
+  it("opens the unified Squads view against the active workspace", async () => {
+    seams.snapshot = baseSnapshot();
+    const squads = {} as SquadsApi;
+    render(page(operations(), squads));
+
+    await userEvent.setup().click(screen.getByRole("tab", { name: "Squads" }));
+    expect(screen.getByText("Squads for workspace-1")).toBeVisible();
+  });
+
   it("favorites a run from its row and context menu without opening or running it", async () => {
     localStorage.removeItem(FAVORITES_STORAGE_KEY);
     const client = operations();

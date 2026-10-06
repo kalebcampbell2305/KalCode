@@ -1,6 +1,16 @@
 import type { ModelInfo, ProviderAccount, ProviderAccountBinding, Workspace } from "@kalcode/protocol";
 import { Button, IconButton, ProviderGlyph } from "@kalcode/ui/components";
-import { Bot, CornerDownLeft, Globe, LayoutGrid, Minus, Plus, RotateCcw, SquareTerminal } from "lucide-react";
+import {
+  Bot,
+  CornerDownLeft,
+  Globe,
+  LayoutGrid,
+  Minus,
+  Plus,
+  RotateCcw,
+  SquareTerminal,
+  UsersRound,
+} from "lucide-react";
 import { Dialog } from "radix-ui";
 import {
   type FormEvent,
@@ -71,6 +81,8 @@ export interface NewAgentDialogProps {
   onNewTerminal?: () => void;
   onOpenBrowser?: () => void;
   onAddWidget?: () => void;
+  /** Opens Operations → Squads, the reusable multi-agent launch surface. */
+  onOpenSquads?: () => void;
 }
 
 /**
@@ -130,6 +142,7 @@ export function NewAgentDialog({
   onNewTerminal,
   onOpenBrowser,
   onAddWidget,
+  onOpenSquads,
 }: NewAgentDialogProps) {
   const { client } = useRuntime();
   const sessions = useOptionalProviderAccountSessions();
@@ -559,6 +572,7 @@ export function NewAgentDialog({
   if (onNewTerminal) others.push({ label: "Terminal", icon: <SquareTerminal />, run: onNewTerminal });
   if (onOpenBrowser) others.push({ label: "Live Browser", icon: <Globe />, run: onOpenBrowser });
   if (onAddWidget) others.push({ label: "Widget", icon: <LayoutGrid />, run: onAddWidget });
+  if (onOpenSquads) others.push({ label: "Squads", icon: <UsersRound />, run: onOpenSquads });
 
   return (
     <Dialog.Root open onOpenChange={(open) => (open || busy ? undefined : onClose())}>

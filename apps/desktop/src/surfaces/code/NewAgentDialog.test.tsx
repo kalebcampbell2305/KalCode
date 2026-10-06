@@ -84,6 +84,33 @@ beforeEach(() => {
 });
 
 describe("restored accounts in the Code launcher", () => {
+  it("opens reusable Squads directly from the launcher's Other actions", async () => {
+    const personal = makeAccount("personal", "Personal", true);
+    runtime.client = {
+      listProviderAccounts: vi.fn(async () => [personal]),
+      listProviderAccountBindings: vi.fn(async () => []),
+      threadOptions: vi.fn(() => new Promise<ThreadOptions>(() => {})),
+    } as unknown as KalCodeClient;
+    const onOpenSquads = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <NewAgentDialog
+        workspace={{ id: "ws", name: "Project" } as Workspace}
+        offered={[]}
+        initialProvider="claude-code"
+        busy={false}
+        error={null}
+        onLaunch={vi.fn(async () => true)}
+        onClose={onClose}
+        onOpenSquads={onOpenSquads}
+      />,
+    );
+
+    await userEvent.setup().click(screen.getByRole("button", { name: "Squads" }));
+    expect(onOpenSquads).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
   it("uses the sole account without a picker and launches its exact identity", async () => {
     const personal = makeAccount("personal", "Personal", true);
     runtime.client = {
