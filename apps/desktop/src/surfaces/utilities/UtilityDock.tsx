@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   EnvListing,
   HttpResponseView,
@@ -129,6 +129,9 @@ export function UtilityDock({ api, openScratchTerminal }: UtilityDockProps) {
   const [revealed, setRevealed] = useState<{ name: string; value: string } | null>(null);
 
   const [database, setDatabase] = useState<SqliteHandle | null>(null);
+  // The handle the native runtime is holding for this dock; it owns at most one at a time.
+  const openDatabase = useRef<SqliteHandle | null>(null);
+  const mounted = useRef(true);
   const [sql, setSql] = useState("SELECT name, type FROM sqlite_schema ORDER BY name;");
   const [query, setQuery] = useState<SqliteQueryResult | null>(null);
   const [confirmSql, setConfirmSql] = useState(false);
@@ -156,6 +159,16 @@ export function UtilityDock({ api, openScratchTerminal }: UtilityDockProps) {
     );
     return () => {
       current = false;
+    };
+  }, [api]);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      const open = openDatabase.current;
+      openDatabase.current = null;
+      if (open) void api.sqliteClose(open.id).catch(() => undefined);
     };
   }, [api]);
 
@@ -298,6 +311,30 @@ export function UtilityDock({ api, openScratchTerminal }: UtilityDockProps) {
     setQuery(null);
     setConfirmSql(false);
     setError(`${outcome.result.changes} row${outcome.result.changes === 1 ? "" : "s"} changed.`);
+  }
+
+  async function chooseDatabase() {
+    let picked: SqliteHandle | null;
+    try {
+      picked = await api.sqlitePick();
+    } catch (failure) {
+      setError(safeMessage(failure));
+      return;
+    }
+    if (!picked) return;
+    if (!mounted.current) {
+      void api.sqliteClose(picked.id).catch(() => undefined);
+      return;
+    }
+    const previous = openDatabase.current;
+    openDatabase.current = picked;
+    setDatabase(picked);
+    setQuery(null);
+    setConfirmSql(false);
+    setPendingSqlApproval(null);
+    if (previous && previous.id !== picked.id) {
+      void api.sqliteClose(previous.id).catch(() => undefined);
+    }
   }
 
   async function runSql() {
@@ -739,11 +776,7 @@ export function UtilityDock({ api, openScratchTerminal }: UtilityDockProps) {
                   detail="Open through the native picker. Reads are bounded; write statements stay separate and require deliberate confirmation."
                 />
                 <div className={styles.actions}>
-                  <button
-                    className={styles.primary}
-                    type="button"
-                    onClick={() => void api.sqlitePick().then(setDatabase, (failure) => setError(safeMessage(failure)))}
-                  >
+                  <button className={styles.primary} type="button" onClick={() => void chooseDatabase()}>
                     Choose database
                   </button>
                   {database ? (
