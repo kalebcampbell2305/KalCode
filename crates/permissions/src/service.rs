@@ -1176,8 +1176,38 @@ impl PermissionService {
         Ok(count)
     }
 
-    /// Pending (or all recent) requests, newest first.
+    /// Expires pending Environment Doctor and Utility Dock requests whose short lifetime passed
+    /// (their claim refuses them anyway), so they stop showing as waiting for an answer. Emits
+    /// `approval.expired` for each one, which refreshes the Approvals panel and Needs You.
+    /// Returns how many requests expired.
+    pub fn expire_lapsed_requests(&self) -> Result<usize> {
+        const REASON: &str = "lifetime_elapsed";
+        let now_ms = self.clock.now_ms();
+        let (count, _) = self.core.transact(|tx| {
+            let mut events = Vec::new();
+            for pending in store::pending_short_lived(tx)? {
+                let ttl_ms = match pending.origin_kind.as_str() {
+                    "doctor" => DOCTOR_APPROVAL_TTL_MS,
+                    _ => UTILITY_APPROVAL_TTL_MS,
+                };
+                // An unreadable timestamp can never be claimed either.
+                let lapsed = timestamp_ms(&pending.created_at)
+                    .is_none_or(|created_at_ms| now_ms.saturating_sub(created_at_ms) > ttl_ms);
+                if lapsed && store::expire_lapsed(tx, &pending.request.id)? {
+                    events.push(self.expired_event(tx, &pending.request, REASON)?);
+                }
+            }
+            Ok((events.len(), events))
+        })?;
+        Ok(count)
+    }
+
+    /// Pending (or all recent) requests, newest first. Lapsed short-lived requests expire first,
+    /// so none of them is listed as pending.
     pub fn list_approvals(&self, status: Option<ApprovalStatus>) -> Result<Vec<ApprovalView>> {
+        if let Err(error) = self.expire_lapsed_requests() {
+            tracing::error!(event = "permissions.expire_lapsed_failed", error = %error.diagnostic());
+        }
         self.core
             .read(|conn| store::list_approvals(conn, status, MAX_LIST))
     }
@@ -1202,6 +1232,11 @@ impl PermissionService {
         if !is_valid_id(request_id) {
             return Err(invalid_id("request"));
         }
+        // A late answer to a lapsed Environment Doctor or Utility Dock request is refused as
+        // expired rather than recorded against a request its claim would refuse.
+        if let Err(error) = self.expire_lapsed_requests() {
+            tracing::error!(event = "permissions.expire_lapsed_failed", error = %error.diagnostic());
+        }
         let now_ms = self.clock.now_ms();
         let (view, _) = self.core.transact(|tx| {
             let stored = store::get_approval(tx, request_id)?.ok_or_else(|| {
@@ -1214,7 +1249,11 @@ impl PermissionService {
                     return Err(KalError::new(
                         ErrorCategory::Permission,
                         "approval_expired",
-                        "This request expired because its thread stopped or a newer request replaced it. It can't be approved.",
+                        if request.expire_reason.is_none() {
+                            "This request's approval window passed. Run the action again to get a new request."
+                        } else {
+                            "This request expired because its thread stopped or a newer request replaced it. It can't be approved."
+                        },
                     ));
                 }
                 _ => {
