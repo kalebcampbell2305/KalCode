@@ -96,6 +96,9 @@ test("main reuses only an exact successful candidate on a trusted pool worker", 
     ["split-both-green", { pc2: {} }, true],
     ["split-pc2-red", { pc2: { conclusion: "failure" } }, false],
     ["split-pc2-wrong-runner", { pc2: { runner_name: "kalcode-win-gate-w1" } }, false],
+    // The second PC's second runner is equally trusted; any other name is not.
+    ["split-pc2-second-runner", { pc2: { runner_name: "kalcode-win-gate-2b" } }, true],
+    ["split-pc2-unknown-runner", { pc2: { runner_name: "kalcode-win-gate-2c" } }, false],
     ["split-pc2-other-sha", { pc2: { head_sha: "b".repeat(40) } }, false],
     ["split-pc2-skipped-check", { pc2: { steps: [{ name: "Gate", conclusion: "skipped" }] } }, false],
     // A two-job build-PC half needs its native job green on a pool worker too.
@@ -346,7 +349,10 @@ test("the second PC's half is self-contained and gates the same exact candidate"
   assert.match(pc2Job, /clean: false/);
   assert.doesNotMatch(pc2Job, /KalCodeGatePool|Assert-GateWorkerHost|gate-worker-hook|kalcode-main-pc\]/);
   const plan = script(pc2Steps[names.indexOf("Plan change-based gate")]);
-  assert.match(plan, /RUNNER_NAME -ne 'kalcode-win-gate-2'/);
+  assert.match(
+    plan,
+    /'kalcode-win-gate-2' \{ 0 \} 'kalcode-win-gate-2b' \{ 1 \} default \{ throw 'Unknown second-PC gate worker' \}/,
+  );
   assert.match(plan, /trailers:key=Merge-Train-Base,valueonly/);
   assert.match(plan, /Checkout does not match the immutable event SHA/);
   assert.match(plan, /gate-split\.mjs pc2/);
@@ -360,6 +366,38 @@ test("the second PC's half is self-contained and gates the same exact candidate"
   assert.ok(
     names.indexOf("Reset to the exact event SHA, keeping warm caches") < names.indexOf("Plan change-based gate"),
   );
+});
+
+test("each second-PC runner gets its own port block, and no other runner is accepted", {
+  skip: process.platform !== "win32",
+}, () => {
+  const names = pc2Steps.map((step) => step.match(/^name: (.+)$/m)?.[1] ?? "");
+  const plan = script(pc2Steps[names.indexOf("Plan change-based gate")]);
+  const slot = plan.split("\n").filter((line) => /\$pc2Slot =|\$portOffset =/.test(line));
+  const ports = plan.split("\n").filter((line) => /"KALCODE_E2E_[A-Z_]*PORT=|"KALCODE_UI_TEST_PORT=/.test(line));
+  assert.equal(slot.length, 2);
+  const run = (runner) =>
+    spawnSync(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-Command",
+        `$ErrorActionPreference = 'Stop'\n${slot.join("\n")}\n@(\n${ports.join("\n").replace(/,\s*$/, "")}\n) -join ' '`,
+      ],
+      { encoding: "utf8", windowsHide: true, env: { ...process.env, RUNNER_NAME: runner } },
+    );
+  const first = run("kalcode-win-gate-2");
+  assert.equal(first.status, 0, first.stderr);
+  assert.match(first.stdout, /KALCODE_E2E_PORT=4691 .*KALCODE_E2E_CDP_PORT=39333/);
+  const second = run("kalcode-win-gate-2b");
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(
+    second.stdout,
+    /KALCODE_E2E_PORT=4711 KALCODE_E2E_MAIL_PORT=4712 KALCODE_E2E_INSPECTOR_PORT=9721 KALCODE_UI_TEST_PORT=1811 KALCODE_E2E_CDP_PORT=39353/,
+  );
+  const unknown = run("kalcode-win-gate-w1");
+  assert.notEqual(unknown.status, 0);
+  assert.match(unknown.stderr + unknown.stdout, /Unknown second-PC gate worker/);
 });
 
 test("the second PC's plan outputs pick Python and browsers for its own checks", {

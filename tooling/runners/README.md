@@ -67,6 +67,17 @@ Until it carries `kalcode-gate-pc2`, the PC2 job stays queued and candidates do 
 label together with landing this workflow. Removing the label later requires reverting to the single-job
 workflow first.
 
+A second PC2 runner, `kalcode-win-gate-2b` (account `kalcode-ci-2b`, root `C:\kalcode-ci-2b`), lets two lanes' PC2
+halves gate at once. `windows/add-gate-runner-pc2.ps1` (one elevated run on that PC, next to
+`setup-gate-runner.ps1`) creates it with the holding label `kalcode-gate-pc2-pending`. Once gate.yml and the
+merge train accept it on main (each PC2 runner has its own port block: slot 1 adds 20), activate it with
+`gh api -X PUT repos/kalebcampbell2305/KalCode/actions/runners/<id>/labels -f "labels[]=kalcode-gate-pc2"`.
+
+On the second PC a machine lock keeps the Windows update proof (`kalcode-win-desktop-qa`) from overlapping any
+gate half: `.github/scripts/pc2-machine-lock.ps1`, a reader/writer lock of OS file-sharing modes in
+`C:\ProgramData\KalCodePC2\locks`. Gate halves hold it shared (both runners at once), the proof holds it
+exclusively and has priority, waits are bounded, and a killed holder can never leave it stale.
+
 The second PC started processes ~10x slower than the build PC (each git ~1.3 s vs ~0.14 s, gate
 37410227962), so git- and process-heavy checks ran 3-8x slower there. `windows/tune-gate-pc2.ps1` (one
 elevated run on that PC, no gate job running) measures git start and `git init` times, adds Defender path
