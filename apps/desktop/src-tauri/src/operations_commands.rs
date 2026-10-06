@@ -8,6 +8,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
+use kalcode_contracts::agent::LaunchOrigin;
 use kalcode_contracts::events::{
     CorrelationFilter, EventEnvelope, EventPayload, EventQuery, SeqOrder,
 };
@@ -374,7 +375,8 @@ impl OperationsState {
             lease.revalidate_core()?;
             match self.store.claim(Some(&row.id)) {
                 Ok(Some(claimed)) => {
-                    self.launch(claimed, lease)?;
+                    // The scheduler starts this on the person's behalf: it yields to CPU load.
+                    self.launch(claimed, lease, LaunchOrigin::Background)?;
                     break;
                 }
                 Ok(None) => {}
@@ -656,7 +658,12 @@ impl OperationsState {
         }
     }
 
-    fn launch(&self, row: OperationRecord, lease: &RuntimeState<Self>) -> Result<()> {
+    fn launch(
+        &self,
+        row: OperationRecord,
+        lease: &RuntimeState<Self>,
+        origin: LaunchOrigin,
+    ) -> Result<()> {
         let consent = self
             .authorized
             .lock()
@@ -693,7 +700,10 @@ impl OperationsState {
                 self.store
                     .reserve_agent_thread(&row.id, branch.as_deref(), version.as_deref())?;
                 let runtime = self.threads.runtime_handle().ok_or_else(unavailable)?;
-                let thread = match self.threads.start_operation(&self.core, &row.id, &row.spec) {
+                let thread = match self
+                    .threads
+                    .start_operation(&self.core, &row.id, &row.spec, origin)
+                {
                     Ok(thread) => thread,
                     Err(start_error) => match runtime.get(&row.id) {
                         Err(error) if error.code == "thread_not_found" => return Err(start_error),
@@ -2139,7 +2149,8 @@ pub async fn operations_run_now(
                 "Resume the queue and resolve this task's blockers before running it.",
             )
         })?;
-        s.launch(row, s)
+        // The person clicked Run now: admit it like any agent they start, never held for CPU.
+        s.launch(row, s, LaunchOrigin::User)
     })
     .await
 }
@@ -2184,7 +2195,7 @@ pub async fn operations_service_action(
                 return Err(error);
             }
             s.authorized.lock().map_err(|_| poisoned())?.insert(row.id.clone(), consent);
-            if let Some(row) = s.store.claim(Some(&row.id))? { s.launch(row, s)?; }
+            if let Some(row) = s.store.claim(Some(&row.id))? { s.launch(row, s, LaunchOrigin::User)?; }
         } else if matches!(old.status, OperationStatus::Running | OperationStatus::Starting) {
             s.cancel(&run_id)?;
         }

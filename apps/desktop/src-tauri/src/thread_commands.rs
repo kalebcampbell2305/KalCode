@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use kalcode_contracts::agent::{
-    AgentEvent, AgentEventSink, AgentProvider, AgentSession, AuthState, ProviderCapabilities,
-    ProviderDetection, ProviderError, ProviderId, SessionConfig,
+    AgentEvent, AgentEventSink, AgentProvider, AgentSession, AuthState, LaunchOrigin,
+    ProviderCapabilities, ProviderDetection, ProviderError, ProviderId, SessionConfig,
 };
 use kalcode_contracts::context::PromptReview;
 use kalcode_contracts::operations::{OperationKind, OperationSpec};
@@ -485,11 +485,14 @@ impl ThreadsState {
     /// Starts a confirmed Operations agent task through the canonical thread admission path.
     /// Operations uses the saved startable permission preference. Fresh settings use bounded Auto;
     /// modes that need an attached confirmation or profile conservatively use Approve.
+    /// `origin` is who asked for this start: the person's Run now is `User` and is admitted like
+    /// any agent they start; the scheduler's own starts are `Background` and yield to CPU load.
     pub(crate) fn start_operation(
         &self,
         core: &Arc<Core>,
         operation_id: &str,
         spec: &OperationSpec,
+        origin: LaunchOrigin,
     ) -> kalcode_core::Result<ThreadSummary> {
         let request = self.reviewed_operation_request(core, spec)?;
         if request.provider_id == ProviderId::CURSOR {
@@ -497,11 +500,11 @@ impl ThreadsState {
             return self
                 .routes
                 .create_operation_pane(runtime, operation_id, |id| {
-                    runtime.create_reviewed_for_operation(id, request, None)
+                    runtime.create_reviewed_for_operation_with_origin(id, request, None, origin)
                 });
         }
         self.operation_runtime()?
-            .create_reviewed_for_operation(operation_id, request, None)
+            .create_reviewed_for_operation_with_origin(operation_id, request, None, origin)
     }
 
     fn reviewed_operation_request(
