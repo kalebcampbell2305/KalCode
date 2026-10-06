@@ -167,6 +167,15 @@ const lanesOf = (r) => r.lanes.join(",");
 // ------------------------------------------------------------------ policy
 
 describe("policy", () => {
+  test("native restart evidence uses the registered zero-skip suite and canonical executable", () => {
+    const native = policy.gates.find(({ id }) => id === "desktop-native-e2e");
+    assert.deepEqual(native.run, [
+      "pnpm --filter @kalcode/desktop build:e2e",
+      "node tooling/test-suites.mjs --suite desktop-native-e2e",
+    ]);
+    assert.ok(native.unsetEnv?.includes("KALCODE_E2E_EXE"));
+  });
+
   test("policy.json is valid, has exactly the four lanes and a conservative fallback", () => {
     assert.deepEqual(validatePolicy(policy), []);
     assert.deepEqual(Object.keys(policy.lanes).sort(), ["desktop", "docs", "internal", "website"]);

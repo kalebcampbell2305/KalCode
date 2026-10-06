@@ -66,6 +66,8 @@ Final root follow-up evidence: 80 focused UI/controller/IPC tests passed; a subs
 
 At final implementation commit `31635f0b98880b285a72b4340aecac2b12d7c076`, root independently reran DeskRecovery: 16/16 passed. The updated native binary rebuild was externally terminated by another session's temporary heavy-build guard, which kills other sessions' Cargo release builds while shared gates run. No compiler failure was reported and no cache was deleted. The required final native restart reproof remains pending; the shared exact-candidate `desktop-native-e2e` gate builds the executable and discovers this restart spec. Submission to that gate is not a claim that final native verification or delivery has passed.
 
+Final integration review found that the native gate invoked raw Playwright and could accept an accidentally skipped restart test. The gate now invokes the existing registered `desktop-native-e2e` suite, which allows zero skips, and clears inherited `KALCODE_E2E_EXE` before build and test. The regression failed on the old command and passed after the repair; policy/gate tests passed 16/16 and registered-suite tests passed 23/23. Whole-repository Biome and diff checks passed; independent review cleared the two-file change. No additional test authority was introduced.
+
 ## Compatibility and rollback
 
 No database migration or credential-store change. Protocol additions have defaults for older payloads. Local records are versioned. Drafts contain user-entered plaintext in the local account-scoped WebView profile; they are not an encrypted credential vault. A crash before a native transaction commits can still lose that transaction; URL updates no longer wait for the layout debounce.
