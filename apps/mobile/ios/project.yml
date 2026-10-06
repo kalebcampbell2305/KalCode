@@ -1,0 +1,100 @@
+name: KalCodeRemote
+options:
+  bundleIdPrefix: com.kalcode
+  deploymentTarget:
+    iOS: "18.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: false
+  developmentLanguage: en
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    SWIFT_STRICT_CONCURRENCY: minimal
+    DEAD_CODE_STRIPPING: YES
+targets:
+  RemoteKit:
+    type: framework
+    platform: iOS
+    sources:
+      - path: RemoteKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kalcode.remote.RemoteKit
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SKIP_INSTALL: YES
+        DEFINES_MODULE: YES
+        APPLICATION_EXTENSION_API_ONLY: YES
+  KalCodeRemote:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+    dependencies:
+      - target: RemoteKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kalcode.remote
+        PRODUCT_NAME: KalCode Remote
+        INFOPLIST_FILE: App/Resources/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        SUPPORTS_MACCATALYST: NO
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+        SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: NO
+  RemoteKitTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: RemoteKitTests
+    dependencies:
+      - target: RemoteKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kalcode.remote.RemoteKitTests
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+  KalCodeRemoteUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: KalCodeRemote
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kalcode.remote.UITests
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+        TEST_TARGET_NAME: KalCodeRemote
+schemes:
+  KalCodeRemote:
+    build:
+      targets:
+        KalCodeRemote: all
+        RemoteKit: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      gatherCoverageData: false
+      targets:
+        - name: RemoteKitTests
+          parallelizable: false
+        - name: KalCodeRemoteUITests
+          parallelizable: false
+  RemoteKit:
+    build:
+      targets:
+        RemoteKit: all
+    test:
+      config: Debug
+      targets:
+        - RemoteKitTests
