@@ -7,11 +7,9 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const workflow = readFileSync(new URL("../.github/workflows/gate.yml", import.meta.url), "utf8");
-// Two Windows jobs test the same SHA: the build PC's pool ("windows") and the second PC ("pc2").
-const windows = workflow.split("\n  pc2:")[0];
-const pc2Job = workflow.split("\n  pc2:")[1].split("\n  macos:")[0];
+// Gates run only on the build PC (owner, 2026-10-06): one "windows" matrix job of three halves.
+const windows = workflow.split("\n  macos:")[0];
 const steps = windows.split(/\n {6}- /).slice(1);
-const pc2Steps = pc2Job.split(/\n {6}- /).slice(1);
 function script(step) {
   const block = step.split("\n        run: |\n")[1];
   if (block)
@@ -168,10 +166,7 @@ test("a release kit PR that changes only the release record and notes skips both
     ["api-error", null, false],
   ];
   const root = mkdtempSync(join(tmpdir(), "kalcode-gate-records-"));
-  for (const [job, jobSteps] of [
-    ["windows", steps],
-    ["pc2", pc2Steps],
-  ]) {
+  for (const [job, jobSteps] of [["windows", steps]]) {
     const step = jobSteps.find((s) => s.startsWith("name: Reuse the merge-train"));
     assert.match(step, /startsWith\(github\.head_ref, 'release\/website-'\)/, `${job}: only kit branches qualify`);
     const reuse = script(step);
@@ -290,105 +285,17 @@ test("the workspace hygiene script parses and refuses a non-_work root", { skip:
   assert.match(refused.stdout + refused.stderr, /Refusing to clean outside a runner _work directory/);
 });
 
-test("both halves reuse with the identical evidence rule", () => {
-  const reuse = (list) => script(list.find((step) => step.startsWith("name: Reuse the merge-train")));
-  assert.ok(reuse(steps));
-  assert.equal(reuse(pc2Steps), reuse(steps));
-});
-
-test("the second PC's half is self-contained and gates the same exact candidate", () => {
-  const names = pc2Steps.map((step) => step.match(/^name: (.+)$/m)?.[1] ?? step.split("\n")[0]);
-  assert.match(pc2Job, /^ {4}name: Gate \(Windows, PC2\)$/m);
-  assert.match(pc2Job, /^ {4}runs-on: \[self-hosted, Windows, kalcode-gate-pc2\]$/m);
-  assert.match(pc2Job, /head\.repo\.full_name == github\.repository/, "fork guard");
-  assert.match(pc2Job, /persist-credentials: false/);
-  assert.match(pc2Job, /clean: false/);
-  assert.doesNotMatch(pc2Job, /KalCodeGatePool|Assert-GateWorkerHost|gate-worker-hook|kalcode-main-pc\]/);
-  const plan = script(pc2Steps[names.indexOf("Plan change-based gate")]);
-  assert.match(
-    plan,
-    /'kalcode-win-gate-2' \{ 0 \} 'kalcode-win-gate-2b' \{ 1 \} default \{ throw 'Unknown second-PC gate worker' \}/,
-  );
-  assert.match(plan, /trailers:key=Merge-Train-Base,valueonly/);
-  assert.match(plan, /Checkout does not match the immutable event SHA/);
-  assert.match(plan, /gate-split\.mjs pc2/);
-  for (const port of ["4691", "4692", "9701", "1791", "39333"]) assert.ok(plan.includes(port), `fixed port ${port}`);
-  const gate = script(pc2Steps[names.indexOf("Gate")]);
-  assert.match(gate, /BelowNormal/);
-  assert.match(gate, /--only \$env:KALCODE_GATE_ONLY/);
-  assert.match(gate, /nothing selected for the second PC/);
-  assert.equal(names.indexOf("Stop this worker's orphaned processes"), 1);
-  assert.equal(names.at(-1), "Stop processes this job left behind");
-  assert.ok(
-    names.indexOf("Reset to the exact event SHA, keeping warm caches") < names.indexOf("Plan change-based gate"),
-  );
-});
-
-test("each second-PC runner gets its own port block, and no other runner is accepted", {
-  skip: process.platform !== "win32",
-}, () => {
-  const names = pc2Steps.map((step) => step.match(/^name: (.+)$/m)?.[1] ?? "");
-  const plan = script(pc2Steps[names.indexOf("Plan change-based gate")]);
-  const slot = plan.split("\n").filter((line) => /\$pc2Slot =|\$portOffset =/.test(line));
-  const ports = plan.split("\n").filter((line) => /"KALCODE_E2E_[A-Z_]*PORT=|"KALCODE_UI_TEST_PORT=/.test(line));
-  assert.equal(slot.length, 2);
-  const run = (runner) =>
-    spawnSync(
-      "powershell.exe",
-      [
-        "-NoProfile",
-        "-Command",
-        `$ErrorActionPreference = 'Stop'\n${slot.join("\n")}\n@(\n${ports.join("\n").replace(/,\s*$/, "")}\n) -join ' '`,
-      ],
-      { encoding: "utf8", windowsHide: true, env: { ...process.env, RUNNER_NAME: runner } },
-    );
-  const first = run("kalcode-win-gate-2");
-  assert.equal(first.status, 0, first.stderr);
-  assert.match(first.stdout, /KALCODE_E2E_PORT=4691 .*KALCODE_E2E_CDP_PORT=39333/);
-  const second = run("kalcode-win-gate-2b");
-  assert.equal(second.status, 0, second.stderr);
-  assert.match(
-    second.stdout,
-    /KALCODE_E2E_PORT=4711 KALCODE_E2E_MAIL_PORT=4712 KALCODE_E2E_INSPECTOR_PORT=9721 KALCODE_UI_TEST_PORT=1811 KALCODE_E2E_CDP_PORT=39353/,
-  );
-  const unknown = run("kalcode-win-gate-w1");
-  assert.notEqual(unknown.status, 0);
-  assert.match(unknown.stderr + unknown.stdout, /Unknown second-PC gate worker/);
-});
-
-test("the second PC's plan outputs pick Python and browsers for its own checks", {
-  skip: process.platform !== "win32",
-}, () => {
-  const names = pc2Steps.map((step) => step.match(/^name: (.+)$/m)?.[1] ?? "");
-  const plan = script(pc2Steps[names.indexOf("Plan change-based gate")]);
-  const outputs = plan.split("\n").filter((line) => line.includes("$env:GITHUB_OUTPUT"));
-  assert.equal(outputs.length, 2);
-  const root = mkdtempSync(join(tmpdir(), "kalcode-gate-pc2-output-"));
-  for (const [name, ids, expected] of [
-    ["tooling", ["tooling-unit"], "python=true\nbrowsers=false"],
-    ["website", ["website-e2e"], "python=false\nbrowsers=true"],
-    ["none", [], "python=false\nbrowsers=false"],
-  ]) {
-    const output = join(root, name);
-    writeFileSync(output, "");
-    const result = spawnSync(
-      "powershell.exe",
-      ["-NoProfile", "-Command", `$ids = @(${ids.map((id) => `'${id}'`).join(",")})\n${outputs.join("\n")}`],
-      { encoding: "utf8", windowsHide: true, env: { ...process.env, GITHUB_OUTPUT: output } },
-    );
-    assert.equal(result.status, 0, result.stdout + result.stderr);
-    assert.equal(readFileSync(output, "utf8").trim().replaceAll("\r\n", "\n"), expected);
-  }
-});
-
 test("the gate split runs every selected check exactly once across the three jobs", async () => {
-  const { NATIVE_GATES, PC2_GATES, splitGateIds } = await import("./release/lifecycle/gate-split.mjs");
+  const { NATIVE_GATES, WEB_GATES, splitGateIds } = await import("./release/lifecycle/gate-split.mjs");
   const policy = JSON.parse(readFileSync(new URL("./release/lifecycle/policy.json", import.meta.url), "utf8"));
   const all = policy.gates.map((gate) => gate.id);
-  for (const id of [...PC2_GATES, ...NATIVE_GATES]) assert.ok(all.includes(id), `${id} is a real gate`);
-  const { main, native, pc2 } = splitGateIds(all);
-  assert.deepEqual([...main, ...native, ...pc2].sort(), [...all].sort());
-  assert.equal(new Set([...main, ...native, ...pc2]).size, all.length);
+  for (const id of [...WEB_GATES, ...NATIVE_GATES]) assert.ok(all.includes(id), `${id} is a real gate`);
+  const { main, native, web } = splitGateIds(all);
+  assert.deepEqual([...main, ...native, ...web].sort(), [...all].sort());
+  assert.equal(new Set([...main, ...native, ...web]).size, all.length);
+  // The JS/web checks that ran on the second PC now run in the build PC's web job (owner, 2026-10-06).
+  for (const id of ["tooling-unit", "website-e2e", "api", "packages"])
+    assert.ok(web.includes(id), `${id} runs in the web job`);
   // Checkout writers and the pool-only Cargo tools run in the build PC's native job.
   for (const id of ["rust", "desktop-native-e2e", "cargo-deny", "cargo-audit"])
     assert.ok(native.includes(id), `${id} runs in the build PC's native job`);
@@ -400,7 +307,7 @@ test("the gate split runs every selected check exactly once across the three job
     ["a-check-added-later"],
     "new checks default to the build PC's main job",
   );
-  assert.deepEqual(splitGateIds([]), { main: [], native: [], pc2: [] });
+  assert.deepEqual(splitGateIds([]), { main: [], native: [], web: [] });
   const cli = (machine, ids) =>
     spawnSync(
       process.execPath,
@@ -411,26 +318,33 @@ test("the gate split runs every selected check exactly once across the three job
     );
   assert.equal(cli("main", "biome,rust,desktop-ui,website-e2e").stdout, "desktop-ui");
   assert.equal(cli("native", "biome,rust,desktop-ui,website-e2e").stdout, "rust");
-  assert.equal(cli("pc2", "biome,rust,desktop-ui,website-e2e").stdout, "biome,website-e2e");
-  assert.equal(cli("pc2", "").stdout, "");
+  assert.equal(cli("web", "biome,rust,desktop-ui,website-e2e").stdout, "biome,website-e2e");
+  assert.equal(cli("web", "").stdout, "");
+  assert.equal(cli("pc2", "rust").status, 2, "no second-PC share any more");
   assert.equal(cli("elsewhere", "rust").status, 2);
 });
 
-test("the build PC's gate runs as two matrix jobs that never cancel each other", () => {
+test("gates run only on the build PC: three matrix jobs that never cancel each other, and no second-PC job", () => {
   const header = windows.split(/\n {4}steps:/)[0];
   assert.match(
     header,
-    /name: \$\{\{ matrix\.half == 'native' && 'Gate \(Windows, native\)' \|\| 'Gate \(Windows\)' \}\}/,
+    /name: \$\{\{ matrix\.half == 'native' && 'Gate \(Windows, native\)' \|\| matrix\.half == 'web' && 'Gate \(Windows, web\)' \|\| 'Gate \(Windows\)' \}\}/,
   );
   assert.match(header, /fail-fast: false/);
-  assert.match(header, /half: \[main, native\]/);
+  assert.match(header, /half: \[main, native, web\]/);
+  assert.doesNotMatch(workflow, /^ {2}pc2:$/m, "no second-PC gate job");
+  assert.doesNotMatch(
+    workflow,
+    /runs-on: \[self-hosted, Windows, kalcode-gate-pc2\]/,
+    "nothing routes a gate to the second PC",
+  );
   const plan = script(steps.find((step) => step.startsWith("name: Plan change-based gate")));
   assert.match(plan, /gate-split\.mjs \$env:GATE_HALF/);
   assert.match(plan, /Unknown build-PC gate half/);
   const evidence = steps.find((step) => step.startsWith("name: Preserve exact candidate evidence"));
   assert.match(
     evidence,
-    /gate-evidence-\$\{\{ matrix\.half == 'native' && 'native-' \|\| '' \}\}/,
+    /gate-evidence-\$\{\{ matrix\.half != 'main' && format\('\{0\}-', matrix\.half\) \|\| '' \}\}/,
     "distinct artifact per job",
   );
 });

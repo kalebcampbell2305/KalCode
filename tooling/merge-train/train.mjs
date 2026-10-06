@@ -17,7 +17,7 @@
 // updating main (a lease that requires main to still be the candidate's base). A racing coordinator that
 // loses either one rebuilds or reuses; nothing is corrupted.
 import { spawn } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   appendFileSync,
   closeSync,
@@ -1597,7 +1597,7 @@ export function createTrain({
       await commentOnce(
         number,
         null,
-        `Submitted to the merge train at head ${short(pr.head)} (queue position ${position || "?"}). Any agent's \`node tooling/merge-train/train.mjs run\` will batch, gate and land it.`,
+        `Submitted to the merge train at head ${short(pr.head)} (queue position ${position || "?"}). The WS-1 coordinator batches, gates and lands it.`,
       );
     }
     log(`#${number} ${pr.queued ? "was already" : "is now"} queued (position ${position || "?"} of ${queue.length})`);
@@ -1615,6 +1615,39 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 export function resolveLanesDir(toplevel, commonDir) {
   const primary = join(dirname(resolve(commonDir)), "target", "lanes");
   return existsSync(primary) ? primary : join(toplevel, "target", "lanes");
+}
+
+/** Commands that move main or build and gate candidates: the WS-1 coordinator's alone (AGENTS.md). */
+export const COORDINATOR_COMMANDS = Object.freeze(["run", "build", "land"]);
+
+/**
+ * One coordinator (owner, 2026-10-06): only the session holding the coordinator token may build, run or
+ * land the train; every other session opens a PR and submits it. The token is a secret in the shared lanes
+ * folder (every worktree of this clone sees it); the coordinator exports it as KALCODE_TRAIN_COORDINATOR.
+ * There is no lock state to go stale: handing over the role means rewriting the token file.
+ */
+export function assertCoordinator(
+  command,
+  { env = process.env, tokenFile, read = (path) => readFileSync(path, "utf8") },
+) {
+  if (!COORDINATOR_COMMANDS.includes(command)) return;
+  const refuse = (why) =>
+    new Error(
+      `train.mjs ${command} is for the WS-1 merge coordinator only (${why}). Open a PR, then queue it with ` +
+        "`node tooling/merge-train/train.mjs submit <pr>`; the coordinator builds, gates and lands lanes. Stop here.",
+    );
+  const offered = env.KALCODE_TRAIN_COORDINATOR ?? "";
+  if (!offered) throw refuse("KALCODE_TRAIN_COORDINATOR is not set");
+  let expected;
+  try {
+    expected = read(tokenFile).trim();
+  } catch {
+    throw refuse(`no coordinator token at ${tokenFile}`);
+  }
+  if (expected.length < 16) throw refuse(`the coordinator token at ${tokenFile} is too short`);
+  const a = Buffer.from(offered);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) throw refuse("this session's token is not the coordinator's");
 }
 
 export function parseArgs(argv) {
@@ -1645,6 +1678,9 @@ async function main(argv) {
   const toplevel = (await cwdGit(["rev-parse", "--show-toplevel"])).stdout.trim();
   const commonDir = (await cwdGit(["rev-parse", "--path-format=absolute", "--git-common-dir"])).stdout.trim();
   const lanesDir = resolveLanesDir(toplevel, commonDir);
+  assertCoordinator(opts.command, {
+    tokenFile: process.env.KALCODE_TRAIN_COORDINATOR_FILE || join(lanesDir, "coordinator.token"),
+  });
   const { createGitHubProvider } = await import("./github.mjs");
   const provider = await createGitHubProvider({ repo: toplevel });
   const hookPath = join(HERE, "on-landed.mjs");

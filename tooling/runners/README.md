@@ -54,6 +54,8 @@ native E2E and anything not listed for the second PC) and `Gate (Windows, PC2)` 
 `tooling/release/lifecycle/gate-split.mjs`). The merge train lands a candidate only when both jobs passed
 for that exact SHA (a workflow without the PC2 job keeps single-job evidence).
 
+**Since 2026-10-06 gates run only on the build PC (owner directive; the second PC was 3-8x slower). gate.yml has no PC2 job, and the second PC runs release QA only. The paragraphs below describe its gate runners, which stay registered but idle.**
+
 The PC2 job runs on `kalcode-win-gate-2` (the second PC's gate account) without the build-PC pool hooks,
 at below-normal priority, on fixed ports (pool base + 200). That account needs Git, Node.js and pnpm on
 its PATH; the job installs Playwright's Chromium and the pinned portable Python itself. Activate it once

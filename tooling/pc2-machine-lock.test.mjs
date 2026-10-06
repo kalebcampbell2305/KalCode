@@ -55,20 +55,16 @@ Exit-Pc2MachineLock $lock`;
   };
 }
 
-test("the second PC's gate halves and update proof take the machine lock", () => {
+test("the second PC's update proof takes the machine lock; no gate job runs there any more", () => {
+  // Gates run only on the build PC (owner, 2026-10-06); the lock keeps any future PC2 work off the proof.
   const gate = workflow("gate.yml");
-  const pc2 = gate.split("\n  pc2:")[1].split("\n  macos:")[0];
-  assert.match(
-    pc2,
-    /\. \.github\/scripts\/pc2-machine-lock\.ps1\n\s+\$lock = Enter-Pc2MachineLock -Mode Shared -TimeoutMinutes 60/,
-  );
-  assert.match(pc2, /finally \{\n\s+Exit-Pc2MachineLock \$lock/);
+  assert.doesNotMatch(gate, /^ {2}pc2:$/m);
+  assert.doesNotMatch(gate, /kalcode-gate-pc2\]/);
   const qa = workflow("desktop-update-verify.yml");
   assert.match(qa, /\$lock = Enter-Pc2MachineLock -Mode Exclusive -TimeoutMinutes 75/);
   assert.match(qa, /timeout-minutes: 120/);
   assert.match(qa, /sparse-checkout: \.github\/scripts/, "the proof's checkout includes the lock script");
 });
-
 test(
   "both gate runners share the lock; the update proof waits for them and then excludes new gate halves",
   windows,

@@ -90,6 +90,8 @@ export function isPc2Job(job, sha) {
 
 /** The build PC's second job of a split gate: rust, native E2E and the pool-only Cargo tools. */
 export const NATIVE_GATE_JOB = "Gate (Windows, native)";
+/** The build PC's third job: the self-contained JS/web checks (the second PC ran them until 2026-10-06). */
+export const WEB_GATE_JOB = "Gate (Windows, web)";
 
 /** One job's verdict: its own completed, trusted, executed Gate step decides it. */
 function jobState(matching, run, sha, trusted) {
@@ -109,8 +111,8 @@ function jobState(matching, run, sha, trusted) {
 
 /**
  * The candidate is green only when every part of its gate is: the build-PC job always, and the build PC's
- * native job and the second-PC job whenever the run has them (a workflow without a split keeps its
- * single-job evidence).
+ * native and web jobs whenever the run has them. A second-PC job counts only in runs from the earlier
+ * workflow that had one (gates left the second PC on 2026-10-06); current runs never have or wait for it.
  */
 export function gateStateFrom(runs, jobs, sha, branch) {
   const run = runs[0];
@@ -125,6 +127,8 @@ export function gateStateFrom(runs, jobs, sha, branch) {
   ];
   const nativeJobs = jobs.filter((j) => j.name === NATIVE_GATE_JOB);
   if (nativeJobs.length) parts.push(jobState(nativeJobs, run, sha, isMainPcJob));
+  const webJobs = jobs.filter((j) => j.name === WEB_GATE_JOB);
+  if (webJobs.length) parts.push(jobState(webJobs, run, sha, isMainPcJob));
   const pc2Jobs = jobs.filter((j) => j.name === PC2_GATE_JOB);
   if (pc2Jobs.length) parts.push(jobState(pc2Jobs, run, sha, isPc2Job));
   for (const state of ["failure", "pending", "stale"]) {

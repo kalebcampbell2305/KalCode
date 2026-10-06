@@ -1,19 +1,18 @@
-// Splits one change-based gate plan between the two Windows gate machines (owner, 2026-10-05: "some
-// tests running on this computer, and some tests running on the other Windows computer"). Both jobs of
-// a gate.yml run test the same event SHA; together they run exactly the selected checks, once each.
+// Splits one change-based gate plan across the build PC's gate jobs. Every job of a gate.yml run tests the
+// same event SHA on its own pool worker and checkout; together they run exactly the selected checks, once each.
 //
-//   node tooling/release/lifecycle/gate-split.mjs <main|native|pc2> <id,id,...>   prints that job's ids
+//   node tooling/release/lifecycle/gate-split.mjs <main|native|web> <id,id,...>   prints that job's ids
 //
-// The second PC takes the self-contained JS/web checks. Everything else (Rust, the desktop frontend,
-// UI and native E2E, and any check added later) stays on the build PC's pool, which has the warm
-// Cargo targets, CMake/libclang and the provider CLIs those checks need. On the build PC it runs as two
-// jobs on two pool workers: "native" (the checks that write the checkout or need the pool's Cargo
-// tools) and "main" (the desktop readers and anything new). In one checkout, rust and native E2E's
-// workspace writes serialized them behind the desktop readers (lane 7 run 37389408543: [frontend 304 s
-// ‖ UI 677 s] → rust 286 s → native E2E 587 s, ~30 min); as separate jobs the two chains overlap.
+// Gates run only on the build PC (owner, 2026-10-06: "we need to find a faster way to ship things"). The
+// second PC ran checks 3-8x slower (each git ~1.3 s vs ~0.14 s; desktop suites timed out there, trial
+// 37402429693) and its single runner serialized every lane's PC2 half; it now runs release QA only. Three
+// jobs on three pool workers overlap: "native" (the checks that write the checkout or need the pool's Cargo
+// tools: rust, native E2E, cargo-deny/audit), "web" (the self-contained JS/web checks that ran on the
+// second PC) and "main" (the desktop frontend/UI readers and any check added later).
 import { fileURLToPath } from "node:url";
 
-export const PC2_GATES = Object.freeze([
+/** The build PC's web job: self-contained JS/web checks (they ran on the second PC until 2026-10-06). */
+export const WEB_GATES = Object.freeze([
   "biome",
   "branding",
   "capabilities",
@@ -31,22 +30,22 @@ export const PC2_GATES = Object.freeze([
 /** The build PC's second job: checkout writers (rust, native E2E) and the pool-only Cargo tools. */
 export const NATIVE_GATES = Object.freeze(["rust", "desktop-native-e2e", "cargo-deny", "cargo-audit"]);
 
-const PC2 = new Set(PC2_GATES);
+const WEB = new Set(WEB_GATES);
 const NATIVE = new Set(NATIVE_GATES);
 
 /** The selected ids for each job, in plan order: disjoint, and together exactly the input. */
 export function splitGateIds(ids) {
   const main = [];
   const native = [];
-  const pc2 = [];
-  for (const id of ids) (PC2.has(id) ? pc2 : NATIVE.has(id) ? native : main).push(id);
-  return { main, native, pc2 };
+  const web = [];
+  for (const id of ids) (WEB.has(id) ? web : NATIVE.has(id) ? native : main).push(id);
+  return { main, native, web };
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const [machine, list = ""] = process.argv.slice(2);
-  if (machine !== "main" && machine !== "native" && machine !== "pc2") {
-    console.error("usage: gate-split.mjs <main|native|pc2> <id,id,...>");
+  if (machine !== "main" && machine !== "native" && machine !== "web") {
+    console.error("usage: gate-split.mjs <main|native|web> <id,id,...>");
     process.exit(2);
   }
   const ids = list

@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   createGitHubProvider,
@@ -14,10 +15,12 @@ import {
   parseGateLog,
   parseSlug,
   queueFromGraphql,
+  WEB_GATE_JOB,
 } from "./github.mjs";
 import { releaseKitCommand } from "./on-landed.mjs";
 import {
   assertCandidateWorkflow,
+  assertCoordinator,
   candidateBranch,
   createTrain,
   makeGit,
@@ -952,6 +955,13 @@ describe("merge train pieces", () => {
       "stale",
     );
     assert.equal(state(native, pc2), "pending", "the native job never satisfies the main job");
+    // The build PC's web job (JS/web checks, off the second PC since 2026-10-06) is required when present.
+    const web = { ...main, name: WEB_GATE_JOB, runner_name: "kalcode-win-gate-w2" };
+    assert.equal(state(main, native, web), "success", "main + native + web green, no second-PC job needed");
+    assert.equal(state(main, native, { ...web, conclusion: "failure" }), "failure", "a red web job refuses");
+    assert.equal(state(main, native, { ...web, status: "queued", conclusion: null }), "pending");
+    assert.equal(state(main, native, { ...web, runner_name: "kalcode-win-gate-2" }), "stale", "only a pool worker");
+    assert.equal(state(main, native, web, web), "stale", "two web jobs are ambiguous");
     assert.equal(
       state({ ...main, conclusion: "failure" }, native, { ...pc2, status: "queued", conclusion: null }),
       "failure",
@@ -1082,13 +1092,11 @@ describe("merge train pieces", () => {
       workflow,
       /--base \$env:KALCODE_GATE_BASE --only \$env:KALCODE_GATE_ONLY --jobs \$env:KALCODE_GATE_JOBS --keep-going/,
     );
-    // The split: the second PC's half gates the same exact candidate and recorded base.
-    assert.match(workflow, /name: Gate \(Windows, PC2\)/);
-    assert.match(workflow, /runs-on: \[self-hosted, Windows, kalcode-gate-pc2\]\n/);
-    // The build PC's share runs as two matrix jobs (main, native), each gating its half of the split.
-    assert.match(workflow, /half: \[main, native\]/);
+    // Gates run only on the build PC (owner, 2026-10-06): three matrix jobs, no second-PC job.
+    assert.doesNotMatch(workflow, /name: Gate \(Windows, PC2\)/);
+    assert.doesNotMatch(workflow, /kalcode-gate-pc2\]/);
+    assert.match(workflow, /half: \[main, native, web\]/);
     assert.match(workflow, /gate-split\.mjs \$env:GATE_HALF/);
-    assert.match(workflow, /gate-split\.mjs pc2/);
     assert.match(workflow, /github\.event\.pull_request\.base\.sha/);
     assert.match(workflow, /%\(trailers:key=Merge-Train-Base,valueonly\)/);
     assert.match(workflow, /--keep-going/);
@@ -1128,10 +1136,6 @@ test("bootstrap refuses pushing a candidate with no usable main-PC push workflow
     workflow.replace('"merge-train/**"', '"unrelated/**"'),
     workflow.replace(/Windows, kalcode-gate(?:, kalcode-main-pc)?\]/, "Windows, kalcode-gate-2]"),
     workflow.replace("trailers:key=Merge-Train-Base,valueonly", "wrong-base"),
-    workflow.replace(
-      "runs-on: [self-hosted, Windows, kalcode-gate-pc2]",
-      "runs-on: [self-hosted, Windows, kalcode-gate-2]",
-    ),
   ]) {
     const env = setup();
     openPr(env, 1, { ".github/workflows/gate.yml": invalid });
@@ -1216,4 +1220,49 @@ test("GitHub cancellation binds exact candidate push and rechecks status without
   });
   assert.deepEqual(await provider.cancelGates(sha, branch), [1]);
   assert.deepEqual(mutations, ["repos/fixture/repository/actions/runs/1/cancel"]);
+});
+
+test("only the coordinator builds, runs or lands; everyone else submits a PR", () => {
+  const dir = mkdtempSync(join(tmpdir(), "kalcode-train-coordinator-"));
+  temps.push(dir);
+  const tokenFile = join(dir, "coordinator.token");
+  const token = "c0ordinator-token-0123456789abcdef";
+  writeFileSync(
+    tokenFile,
+    `${token}
+`,
+  );
+  for (const command of ["submit", "plan", "status"])
+    assert.doesNotThrow(() => assertCoordinator(command, { env: {}, tokenFile }), `${command} stays open`);
+  for (const command of ["run", "build", "land"]) {
+    assert.throws(
+      () => assertCoordinator(command, { env: {}, tokenFile }),
+      /for the WS-1 merge coordinator only.*Open a PR/s,
+    );
+    assert.throws(
+      () => assertCoordinator(command, { env: { KALCODE_TRAIN_COORDINATOR: "someone-else-token-0000" }, tokenFile }),
+      /not the coordinator's/,
+    );
+    assert.doesNotThrow(() => assertCoordinator(command, { env: { KALCODE_TRAIN_COORDINATOR: token }, tokenFile }));
+  }
+  assert.throws(
+    () => assertCoordinator("land", { env: { KALCODE_TRAIN_COORDINATOR: token }, tokenFile: join(dir, "missing") }),
+    /no coordinator token/,
+  );
+  writeFileSync(tokenFile, "short");
+  assert.throws(
+    () => assertCoordinator("run", { env: { KALCODE_TRAIN_COORDINATOR: "short" }, tokenFile }),
+    /too short/,
+  );
+
+  // The CLI refuses before touching git or GitHub, with the instruction to open a PR.
+  const env = { ...process.env, KALCODE_TRAIN_COORDINATOR_FILE: join(dir, "absent.token") };
+  delete env.KALCODE_TRAIN_COORDINATOR;
+  const cli = spawnSync(process.execPath, [fileURLToPath(new URL("./train.mjs", import.meta.url)), "build"], {
+    encoding: "utf8",
+    env,
+    windowsHide: true,
+  });
+  assert.notEqual(cli.status, 0);
+  assert.match(cli.stdout + cli.stderr, /train\.mjs build is for the WS-1 merge coordinator only/);
 });
