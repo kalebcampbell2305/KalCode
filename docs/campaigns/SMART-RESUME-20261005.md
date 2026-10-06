@@ -26,7 +26,7 @@ Review reproduced stale recovery banners after successful resume, false resumabl
 
 Independent reviewer found no remaining blocker in the final TypeScript/UI scope. Native and release verification remain separate facts.
 
-The subsequent real native close/relaunch test exposed a startup dependency missed by the unit fixtures: a durable provider session was reported non-resumable while the process-local thread adapter registry was empty. The persisted session and shutdown classification were intact. Session reads now use existing single-flight installation detection and synchronize the canonical adapter registry before summarizing. This runs off the UI thread, skips authentication probes and reuses cached results. Two native regressions pass; final native restart remains a separate gate.
+The subsequent real native close/relaunch test exposed a startup dependency missed by the unit fixtures: a durable provider session was reported non-resumable while the process-local thread adapter registry was empty. The persisted session and shutdown classification were intact. Session reads now use existing single-flight installation detection and synchronize the canonical adapter registry before summarizing. This runs off the UI thread, skips authentication probes and reuses cached results. Two native regressions and the final real restart test pass.
 
 Review also reproduced a late-availability gap after transient detection failure. Provider events now refresh pane summaries; automatic recovery admits newly eligible IDs once, and a real manual Continue click retains intent for late providers. Failed launches require explicit retry. Root reproof passed 26 focused tests and all five rendered recovery flows.
 
@@ -48,9 +48,11 @@ The combined layout-retry review additionally found that interim fallback intera
 - Native context-source tests: 3 passed; fresh identity test: 1 passed; restart classification test: 1 passed. Neighboring create, pause/resume and resource-admission tests passed.
 - Rendered recovery suite: 5 passed, including Settings persistence, manual continuation, unsupported resume, failed-load retry, and actual Custom fresh-session launch. Accessibility check found no serious/critical violations on the recovery surface. Screenshots were visually inspected.
 - Updated Close/Dock flows: 3 targeted rendered tests passed.
+- Final native release-binary restart test at `82fb3b5d8014761b394a2e67778c7907db188c12`: 1/1 passed in 37.4 seconds. The first restart required manual Continue and resumed one exact native session once; New Agent created a distinct fresh session; the actual Settings toggle enabled a second restart that automatically resumed both distinct sessions exactly once. Layout IDs, names, focus, Browser ID/URL, stopped/closed absence, completed command history and final zero owned processes were verified. The synthetic native screenshot and receipt were inspected by the integration owner.
+- Queued PR #287 was integrated into the feature branch with the combined controller and its original retry regression retained: 36 TypeScript tests and 3 native regressions passed; typecheck and Biome passed. This integration preserves the other terminal, workspace and pin persistence repairs.
 - `cargo fmt --all -- --check` and `git diff --check`: pass.
 
-The counts above are receipts for distinct commands, not an aggregate unique-test count. Test fixtures use isolated fake providers; no paid provider call or owner credential mutation was required. Native restart, merge, signed packages, updater availability and production receipt are not claimed by these offline receipts.
+The counts above are receipts for distinct commands, not an aggregate unique-test count. Test fixtures use isolated fake providers; no paid provider call or owner credential mutation was required. The native restart receipt proves the feature on Windows. Main integration, signed packages, macOS execution, updater availability and production delivery remain separate release facts and are not claimed here.
 
 ## Compatibility and rollback
 
