@@ -1,7 +1,7 @@
 /* The canvas narrows (rails open, small windows): the label folds into the icon, like Code's others,
    and on the narrowest canvas the button gives its room to the work controls (Unified Memory stays
    one click away in More and the command palette). */
-@container code (max-width: 38rem) {
+@container code (max-width: 60rem) {
   .triggerLabel {
     display: none;
   }
