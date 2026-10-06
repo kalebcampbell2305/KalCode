@@ -48,12 +48,16 @@ fn completed_guarded_probes_retire_jobs_and_keep_runtime_state_bounded() {
         cwd: None,
         env: BTreeMap::new(),
     };
+    // This test proves retirement and boundedness, not spawn latency: 64 sequential spawns on a
+    // loaded gate machine can each take seconds, so the per-probe budget only guards against a hang.
+    // The budget is this caller's argument; product probes keep their own timeouts.
+    let probe_budget = Duration::from_secs(30);
     for _ in 0..64 {
         let job = guardian
             .prepare_job("bounded-probe")
             .expect("prepared probe");
-        let output = run_probe_guarded(&spec, job, Duration::from_secs(2), true, 4096)
-            .expect("guarded probe");
+        let output =
+            run_probe_guarded(&spec, job, probe_budget, true, 4096).expect("guarded probe");
         assert!(output.status.success());
         assert_eq!(
             runtime
