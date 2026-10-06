@@ -78,6 +78,8 @@ A separate rendered acceptance test restored the 32-pane maximum with all provid
 
 ## Compatibility and rollback
 
+An integration review of the separately queued Live Update feature exposed one standalone draft-ordering defect: successful New Thread creation retained its submitted draft while an optional remembered-account write was pending. A deterministic test reproduced the retained text. Clearing the successful draft now occurs synchronously before that optional await, retaining the existing exact-text comparison and failed-start behavior. The new test plus all neighboring NewThread and draft tests passed (23/23, zero skipped); desktop typecheck, repository Biome and diff checks passed. This changes no native restart, process, credential or schema path. Live Update's account handoff, confirmed-send reload hold and renderer-recovery state remain owned by PR #293; they are not silently included in this feature's proof.
+
 No database migration or credential-store change. Protocol additions have defaults for older payloads. Local records are versioned. Drafts contain user-entered plaintext in the local account-scoped WebView profile; they are not an encrypted credential vault. A crash before a native transaction commits can still lose that transaction; URL updates no longer wait for the layout debounce.
 
 Rollback uses a normal revert on the current integration head, preserving subsequent work and existing native databases. Production is unchanged until publication. The original working checkout, owner processes and owner credentials were left untouched.

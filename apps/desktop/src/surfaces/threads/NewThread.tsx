@@ -408,6 +408,18 @@ function NewThreadForm({
         ? { account: providerAccount, workspace, providerName: provider.displayName }
         : null;
     const finish = async (thread: ThreadSummary) => {
+      // Creation succeeded independently of saving an optional account preference. Clear now
+      // so closing or reloading during that write cannot recover an already submitted task.
+      if (thread.status !== "failed") {
+        const result = persistedTask.clearSubmitted(submittedTask);
+        if (result.problem) {
+          toast.show({
+            tone: "danger",
+            title: "Thread started, but its saved task wasn't cleared",
+            description: "It may reappear after restart. Delete it before starting another thread.",
+          });
+        }
+      }
       // Remembered only once the thread was created and its provider started: a refused create
       // (onError) or a failed start writes no workspace default.
       if (rememberFor && thread.status !== "failed") {
@@ -422,16 +434,6 @@ function NewThreadForm({
             tone: "danger",
             title: "Workspace default wasn't saved",
             description: toKalCodeError(err).message,
-          });
-        }
-      }
-      if (thread.status !== "failed") {
-        const result = persistedTask.clearSubmitted(submittedTask);
-        if (result.problem) {
-          toast.show({
-            tone: "danger",
-            title: "Thread started, but its saved task wasn't cleared",
-            description: "It may reappear after restart. Delete it before starting another thread.",
           });
         }
       }
