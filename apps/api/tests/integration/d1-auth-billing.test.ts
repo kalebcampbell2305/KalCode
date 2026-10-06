@@ -1127,6 +1127,44 @@ describe("D1 billing authority", () => {
     expect(await store.applySubscription(snapshot, second, "2026-09-25T12:00:02.000Z")).toBe(true);
   });
 
+  it("keeps a renewing subscription paid past its period end until the renewal grace runs out", async () => {
+    await db
+      .prepare("INSERT INTO accounts (id, email, email_verified_at, created_at) VALUES (?1, ?2, ?3, ?3)")
+      .bind("acct_renewal_grace", "renewal-grace@example.com", T0)
+      .run();
+    const store = d1BillingStore(db);
+    await store.reserveCustomer({ accountId: "acct_renewal_grace", idempotencyKey: "customer_renewal_grace", now: T0 });
+    expect(await store.bindCustomer("acct_renewal_grace", "cus_renewal101", T0)).toBe(true);
+    const lease = await store.acquireLease({
+      subscriptionId: "sub_renewal101",
+      token: "lease_renewal_0000001",
+      now: "2026-09-25T12:00:01.000Z",
+      expiresAt: "2026-09-25T12:00:31.000Z",
+    });
+    if (!lease) throw new Error("test lease missing");
+    const periodEnd = "2026-10-25T12:00:00.000Z";
+    expect(
+      await store.applySubscription(
+        {
+          id: "sub_renewal101",
+          customerId: "cus_renewal101",
+          status: "active",
+          tier: "pro",
+          periodStart: T0,
+          periodEnd,
+        },
+        lease,
+        "2026-09-25T12:00:02.000Z",
+      ),
+    ).toBe(true);
+    const at = (offsetMs: number) => new Date(Date.parse(periodEnd) + offsetMs);
+    // The renewal webhook has not landed yet: the account stays paid just after period end.
+    expect((await resolveEntitlement(d1Store(db), "acct_renewal_grace", at(1_000))).tier).toBe("pro");
+    expect((await resolveEntitlement(d1Store(db), "acct_renewal_grace", at(71 * 3_600_000))).tier).toBe("pro");
+    // A renewal that never arrives ends the grant once the 72-hour grace is over.
+    expect((await resolveEntitlement(d1Store(db), "acct_renewal_grace", at(73 * 3_600_000))).tier).toBe("free");
+  });
+
   it("revokes a subscription grant when Stripe's current snapshot is inactive", async () => {
     const store = d1BillingStore(db);
     const lease = await store.acquireLease({

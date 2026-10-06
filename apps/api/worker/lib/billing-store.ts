@@ -31,6 +31,19 @@ export interface BillingEventClaim {
 
 const ACTIVE = new Set(["active", "trialing"]);
 
+/**
+ * How long an active/trialing subscription's billing grant outlives Stripe's current period end.
+ * Stripe renews at period end, but the renewal webhook can land minutes to hours later; without
+ * this grace the grant expires first and a paying account is signed a 7-day Free document. Any
+ * non-active snapshot (canceled, past_due, unpaid, …) still revokes the grant immediately.
+ */
+export const BILLING_GRANT_RENEWAL_GRACE_MS = 72 * 60 * 60 * 1000;
+
+/** The billing grant's `expires_at` for an active subscription period ending at `periodEnd`. */
+export function billingGrantExpiresAt(periodEnd: string): string {
+  return new Date(Date.parse(periodEnd) + BILLING_GRANT_RENEWAL_GRACE_MS).toISOString();
+}
+
 export function d1BillingStore(db: D1Database) {
   return {
     async reserveCustomer(input: {
@@ -397,6 +410,7 @@ export function d1BillingStore(db: D1Database) {
         return false;
       }
       const active = ACTIVE.has(snapshot.status);
+      const grantExpiresAt = billingGrantExpiresAt(snapshot.periodEnd);
       const fence = `EXISTS (SELECT 1 FROM billing_sync_leases l
         WHERE l.stripe_subscription_id = ?1 AND l.lease_token = ?2 AND l.version = ?3 AND l.expires_at > ?4)`;
       const statements: D1PreparedStatement[] = [
@@ -446,7 +460,7 @@ export function d1BillingStore(db: D1Database) {
               `UPDATE entitlement_grants SET expires_at = ?5
                WHERE billing_subscription_id = ?1 AND tier = ?6 AND revoked_at IS NULL AND ${fence}`,
             )
-            .bind(lease.subscriptionId, lease.token, lease.version, now, snapshot.periodEnd, snapshot.tier),
+            .bind(lease.subscriptionId, lease.token, lease.version, now, grantExpiresAt, snapshot.tier),
           db
             .prepare(
               `INSERT INTO entitlement_grants
@@ -464,7 +478,7 @@ export function d1BillingStore(db: D1Database) {
               customer.account_id,
               snapshot.tier,
               snapshot.periodStart,
-              snapshot.periodEnd,
+              grantExpiresAt,
             ),
         );
         statements.push(
