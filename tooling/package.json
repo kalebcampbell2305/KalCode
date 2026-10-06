@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test \"../apps/desktop/tests/perf/**/*.test.ts\" \"*.test.mjs\" \"release/*.test.mjs\" \"merge-train/*.test.mjs\""
+    "test": "node --test \"../apps/desktop/tests/perf/**/*.test.ts\" \"*.test.mjs\" \"release/*.test.mjs\" \"merge-train/*.test.mjs\" \"community/discord/*.test.mjs\""
   },
   "devDependencies": {
     "@resvg/resvg-js": "2.6.2",

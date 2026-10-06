@@ -825,6 +825,26 @@ THE WEBSITE MUST BE BEAUTIFUL, DYNAMIC, FAST, SIMPLE, AND UNMISTAKABLY KALCODE."
 - **Truth:** a demo surface whose `PLAN_FEATURE_GROUPS` entry is `coming_soon` carries a Coming soon tag automatically; flipping the entry to `available` (after production verification) removes it. Sample data is fictional sample data, never real user information.
 - **Fast:** the demo script loads only near the viewport or on a Try control, honours reduced motion, pauses off-screen, and needs no inline styles (strict CSP).
 
+## Permanent community standard (owner directive 2026-10-05)
+
+> "KALCODE COMMUNITY SURFACES SHOULD FOLLOW THE SAME PRODUCT STANDARD AS KALCODE ITSELF: SIMPLE. BEAUTIFUL. PROFESSIONAL. HIGH-SIGNAL. SAFE. EASY TO NAVIGATE. DO NOT CREATE CLUTTER. DO NOT MAKE USERS HUNT. MAKE SUPPORT, FEEDBACK, UPDATES, AND COMMUNITY EASY TO FIND. THE KALCODE DISCORD SHOULD FEEL LIKE THE OFFICIAL COMMUNITY HOME FOR A SERIOUS TECHNOLOGY PRODUCT."
+
+- **Scope:** the Discord, social profiles, launch/community posts, and any future forum or community surface.
+- **The Discord is code.**
+  - It is declared in `tooling/community/discord/server.mjs` and reconciled with `kc-discord.mjs apply`.
+  - Change the declaration and re-apply. Never hand-configure the server, which would drift from the repo.
+- **Small and active over big and empty.** Add a channel only when activity justifies it. Prefer forums for support, bug reports and feature requests. `#announcements` is major news only; every build goes to `#changelog`.
+- **Truthful.**
+  - `#roadmap` is generated from `PLAN_FEATURE_GROUPS`, the same source as the website.
+  - `#changelog` comes from `docs/releases`.
+  - Never present a coming-soon or publicly unavailable feature as available (`PUBLICLY_UNAVAILABLE`), and never promise a date that isn't confirmed.
+- **Brand:** the current mascot and electric blue on graphite. There is no retired branding and no gamer-style clutter.
+- **Safe.**
+  - Never ask members for passwords, API keys, provider tokens or private code. AutoMod blocks secrets for everyone.
+  - Bot tokens and webhook URLs live only in `~/.kalcode/discord/` or the environment, never in the repo, logs or chat.
+  - Plan roles may only ever come from server-side entitlement verification (Discord Linked Roles, see the tool's README), never by hand, and never expose Stripe or customer data.
+- **After each release,** post it: `node tooling/community/discord/kc-discord.mjs changelog <version+build> --post`.
+
 ## Permanent KalCode pricing and entitlements (owner directive 2026-10-04)
 
 This section REPLACES every older conflicting pricing/entitlement rule and is authoritative for BOTH Claude Code and Codex (`CLAUDE.md` imports this file).
