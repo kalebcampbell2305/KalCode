@@ -1136,7 +1136,60 @@ impl<'a> Cx<'a> {
                     self.note(format!("KalCode couldn't read the host of {text}."));
                 } else {
                     self.add(S::FilesystemOutsideWorkspace);
+                    self.file_url(text);
                 }
+            }
+        }
+    }
+
+    /// A `file:` URL reads a local file (`curl file:///home/me/.ssh/id_rsa`): judge the file it
+    /// names, percent-decoded the way the program will open it.
+    fn file_url(&mut self, text: &str) {
+        let Ok(parsed) = url::Url::parse(text.trim()) else {
+            self.opaque("names a file URL KalCode can't interpret");
+            return;
+        };
+        match parsed.to_file_path() {
+            Ok(path) => self.path(&Word::plain(&path.to_string_lossy()), Access::Read),
+            Err(()) => {
+                let decoded = percent_decode(parsed.path());
+                if paths::looks_like_credentials(&decoded) {
+                    self.add(S::CredentialsAccess);
+                    self.note(format!("{text} may contain credentials."));
+                }
+            }
+        }
+    }
+
+    /// Files a cloud or messaging CLI uploads, attaches or copies (`gh gist create key.pem`,
+    /// `gsutil cp ~/.ssh/id_rsa gs://b`, `az storage blob upload --file .env`): credentials
+    /// still ask. Only the credential check is added; the CLI's own scopes are unchanged.
+    fn credential_args(&mut self, args: &[Word]) {
+        for arg in args {
+            let text = arg.text.trim();
+            let value = if arg.is_flag() {
+                match text.split_once('=') {
+                    Some((_, value)) => value,
+                    None => continue,
+                }
+            } else {
+                text
+            };
+            // `@file` and `name=@file` read a file's contents (vault, httpie-style payloads).
+            let value = value
+                .strip_prefix('@')
+                .or_else(|| value.split_once("=@").map(|(_, file)| file))
+                .unwrap_or(value);
+            if value.is_empty()
+                || value.contains("://")
+                || !(looks_like_path(value) || paths::looks_like_credentials(value))
+            {
+                continue;
+            }
+            let info = self.resolve(value);
+            if info.credentials {
+                self.add(S::CredentialsAccess);
+                self.note(format!("{} may contain credentials.", info.display));
             }
         }
     }
@@ -3699,6 +3752,7 @@ impl<'a> Cx<'a> {
     }
 
     fn cloud_cli(&mut self, n: &str, args: &[Word], positional: &[String], secrets: bool) {
+        self.credential_args(args);
         let has_word = |words: &[&str]| positional.iter().any(|p| words.contains(&p.as_str()));
         let any_prefix = |prefixes: &[&str]| {
             positional
@@ -4853,6 +4907,27 @@ fn dash_normalize(text: &str) -> String {
             _ => c,
         })
         .collect()
+}
+
+/// Decodes `%XX` escapes; anything malformed is kept as written.
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |b: u8| char::from(b).to_digit(16);
+        if bytes[i] == b'%'
+            && let (Some(&hi), Some(&lo)) = (bytes.get(i + 1), bytes.get(i + 2))
+            && let (Some(hi), Some(lo)) = (hex(hi), hex(lo))
+        {
+            out.push((hi * 16 + lo) as u8);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn looks_like_path(text: &str) -> bool {
