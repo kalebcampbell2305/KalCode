@@ -304,6 +304,8 @@ export const AgentCard = memo(function AgentCard({
       aria-busy={pendingAction ? true : undefined}
       onClick={onCardClick}
     >
+      {/* Decoration on inert elements, not pseudo-elements (see AgentCard.module.css). */}
+      <span className={styles.rail} aria-hidden="true" />
       <header className={styles.top}>
         <span className={styles.signal} data-tone={archived ? "muted" : tone} aria-hidden="true" />
         {accountLabel ? (
@@ -663,6 +665,7 @@ export const AgentCard = memo(function AgentCard({
           </span>
         </footer>
       )}
+      <span className={styles.horizon} aria-hidden="true" />
     </article>
   );
 }, sameAgentCardProps);

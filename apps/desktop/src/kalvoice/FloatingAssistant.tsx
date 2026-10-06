@@ -28,7 +28,7 @@ import {
 } from "./panelGeometry.ts";
 import { pushToTalkReadiness } from "./readiness.ts";
 import { displayKey } from "./shortcutModel.ts";
-import { KalVoiceWordmark, Orb, Waveform } from "./Visuals.tsx";
+import { KalVoiceWordmark, Orb, VoiceRoute, Waveform } from "./Visuals.tsx";
 
 const DOCK_CHOICES: PanelAnchor[] = [
   "top_left",
@@ -318,6 +318,7 @@ export function FloatingAssistant() {
       data-dragging={drag ? "true" : undefined}
       data-anchor={panel.anchor}
       aria-label="KalVoice widget"
+      data-kalvoice-widget=""
       style={{ left: position.left, top: position.top }}
       // A finished result stays while the person points at or focuses it (it may be in use).
       onPointerEnter={() => setHeld(true)}
@@ -327,6 +328,7 @@ export function FloatingAssistant() {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setHeld(false);
       }}
     >
+      <VoiceRoute origin={ref} />
       {/* Collapsed to the orb, the push-to-talk bar announces activity instead (no double reading). */}
       {view === "orb" ? null : (
         <p className="visually-hidden" role="status" aria-live="polite">
@@ -354,6 +356,8 @@ export function FloatingAssistant() {
       ) : (
         <div className={styles.body}>
           <div className={styles.card}>
+            {/* The lit top edge on an inert element, not ::before (see FloatingAssistant.module.css). */}
+            <span className={styles.cardEdge} aria-hidden="true" />
             <header className={styles.header} {...dragProps}>
               <button
                 type="button"

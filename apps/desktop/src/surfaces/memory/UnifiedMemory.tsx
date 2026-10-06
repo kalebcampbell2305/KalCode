@@ -5,7 +5,7 @@ import {
   type MemoryRecord,
   type MemorySettings,
 } from "@kalcode/protocol";
-import { Button, IconButton } from "@kalcode/ui/components";
+import { Button, EmptyState, IconButton } from "@kalcode/ui/components";
 import {
   ArrowLeft,
   BrainCircuit,
@@ -47,6 +47,7 @@ const SOURCES = {
   handoff: "Agent handoff",
   merge: "Merged change",
 };
+const sameJson = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 const blank = (): MemoryInput => ({
   category: "project",
   title: "",
@@ -92,12 +93,20 @@ export function UnifiedMemory() {
         <WorkspaceMemory key={active.id} workspaceId={active.id} name={active.name} />
       ) : (
         <div className={styles.empty}>
-          <FolderOpen size={36} />
-          <h2>A home for your project knowledge</h2>
-          <p>Open a project to keep its decisions, conventions and useful context together.</p>
-          <Button variant="primary" onClick={() => void openFolder()}>
-            Open project
-          </Button>
+          <EmptyState
+            className={styles.emptyWell}
+            art={<FolderOpen />}
+            title="A home for your project knowledge"
+            headingLevel={2}
+            align="center"
+            actions={
+              <Button variant="primary" onClick={() => void openFolder()}>
+                Open project
+              </Button>
+            }
+          >
+            <p>Open a project to keep its decisions, conventions and useful context together.</p>
+          </EmptyState>
         </div>
       )}
     </section>
@@ -130,24 +139,31 @@ function WorkspaceMemory({ workspaceId, name }: { workspaceId: string; name: str
       live.current = false;
     };
   }, []);
+  // Set by the background refresh so its reload stays silent: no spinner, no disabled
+  // buttons, and an error on screen stays until the person acts on it.
+  const background = useRef(false);
   useEffect(() => {
     // Explicit refresh invalidates the local snapshot without polling while editing.
     void revision;
+    const silent = background.current;
+    background.current = false;
     let cancelled = false;
-    setSearching(true);
-    setError("");
+    if (!silent) {
+      setSearching(true);
+      setError("");
+    }
     const timer = window.setTimeout(
       () => {
         Promise.all([client.listUnifiedMemory(workspaceId, query), client.unifiedMemoryPreferences(workspaceId)])
           .then(([items, preferences]) => {
             if (cancelled) return;
-            setRecords(items);
-            setSettings(preferences);
+            setRecords((current) => (silent && sameJson(current, items) ? current : items));
+            setSettings((current) => (silent && sameJson(current, preferences) ? current : preferences));
             setLoaded(true);
             setSearching(false);
           })
           .catch((cause: unknown) => {
-            if (!cancelled) {
+            if (!cancelled && !silent) {
               const failure = toKalCodeError(cause);
               setError(failure.message);
               setPlanRequired(failure.code === "memory_plan_required");
@@ -167,6 +183,7 @@ function WorkspaceMemory({ workspaceId, name }: { workspaceId: string; name: str
   useEffect(() => {
     const refresh = () => {
       if (document.visibilityState === "visible" && !draft && !saving && !searching) {
+        background.current = true;
         setRevision((value) => value + 1);
       }
     };

@@ -81,7 +81,7 @@ describe.each(["stable", "development"] as const)("%s build", (channel) => {
     await goTo(user, "KalVoice");
     const examples = within(await screen.findByRole("list", { name: "Examples" }));
     const commandsCopy = await screen.findByText(/KalCode acts the moment you let go/);
-    expect(examples.getByRole("button", { name: "Open four Codex threads" })).toBeInTheDocument();
+    expect(examples.getByRole("button", { name: "Start three Codex agents" })).toBeInTheDocument();
     expect(commandsCopy.textContent).toMatch(/Open four Codex terminals/);
   });
 

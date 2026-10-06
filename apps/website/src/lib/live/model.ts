@@ -159,6 +159,7 @@ export type Menu =
   | "environment"
   | "history"
   | "notifications"
+  | "more"
   | `plus:${string}`;
 
 export interface Nudge {
@@ -282,7 +283,12 @@ export const SURFACES: readonly { id: Surface; label: string; icon: string; hint
     icon: "code",
     hint: "Where your coding agents run, each in its own terminal.",
   },
-  { id: "dashboard", label: "Dashboard", icon: "dashboard", hint: "Agent Fleet: see every coding agent in one place." },
+  {
+    id: "dashboard",
+    label: "Activity",
+    icon: "activity",
+    hint: "Mission control: what needs you, what's working and what finished.",
+  },
   {
     id: "operations",
     label: "Operations",
@@ -309,6 +315,12 @@ export const SURFACES: readonly { id: Surface; label: string; icon: string; hint
     hint: "Claude Code, Codex, Gemini CLI and Cursor, on your own accounts.",
   },
 ];
+
+/**
+ * The sidebar's primary places, as in the app: Code and Activity, with the Projects list beneath
+ * them. Every other surface sits in the footer's More menu.
+ */
+export const PRIMARY_SURFACES: readonly Surface[] = ["code", "dashboard"];
 
 // ── Agent state: the one model every surface uses ───────────────────────────────────────────
 
@@ -881,6 +893,56 @@ export function focusAgent(state: State, agentId: string) {
 }
 
 /** Needs You: jump to the first agent that is waiting on the visitor. */
+/** One Needs You item, exactly as the app's inbox words it: what happened, why, what next. */
+export interface AttentionItem {
+  agent: string;
+  tone: "waiting" | "failed";
+  source: string;
+  what: string;
+  why: string;
+  action: string;
+}
+
+/** What genuinely needs the visitor: questions, approvals and failures. Ordinary progress never. */
+export function attentionItems(state: State): AttentionItem[] {
+  const items: AttentionItem[] = [];
+  for (const agent of agentsList(state)) {
+    const s = agentState(agent);
+    const source = `${PROVIDER_NAME[agent.provider]} · ${agent.name}`;
+    if (s === "needs_you") {
+      items.push(
+        agent.approval
+          ? {
+              agent: agent.id,
+              tone: "waiting",
+              source,
+              what: "Needs your permission",
+              why: agent.approval.title,
+              action: "Open agent",
+            }
+          : {
+              agent: agent.id,
+              tone: "waiting",
+              source,
+              what: "Asked you a question",
+              why: agent.activity,
+              action: "Open agent",
+            },
+      );
+    } else if (s === "failed") {
+      items.push({
+        agent: agent.id,
+        tone: "failed",
+        source,
+        what: "Failed",
+        why: agent.activity,
+        action: "Open agent",
+      });
+    }
+  }
+  return items;
+}
+
 export function jumpToNeeds(state: State): boolean {
   const agent = agentsList(state).find(needsYou);
   if (!agent) return false;
@@ -1467,12 +1529,7 @@ export function tick(state: State): string[] {
 // ── KalVoice ────────────────────────────────────────────────────────────────────────────────
 
 /** Phrases the shipped KalVoice screen suggests (apps/desktop KalVoice surface). */
-export const VOICE_PHRASES = [
-  "Open Dashboard",
-  "Open four Codex terminals",
-  "What needs permission?",
-  "Go to settings",
-];
+export const VOICE_PHRASES = ["Open Activity", "Open four Codex terminals", "What needs permission?", "Go to settings"];
 
 const NUMBERS: Record<string, number> = {
   one: 1,
@@ -1522,6 +1579,11 @@ export function runVoice(state: State, phrase: string): string {
     const first = waiting[0] as Agent;
     return `${first.name} needs you: ${first.activity.charAt(0).toLowerCase()}${first.activity.slice(1)}.`;
   }
+  if (/\bdashboard\b|mission control/.test(p)) {
+    // The app's Dashboard is now Activity; the old word still gets you there.
+    go(state, "dashboard");
+    return "Opened Activity.";
+  }
   if (/fleet|my agents|show (the )?agents/.test(p)) {
     go(state, "dashboard");
     return "Here's your Agent Fleet.";
@@ -1546,5 +1608,5 @@ export function runVoice(state: State, phrase: string): string {
     go(state, "settings");
     return "Opened Settings.";
   }
-  return "In this demo, try “Open Dashboard” or “Open four Codex terminals”.";
+  return "In this demo, try “Open Activity” or “Open four Codex terminals”.";
 }

@@ -5,10 +5,15 @@
   max-height: min(28rem, var(--radix-dropdown-menu-content-available-height));
   padding: var(--space-1);
   overflow-y: auto;
-  border: 1px solid var(--color-border-strong);
+  /* Floating glass over the atmosphere: a lit top edge, blurred depth behind (menus are small,
+     so the blur is cheap), the surface step underneath for contrast. */
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius-card);
-  background: var(--panel-sheen), var(--color-surface-3);
-  box-shadow: var(--shadow-xl);
+  background: var(--panel-sheen), var(--glass-bg);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.06),
+    var(--shadow-xl);
+  backdrop-filter: blur(var(--blur-glass)) saturate(1.3);
   transform-origin: var(--radix-dropdown-menu-content-transform-origin);
 }
 
@@ -35,9 +40,12 @@
   user-select: none;
 }
 
+/* The highlighted item: a selected wash with a thin electric edge on its leading side. */
 .item[data-highlighted] {
   background: var(--color-surface-selected);
-  box-shadow: inset 0 0 0 1px var(--color-border-lit-soft);
+  box-shadow:
+    inset 2px 0 0 var(--color-accent),
+    inset 0 0 0 1px var(--color-border-lit-soft);
   color: var(--color-text);
 }
 
@@ -52,6 +60,9 @@
 
 .danger[data-highlighted] {
   background: var(--color-danger-soft);
+  box-shadow:
+    inset 2px 0 0 var(--status-failed),
+    inset 0 0 0 1px var(--status-failed-line);
   color: var(--color-danger-text);
 }
 
@@ -118,12 +129,19 @@
 .separator {
   height: 1px;
   margin: var(--space-1) calc(-1 * var(--space-1));
-  background: var(--color-border);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--color-border-strong) 18%,
+    var(--color-border-strong) 82%,
+    transparent
+  );
 }
 
+/* Opening depth: the menu rises out of its trigger. */
 @keyframes appear {
   from {
     opacity: 0;
-    transform: scale(0.97);
+    transform: translateY(-2px) scale(0.97);
   }
 }

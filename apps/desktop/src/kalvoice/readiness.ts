@@ -133,7 +133,10 @@ export function waitingReason(reason: string | undefined): string {
 export function retryWhen(seconds: number | undefined): string {
   if (seconds === undefined) return "automatically";
   if (seconds < 90) return "automatically in about a minute";
-  return `automatically in about ${Math.round(seconds / 60)} minutes`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 55) return `automatically in about ${minutes} minutes`;
+  const hours = Math.round(minutes / 60);
+  return hours === 1 ? "automatically in about an hour" : `automatically in about ${hours} hours`;
 }
 
 /** Why automatic provisioning stopped for good (until KalCode restarts), in owner terms. */

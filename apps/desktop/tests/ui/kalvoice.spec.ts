@@ -1,5 +1,5 @@
-import AxeBuilder from "@axe-core/playwright";
 import { expect, type Locator, type Page, test } from "@playwright/test";
+import { expectNoSeriousA11yViolations } from "./a11y.ts";
 import { expectApprovalItems, goTo } from "./nav.ts";
 
 /**
@@ -42,19 +42,6 @@ async function openKalVoicePage(page: Page) {
 
 function pageRequestBox(page: Page): Locator {
   return page.getByRole("main").getByRole("textbox", { name: "Type a request for KalVoice" });
-}
-
-async function expectNoSeriousA11yViolations(page: Page) {
-  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze();
-  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
-  expect(
-    serious,
-    JSON.stringify(
-      serious.map((v) => ({ id: v.id, nodes: v.nodes.map((n) => n.target) })),
-      null,
-      2,
-    ),
-  ).toEqual([]);
 }
 
 async function widgetBox(page: Page) {
@@ -519,14 +506,24 @@ test.describe("KalVoice voice widget", () => {
     await expect(live).toHaveText("KalVoice: Done. Opened Settings.");
   });
 
-  test("orb motion follows the motion setting", async ({ page }) => {
+  test("orb motion follows the motion setting, and an idle orb never loops", async ({ page }) => {
     // The suite runs with prefers-reduced-motion: reduce.
     await open(page);
-    const halo = widget(page).locator("span[data-phase] > span").first();
+    const orb = widget(page).locator("span[data-phase]").first();
+    const halo = orb.locator(":scope > span").first();
+    const ring = orb.locator(":scope > span").nth(1);
     await expect(halo).toHaveCSS("animation-name", "none");
     await page.getByRole("button", { name: "Settings" }).click();
     await page.getByRole("radiogroup", { name: "Motion" }).getByRole("radio", { name: "Full" }).click();
-    await expect(halo).not.toHaveCSS("animation-name", "none");
+    // Idle stays still even with full motion: KalVoice does no per-frame work while it waits.
+    await expect(orb).toHaveAttribute("data-phase", "idle");
+    await expect(halo).toHaveCSS("animation-name", "none");
+    await expect(ring).toHaveCSS("animation-name", "none");
+    // Listening moves (with full motion only).
+    await page.keyboard.down("F8");
+    await expect(orb).toHaveAttribute("data-phase", "listening");
+    await expect(ring).not.toHaveCSS("animation-name", "none");
+    await page.keyboard.up("F8");
   });
 });
 

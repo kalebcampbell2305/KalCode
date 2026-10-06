@@ -98,6 +98,24 @@ import {
   followUpChoice,
   submitComposer,
 } from "./voiceDirectives.ts";
+import { routeVoice, type VoiceRouteKind } from "./voiceRoute.ts";
+
+/** Directives that move the person somewhere, and where their result lands (voiceRoute.ts). */
+const VOICE_ROUTE_OF: Partial<Record<UiDirective["kind"], VoiceRouteKind>> = {
+  navigate: "surface",
+  filter_agents: "surface",
+  open_workspace: "pane",
+  open_terminal: "pane",
+  open_thread: "pane",
+  open_agent: "pane",
+  open_provider_panes: "pane",
+  control_pane: "pane",
+  control_browser: "pane",
+  split_pane: "pane",
+  arrange_panes: "pane",
+  focus_previous: "pane",
+  show_approvals: "focus",
+};
 
 export interface HistoryItem {
   requestId: string;
@@ -773,6 +791,9 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           });
           break;
       }
+      // Show where the command landed (a comet from the orb, the destination lit briefly).
+      const route = directive ? VOICE_ROUTE_OF[directive.kind] : undefined;
+      if (route) routeVoice(route, scope.signal);
     },
     [navigate, composerDeps, client],
   );
@@ -1055,7 +1076,11 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       const deps = {
         client: operationsClient,
         navigate: () => navigate("operations"),
-        focus: (target: OperationsVoiceTarget) => focusOperationsTarget(target, { signal }),
+        focus: (target: OperationsVoiceTarget) =>
+          focusOperationsTarget(target, { signal }).then((focused) => {
+            if (focused) routeVoice("focus", signal);
+            return focused;
+          }),
         signal,
         claim: () => meterUiCommand(scope, "operations", input),
       };

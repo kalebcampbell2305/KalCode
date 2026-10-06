@@ -1104,12 +1104,16 @@ fn interrupt_cannot_interleave_between_claim_and_terminal_write() {
     ));
 }
 
+/// The claim and acknowledged write hold only the target's lifecycle lock: main-thread pane
+/// commands (resize, replacement) never wait on them, and the handoff still lands only on the
+/// exact instance that was resolved, never on a replacement registered meanwhile.
 #[test]
-fn registry_replacement_cannot_redirect_a_claimed_handoff() {
+fn registry_stays_responsive_and_replacement_cannot_redirect_a_claimed_handoff() {
     let _recursive_test_process_slot = recursive_test_process_slot();
     let original = Rig::new_for("claude-code");
     let replacement = Rig::new_for("claude-code");
     let delivered = original.observer_for(HANDOFF_OUTPUT);
+    let redirected = replacement.observer_for(HANDOFF_OUTPUT);
     original.establish_ready_boundary();
 
     let panes = original.panes.clone();
@@ -1131,17 +1135,19 @@ fn registry_replacement_cannot_redirect_a_claimed_handoff() {
     let panes = original.panes.clone();
     let thread_id = original.thread_id.clone();
     let replacement_shared = replacement.shared.clone();
-    let (swap_done_tx, swap_done_rx) = mpsc::channel();
-    let swap = std::thread::spawn(move || {
+    let (registry_done_tx, registry_done_rx) = mpsc::channel();
+    let registry = std::thread::spawn(move || {
+        panes.resize(&thread_id, 100, 30).expect("resize");
         panes.insert(&thread_id, replacement_shared);
-        swap_done_tx.send(()).expect("swap complete");
+        registry_done_tx
+            .send(())
+            .expect("registry commands complete");
     });
-    assert!(
-        swap_done_rx
-            .recv_timeout(Duration::from_millis(100))
-            .is_err(),
-        "registry replacement waits for the exact-instance claim/write"
-    );
+    registry_done_rx
+        .recv_timeout(WAIT)
+        .expect("resize and replacement do not wait for the held claim/write");
+    registry.join().expect("registry thread");
+
     release_tx.send(()).expect("release delivery");
     delivery
         .join()
@@ -1150,8 +1156,10 @@ fn registry_replacement_cannot_redirect_a_claimed_handoff() {
     delivered
         .recv_timeout(WAIT)
         .expect("original fixture output");
-    swap_done_rx.recv_timeout(WAIT).expect("registry swap");
-    swap.join().expect("swap thread");
+    assert!(
+        redirected.recv_timeout(Duration::from_millis(300)).is_err(),
+        "the replacement never receives the claimed handoff"
+    );
     assert_eq!(
         original
             .panes

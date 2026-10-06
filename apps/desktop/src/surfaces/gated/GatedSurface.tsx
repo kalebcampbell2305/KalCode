@@ -19,6 +19,8 @@ export function GatedSurface({ id }: { id: SurfaceId }) {
   return (
     <Page title={meta.label}>
       <section className={styles.hero} data-surface={id} aria-labelledby={`gated-${id}-summary`}>
+        {/* The lit top edge on an inert element, not ::before (see GatedSurface.module.css). */}
+        <span className={styles.heroEdge} aria-hidden="true" />
         <div className={styles.copy}>
           <div className={styles.head}>
             <span className={styles.iconTile} aria-hidden="true">

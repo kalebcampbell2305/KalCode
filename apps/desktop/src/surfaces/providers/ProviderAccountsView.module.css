@@ -314,6 +314,11 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* The accounts table has room for a readable rail. */
+.cellUsage {
+  --usage-meter-w: 4.5rem;
+}
+
 /* Provider usage: the canonical meter, then the plan as a quiet outlined tag. */
 .usageLine {
   display: flex;
@@ -337,6 +342,17 @@
   font-weight: var(--type-label-weight);
   line-height: 1.4;
   white-space: nowrap;
+}
+
+/* Why there is no number can be a sentence ("Usage appears after the first agent run"): let it
+   wrap to two lines instead of cutting it off mid-word. */
+.cellUsage > .sub {
+  display: -webkit-box;
+  white-space: normal;
+  text-wrap: pretty;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 
 .sub[data-tone="stale"] {

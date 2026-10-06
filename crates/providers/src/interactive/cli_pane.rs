@@ -367,15 +367,26 @@ impl InteractiveCliProvider {
                         .as_ref()
                         .map(ManagedProfiles::probe_guardian)
                         .transpose()?;
-                    let models =
-                        crate::cursor::discover_models_guarded(&self.env, guardian.as_ref())?;
-                    if !models.iter().any(|available| available.id == model) {
-                        return Err(ProviderError::Refused {
-                            code: "cursor_model_unavailable".into(),
-                            message: format!(
-                                "Model unavailable for this Cursor account: {model}. Refresh available models or use /model in the Cursor terminal."
-                            ),
-                        });
+                    // Refuse only a model Cursor positively lists as unavailable. When model
+                    // discovery itself fails, launch with `--model` and let Cursor validate it.
+                    match crate::cursor::discover_models_guarded(&self.env, guardian.as_ref()) {
+                        Ok(models) if !models.iter().any(|available| available.id == model) => {
+                            return Err(ProviderError::Refused {
+                                code: "cursor_model_unavailable".into(),
+                                message: format!(
+                                    "Model unavailable for this Cursor account: {model}. Refresh available models or use /model in the Cursor terminal."
+                                ),
+                            });
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            tracing::warn!(
+                                event = "pane.cursor_model_discovery_failed",
+                                provider_id = self.cli.id(),
+                                error = %error,
+                                "launching with the selected model; Cursor validates it"
+                            );
+                        }
                     }
                 }
                 if let Some(bridge) = &self.bridge {

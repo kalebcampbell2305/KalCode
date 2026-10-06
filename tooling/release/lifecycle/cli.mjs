@@ -127,7 +127,19 @@ export async function lifecycleMain(argv, io = {}) {
       worker: process.env.RUNNER_NAME,
       plan: g.plan,
     });
-    const outcome = await runGates(g.plan, { repo: g.top, log, keepGoing: true, jobs, evidence, capacity, report });
+    // On the gate pool, the browser-driven desktop suites never overlap across its jobs (machine-lock.mjs).
+    const machineLock =
+      capacity && process.env.KALCODE_GATE_LOCK_DIR ? { dir: process.env.KALCODE_GATE_LOCK_DIR } : undefined;
+    const outcome = await runGates(g.plan, {
+      repo: g.top,
+      log,
+      keepGoing: true,
+      jobs,
+      evidence,
+      capacity,
+      report,
+      machineLock,
+    });
     const receipt = recordGate(git, g, outcome);
     if (outcome.status === "PASS" && g.clean && !g.partial && !receipt) {
       outcome.status = "FAIL";

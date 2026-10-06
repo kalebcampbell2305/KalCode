@@ -75,6 +75,14 @@ test("main reuses only an exact successful candidate on a trusted pool worker", 
       labels: ["self-hosted", "Windows", "kalcode-gate-pc2"],
       steps: [{ name: "Gate", conclusion: "success" }],
     },
+    native: {
+      name: "Gate (Windows, native)",
+      conclusion: "success",
+      head_sha: sha,
+      runner_name: "kalcode-win-gate-w2",
+      labels: ["self-hosted", "Windows", "kalcode-gate", "kalcode-main-pc"],
+      steps: [{ name: "Gate", conclusion: "success" }],
+    },
   };
   const cases = [
     ["exact", {}, true],
@@ -90,12 +98,20 @@ test("main reuses only an exact successful candidate on a trusted pool worker", 
     ["split-pc2-wrong-runner", { pc2: { runner_name: "kalcode-win-gate-w1" } }, false],
     ["split-pc2-other-sha", { pc2: { head_sha: "b".repeat(40) } }, false],
     ["split-pc2-skipped-check", { pc2: { steps: [{ name: "Gate", conclusion: "skipped" }] } }, false],
+    // A two-job build-PC half needs its native job green on a pool worker too.
+    ["native-all-green", { pc2: {}, native: {} }, true],
+    ["native-red", { pc2: {}, native: { conclusion: "failure" } }, false],
+    ["native-on-second-pc", { pc2: {}, native: { runner_name: "kalcode-win-gate-2" } }, false],
+    ["native-missing-host-label", { pc2: {}, native: { labels: ["self-hosted", "Windows", "kalcode-gate"] } }, false],
+    ["native-other-sha", { pc2: {}, native: { head_sha: "b".repeat(40) } }, false],
+    ["native-skipped-check", { pc2: {}, native: { steps: [{ name: "Gate", conclusion: "skipped" }] } }, false],
   ];
   for (const [name, patch, expected] of cases) {
     const fixture = {
       run: { ...baseline.run, ...patch.run },
       job: { ...baseline.job, ...patch.job },
       pc2: patch.pc2 === undefined ? null : { ...baseline.pc2, ...patch.pc2 },
+      native: patch.native === undefined ? null : { ...baseline.native, ...patch.native },
     };
     const output = join(root, `${name}.out`);
     const path = join(root, `${name}.ps1`);
@@ -105,7 +121,7 @@ test("main reuses only an exact successful candidate on a trusted pool worker", 
       `$fixture = '${JSON.stringify(fixture).replaceAll("'", "''")}' | ConvertFrom-Json
 function Invoke-RestMethod {
   param($Headers, $Uri)
-  if ($Uri -match '/jobs\\?filter=latest&per_page=100$') { return @{ jobs = @(@($fixture.job) + @($fixture.pc2 | Where-Object { $_ })) } }
+  if ($Uri -match '/jobs\\?filter=latest&per_page=100$') { return @{ jobs = @(@($fixture.job) + @($fixture.pc2 | Where-Object { $_ }) + @($fixture.native | Where-Object { $_ })) } }
   if ($Uri -match '/runs\\?head_sha=') { return @{ workflow_runs = @($fixture.run) } }
   throw 'Unexpected evidence API request'
 }
@@ -130,6 +146,66 @@ ${reuse}`,
       expected,
       `${name}: ${result.stdout}${result.stderr}`,
     );
+  }
+});
+
+test("a release kit PR that changes only the release record and notes skips both gate halves", {
+  skip: process.platform !== "win32",
+}, () => {
+  const record = "apps/website/src/data/releases.json";
+  const notes = "docs/releases/0.1.9+1908.md";
+  const cases = [
+    ["record-and-notes", [{ filename: record }, { filename: notes }], true],
+    ["notes-only", [{ filename: notes }], true],
+    ["plus-code", [{ filename: record }, { filename: "apps/desktop/src/main.tsx" }], false],
+    ["other-website-file", [{ filename: record }, { filename: "apps/website/src/pages/updates.astro" }], false],
+    ["renamed-from-code", [{ filename: notes, previous_filename: "tooling/merge-train/train.mjs" }], false],
+    ["renamed-within-notes", [{ filename: notes, previous_filename: "docs/releases/old.md" }], true],
+    ["no-files", [], false],
+    ["api-error", null, false],
+  ];
+  const root = mkdtempSync(join(tmpdir(), "kalcode-gate-records-"));
+  for (const [job, jobSteps] of [
+    ["windows", steps],
+    ["pc2", pc2Steps],
+  ]) {
+    const step = jobSteps.find((s) => s.startsWith("name: Reuse the merge-train"));
+    assert.match(step, /startsWith\(github\.head_ref, 'release\/website-'\)/, `${job}: only kit branches qualify`);
+    const reuse = script(step);
+    for (const [name, files, expected] of cases) {
+      const output = join(root, `${job}-${name}.out`);
+      const path = join(root, `${job}-${name}.ps1`);
+      writeFileSync(output, "");
+      writeFileSync(
+        path,
+        `$fixtureFiles = '${JSON.stringify(files).replaceAll("'", "''")}' | ConvertFrom-Json
+function Invoke-RestMethod {
+  param($Headers, $Uri)
+  if ($Uri -match '/pulls/304/files\\?per_page=100&page=1$') { if ($null -eq $fixtureFiles) { throw 'HTTP 502' }; return $fixtureFiles }
+  throw "Unexpected request $Uri"
+}
+${reuse}`,
+      );
+      const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path], {
+        encoding: "utf8",
+        windowsHide: true,
+        env: {
+          ...process.env,
+          GH_TOKEN: "fixture-only",
+          GITHUB_API_URL: "https://example.invalid",
+          GITHUB_REPOSITORY: "fixture/repo",
+          GITHUB_EVENT_NAME: "pull_request",
+          PR_NUMBER: "304",
+          GITHUB_OUTPUT: output,
+        },
+      });
+      assert.equal(result.status, 0, `${job} ${name}: ${result.stdout}${result.stderr}`);
+      assert.equal(
+        readFileSync(output, "utf8").trim() === "reused=true",
+        expected,
+        `${job} ${name}: ${result.stdout}${result.stderr}`,
+      );
+    }
   }
 });
 
@@ -267,23 +343,26 @@ test("the second PC's plan outputs pick Python and browsers for its own checks",
   }
 });
 
-test("the gate split runs every selected check exactly once across the two PCs", async () => {
-  const { PC2_GATES, splitGateIds } = await import("./release/lifecycle/gate-split.mjs");
+test("the gate split runs every selected check exactly once across the three jobs", async () => {
+  const { NATIVE_GATES, PC2_GATES, splitGateIds } = await import("./release/lifecycle/gate-split.mjs");
   const policy = JSON.parse(readFileSync(new URL("./release/lifecycle/policy.json", import.meta.url), "utf8"));
   const all = policy.gates.map((gate) => gate.id);
-  for (const id of PC2_GATES) assert.ok(all.includes(id), `${id} is a real gate`);
-  const { main, pc2 } = splitGateIds(all);
-  assert.deepEqual([...main, ...pc2].sort(), [...all].sort());
-  assert.equal(new Set([...main, ...pc2]).size, all.length);
-  // Native checks need the build PC's warm Cargo targets, CMake/libclang and provider CLIs.
-  for (const id of ["rust", "desktop-frontend", "desktop-ui", "desktop-native-e2e", "cargo-deny", "cargo-audit"])
-    assert.ok(main.includes(id), `${id} stays on the build PC`);
+  for (const id of [...PC2_GATES, ...NATIVE_GATES]) assert.ok(all.includes(id), `${id} is a real gate`);
+  const { main, native, pc2 } = splitGateIds(all);
+  assert.deepEqual([...main, ...native, ...pc2].sort(), [...all].sort());
+  assert.equal(new Set([...main, ...native, ...pc2]).size, all.length);
+  // Checkout writers and the pool-only Cargo tools run in the build PC's native job.
+  for (const id of ["rust", "desktop-native-e2e", "cargo-deny", "cargo-audit"])
+    assert.ok(native.includes(id), `${id} runs in the build PC's native job`);
+  // The desktop readers run in the build PC's main job, in parallel with the native chain.
+  for (const id of ["desktop-frontend", "desktop-ui"])
+    assert.ok(main.includes(id), `${id} stays in the build PC's main job`);
   assert.deepEqual(
     splitGateIds(["a-check-added-later"]).main,
     ["a-check-added-later"],
-    "new checks default to the build PC",
+    "new checks default to the build PC's main job",
   );
-  assert.deepEqual(splitGateIds([]), { main: [], pc2: [] });
+  assert.deepEqual(splitGateIds([]), { main: [], native: [], pc2: [] });
   const cli = (machine, ids) =>
     spawnSync(
       process.execPath,
@@ -291,8 +370,29 @@ test("the gate split runs every selected check exactly once across the two PCs",
       {
         encoding: "utf8",
       },
-    ).stdout;
-  assert.equal(cli("main", "biome,rust,website-e2e"), "rust");
-  assert.equal(cli("pc2", "biome,rust,website-e2e"), "biome,website-e2e");
-  assert.equal(cli("pc2", ""), "");
+    );
+  assert.equal(cli("main", "biome,rust,desktop-ui,website-e2e").stdout, "desktop-ui");
+  assert.equal(cli("native", "biome,rust,desktop-ui,website-e2e").stdout, "rust");
+  assert.equal(cli("pc2", "biome,rust,desktop-ui,website-e2e").stdout, "biome,website-e2e");
+  assert.equal(cli("pc2", "").stdout, "");
+  assert.equal(cli("elsewhere", "rust").status, 2);
+});
+
+test("the build PC's gate runs as two matrix jobs that never cancel each other", () => {
+  const header = windows.split(/\n {4}steps:/)[0];
+  assert.match(
+    header,
+    /name: \$\{\{ matrix\.half == 'native' && 'Gate \(Windows, native\)' \|\| 'Gate \(Windows\)' \}\}/,
+  );
+  assert.match(header, /fail-fast: false/);
+  assert.match(header, /half: \[main, native\]/);
+  const plan = script(steps.find((step) => step.startsWith("name: Plan change-based gate")));
+  assert.match(plan, /gate-split\.mjs \$env:GATE_HALF/);
+  assert.match(plan, /Unknown build-PC gate half/);
+  const evidence = steps.find((step) => step.startsWith("name: Preserve exact candidate evidence"));
+  assert.match(
+    evidence,
+    /gate-evidence-\$\{\{ matrix\.half == 'native' && 'native-' \|\| '' \}\}/,
+    "distinct artifact per job",
+  );
 });

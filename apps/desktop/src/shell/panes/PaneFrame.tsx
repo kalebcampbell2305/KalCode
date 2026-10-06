@@ -393,6 +393,7 @@ export const PaneFrame = memo(function PaneFrame(props: PaneFrameProps) {
         data-collapsed={collapsedStrip ? "strip" : "bar"}
         data-focused={focused || undefined}
         data-attention={attentionInfo?.attention}
+        data-tone={activeInfo?.tone}
         data-kalvoice-target={kalVoiceTarget ? "listening" : undefined}
         hidden={hidden}
         aria-current={focused ? "true" : undefined}
@@ -400,6 +401,7 @@ export const PaneFrame = memo(function PaneFrame(props: PaneFrameProps) {
         style={style}
         onFocusCapture={() => onFocus(leaf.paneId)}
       >
+        <span className={styles.trace} aria-hidden="true" />
         <div className={styles.collapsedBar}>
           <Tooltip
             content={`Expand ${title} (${PANE_SHORTCUT_LABELS.collapse})`}
@@ -443,6 +445,7 @@ export const PaneFrame = memo(function PaneFrame(props: PaneFrameProps) {
       data-pane-id={leaf.paneId}
       data-focused={focused || undefined}
       data-attention={attentionInfo?.attention}
+      data-tone={activeInfo?.tone}
       data-kalvoice-target={kalVoiceTarget ? "listening" : undefined}
       data-maximized={maximized || undefined}
       data-drop-target={dropTarget || undefined}
@@ -460,6 +463,8 @@ export const PaneFrame = memo(function PaneFrame(props: PaneFrameProps) {
         if ((event.target as HTMLElement).closest("[data-pane-body]")) activeInfo?.onAttentionSeen?.();
       }}
     >
+      {/* The focus trace on an inert element, not ::before (see PaneCanvas.module.css). */}
+      <span className={styles.trace} aria-hidden="true" />
       {/* biome-ignore lint/a11y/noStaticElementInteractions: dragging the header moves the pane; the menu offers the same moves by keyboard. */}
       <header
         className={styles.header}
@@ -508,6 +513,7 @@ export const PaneFrame = memo(function PaneFrame(props: PaneFrameProps) {
                   }
                 }}
               >
+                <span className={styles.tabMark} aria-hidden="true" />
                 <span className={styles.tabGlyph} aria-hidden="true">
                   {info.glyph}
                 </span>

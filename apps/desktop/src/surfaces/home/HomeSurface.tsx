@@ -132,6 +132,7 @@ export function HomeSurface() {
           <Skeleton width="12rem" />
           <Skeleton width="24rem" height="2rem" />
           <Skeleton width="18rem" />
+          <span className={styles.heroRule} aria-hidden="true" />
         </header>
       </div>
     );
@@ -181,6 +182,7 @@ function Hero({ summary }: { summary: HomeSummary }) {
           </Button>
         ) : null}
       </div>
+      <span className={styles.heroRule} aria-hidden="true" />
     </header>
   );
 }

@@ -39,6 +39,34 @@ This applies to Claude Code, Codex and every future agent, for every surface and
 - **Outcomes beside the work.** Every agent can show what changed, what passed/failed, its branch/worktree, and whether it is merged and shipped, from real state only. AGENT DONE, CHANGE VERIFIED, MERGED and SHIPPED TO USERS are different facts; never show one as another, and never guess.
 - **Unified Memory in the flow.** Project memory (see the Unified Memory rule) is visible where people work, inspectable, editable and removable, and only relevant notes reach a task.
 
+## Permanent futuristic space design system (owner directive 2026-10-05)
+
+"KALCODE'S VISUAL IDENTITY IS A FUTURISTIC AI ENGINEERING COMMAND CENTER INSPIRED BY DEEP SPACE.
+
+CODE THE FUTURE SHOULD BE FELT THROUGHOUT THE ENTIRE PRODUCT.
+
+USE DEEP GRAPHITE, SUBTLE STARS, RESTRAINED NEBULA ATMOSPHERE, ELECTRIC-BLUE ENERGY, BEAUTIFUL DEPTH, PREMIUM TYPOGRAPHY, AND PURPOSEFUL MOTION.
+
+SPACE IS THE ATMOSPHERE.
+KALCODE IS THE PRODUCT.
+
+NEVER SACRIFICE READABILITY, SIMPLICITY, RESPONSIVENESS, ACCESSIBILITY, OR PERFORMANCE FOR VISUAL EFFECTS.
+
+EVERY USER-FACING SURFACE SHOULD FEEL BEAUTIFUL, COHESIVE, PREMIUM, AND UNMISTAKABLY KALCODE."
+
+This applies to Claude Code, Codex and every future agent, on every user-facing surface (desktop app, website and interactive demo, installers and marketing where visual). It extends the visual quality rule; it never overrides responsiveness, accessibility or truthful state.
+
+- **Hierarchy:** CONTENT → STATE → INTERACTION → ATMOSPHERE. Never put bright stars, nebula or glow behind terminal text, code, settings, charts or Browser content. Dense work surfaces stay darker and quieter.
+- **One token system.** Everything comes from `packages/ui/src/styles/tokens.css`: graphite surfaces, the Constellation electric blue, status tones, the atmosphere planes (`--atmosphere-stars`, `--atmosphere-stars-far`, `--atmosphere-nebula`), space-level intensities (`--space-{quiet,standard,cinematic}-{stars,nebula}`), illumination (`--glow-active`, `--glow-subtle`, `--glow-waiting`, `--glow-failed`), depth (`--lift-active`, `--shadow-*`), glass (`--glass-bg`, `--glass-border`, `--blur-glass`), the focus trace (`--trace-*`, `--dur-trace`) and the motion roles. No one-off colours, glows or durations in components; `designTokens.test.ts` enforces it. New features inherit the system.
+- **Space intensity levels**, set once by the Shell (`[data-space]`, `shell/spaceLevel.ts`): **quiet** (Settings, Billing, forms, Unified Memory, dense text), **standard** (Code, Operations, Accounts/Providers, Threads, Browser), **cinematic** (Mission Control/Activity, KalVoice, Home, launch and empty states, major transitions).
+- **State colours, consistently:** BLUE = focused/active · GREEN = healthy/working · AMBER = waiting/Needs You · RED = failure/error. Only illuminate what matters; never glow everything.
+- **Focused pane:** a quick electric-blue energy trace that settles into a thin lit edge with a slight depth lift; no flashing. Inactive panes return to neutral graphite.
+- **Motion** communicates focus, location, causality, status and progress, never decoration: 160–260 ms UI transitions, purposeful routing (KalVoice → its target), opening/closing depth. CLICK → IMMEDIATE RESPONSE → BEAUTIFUL TRANSITION; animation never delays an action.
+- **Performance is part of the design.** Atmosphere layers are static CSS (cached SVG/gradients), no high-FPS star fields, particle systems, app-wide re-renders or large blurs in dense areas; idle KalCode does no per-frame atmospheric work. Measure with the perf harness when a change touches always-on chrome.
+- **Accessibility:** reduced motion removes parallax, traces, routing and loops while staying premium; high contrast removes atmosphere and glow; text size, keyboard focus and screen readers keep working.
+- **Original identity.** Learn from the best products' hierarchy, density and polish; never clone them. The website and demo use the same language so kalcoded.com → demo → download → app feels like one universe.
+- **Visual review is required** on the real rendered surface before shipping (see the visual quality rule).
+
 ## Permanent provider account truth and agent launch rule (owner directive 2026-10-04)
 
 **UNKNOWN PROVIDER USAGE NEVER EQUALS 0%. FAILURE TO READ PLAN OR USAGE METADATA MUST NOT BLOCK A VALID PROVIDER CODING SESSION.**
@@ -242,6 +270,23 @@ Bugs, crashes, broken workflows, stale state, failed provider integrations, upda
 - Prevent issues with focused regression tests, truthful state handling, safe recovery, provider/session isolation, good error handling, restart/reconnect testing, update-path verification and real production checks.
 - A bug found during other work is fixed, or reported to the owner as open with its reproduction. It is never silently ignored.
 
+### Full audit standard (owner directive 2026-10-05)
+
+> "WHEN KALCODE IS ASKED FOR A FULL AUDIT, AUDIT THE REAL CURRENT PRODUCT END TO END.
+>
+> DO NOT STOP AT STATIC ANALYSIS OR A REPORT.
+>
+> REPRODUCE REAL ISSUES, FIX ROOT CAUSES, ADD FOCUSED REGRESSION COVERAGE, VISUALLY INSPECT USER-FACING CHANGES, MERGE VALIDATED FIXES TO MAIN, SHIP THEM THROUGH THE REAL PRODUCTION PIPELINE, AND VERIFY USERS RECEIVE THEM.
+>
+> PRESERVE VALID WORK.
+> DO NOT REOPEN SOLVED ISSUES.
+> DO NOT CREATE UNNECESSARY REWRITES.
+> DO NOT LOWER THE QUALITY BAR.
+>
+> THE TARGET IS ZERO KNOWN REPRODUCIBLE USER-FACING ISSUES."
+
+Applies to Claude Code, Codex and every future agent. Start from current `origin/main`, active branches and the live feed/website, never an old checkout. Split the audit into independent read-only areas run in parallel (terminal/PTY, agent state, providers/accounts/usage, persistence, security, Browser/KalVoice/Operations, updater, API/website/billing), with one canonical writer per conflicting area and owned areas (for example the updater) handed to their owner as exact findings. Every confirmed issue goes REPRODUCE → ROOT CAUSE → SMALLEST FIX → FOCUSED REGRESSION TEST → small PR per root cause through the merge train → ship → verify production. The final report lists what was audited, fixed (root cause, commit/build), verified, and only genuine remaining blockers with the reason.
+
 ## Permanent terminal containment and agent identity rule (owner directive 2026-10-03)
 
 An agent is always a real provider coding terminal/session in Code. Agent commands never create chat Threads. Opening four Claude Code agents creates four fresh Claude Code terminals in the current workspace; opening six Codex agents creates six fresh Codex terminals. Each binds its provider account, exact model, effort and working directory. Agent Fleet focuses that same terminal. Threads remain a separate product concept. Preserve terminal identity through resource waits, retry, restoration and runtime errors; never fall back to chat execution or Threads navigation.
@@ -327,7 +372,7 @@ This replaces the single-release-driver model, including the old "one release at
 **KEEP THE BUILD CACHE. NEVER FORCE A FULL REBUILD.** Release builds on the Mac and on Windows reuse the warm compiled cache (`target/`, including Cargo `.fingerprint` and incremental data) from the most recent build of the nearest commit. Never delete Cargo fingerprints, incrementals or the release `target` before a release build, and never start from a cold clone when a warm one exists. Cargo's own fingerprinting decides what is stale, so a warm cache is correct, not a shortcut. The only exception is a targeted removal of one artifact that is proven to be wrongly reused, such as `guardian-packaging.mjs` and `hook-packaging.mjs` forcing their one binary to relink; never remove a whole cache. A slow cold rebuild is a pipeline bug to fix.
 
 - **Release builds always run on the owner's main Windows PC** (and the Mac for macOS). Building, signing and packaging never move to another machine.
-- **The build PC runs everything (owner directive 2026-10-04: it now has 64 GB of RAM).** Gates (`kalcode-win-gate`, label `kalcode-gate`), builds, tests and QA run on the owner's main Windows PC. Do not use the second Windows machine (`kalcode-win-gate-2`, `kalcode-win-desktop-qa`) for gates, QA or anything else.
+- **Both Windows PCs share the gate; a check moves to the second PC only when it is measured green and faster there (owner directives 2026-10-05 and 2026-10-06; they supersede 2026-10-04's "the build PC runs everything").** Owner, 2026-10-05: split gate stages across both PCs so neither pins its CPU. Owner, 2026-10-06 02:47Z: "If tests are passing more on the PC number 2, use testing for that PC. Don't use this PC, only unless you have to ... if PC number 2 is passing all tests, use PC number 2. We need to find the fastest way to ship everything." That preference is conditional on PC2 passing. Measured the same night, the second PC (a laptop) ran checks 3-8x slower than the build PC: desktop-unit timed out at 904 s vs 304 s, and desktop-ui took 42 min with flakes vs 11 min (trial run 37402429693). So only the self-contained JS/web checks run there today. Every gate.yml run has two halves on the same exact SHA: `Gate (Windows)` on the build PC's pool (`kalcode-win-gate` + w1..w5, label `kalcode-main-pc`) and `Gate (Windows, PC2)` on `kalcode-win-gate-2` (label `kalcode-gate-pc2`). `tooling/release/lifecycle/gate-split.mjs` is the only place that assigns checks; the halves stay disjoint and together exactly the plan. Move a check to the second PC only after it has passed there and finished faster than its build-PC time on the same kind of candidate. Both halves must be green to land. Release builds and signing stay on the build PC. The second PC's `kalcode-win-desktop-qa` runs the Windows update proofs, never while its gate half is running. Do not remove the PC2 half without a new owner directive.
 
 ## Permanent fastest truthful release policy (owner directive 2026-10-02)
 
@@ -596,7 +641,7 @@ This replaces "merge it yourself", `gh pr merge`, hand-built `train/<topic>` bra
 - `build` builds every lane at once as **stacked exact candidates**: level 1 = main + lane 1, level 2 = level 1 + lane 2, and so on, each pushed as `merge-train/<base12>-<id>`. All levels gate concurrently on the gate pool. A conflicting PR is skipped (told the files and why) and blocks nothing else.
 - **Land** fast-forwards main to the deepest green level: compatible lanes batch into one main update, and the levels below it are SUPERSEDED (gate cancelled, branch deleted). When a lower level lands first, the deeper levels still fast-forward later on their exact gated trees, because main is on their first-parent chain. No re-gate is needed.
 - **Red gates stay in their lane.** A red level whose lower levels are green is attributed to its own lane: a single PR is ejected with a comment; a multi-PR lane is bisected. Levels built on it are superseded; other lanes continue.
-- **Exact-candidate only.** Land requires a successful Gate (Windows) for the exact candidate push on a main-PC pool worker, unchanged queued PR heads, and main still on the candidate's chain (`--force-with-lease`). One exception, re-verified at landing: when main moved only by release records (`apps/website/src/data/releases.json`, `docs/releases/**`) or paths gate.yml never gates, a lane that touches none of the website/release-note inputs may land its rebuilt candidate on the identical stack's green gate.
+- **Exact-candidate only.** Land requires a successful Gate (Windows) on a main-PC pool worker and a successful Gate (Windows, PC2) on `kalcode-win-gate-2`, both for the exact candidate push, unchanged queued PR heads, and main still on the candidate's chain (`--force-with-lease`). One exception, re-verified at landing: when main moved only by release records (`apps/website/src/data/releases.json`, `docs/releases/**`) or paths gate.yml never gates, a lane that touches none of the website/release-note inputs may land its rebuilt candidate on the identical stack's green gate.
 - **Mechanical conflicts only.** The registered `release-record` resolver settles a `releases.json` conflict by taking the side with the higher `latest.version` build, and refuses if either side changed anything else. Semantic conflicts go to the owning agent.
 - **Tiny main lock.** Only the `git push` to main runs under `target/lanes/main-update.lock`, and the time it is held is logged in ms. Nothing else (fetches, gate queries, tests) runs under it. Never re-push a candidate whose base is no longer main.
 - `status [--json]` reports every PR as READY FOR INTEGRATION / MERGE GROUP / GATING / GREEN / FAILED / LANDING / MERGED / SUPERSEDED, with queue wait, conflict wait, gate and time-to-land timings.
@@ -618,10 +663,11 @@ This replaces "merge it yourself", `gh pr merge`, hand-built `train/<topic>` bra
 
 > "KALCODE USES A PARALLEL GATE WORKER POOL. MULTIPLE READY CHANGES SHOULD VALIDATE CONCURRENTLY. GATES ARE CHANGE-BASED, NOT GIANT GENERIC CHECKLISTS. INDEPENDENT CHECKS RUN IN PARALLEL. A FAILURE IN ONE CHANGE MUST NOT BLOCK UNRELATED READY WORK. GATE RESULTS ARE TIED TO THE EXACT MERGE CANDIDATE. STALE GATES ARE CANCELLED. STILL-VALID EVIDENCE IS REUSED. ONCE THE REQUIRED GATES PASS, AUTO-MERGE AND AUTO-SHIP IMMEDIATELY. THE PURPOSE OF GATES IS TO PROVE CORRECTNESS QUICKLY, NOT TO CREATE A BOTTLENECK."
 
-- **No single gate owner.** The pool (lanes gate their stacked levels on it concurrently) is the `kalcode-gate` runners on the main 64 GB Windows PC: `kalcode-win-gate` plus the workers `kalcode-win-gate-w1`…`-w5`, added by `tooling/runners/windows/add-gate-workers.ps1` (one elevated run; see `tooling/runners/README.md`). Claude Code and Codex submit to the same pool through PRs and the merge train. Never validate and merge privately.
+- **No single gate owner.** The pool (lanes gate their stacked levels on it concurrently) spans both Windows PCs. On the main 64 GB PC, the `kalcode-main-pc` runners `kalcode-win-gate` plus the workers `kalcode-win-gate-w1`…`-w5` (added by `tooling/runners/windows/add-gate-workers.ps1`, one elevated run; see `tooling/runners/README.md`) run each gate's build-PC half. On the second PC, `kalcode-win-gate-2` (label `kalcode-gate-pc2`) runs its PC2 half, as `tooling/release/lifecycle/gate-split.mjs` assigns (see "Both Windows PCs share the gate"). Claude Code and Codex submit to the same pool through PRs and the merge train. Never validate and merge privately.
 - **Isolation and priority.** Six main-PC slots use separate worker accounts, homes, checkouts, caches and ports. The canonical `KALCODE_GATE_SLOT` is 0 for the original runner and 1-5 for added workers. Gates run below normal priority. At most three Rust gate jobs hold machine-wide tokens and start with at least 10 GiB free memory; they never bypass admission after a timeout. Optional gates yield under CPU/RAM/disk pressure before the UI or user coding agents slow down. These background limits never cap user agents.
+- **The build PC's share runs as two parallel jobs.** gate.yml's `windows` job is a two-entry matrix on the same exact SHA: `Gate (Windows)` (the desktop frontend/UI readers and any new check) and `Gate (Windows, native)` (rust, native E2E, cargo-deny, cargo-audit), each on its own pool worker and checkout. In one checkout, rust's and native E2E's workspace writes forced them to wait behind the readers (lane 7: ~30 min serial). `tooling/release/lifecycle/gate-split.mjs` assigns `main`, `native` and `pc2`; the three stay disjoint and together exactly the plan. Landing evidence requires every part the run has, all green on the exact SHA: `Gate (Windows)` and `Gate (Windows, native)` on pool workers, and `Gate (Windows, PC2)` on `kalcode-win-gate-2` (`tooling/merge-train/github.mjs` `gateStateFrom`). A landing tool that checks only `Gate (Windows)` must not be used without checking the other two by hand.
 - **Change-based and parallel inside.** `node tooling/release/ship.mjs gate --base <base>` selects checks from the diff. Independent checks run concurrently with `KALCODE_GATE_JOBS=2` per CI worker. Shared build resources and dependent checks remain ordered. During an active main-PC gate, agents must not launch long local full Cargo, Playwright, Vitest or ship-gate suites; focused single-file checks are allowed.
-- **Exact evidence, reused when still valid.** Train evidence is a passing Gate step for the exact candidate push on a verified main-PC worker. Per-check reuse binds source inputs, commands, policy, environment and toolchain; revision-sensitive checks also bind the commit. Changed or unknown inputs invalidate reuse. Live audits always run. A main push of the identical landed candidate reuses its verified green gate.
+- **Exact evidence, reused when still valid.** Train evidence is a passing Gate step for the exact candidate push on a verified main-PC worker plus, for a split gate, the second PC's passing Gate step on the same SHA. Per-check reuse binds source inputs, commands, policy, environment and toolchain; revision-sensitive checks also bind the commit. Changed or unknown inputs invalidate reuse. Live audits always run. A main push of the identical landed candidate reuses its verified green gate.
 - **Stale gates are cancelled.** When main moves or a PR changes, the train cancels the obsolete candidate's unfinished gate runs and deletes its branch. A newer commit on a PR cancels that PR's older run.
 - **Green → land → ship.** When the exact candidate is green, the train lands it and shipping starts at once. No owner approval is needed. On failure, the train bisects. Send the exact failure to the owning agent; it fixes and resubmits, and only the invalidated gates rerun.
 
@@ -828,6 +874,26 @@ THE WEBSITE MUST BE BEAUTIFUL, DYNAMIC, FAST, SIMPLE, AND UNMISTAKABLY KALCODE."
 - **The demo is not the Free plan.** It is a temporary sample in the browser; the Free plan is a real account tier from `plans.ts`. Never invent prices, limits or plan features for the website.
 - **Truth:** a demo surface whose `PLAN_FEATURE_GROUPS` entry is `coming_soon` carries a Coming soon tag automatically; flipping the entry to `available` (after production verification) removes it. Sample data is fictional sample data, never real user information.
 - **Fast:** the demo script loads only near the viewport or on a Try control, honours reduced motion, pauses off-screen, and needs no inline styles (strict CSP).
+
+## Permanent community standard (owner directive 2026-10-05)
+
+> "KALCODE COMMUNITY SURFACES SHOULD FOLLOW THE SAME PRODUCT STANDARD AS KALCODE ITSELF: SIMPLE. BEAUTIFUL. PROFESSIONAL. HIGH-SIGNAL. SAFE. EASY TO NAVIGATE. DO NOT CREATE CLUTTER. DO NOT MAKE USERS HUNT. MAKE SUPPORT, FEEDBACK, UPDATES, AND COMMUNITY EASY TO FIND. THE KALCODE DISCORD SHOULD FEEL LIKE THE OFFICIAL COMMUNITY HOME FOR A SERIOUS TECHNOLOGY PRODUCT."
+
+- **Scope:** the Discord, social profiles, launch/community posts, and any future forum or community surface.
+- **The Discord is code.**
+  - It is declared in `tooling/community/discord/server.mjs` and reconciled with `kc-discord.mjs apply`.
+  - Change the declaration and re-apply. Never hand-configure the server, which would drift from the repo.
+- **Small and active over big and empty.** Add a channel only when activity justifies it. Prefer forums for support, bug reports and feature requests. `#announcements` is major news only; every build goes to `#changelog`.
+- **Truthful.**
+  - `#roadmap` is generated from `PLAN_FEATURE_GROUPS`, the same source as the website.
+  - `#changelog` comes from `docs/releases`.
+  - Never present a coming-soon or publicly unavailable feature as available (`PUBLICLY_UNAVAILABLE`), and never promise a date that isn't confirmed.
+- **Brand:** the current mascot and electric blue on graphite. There is no retired branding and no gamer-style clutter.
+- **Safe.**
+  - Never ask members for passwords, API keys, provider tokens or private code. AutoMod blocks secrets for everyone.
+  - Bot tokens and webhook URLs live only in `~/.kalcode/discord/` or the environment, never in the repo, logs or chat.
+  - Plan roles may only ever come from server-side entitlement verification (Discord Linked Roles, see the tool's README), never by hand, and never expose Stripe or customer data.
+- **After each release,** post it: `node tooling/community/discord/kc-discord.mjs changelog <version+build> --post`.
 
 ## Permanent KalCode pricing and entitlements (owner directive 2026-10-04)
 

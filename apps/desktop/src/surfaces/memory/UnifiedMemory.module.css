@@ -570,3 +570,9 @@
     transition: none;
   }
 }
+
+/* The no-project state is open space: KalCode's framed empty well, centred, with room to breathe. */
+.emptyWell {
+  width: min(34rem, 100%);
+  padding-block: var(--space-10);
+}

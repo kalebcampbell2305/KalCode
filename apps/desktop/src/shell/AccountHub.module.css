@@ -212,10 +212,13 @@
   height: 100%;
   border-radius: inherit;
   background: linear-gradient(90deg, var(--btn-primary-bottom), var(--color-accent));
+  box-shadow: 0 0 8px -1px var(--color-glow);
+  transition: width var(--dur-slow) var(--ease-out);
 }
 
 .bar[data-high] .fill {
   background: var(--status-waiting);
+  box-shadow: 0 0 8px -1px var(--status-waiting-line);
 }
 
 .caption {

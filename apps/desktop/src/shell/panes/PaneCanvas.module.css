@@ -47,12 +47,26 @@
   display: none;
 }
 
-/* Exactly one pane is lit: a crisp electric-blue edge and a faint outer glow. */
+/*
+ * Exactly one pane is lit (AGENTS.md space design system): a thin electric-blue edge, a restrained
+ * outer glow and a slight depth lift. The lift is a shadow, never a transform, so terminal text
+ * stays pixel-crisp. Inactive panes stay neutral graphite.
+ */
 .frame[data-focused] {
   border-color: var(--color-border-lit);
-  box-shadow:
-    var(--shadow-panel),
-    0 0 22px -12px var(--color-glow);
+  box-shadow: var(--shadow-panel), var(--glow-active), var(--lift-active);
+}
+
+/* Unfocused panes carry their real state as a hairline only: amber waiting/Needs You, red failed. */
+.frame:not([data-focused])[data-tone="waiting"],
+.frame:not([data-focused])[data-tone="paused"] {
+  border-color: var(--status-waiting-line);
+  box-shadow: var(--shadow-panel), var(--glow-waiting);
+}
+
+.frame:not([data-focused])[data-tone="failed"] {
+  border-color: var(--status-failed-line);
+  box-shadow: var(--shadow-panel), var(--glow-failed);
 }
 
 .frame[data-kalvoice-target="listening"] {
@@ -64,9 +78,65 @@
 }
 
 /*
- * Focusing a pane plays one short inner bloom along its edge that settles into the lit outline
- * above. CSS only: the pseudo-element exists only while the pane is focused, so each new focus
- * replays it once (KalVoice replays it to show where it acted). It never loops, and reduced
+ * The energy trace: when a pane takes focus, a short electric-blue arc runs once around its edge
+ * (a conic gradient masked to the 1px border ring, its angle animated for --dur-trace) and fades
+ * into the lit outline above. The trace element (PaneFrame.tsx, first in the frame) is displayed
+ * only while the pane is focused, so each new focus (and each KalVoice action on it) replays it
+ * once. It never loops; reduced motion (--dur-trace: 0ms) skips it and high contrast makes it
+ * transparent. A real aria-hidden element rather than ::before: axe's colour-contrast check
+ * reports "incomplete" for every text node under an absolute pseudo-element with a background.
+ * At rest it ends at opacity 0, which axe treats as not painted. The bloom (::after) below stays a
+ * pseudo-element: it is only a box-shadow, no background, so axe gives it no area.
+ */
+@property --trace-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+.trace {
+  display: none;
+}
+
+.frame[data-focused] > .trace {
+  display: block;
+  position: absolute;
+  z-index: 11;
+  inset: 0;
+  padding: 2px;
+  border-radius: calc(var(--radius-panel) - 1px);
+  background: conic-gradient(
+    from var(--trace-angle),
+    transparent 0deg,
+    var(--trace-color) 64deg,
+    var(--color-accent-icy) 76deg,
+    transparent 112deg,
+    transparent 360deg
+  );
+  opacity: 0;
+  pointer-events: none;
+  mask:
+    linear-gradient(rgb(0 0 0) 0 0) content-box exclude,
+    linear-gradient(rgb(0 0 0) 0 0);
+  animation: pane-energy var(--dur-trace) var(--ease-out) both;
+}
+
+@keyframes pane-energy {
+  0% {
+    --trace-angle: -40deg;
+    opacity: 1;
+  }
+  75% {
+    opacity: 1;
+  }
+  100% {
+    --trace-angle: 320deg;
+    opacity: 0;
+  }
+}
+
+/*
+ * After the trace, one soft inner bloom settles into the outline. CSS only, never loops; reduced
  * motion (0ms durations) skips it.
  */
 .frame[data-focused]::after {
@@ -74,9 +144,7 @@
   z-index: 10;
   inset: 0;
   border-radius: calc(var(--radius-panel) - 1px);
-  box-shadow:
-    inset 0 0 0 1px var(--color-accent),
-    inset 0 0 18px -6px var(--color-glow);
+  box-shadow: inset 0 0 22px -10px var(--color-glow);
   content: "";
   opacity: 0;
   pointer-events: none;
@@ -230,7 +298,15 @@
   border-color: var(--color-border-lit-soft);
 }
 
-.frame[data-focused] .tab[aria-selected="true"]::before {
+/* The underline is an aria-hidden element (first in the tab, PaneFrame.tsx) shown only on the
+   focused pane's front tab, not ::before: axe's colour-contrast check reports "incomplete" for
+   the tab's small state word under an absolute pseudo-element with a background. */
+.tabMark {
+  display: none;
+}
+
+.frame[data-focused] .tab[aria-selected="true"] > .tabMark {
+  display: block;
   position: absolute;
   right: var(--space-2-5);
   bottom: -1px;
@@ -239,10 +315,9 @@
   border-radius: 2px;
   background: var(--color-accent);
   box-shadow: 0 0 8px var(--color-glow);
-  content: "";
 }
 
-.frame[data-kalvoice-target="listening"] .tab[aria-selected="true"]::before {
+.frame[data-kalvoice-target="listening"] .tab[aria-selected="true"] > .tabMark {
   right: var(--space-1);
   left: var(--space-1);
   box-shadow: 0 0 14px var(--color-glow);

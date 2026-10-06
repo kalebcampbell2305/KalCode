@@ -30,9 +30,14 @@
   overflow: hidden;
 }
 
+/* The grid and the horizon are aria-hidden elements (DashboardBoard.tsx: .headGrid first,
+   .headHorizon last, the paint order of the ::before/::after they replace), not pseudo-elements:
+   axe's colour-contrast check reports "incomplete" for every text node under an absolute
+   pseudo-element with a background. The content above them is positioned (.head > * below), so
+   axe also sorts it above the grid. */
+
 /* A faint star-chart grid: depth, never noise. */
-.head::before {
-  content: "";
+.head > .headGrid {
   position: absolute;
   inset: 0;
   background-image:
@@ -40,6 +45,18 @@
     linear-gradient(90deg, color-mix(in srgb, var(--color-text) 3.5%, transparent) 1px, transparent 1px);
   background-size: 24px 24px;
   mask-image: linear-gradient(90deg, black 0%, transparent 45%);
+  pointer-events: none;
+}
+
+/* The bridge's lit horizon: one electric-blue hairline across the top edge, brightest where the
+   fleet count sits. Static. */
+.head > .headHorizon {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, var(--color-border-lit) 0%, var(--color-border-lit-soft) 40%, transparent 85%);
   pointer-events: none;
 }
 
@@ -69,6 +86,7 @@
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.03em;
   line-height: 1;
+  text-shadow: 0 0 22px var(--color-glow);
 }
 
 .totalLabel {
@@ -371,7 +389,18 @@
 .groupRule {
   flex: 1;
   height: 1px;
-  background: linear-gradient(90deg, var(--color-border) 0%, transparent 100%);
+  background: linear-gradient(90deg, var(--group-tone, var(--color-border)) 0%, transparent 100%);
+}
+
+/* A group's rule carries its state from the dot outward: amber for Needs you, green for working. */
+.groupRow[data-chip="needs_you"] {
+  --group-tone: var(--status-waiting-line);
+}
+.groupRow[data-chip="working"] {
+  --group-tone: var(--status-working-line);
+}
+.groupRow[data-chip="failed"] {
+  --group-tone: var(--status-failed-line);
 }
 
 .groupAction {
@@ -489,6 +518,44 @@
 .state.state {
   min-height: 18rem;
   align-items: center;
+}
+
+/* No agents yet: the bridge before launch (cinematic level). A nebula wash, a faint star plane and
+   a lit horizon inside the well; static layers only. */
+.launch.launch {
+  position: relative;
+  border-style: solid;
+  border-color: var(--color-border-lit-soft);
+  background:
+    radial-gradient(40rem 16rem at 50% 0%, color-mix(in srgb, var(--color-accent) 14%, transparent), transparent 70%),
+    var(--atmosphere-nebula),
+    var(--atmosphere-stars-far) 0 0 / var(--atmosphere-stars-far-size),
+    var(--color-surface-1);
+  box-shadow: var(--shadow-panel), var(--glow-subtle);
+  overflow: hidden;
+}
+
+/* The well's top edge (EmptyState's aria-hidden [data-empty-edge]), narrowed and brightened. */
+.launch.launch > [data-empty-edge] {
+  position: absolute;
+  top: 0;
+  left: 20%;
+  right: 20%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--color-border-lit), transparent);
+  pointer-events: none;
+}
+
+/* Provider marks inside a sentence. An inline-flex mark with no baseline-aligned item takes its
+   baseline from the glyph's bottom edge, which lifts the name above the sentence and leaves the
+   commas between marks sitting low. Baseline-align the name (the glyph stays centred) so the mark
+   shares the sentence's baseline. (Doubled class: wins over the shared mark's alignment.) */
+.inlineMark.inlineMark {
+  align-items: baseline;
+}
+
+.inlineMark > :first-child {
+  align-self: center;
 }
 
 .noMatch {

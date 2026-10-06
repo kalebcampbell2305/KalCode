@@ -6,8 +6,10 @@ name: Gate (self-hosted)
 
 on:
   push:
-    # Gate the exact immutable candidate before the train updates main.
-    branches: [main, "merge-train/**"]
+    # Gate the exact immutable candidate before the train updates main. main itself is not gated on
+    # push: it only ever moves to a commit that already passed this gate (the train lands the exact
+    # gated candidate), so a push gate on main would re-run the same evidence and hold both PCs.
+    branches: ["merge-train/**"]
   pull_request:
     # Docs-only PRs skip the self-hosted gate. Later patterns win; release notes still gate.
     paths:
@@ -39,12 +41,20 @@ env:
 
 jobs:
   windows:
-    name: Gate (Windows)
+    # The build PC's share runs as two jobs on two pool workers so its two chains overlap: "Gate (Windows)"
+    # (the desktop frontend/UI readers and any new check) and "Gate (Windows, native)" (rust, native E2E
+    # and the pool-only Cargo tools, which write the checkout or need the pool's tools). In one checkout
+    # those writes serialized everything (~30 min, lane 7 run 37389408543). The second Windows PC runs the
+    # JS/web share in the "Gate (Windows, PC2)" job below (owner, 2026-10-05: split tests across both PCs).
+    # All three jobs test the same event SHA; tooling/release/lifecycle/gate-split.mjs assigns the checks.
+    name: ${{ matrix.half == 'native' && 'Gate (Windows, native)' || 'Gate (Windows)' }}
+    strategy:
+      # One half failing never cancels the other: each half's own result is evidence.
+      fail-fast: false
+      matrix:
+        half: [main, native]
     # Never run code from a fork on our machines.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    # The build PC's pool runs the native half (Rust, desktop frontend/UI, native E2E); the second
-    # Windows PC runs the JS/web half in the "Gate (Windows, PC2)" job below (owner, 2026-10-05: split
-    # tests across both PCs so neither pins its CPU). Both jobs test the same event SHA.
     runs-on: [self-hosted, Windows, kalcode-gate, kalcode-main-pc]
     timeout-minutes: 195
     steps:
@@ -53,13 +63,37 @@ jobs:
       # no code under test sees the token.
       - name: Reuse the merge-train gate of this exact commit
         id: reuse
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && startsWith(github.head_ref, 'release/website-'))
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' }
           $api = "$env:GITHUB_API_URL/repos/$env:GITHUB_REPOSITORY/actions"
+          # The release kit's website-record PR (release/website-*) changes only the release record and
+          # release notes, the paths the train treats as evidence-preserving (merge-train/train.mjs
+          # isReleaseRecordPath). The kit gates it itself before merging (exact diff set, check:releases,
+          # website typecheck/unit/build/e2e), so gating it here only held pool workers lanes needed. A PR
+          # that changes, renames or removes anything else gates as usual.
+          if ($env:GITHUB_EVENT_NAME -eq 'pull_request') {
+            $record = { param($path) $path -eq 'apps/website/src/data/releases.json' -or ($path -is [string] -and $path.StartsWith('docs/releases/')) }
+            try {
+              $files = @(); $page = 1
+              do {
+                $batch = @(Invoke-RestMethod -Headers $headers -Uri "$env:GITHUB_API_URL/repos/$env:GITHUB_REPOSITORY/pulls/$env:PR_NUMBER/files?per_page=100&page=$page")
+                $files += $batch; $page++
+              } while ($batch.Count -eq 100 -and $page -le 30)
+              $other = @($files | Where-Object { -not (& $record $_.filename) -or ($_.previous_filename -and -not (& $record $_.previous_filename)) })
+              if ($files.Count -gt 0 -and $other.Count -eq 0) {
+                Write-Output "Release-record PR #$($env:PR_NUMBER): only the release record and notes changed; the release kit gates it."
+                Add-Content -Path $env:GITHUB_OUTPUT -Encoding ascii -Value 'reused=true'
+              }
+            } catch {
+              Write-Output "::warning::Could not list the PR's files ($($_.Exception.Message)); gating."
+            }
+            exit 0
+          }
           try {
             $runs = (Invoke-RestMethod -Headers $headers -Uri "$api/workflows/gate.yml/runs?head_sha=$env:GITHUB_SHA&per_page=20").workflow_runs
             foreach ($run in $runs) {
@@ -82,7 +116,16 @@ jobs:
                 -not ($_.labels -contains 'kalcode-main-pc') -and
                 ($_.steps | Where-Object { $_.name -eq 'Gate' -and $_.conclusion -eq 'success' })
               }).Count -eq 1
-              if ($green -and $pc2Green) {
+              # A two-job build-PC half also needs its native job green on the same SHA on a pool worker.
+              $native = @($jobs | Where-Object { $_.name -eq 'Gate (Windows, native)' })
+              $nativeGreen = $native.Count -eq 0 -or @($native | Where-Object {
+                $_.conclusion -eq 'success' -and $_.head_sha -eq $env:GITHUB_SHA -and
+                $_.runner_name -match '^kalcode-win-gate(-w[1-5])?$' -and
+                ($_.labels -contains 'self-hosted') -and ($_.labels -contains 'Windows') -and
+                ($_.labels -contains 'kalcode-gate') -and ($_.labels -contains 'kalcode-main-pc') -and
+                ($_.steps | Where-Object { $_.name -eq 'Gate' -and $_.conclusion -eq 'success' })
+              }).Count -eq 1
+              if ($green -and $pc2Green -and $nativeGreen) {
                 Write-Output "Gate (Windows) already passed for $env:GITHUB_SHA on $($run.head_branch): $($run.html_url)"
                 # ASCII: Windows PowerShell's utf8 writes a BOM into an empty file, which corrupts the key.
                 Add-Content -Path $env:GITHUB_OUTPUT -Encoding ascii -Value 'reused=true'
@@ -131,8 +174,10 @@ jobs:
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
           BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || (github.event_name == 'push' && github.event.before) || 'origin/main~1' }}
+          GATE_HALF: ${{ matrix.half }}
         run: |
           $ErrorActionPreference = 'Stop'
+          if ($env:GATE_HALF -notin @('main', 'native')) { throw "Unknown build-PC gate half: $env:GATE_HALF" }
           Import-Module ./tooling/runners/windows/gate-worker-pool.psm1 -Force
           Assert-GateWorkerHost
           if ($env:RUNNER_NAME -notmatch '^kalcode-win-gate(-w[1-5])?$') { throw 'Unknown main-PC gate worker' }
@@ -159,8 +204,9 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $plan = ($json | Out-String | ConvertFrom-Json).plan
           $selected = @($plan | Where-Object { $_.state -eq 'selected' } | ForEach-Object { $_.id })
-          # This machine's share of the plan (tooling/release/lifecycle/gate-split.mjs); the second PC runs the rest.
-          $only = (node tooling/release/lifecycle/gate-split.mjs main ($selected -join ',') | Out-String).Trim()
+          # This job's share of the plan (tooling/release/lifecycle/gate-split.mjs): the build PC's "main" or
+          # "native" half; the other build-PC job and the second PC run the rest.
+          $only = (node tooling/release/lifecycle/gate-split.mjs $env:GATE_HALF ($selected -join ',') | Out-String).Trim()
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $ids = @($only -split ',' | Where-Object { $_ })
           @(
@@ -169,12 +215,14 @@ jobs:
             "KALCODE_E2E_INSPECTOR_PORT=$($ports.InspectorPort)", "KALCODE_UI_TEST_PORT=$($ports.UiPort)",
             "KALCODE_E2E_CDP_PORT=$($ports.CdpPort)",
             'KALCODE_GATE_REPORT_DIR=C:\ProgramData\KalCodeGatePool\reports',
-            'KALCODE_GATE_EVIDENCE_DIR=C:\ProgramData\KalCodeGatePool\evidence'
+            'KALCODE_GATE_EVIDENCE_DIR=C:\ProgramData\KalCodeGatePool\evidence',
+            # desktop-ui and desktop-native-e2e never overlap across this PC's jobs (machine-lock.mjs).
+            'KALCODE_GATE_LOCK_DIR=C:\ProgramData\KalCodeGatePool\heavy'
           ) | Add-Content -Path $env:GITHUB_ENV -Encoding ascii
           "python=$(([string]($ids -contains 'tooling-unit' -or $ids -contains 'desktop-native-e2e')).ToLower())" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding ascii
           "native=$(([string]($ids -contains 'desktop-native-e2e')).ToLower())" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding ascii
           "browsers=$(([string](@($ids | Where-Object { $_ -in @('desktop-ui','desktop-native-e2e','website-e2e','website-checkout-e2e') }).Count -gt 0)).ToLower())" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding ascii
-          Write-Host "Exact candidate $head; base $base; selected checks: $($selected -join ', '); on this PC: $($ids -join ', ')"
+          Write-Host "Exact candidate $head; base $base; selected checks: $($selected -join ', '); in this $env:GATE_HALF job: $($ids -join ', ')"
       - name: Admit optional gate work
         if: steps.reuse.outputs.reused != 'true'
         id: admission
@@ -218,7 +266,7 @@ jobs:
           $head = (git rev-parse HEAD | Out-String).Trim()
           if ($LASTEXITCODE -or $head -ne $env:GITHUB_SHA) { throw "Checkout does not match the immutable event SHA" }
           (Get-Process -Id $PID).PriorityClass = 'BelowNormal'
-          if (-not $env:KALCODE_GATE_ONLY) { Write-Host 'gate: nothing selected for the build PC (the second PC runs the rest)'; exit 0 }
+          if (-not $env:KALCODE_GATE_ONLY) { Write-Host 'gate: nothing selected for this build-PC job (the other jobs run the rest)'; exit 0 }
           $token = $null
           try {
             if ($env:KALCODE_GATE_HEAVY -eq 'True') {
@@ -264,7 +312,7 @@ jobs:
         if: steps.reuse.outputs.reused != 'true' && (always())
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: gate-evidence-${{ github.sha }}-${{ github.run_attempt }}
+          name: gate-evidence-${{ matrix.half == 'native' && 'native-' || '' }}${{ github.sha }}-${{ github.run_attempt }}
           path: target/gate-evidence.json
           if-no-files-found: ignore
       # Nothing this job started may outlive it and hold the warm target open for the next job.
@@ -289,13 +337,37 @@ jobs:
       # no code under test sees the token.
       - name: Reuse the merge-train gate of this exact commit
         id: reuse
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && startsWith(github.head_ref, 'release/website-'))
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' }
           $api = "$env:GITHUB_API_URL/repos/$env:GITHUB_REPOSITORY/actions"
+          # The release kit's website-record PR (release/website-*) changes only the release record and
+          # release notes, the paths the train treats as evidence-preserving (merge-train/train.mjs
+          # isReleaseRecordPath). The kit gates it itself before merging (exact diff set, check:releases,
+          # website typecheck/unit/build/e2e), so gating it here only held pool workers lanes needed. A PR
+          # that changes, renames or removes anything else gates as usual.
+          if ($env:GITHUB_EVENT_NAME -eq 'pull_request') {
+            $record = { param($path) $path -eq 'apps/website/src/data/releases.json' -or ($path -is [string] -and $path.StartsWith('docs/releases/')) }
+            try {
+              $files = @(); $page = 1
+              do {
+                $batch = @(Invoke-RestMethod -Headers $headers -Uri "$env:GITHUB_API_URL/repos/$env:GITHUB_REPOSITORY/pulls/$env:PR_NUMBER/files?per_page=100&page=$page")
+                $files += $batch; $page++
+              } while ($batch.Count -eq 100 -and $page -le 30)
+              $other = @($files | Where-Object { -not (& $record $_.filename) -or ($_.previous_filename -and -not (& $record $_.previous_filename)) })
+              if ($files.Count -gt 0 -and $other.Count -eq 0) {
+                Write-Output "Release-record PR #$($env:PR_NUMBER): only the release record and notes changed; the release kit gates it."
+                Add-Content -Path $env:GITHUB_OUTPUT -Encoding ascii -Value 'reused=true'
+              }
+            } catch {
+              Write-Output "::warning::Could not list the PR's files ($($_.Exception.Message)); gating."
+            }
+            exit 0
+          }
           try {
             $runs = (Invoke-RestMethod -Headers $headers -Uri "$api/workflows/gate.yml/runs?head_sha=$env:GITHUB_SHA&per_page=20").workflow_runs
             foreach ($run in $runs) {
@@ -318,7 +390,16 @@ jobs:
                 -not ($_.labels -contains 'kalcode-main-pc') -and
                 ($_.steps | Where-Object { $_.name -eq 'Gate' -and $_.conclusion -eq 'success' })
               }).Count -eq 1
-              if ($green -and $pc2Green) {
+              # A two-job build-PC half also needs its native job green on the same SHA on a pool worker.
+              $native = @($jobs | Where-Object { $_.name -eq 'Gate (Windows, native)' })
+              $nativeGreen = $native.Count -eq 0 -or @($native | Where-Object {
+                $_.conclusion -eq 'success' -and $_.head_sha -eq $env:GITHUB_SHA -and
+                $_.runner_name -match '^kalcode-win-gate(-w[1-5])?$' -and
+                ($_.labels -contains 'self-hosted') -and ($_.labels -contains 'Windows') -and
+                ($_.labels -contains 'kalcode-gate') -and ($_.labels -contains 'kalcode-main-pc') -and
+                ($_.steps | Where-Object { $_.name -eq 'Gate' -and $_.conclusion -eq 'success' })
+              }).Count -eq 1
+              if ($green -and $pc2Green -and $nativeGreen) {
                 Write-Output "Gate (Windows) already passed for $env:GITHUB_SHA on $($run.head_branch): $($run.html_url)"
                 # ASCII: Windows PowerShell's utf8 writes a BOM into an empty file, which corrupts the key.
                 Add-Content -Path $env:GITHUB_OUTPUT -Encoding ascii -Value 'reused=true'

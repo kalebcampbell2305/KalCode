@@ -38,7 +38,7 @@ export function assertCandidateWorkflow(source) {
   const workflow = source.replaceAll("\r\n", "\n");
   const windows = workflow.match(/^ {2}windows:\n([\s\S]*?)(?=^ {2}[a-zA-Z][\w-]*:|$(?![\s\S]))/m)?.[1] ?? "";
   if (
-    !/ {2}push:\n(?:\s+#.*\n)* {4}branches: \[main, "merge-train\/\*\*"\]/.test(workflow) ||
+    !/ {2}push:\n(?:\s+#.*\n)* {4}branches: \[(?:main, )?"merge-train\/\*\*"\]/.test(workflow) ||
     !/ {4}runs-on: \[self-hosted, Windows, kalcode-gate(?:, kalcode-main-pc)?\]\n/.test(windows) ||
     !windows.includes("name: Gate\n") ||
     !windows.includes("trailers:key=Merge-Train-Base,valueonly")
@@ -84,7 +84,13 @@ export function makeGit(repo, { env = {}, timeoutMs = 120_000 } = {}) {
       const child = spawn(
         "git",
         ["-C", repo, "-c", "core.quotepath=off", "-c", "gc.auto=0", "-c", "maintenance.auto=false", ...args],
-        { env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...env }, windowsHide: true, timeout: timeoutMs },
+        {
+          env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...env },
+          windowsHide: true,
+          timeout: timeoutMs,
+          // Only a command given input gets a stdin pipe.
+          stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+        },
       );
       let stdout = "";
       let stderr = "";
@@ -100,7 +106,13 @@ export function makeGit(repo, { env = {}, timeoutMs = 120_000 } = {}) {
           reject(new GitError(`git ${args.join(" ")}: ${stderr.trim().split("\n")[0] || `exit ${code}`}`));
         } else resolvePromise({ code, stdout, stderr });
       });
-      child.stdin.end(input ?? "");
+      if (input !== undefined) {
+        // A git that exits (or is killed at timeoutMs) before reading its input closes the pipe: the
+        // write then fails with EPIPE/EOF. Its exit code above is the result; an unhandled stream error
+        // would instead crash the coordinator (gate 37410227962, a slow second PC).
+        child.stdin.on("error", () => {});
+        child.stdin.end(input);
+      }
     });
 }
 

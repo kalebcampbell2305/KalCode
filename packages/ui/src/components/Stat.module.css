@@ -16,9 +16,10 @@
   text-align: left;
 }
 
-/* A lit hairline along the top edge, in the tone's colour. */
-.stat::before {
-  content: "";
+/* A lit hairline along the top edge, in the tone's colour. An aria-hidden element (first in the
+   stat), not ::before: axe's colour-contrast check reports "incomplete" for any text under an
+   absolute pseudo-element with a background. */
+.stat > .edge {
   position: absolute;
   top: -1px;
   left: var(--space-4);

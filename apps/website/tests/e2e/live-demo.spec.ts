@@ -107,10 +107,9 @@ test.describe("live demo (desktop)", () => {
     await expect(
       app(page).getByRole("button", { name: "Dashboard Redesign", exact: true, pressed: true }),
     ).toBeVisible();
-    await app(page)
-      .getByRole("navigation", { name: "KalCode" })
-      .getByRole("button", { name: /^Operations/ })
-      .click();
+    // Code and Activity are the primary places; Operations is one click away in More.
+    await app(page).getByRole("navigation", { name: "KalCode" }).getByRole("button", { name: "More" }).click();
+    await app(page).getByRole("menu", { name: "More places" }).getByRole("menuitem", { name: "Operations" }).click();
     await app(page).getByRole("button", { name: "Go back" }).click();
     await expect(app(page).locator(".lk-app")).toHaveAttribute("data-surface", "code");
     await app(page).getByRole("button", { name: "Personal. Switch Claude Code account" }).first().click();
@@ -127,8 +126,10 @@ test.describe("live demo (desktop)", () => {
     await openDemo(page);
     await app(page)
       .getByRole("navigation", { name: "KalCode" })
-      .getByRole("button", { name: /^Dashboard/ })
+      .getByRole("button", { name: /^Activity/ })
       .click();
+    // Activity leads with Needs You, as in the app: one line that opens the inbox.
+    await expect(app(page).getByRole("region", { name: "Needs you" })).toContainText("blocked on you");
     await expect(app(page).getByRole("region", { name: "Agent Fleet" })).toContainText("Dashboard Redesign");
     await app(page)
       .getByRole("article", { name: /Dashboard Tests/ })
@@ -138,10 +139,9 @@ test.describe("live demo (desktop)", () => {
     await app(page).getByRole("button", { name: "Add to pane 1" }).click();
     await app(page).getByRole("menuitem", { name: "Browser" }).click();
     await expect(app(page).getByText("localhost:3000").first()).toBeVisible();
-    await app(page)
-      .getByRole("navigation", { name: "KalCode" })
-      .getByRole("button", { name: /^Operations/ })
-      .click();
+    // Code and Activity are the primary places; Operations is one click away in More.
+    await app(page).getByRole("navigation", { name: "KalCode" }).getByRole("button", { name: "More" }).click();
+    await app(page).getByRole("menu", { name: "More places" }).getByRole("menuitem", { name: "Operations" }).click();
     for (const tab of ["Runs", "Queue", "Services", "Environments", "Activity"]) {
       await app(page).getByRole("tab", { name: tab }).click();
       await expect(app(page).getByRole("tab", { name: tab })).toHaveAttribute("aria-selected", "true");

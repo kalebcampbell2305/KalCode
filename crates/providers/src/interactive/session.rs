@@ -10,7 +10,8 @@
 //! | UserPromptSubmit | `Status(active)`; first prompt → title (never stored) |
 //! | PreToolUse | `ToolRequested`; engine routing: `ApprovalRequired` then, when allowed, `ToolStarted` + `Status(by tool)`; provider-prompt routing and observing providers: `ToolStarted` + `Status(by tool)` |
 //! | PermissionRequest, Notification(permission_prompt) | `Status(waiting_for_user, "Answer in <provider>")` |
-//! | Notification(idle_prompt, elicitation…, agent_needs_input) | `Status(waiting_for_user)` |
+//! | Notification(elicitation…, agent_needs_input) | `Status(waiting_for_user)` |
+//! | Notification(idle_prompt) | nothing: Claude is idle at its prompt after `Stop`, not asking |
 //! | PostToolUse / PostToolUseFailure | `ToolCompleted { ok }`; `FileChanged` for edit tools |
 //! | Stop | open tool calls closed as not run, `TurnCompleted { ok: true }` |
 //! | StopFailure | `Error { recoverable }`, `TurnCompleted { ok: false }` |
@@ -1028,10 +1029,6 @@ impl Shared {
             HookEvent::PermissionRequest => vec![waiting(self.profile().answer_in)],
             HookEvent::Notification => match record.notification_type.as_deref() {
                 Some("permission_prompt") => vec![waiting(self.profile().answer_in)],
-                Some("idle_prompt") => vec![waiting(&format!(
-                    "{} is waiting for your input",
-                    self.profile().name
-                ))],
                 Some("elicitation_dialog" | "elicitation_url_dialog" | "agent_needs_input") => {
                     vec![waiting(&format!(
                         "{} needs your input",
@@ -1560,7 +1557,6 @@ impl Shared {
                     record.notification_type.as_deref(),
                     Some(
                         "permission_prompt"
-                            | "idle_prompt"
                             | "elicitation_dialog"
                             | "elicitation_url_dialog"
                             | "agent_needs_input"
@@ -3109,6 +3105,18 @@ mod tests {
         ));
         assert!(drain(&rx).is_empty());
 
+        // `idle_prompt` fires ~60 s after a finished turn while Claude sits idle at its prompt.
+        // It is not a question: the turn already ended IDLE on `Stop`, and a handoff can land.
+        s.handle(record(HookEvent::Stop, json!({})));
+        assert_eq!(drain(&rx), [AgentEvent::TurnCompleted { ok: true }]);
+        assert_eq!(s.handoff_readiness(), Ok(()));
+        s.handle(record(
+            HookEvent::Notification,
+            json!({"notification_type": "idle_prompt"}),
+        ));
+        assert!(drain(&rx).is_empty());
+        assert_eq!(s.handoff_readiness(), Ok(()));
+
         s.handle(record(
             HookEvent::StopFailure,
             json!({"error_type": "rate_limit"}),
@@ -3552,24 +3560,14 @@ mod tests {
         });
         s.handle(record(
             HookEvent::Notification,
-            json!({"notification_type": "idle_prompt"}),
-        ));
-        s.handle(record(
-            HookEvent::Notification,
             json!({"notification_type": "agent_needs_input"}),
         ));
         assert_eq!(
             statuses(&drain(&rx)),
-            [
-                (
-                    ThreadStatus::WaitingForUser,
-                    Some("Gemini CLI is waiting for your input".into())
-                ),
-                (
-                    ThreadStatus::WaitingForUser,
-                    Some("Gemini CLI needs your input".into())
-                ),
-            ]
+            [(
+                ThreadStatus::WaitingForUser,
+                Some("Gemini CLI needs your input".into())
+            )]
         );
     }
 

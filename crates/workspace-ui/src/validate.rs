@@ -190,6 +190,7 @@ mod tests {
         }
         assert!(is_browser_url("http://localhost:3000"));
         assert!(is_browser_url("https://example.com/a/b%20c"));
+        assert!(is_browser_url("http://localhost:3000/100%25"));
         for bad in [
             "file:///c:/x",
             "javascript:alert(1)",
@@ -202,6 +203,7 @@ mod tests {
             "https://example.com/callback#access-token",
             "https:///missing-host",
             "https://example.com/bad path",
+            "http://localhost:3000/100%",
             "http://999.999.999.999/",
         ] {
             assert!(!is_browser_url(bad), "{bad}");

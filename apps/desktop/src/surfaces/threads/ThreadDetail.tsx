@@ -69,6 +69,8 @@ interface ThreadDetailProps {
   onArchived: () => void;
   /** The thread was restored to the open list (`thread_unarchive`). */
   onUnarchived: () => void;
+  /** Newer messages were loaded, which marks them read without a thread event. */
+  onRead?: () => void;
 }
 
 /** Prefix of the runtime's structured activity while a thread waits for approval. */
@@ -87,7 +89,7 @@ const FAILURE_TITLES: Record<Action, string> = {
   rename: "Couldn't rename the thread",
 };
 
-export function ThreadDetail({ threadId, archived, onArchived, onUnarchived }: ThreadDetailProps) {
+export function ThreadDetail({ threadId, archived, onArchived, onUnarchived, onRead }: ThreadDetailProps) {
   const { client } = useRuntime();
   const { pending, pendingState, decide, refreshPending, setPanelOpen } = usePermissions();
   const toast = useToast();
@@ -102,6 +104,14 @@ export function ThreadDetail({ threadId, archived, onArchived, onUnarchived }: T
         : current,
     ),
   );
+  // Reading the newest page clears the unread count natively; let the list catch up.
+  const newestId = detail.state === "ready" ? (detail.messages.at(-1)?.id ?? null) : null;
+  const readThrough = useRef<string | null>(null);
+  useEffect(() => {
+    if (newestId === null || newestId === readThrough.current) return;
+    readThrough.current = newestId;
+    onRead?.();
+  }, [newestId, onRead]);
 
   const run = async (action: Action, call: () => Promise<ThreadSummary>): Promise<boolean> => {
     setBusy(action);
@@ -491,13 +501,37 @@ function Timeline({
   const scroller = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   const size = items.length + streaming.reduce((n, m) => n + m.text.length, 0);
+  const toast = useToast();
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
+  /** Distance from the bottom before earlier messages were prepended, so the view stays put. */
+  const anchor = useRef<number | null>(null);
 
   // Follow new output while the reader is at the bottom; leave them alone if they scrolled up.
   // biome-ignore lint/correctness/useExhaustiveDependencies: `size` changes whenever content grows.
   useLayoutEffect(() => {
     const el = scroller.current;
-    if (el && pinned.current) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    if (anchor.current !== null) {
+      el.scrollTop = el.scrollHeight - anchor.current;
+      anchor.current = null;
+    } else if (pinned.current) el.scrollTop = el.scrollHeight;
   }, [size]);
+
+  const loadEarlier = async () => {
+    const el = scroller.current;
+    setLoadingEarlier(true);
+    if (el) anchor.current = el.scrollHeight - el.scrollTop;
+    const loaded = await detail.loadEarlier();
+    setLoadingEarlier(false);
+    requestAnimationFrame(() => {
+      // Nothing was prepended: don't let a later update jump the view.
+      anchor.current = null;
+      // The button goes away once the first message is loaded; keep focus in the transcript.
+      if (document.activeElement === document.body) scroller.current?.focus();
+    });
+    if (!loaded)
+      toast.show({ tone: "danger", title: "Couldn't load earlier messages", description: "Try again in a moment." });
+  };
 
   return (
     <section
@@ -511,6 +545,13 @@ function Timeline({
         pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
       }}
     >
+      {detail.hasEarlier ? (
+        <div className={styles.earlier}>
+          <Button size="sm" variant="ghost" busy={loadingEarlier} onClick={() => void loadEarlier()}>
+            Load earlier messages
+          </Button>
+        </div>
+      ) : null}
       {items.length === 0 && streaming.length === 0 ? (
         <p className={styles.empty}>No messages yet.</p>
       ) : (
