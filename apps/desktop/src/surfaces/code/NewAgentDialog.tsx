@@ -575,6 +575,9 @@ export function NewAgentDialog({
             listRef.current?.focus({ preventScroll: true });
           }}
         >
+          {/* The lit edge and the starfield on inert elements, not pseudo-elements (see
+              NewAgentDialog.module.css). */}
+          <span className={styles.dialogEdge} aria-hidden="true" />
           <form ref={formRef} className={styles.form} onSubmit={submit} onKeyDown={onFormKey} aria-label="New agent">
             <div className={styles.body}>
               <header className={styles.head}>
@@ -968,6 +971,7 @@ export function NewAgentDialog({
               </div>
             </footer>
           </form>
+          <span className={styles.starfield} aria-hidden="true" />
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

@@ -304,6 +304,8 @@ export function ThreadDetail({ threadId, archived, onArchived, onUnarchived, onR
           context={{ kind: "error", label: problem.title, text: `${thread.error.code}: ${thread.error.message}` }}
         >
           <div className={styles.notice} data-tone={problem.tone} role={problem.tone === "danger" ? "alert" : "status"}>
+            {/* The tone rail on an inert element, not ::before (see ThreadDetail.module.css). */}
+            <span className={styles.noticeRail} aria-hidden="true" />
             {problem.tone === "danger" ? (
               <CircleX className={styles.noticeIcon} aria-hidden="true" />
             ) : (
@@ -326,6 +328,7 @@ export function ThreadDetail({ threadId, archived, onArchived, onUnarchived, onR
       ) : null}
       {thread.status === "waiting_for_permission" ? (
         <div className={styles.notice} data-tone="waiting">
+          <span className={styles.noticeRail} aria-hidden="true" />
           <ShieldAlert className={styles.noticeIcon} aria-hidden="true" />
           <p className={styles.noticeTitle}>
             {thread.pendingApprovals === 1
