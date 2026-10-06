@@ -207,3 +207,20 @@ the payload format is `{"kc":{"link":"kalcode-remote://...","wid":"ws_..."}}`.
 retrying with 0.5 s → 10 s backoff, UI keeps the last state and dims it) · `Offline` (no
 address reachable for 30 s, or the workstation said `shutdown`) · `Removed` (`revoked`). The
 device never shows stale state as live.
+
+## 8. Value sets and sub-shapes (normative)
+
+| Field | Values / shape |
+|---|---|
+| `notify.kind` | `needs_you` \| `agent_failed` \| `agent_done` \| `run_failed` \| `deployment` |
+| `agent.diff` line `kind` (first element of each `lines` pair) | `add` \| `del` \| `ctx` |
+| `agent.log` entry | `{id, kind, text, at}`; `more: bool` means an older page exists (pass the last `id` as `beforeId`) |
+| `agent.detail` `worktree` | `{path, branch, baseBranch}` or `null` |
+| `run.detail` | `logs: [string]`, `tests: [{name, status, durationMs}]` |
+| `needs.decide` result `status` | `approved` \| `denied` \| `already_answered` |
+| `voice.command` result `outcome` | `done` \| `partial` \| `refused` \| `clarify` |
+
+Handshake check order on the desktop: version → revoked → unpaired → `not_entitled` → pairing
+code. A revoked key stays revoked even with a valid code (re-pairing needs the device to forget
+the workstation and generate a new key). A session counts as accepted only after the device's
+encrypted `hello`, so a replayed first message never updates `lastSeenAt`.
