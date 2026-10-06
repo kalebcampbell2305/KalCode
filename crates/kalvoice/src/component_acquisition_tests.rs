@@ -18,6 +18,9 @@ use crate::component_store::{
 
 const NOW: i64 = 1_790_000_000;
 const KEY_ID: &str = "component-2026-1";
+/// Hang guard for test-only thread handshakes: never a latency assertion.
+const HANG_GUARD: Duration = Duration::from_secs(30);
+
 type RecordedRequests = Arc<Mutex<Vec<(String, Option<u64>)>>>;
 
 fn signing_key(seed: u8) -> SigningKey {
@@ -832,7 +835,7 @@ fn cancellation_interrupts_waiting_for_an_acquisition_lock() {
         if first_conflict.swap(false, Ordering::SeqCst) {
             let _ = entered_tx.try_send(());
             if let Ok(receiver) = resume_rx.lock() {
-                let _ = receiver.recv_timeout(Duration::from_secs(5));
+                let _ = receiver.recv_timeout(HANG_GUARD);
             }
         }
     }));
@@ -844,7 +847,7 @@ fn cancellation_interrupts_waiting_for_an_acquisition_lock() {
         let _ = result_tx.send(result);
     });
 
-    let entered = entered_rx.recv_timeout(Duration::from_secs(5));
+    let entered = entered_rx.recv_timeout(HANG_GUARD);
     let started = std::time::Instant::now();
     cancel.store(true, Ordering::SeqCst);
     let _ = resume_tx.try_send(());

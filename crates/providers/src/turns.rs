@@ -507,6 +507,9 @@ mod tests {
     use std::io;
     use std::time::Instant;
 
+    /// Hang guard for a test child process and its turn worker: never a latency assertion.
+    const HANG_GUARD: Duration = Duration::from_secs(30);
+
     struct TestAdapter;
 
     impl TurnAdapter for TestAdapter {
@@ -600,7 +603,7 @@ mod tests {
         drop(lines);
         child.close_stdin();
         let status = child
-            .wait_timeout(Duration::from_secs(5))
+            .wait_timeout(HANG_GUARD)
             .map_err(|error| ProviderError::Start(error.to_string()))?
             .ok_or_else(|| ProviderError::Start("test child did not exit".into()))?;
         let _ = status;
@@ -645,7 +648,7 @@ mod tests {
             "the old interrupted reader must not emit a stale failure"
         );
 
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + HANG_GUARD;
         while lock(&session.shared.current).is_some() {
             if Instant::now() >= deadline {
                 return Err(ProviderError::Start("next test turn did not finish".into()));

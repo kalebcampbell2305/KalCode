@@ -276,6 +276,9 @@ mod tests {
 
     use super::*;
 
+    /// Hang guard for observing the worker thread on a loaded machine: never a latency assertion.
+    const HANG_GUARD: Duration = Duration::from_secs(30);
+
     struct DelayedZeroJob {
         active: Arc<AtomicBool>,
         dropped: Arc<AtomicBool>,
@@ -336,7 +339,7 @@ mod tests {
         // Under a parallel workspace test run the worker may not receive a time
         // slice within 40ms. Wait for the observable retry, while keeping the
         // fake process active, instead of assuming wall time proves scheduling.
-        let retry_deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let retry_deadline = std::time::Instant::now() + HANG_GUARD;
         while terminations.load(Ordering::Acquire) < 2 && std::time::Instant::now() < retry_deadline
         {
             std::thread::sleep(Duration::from_millis(1));
@@ -356,7 +359,7 @@ mod tests {
 
         active.store(false, Ordering::Release);
         done_rx
-            .recv_timeout(Duration::from_secs(1))
+            .recv_timeout(HANG_GUARD)
             .expect("cleanup after zero");
         worker.join().expect("cleanup worker");
         assert!(dropped.load(Ordering::Acquire));

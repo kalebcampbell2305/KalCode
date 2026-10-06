@@ -642,6 +642,9 @@ mod tests {
     use kalcode_core::flags::BuildChannel;
     use kalcode_core::{CoreConfig, Paths};
 
+    /// Hang guard for test-only thread handshakes: never a latency assertion.
+    const HANG_GUARD: Duration = Duration::from_secs(30);
+
     /// Test double: "records" a fixed buffer.
     struct FakeAudio {
         samples: Vec<f32>,
@@ -807,12 +810,10 @@ mod tests {
                 Ok(())
             })
         });
-        locked_rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("core locked");
+        locked_rx.recv_timeout(HANG_GUARD).expect("core locked");
         let starting_voice = voice.clone();
         let start = thread::spawn(move || starting_voice.begin(KalVoiceMode::Dictation));
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + HANG_GUARD;
         while voice.listening().is_none() && Instant::now() < deadline {
             thread::yield_now();
         }
@@ -833,7 +834,7 @@ mod tests {
             result
         });
         cancel_entered_rx
-            .recv_timeout(Duration::from_secs(2))
+            .recv_timeout(HANG_GUARD)
             .expect("cancel entered");
         let waiting = cancelled_rx
             .recv_timeout(Duration::from_millis(100))
@@ -967,7 +968,7 @@ mod tests {
         let begin_voice = voice.clone();
         let begin = thread::spawn(move || begin_voice.begin(KalVoiceMode::Talk));
         entered_rx
-            .recv_timeout(Duration::from_secs(1))
+            .recv_timeout(HANG_GUARD)
             .expect("begin reached microphone start");
 
         let cancel_voice = voice.clone();
@@ -980,7 +981,7 @@ mod tests {
                 .expect("report cancel result");
         });
         cancel_started_rx
-            .recv_timeout(Duration::from_secs(1))
+            .recv_timeout(HANG_GUARD)
             .expect("cancel thread started");
 
         let prompt_cancel = cancelled_rx.recv_timeout(Duration::from_millis(250));
@@ -991,7 +992,7 @@ mod tests {
         let begin_result = begin.join().expect("begin thread");
         if prompt_cancel.is_err() {
             cancelled_rx
-                .recv_timeout(Duration::from_secs(1))
+                .recv_timeout(HANG_GUARD)
                 .expect("blocked cancel settled after microphone start");
         }
         cancel.join().expect("cancel thread");
@@ -1027,7 +1028,7 @@ mod tests {
         let begin_voice = voice.clone();
         let begin = thread::spawn(move || begin_voice.begin(KalVoiceMode::Talk));
         entered_rx
-            .recv_timeout(Duration::from_secs(1))
+            .recv_timeout(HANG_GUARD)
             .expect("begin reached recognizer prepare");
         let cancel_voice = voice.clone();
         let (cancelled_tx, cancelled_rx) = mpsc::sync_channel(1);
@@ -1042,7 +1043,7 @@ mod tests {
         let begin_result = begin.join().expect("begin thread");
         if prompt_cancel.is_err() {
             cancelled_rx
-                .recv_timeout(Duration::from_secs(1))
+                .recv_timeout(HANG_GUARD)
                 .expect("blocked cancel settled after recognizer prepare");
         }
         cancel.join().expect("cancel thread");
@@ -1118,7 +1119,7 @@ mod tests {
         let begin_voice = voice.clone();
         let begin = thread::spawn(move || begin_voice.begin(KalVoiceMode::Dictation));
         entered_rx
-            .recv_timeout(Duration::from_secs(1))
+            .recv_timeout(HANG_GUARD)
             .expect("begin reached microphone start");
         assert!(voice.cancel(None));
         release_tx.send(()).expect("release microphone start");
