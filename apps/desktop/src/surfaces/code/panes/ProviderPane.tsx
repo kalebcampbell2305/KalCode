@@ -198,11 +198,14 @@ export const ProviderPane = memo(function ProviderPane({
     }
   };
 
-  // Ctrl+Shift+E moves focus between the terminal and the approval (or the header). Code's own
-  // window-level tab shortcuts (Ctrl+Shift+W, Ctrl+Tab) pass through untouched.
+  // Ctrl+Shift+E moves focus between the terminal and the approval (or the header). With no
+  // approval waiting, it leaves the terminal through Code's own handler, as in shell terminals.
+  // Code's window-level tab shortcuts (Ctrl+Shift+W, Ctrl+Tab) pass through untouched.
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     const ctrlShift = event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey;
     if (ctrlShift && event.key.toLowerCase() === "e") {
+      const inTerminal = event.target instanceof Element && event.target.closest("[data-pane-terminal]") !== null;
+      if (!showOverlay && inTerminal) return;
       event.preventDefault();
       if (showOverlay && !overlayRef.current?.contains(document.activeElement)) overlayRef.current?.focus();
       else focusTerminal();

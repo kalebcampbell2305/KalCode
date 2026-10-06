@@ -10,6 +10,7 @@ import {
   CodeContextOperations,
   codeContextOperationsAvailable,
   codeContextOperationsContent,
+  requestCodeContextTab,
 } from "./CodeContextOperations.tsx";
 
 const seams = vi.hoisted(() => ({
@@ -20,6 +21,7 @@ const seams = vi.hoisted(() => ({
   activate: vi.fn(async () => true),
   createTerminal: vi.fn(async () => ({ id: "created-terminal" })),
   operationsEnabled: [] as boolean[],
+  workspaceVisible: true,
 }));
 
 vi.mock("../operations/useOperations.ts", () => ({
@@ -42,6 +44,7 @@ vi.mock("../../runtime/WorkspaceProvider.tsx", () => ({
     activate: seams.activate,
     createTerminal: seams.createTerminal,
   }),
+  useWorkspaceVisible: () => seams.workspaceVisible,
 }));
 vi.mock("../../shell/panes/useOpenInPane.ts", () => ({ useOpenInPane: () => seams.openInPane }));
 vi.mock("../../shell/navigation.tsx", () => ({
@@ -171,7 +174,26 @@ describe("CodeContextOperations", () => {
   beforeEach(() => {
     seams.snapshot = snapshot();
     seams.operationsEnabled.length = 0;
+    seams.workspaceVisible = true;
     vi.clearAllMocks();
+  });
+
+  it("leaves a Tests request to the workspace on screen, not a hidden workspace's pane", () => {
+    const client = api();
+    // Workspace B's pane stays mounted while A is shown.
+    seams.workspaceVisible = false;
+    const hidden = renderContext(client);
+    act(() => requestCodeContextTab("tests"));
+    expect(within(hidden.container).getByRole("tab", { name: /Runs/ })).toHaveAttribute("aria-selected", "true");
+
+    // Workspace A opens its own pane for the request.
+    seams.workspaceVisible = true;
+    const shown = render(
+      <ToastProvider>
+        <CodeContextOperations client={client} />
+      </ToastProvider>,
+    );
+    expect(within(shown.container).getByRole("tab", { name: /Tests/ })).toHaveAttribute("aria-selected", "true");
   });
 
   it("registers only behind the native Operations gate", () => {
