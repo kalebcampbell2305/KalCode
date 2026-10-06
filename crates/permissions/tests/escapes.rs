@@ -822,3 +822,38 @@ fn stale_or_forged_modes_cannot_widen_authority() {
     );
     assert_eq!(d.effect, PolicyEffect::Deny);
 }
+
+#[test]
+fn bypass_still_asks_for_credentials_named_through_win32_name_rewrites() {
+    // Windows opens `.env::$DATA` (the default data stream) and `id_rsa.` / `config.json ` (trailing
+    // dots and spaces are stripped) as the credential file itself. These forms are opaque, and
+    // Bypass runs opaque actions, so only the credential check stands between them and the file.
+    let h = Harness::new();
+    let gate: &dyn PermissionGate = h.service.as_ref();
+    let bypass_thread = h.add_thread(M::Bypass);
+    let action = |kind| h.action_for(&bypass_thread, &h.workspace_id, kind);
+    for path in [
+        ".env::$DATA",
+        ".env:$DATA",
+        "id_rsa.",
+        "id_rsa::$DATA",
+        "certs/server.pem.",
+        ".docker./config.json",
+        ".kube. /config",
+        "secrets.json:stream",
+    ] {
+        for kind in [
+            ActionKind::FileRead { path: path.into() },
+            command(&format!("cat '{path}'")),
+            command(&format!("type \"{path}\"")),
+        ] {
+            let decision = gate.evaluate(&action(kind.clone()), M::Bypass);
+            assert_eq!(
+                decision.effect,
+                PolicyEffect::Ask,
+                "{kind:?}: {}",
+                decision.reason
+            );
+        }
+    }
+}
