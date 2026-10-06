@@ -168,6 +168,11 @@ jobs:
         if: steps.reuse.outputs.reused != 'true'
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: .github/scripts/gate-workspace-hygiene.ps1 -Phase Reset
+      # A leaking kernel driver makes sockets fail at random (ERR_NO_BUFFER_SPACE): warn early, refuse late.
+      - name: Check kernel memory
+        if: steps.reuse.outputs.reused != 'true'
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: .github/scripts/gate-kernel-memory.ps1
       - name: Plan change-based gate
         if: steps.reuse.outputs.reused != 'true'
         id: plan
@@ -442,6 +447,11 @@ jobs:
         if: steps.reuse.outputs.reused != 'true'
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: .github/scripts/gate-workspace-hygiene.ps1 -Phase Reset
+      # A leaking kernel driver makes sockets fail at random (ERR_NO_BUFFER_SPACE): warn early, refuse late.
+      - name: Check kernel memory
+        if: steps.reuse.outputs.reused != 'true'
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: .github/scripts/gate-kernel-memory.ps1
       - name: Plan change-based gate
         if: steps.reuse.outputs.reused != 'true'
         id: plan
