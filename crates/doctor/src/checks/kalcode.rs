@@ -412,7 +412,10 @@ mod watchdog_tests {
         // Bounded: the watchdog must stop on its own well before the run's 60 s default.
         let deadline = Instant::now() + Duration::from_secs(30);
         while !watchdog.is_finished() {
-            assert!(Instant::now() < deadline, "the watchdog ignored the check deadline");
+            assert!(
+                Instant::now() < deadline,
+                "the watchdog ignored the check deadline"
+            );
             std::thread::sleep(Duration::from_millis(10));
         }
         watchdog.join().unwrap();

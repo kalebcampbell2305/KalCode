@@ -1822,7 +1822,10 @@ fn lapsed_doctor_and_utility_requests_stop_being_pending() {
         .iter()
         .filter(|kind| kind.as_str() == "approval.expired")
         .count();
-    assert_eq!(expired_events, 2, "each lapse refreshes the Approvals panel");
+    assert_eq!(
+        expired_events, 2,
+        "each lapse refreshes the Approvals panel"
+    );
     assert_eq!(h.service.expire_lapsed_requests().expect("sweep"), 0);
 
     // A late answer is refused, and the claim-time checks still refuse too.

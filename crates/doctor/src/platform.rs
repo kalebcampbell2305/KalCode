@@ -57,7 +57,11 @@ mod tests {
     #[test]
     fn only_windows_versions_carry_a_build_number() {
         assert_eq!(build_number("10.0.26200", true), Some(26200));
-        assert_eq!(build_number("15.1.0", false), None, "macOS 15.1.0 is not build 0");
+        assert_eq!(
+            build_number("15.1.0", false),
+            None,
+            "macOS 15.1.0 is not build 0"
+        );
         assert_eq!(build_number("6.8.12", false), None);
     }
 }
