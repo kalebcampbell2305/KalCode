@@ -31,6 +31,13 @@ final class FramedConnection: @unchecked Sendable {
         queue = DispatchQueue(label: "com.kalcode.remote.conn.\(endpoint)")
     }
 
+    /// Wraps an accepted connection (loopback test host).
+    init(accepted: NWConnection, endpoint: HostPort) {
+        self.endpoint = endpoint
+        connection = accepted
+        queue = DispatchQueue(label: "com.kalcode.remote.accepted")
+    }
+
     func open() async throws {
         let conn = connection
         let ep = endpoint.description
@@ -125,6 +132,8 @@ public final class SecureSession: @unchecked Sendable {
     private var pending: [Data] = []
     private let sendLock = NSLock()
 
+    var framed: FramedConnection { connection }
+
     init(connection: FramedConnection, transport: NoiseTransport, reply: HandshakeReply) {
         self.connection = connection
         self.endpoint = connection.endpoint
@@ -152,6 +161,15 @@ public final class SecureSession: @unchecked Sendable {
             pending.append(contentsOf: try assembler.push(plaintext))
         }
         return pending.removeFirst()
+    }
+
+    /// Sends raw JSON as one application message (loopback test host).
+    func sendJSON(_ json: Data) throws {
+        sendLock.lock()
+        defer { sendLock.unlock() }
+        for chunk in try Framing.appMessageChunks(json) {
+            try connection.send(frame: try sender.encrypt(plaintext: chunk))
+        }
     }
 
     public func receive() async throws -> InboundMessage {
