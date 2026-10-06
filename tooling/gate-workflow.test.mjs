@@ -207,6 +207,50 @@ ${reuse}`,
   }
 });
 
+test("a gate warns on a leaking kernel nonpaged pool and refuses before sockets start failing", {
+  skip: process.platform !== "win32",
+}, () => {
+  for (const [job, jobSteps] of [
+    ["windows", steps],
+    ["pc2", pc2Steps],
+  ]) {
+    const names = jobSteps.map((step) => step.match(/^name: (.+)$/m)?.[1] ?? "");
+    const check = names.indexOf("Check kernel memory");
+    assert.ok(check > names.indexOf("Reset to the exact event SHA, keeping warm caches"), `${job}: after the checkout`);
+    assert.ok(check < names.indexOf("Plan change-based gate"), `${job}: before any check runs`);
+    assert.match(jobSteps[check], /run: \.github\/scripts\/gate-kernel-memory\.ps1$/m);
+  }
+  const scriptPath = fileURLToPath(new URL("../.github/scripts/gate-kernel-memory.ps1", import.meta.url));
+  const run = (bytes) =>
+    spawnSync(
+      "powershell.exe",
+      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath, "-NonpagedBytes", String(bytes)],
+      { encoding: "utf8", windowsHide: true, env: { ...process.env, COMPUTERNAME: "GATE-PC" } },
+    );
+  const GB = 1024 ** 3;
+  const healthy = run(Math.round(0.6 * GB));
+  assert.equal(healthy.status, 0);
+  assert.doesNotMatch(healthy.stdout, /::(warning|error)::/);
+  const leaking = run(Math.round(3.78 * GB));
+  assert.equal(leaking.status, 0, "a warning never fails the gate");
+  assert.match(leaking.stdout, /::warning::GATE-PC's kernel nonpaged pool is 3\.78 GB/);
+  const exhausted = run(7 * GB);
+  assert.equal(exhausted.status, 1);
+  assert.match(
+    exhausted.stdout,
+    /::error::GATE-PC's kernel nonpaged pool is 7 GB .*Restart GATE-PC, then rerun this gate/,
+  );
+  const live = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath], {
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  assert.match(
+    live.stdout,
+    /kernel nonpaged pool|Could not read/,
+    "the live counter is read (or skipped with a warning)",
+  );
+});
+
 test("selected-check outputs use Actions-compatible bytes on Windows PowerShell", {
   skip: process.platform !== "win32",
 }, () => {
