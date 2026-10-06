@@ -22,7 +22,11 @@ test.describe("every page", () => {
     test(`${page.path} renders with correct metadata and no console errors`, async ({ page: tab }) => {
       const errors: string[] = [];
       tab.on("console", (message) => {
-        if (message.type() === "error") errors.push(message.text());
+        if (message.type() !== "error") return;
+        // /download refreshes its build details from the live release manifest; a local run has
+        // none published, and the browser logs that expected 404. Every other error still fails.
+        if (new URL(message.location().url, "http://localhost").pathname === "/releases/latest.json") return;
+        errors.push(message.text());
       });
       tab.on("pageerror", (error) => errors.push(error.message));
 
