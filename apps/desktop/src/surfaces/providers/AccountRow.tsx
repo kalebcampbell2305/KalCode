@@ -177,7 +177,11 @@ export function AccountRow({
                 <UsageMeter usage={quota} />
                 {quota.plan ? <span className={styles.plan}>{quota.plan}</span> : null}
               </span>
-              <span className={styles.sub} data-tone={quota.status === "stale" ? "stale" : undefined}>
+              <span
+                className={styles.sub}
+                data-tone={quota.status === "stale" ? "stale" : undefined}
+                title={usageDetail(quota)}
+              >
                 {usageDetail(quota)}
               </span>
             </>

@@ -433,10 +433,12 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
         >
           {providerPanes ? (
             <p>
-              Launch a <ProviderMark provider="claude-code" size="sm" />, <ProviderMark provider="codex" size="sm" />,{" "}
-              <ProviderMark provider="cursor" name="Cursor" size="sm" /> or{" "}
-              <ProviderMark provider="gemini-cli" name="Gemini" size="sm" /> agent from Code and it shows up here with
-              what it's doing and whether it needs you. A CLI you type into a plain terminal isn't tracked here.
+              Launch a <ProviderMark provider="claude-code" size="sm" className={styles.inlineMark} />,{" "}
+              <ProviderMark provider="codex" size="sm" className={styles.inlineMark} />,{" "}
+              <ProviderMark provider="cursor" name="Cursor" size="sm" className={styles.inlineMark} /> or{" "}
+              <ProviderMark provider="gemini-cli" name="Gemini" size="sm" className={styles.inlineMark} /> agent from
+              Code and it shows up here with what it's doing and whether it needs you. A CLI you type into a plain
+              terminal isn't tracked here.
             </p>
           ) : (
             <p>Coding agents aren't part of this build. Threads keep their own list in Threads.</p>
