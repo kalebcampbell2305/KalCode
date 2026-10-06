@@ -1,5 +1,9 @@
 # KalCode agent policy
 
+## Pane close and restart ownership (owner directive 2026-10-05)
+
+Closing a terminal or coding-agent pane terminates its owned session through the canonical stop path and persists the pane as closed. Restart must not resurrect it. Docking or hiding is the explicit keep-running action; cancelling Close preserves the pane and process. This supersedes the historical Z7-14 close-only-hides contract. Smart Resume restores only saved-open, recoverable provider sessions and never treats a process ID as durable session truth.
+
 ## Permanent simplification + power rule (owner directive 2026-10-05)
 
 "KALCODE SHOULD REDUCE THE NUMBER OF DECISIONS USERS MUST MAKE AND COMPLETE MORE OF THE MECHANICAL WORK BETWEEN THOSE DECISIONS.
