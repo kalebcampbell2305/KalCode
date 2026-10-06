@@ -31,8 +31,50 @@ export const APP_SHELL = "[data-app-shell]";
  *   atmosphere wash, an empty state's star field); axe does not sample pixels.
  * - imgNode: the text sits over an <img>, <svg>, <canvas> or <video>.
  * - nonBmp: the text is only icon glyphs or emoji, which have no contrast to measure.
+ *
+ * Deliberately NOT here:
+ * - pseudoContent: a large absolute ::before/::after with a background above the text. Draw the
+ *   decoration on an aria-hidden element instead (the hairlines and rails across the app do).
+ * - bgOverlap: another element is stacked above the text. Real overlapping UI is a bug to fix; so
+ *   is decoration axe sorts above the text. axe 4.13 sorts an absolutely positioned child (even at
+ *   z-index -1) above in-flow text of the same stacking context that has no positioned ancestor
+ *   in between, so a full-area decoration sits behind content that is positioned or in its own
+ *   stacking context (Shell's .atmosphere is a sibling before the frame; the sidebar footer is
+ *   isolated; DashboardBoard positions .head's children). A thin edge never covers a text centre.
+ * - shortTextContent: axe's label for a one-character text (a count badge, an initial, a "·")
+ *   whose contrast it did not pass. That covers both a measured failure and a background it could
+ *   not resolve, so it would hide real failures and real overlaps alike. The scan runs with
+ *   ignoreLength instead (CONTRAST_CHECK below): one-character text is judged like any other, and
+ *   lands in the normal pass, violation or reason buckets above.
+ *
+ * One kind of node is exempt by what it is, not by reason: text drawn inside an aria-hidden SVG
+ * icon (ProviderGlyph's generic initial). It is part of a graphic, always next to the real name,
+ * so WCAG 1.4.3 does not apply to it (1.4.11 non-text contrast does), and axe cannot place it:
+ * it orders SVG shapes by CSS display, a <text> computes to block, and so it sorts the icon's
+ * outline above the letter (bgOverlap). See `icon` below.
+ *
+ * And one narrow case of elmPartiallyObscured is allowed (`selfObscured` below): when the only
+ * element axe blames is the text's own element. That is a pill or badge whose painted box is a
+ * pixel shorter than its font's line box (the Agents count: a 13.8px pill around 15px of text),
+ * so axe will not trust its background; nothing else covers the text. Any other element
+ * partially covering text still fails.
+ *
+ * And elmPartiallyObscuring is re-checked rather than trusted (`belowOpaque` below). axe gives
+ * that reason when the lines of a multi-line text have different element stacks, comparing each
+ * stack all the way down to <html>. Over a dialog, a menu or a floating panel the lines always
+ * differ beneath the surface (one line is over the thread list, the next over its header), which
+ * cannot change the text's colours. The guard recomputes each line's stack with axe's own
+ * function and cuts it at the first element with an opaque background: equal above that cut is
+ * accepted; a difference above it (something really covering part of the text) still fails.
  */
 export const UNRESOLVABLE_CONTRAST = new Set(["bgImage", "bgGradient", "imgNode", "nonBmp"]);
+
+/**
+ * axe skips judging one-character text by default (an icon-font ligature can look like a letter).
+ * KalCode draws icons as SVG, so a single character is real text: digits in count badges,
+ * initials, separators. Judge it (axe.run merges these with the check's default options).
+ */
+const CONTRAST_CHECK = { checks: { "color-contrast": { options: { ignoreLength: true } } } };
 
 type AxeResults = Awaited<ReturnType<AxeBuilder["analyze"]>>;
 type AxeNode = AxeResults["passes"][number]["nodes"][number];
@@ -46,6 +88,10 @@ export type ContrastNode = {
   reason?: string;
   /** What axe blames: the pseudo-element's host or the background element. */
   related: string[];
+  /** Text inside an aria-hidden SVG icon: part of a graphic (see UNRESOLVABLE_CONTRAST). */
+  icon: boolean;
+  /** elmPartiallyObscuring whose lines differ only beneath an opaque surface (see above). */
+  belowOpaque: boolean;
 };
 
 const targetOf = (node: AxeNode) => node.target.map(String).join(" >>> ");
@@ -65,27 +111,86 @@ export async function contrastNodes(page: Page, results: AxeResults): Promise<Co
   }
   // Selectors from axe are a path through shadow roots: resolve each step, then test the shell.
   const paths = nodes.map(({ node }) => node.target.map(String));
-  const inShell = await page.evaluate(
+  const places = await page.evaluate(
     ({ paths, shell }) =>
       paths.map((path) => {
         let root: Document | ShadowRoot = document;
         let el: Element | null = null;
         for (const selector of path) {
           el = root.querySelector(selector);
-          if (!el) return false;
+          if (!el) return { inShell: false, icon: false };
           if (el.shadowRoot) root = el.shadowRoot;
         }
-        return Boolean(el?.closest(shell));
+        const icon = el instanceof SVGElement && el.tagName !== "svg" && !!el.closest('svg[aria-hidden="true"]');
+        return { inShell: Boolean(el?.closest(shell)), icon };
       }),
     { paths, shell: APP_SHELL },
   );
+  const reasonOf = (node: AxeNode) =>
+    ((node.any.find((c) => c.id === "color-contrast") ?? node.any[0])?.data as { messageKey?: string } | undefined)
+      ?.messageKey;
+  // Re-check "the lines' stacks differ" with axe's own stack function, cut at the first opaque
+  // background (only for that reason, and only for nodes outside shadow roots).
+  const partial = nodes.flatMap(({ node, status }, index) =>
+    status === "incomplete" && reasonOf(node) === "elmPartiallyObscuring" && node.target.length === 1
+      ? [{ index, selector: String(node.target[0]) }]
+      : [],
+  );
+  const opaqueAgrees = partial.length
+    ? await page.evaluate(
+        (selectors) => {
+          type AxeGlobal = {
+            setup: (node: Node) => void;
+            teardown: () => void;
+            commons: { dom: { getTextElementStack: (el: Element) => Element[][] } };
+          };
+          const axe = (window as unknown as { axe?: AxeGlobal }).axe;
+          if (!axe) return selectors.map(() => false);
+          const opaque = (el: Element) => {
+            const style = getComputedStyle(el);
+            const alpha = style.backgroundColor.match(/rgba?\(([^)]+)\)/)?.[1]?.split(/[ ,/]+/)[3];
+            return (
+              style.opacity === "1" &&
+              style.backgroundColor !== "transparent" &&
+              (alpha === undefined || Number(alpha) === 1)
+            );
+          };
+          const cut = (stack: Element[]) => {
+            const at = stack.findIndex(opaque);
+            return at === -1 ? stack : stack.slice(0, at + 1);
+          };
+          try {
+            axe.setup(document);
+          } catch {
+            // already set up
+          }
+          try {
+            return selectors.map((selector) => {
+              const el = document.querySelector(selector);
+              if (!el) return false;
+              const stacks = axe.commons.dom.getTextElementStack(el).map(cut);
+              const [first, ...rest] = stacks;
+              return (
+                first !== undefined && rest.every((s) => s.length === first.length && s.every((e, i) => e === first[i]))
+              );
+            });
+          } finally {
+            axe.teardown();
+          }
+        },
+        partial.map((p) => p.selector),
+      )
+    : [];
+  const belowOpaque = new Set(partial.filter((_, i) => opaqueAgrees[i]).map((p) => p.index));
   return nodes.map(({ node, status }, index) => {
     const check = node.any.find((c) => c.id === "color-contrast") ?? node.any[0];
     const data = (check?.data ?? {}) as { messageKey?: string };
     return {
       target: targetOf(node),
       status,
-      inShell: inShell[index] ?? false,
+      inShell: places[index]?.inShell ?? false,
+      icon: places[index]?.icon ?? false,
+      belowOpaque: belowOpaque.has(index),
       reason: status === "pass" ? undefined : (data.messageKey ?? undefined),
       related: (check?.relatedNodes ?? []).map((n) => n.target.map(String).join(" >>> ")),
     };
@@ -124,15 +229,23 @@ export async function expectContrastEvaluated(page: Page, results: AxeResults, w
     const blamed: Record<string, number> = {};
     for (const n of nodes) {
       if (n.status !== "incomplete") continue;
-      const key = `${n.inShell ? "shell" : "portal"}:${n.reason ?? "unknown"} <- ${n.related[0] ?? "?"}`;
+      const tag = n.icon ? "icon:" : n.belowOpaque ? "belowOpaque:" : "";
+      const key = `${n.inShell ? "shell" : "portal"}:${tag}${n.reason ?? "unknown"} <- ${n.related[0] ?? "?"}`;
       blamed[key] = (blamed[key] ?? 0) + 1;
     }
     const line = { test: test.info().titlePath.join(" › "), where, ...summary, blamed };
     appendFileSync(report, `${JSON.stringify(line)}\n`);
   }
   const label = where ? `${where}: ` : "";
+  const selfObscured = (n: ContrastNode) =>
+    n.reason === "elmPartiallyObscured" && n.related.length === 1 && n.related[0] === n.target;
   const unexplained = nodes.filter(
-    (n) => n.status === "incomplete" && !(n.reason && UNRESOLVABLE_CONTRAST.has(n.reason)),
+    (n) =>
+      n.status === "incomplete" &&
+      !n.icon &&
+      !selfObscured(n) &&
+      !n.belowOpaque &&
+      !(n.reason && UNRESOLVABLE_CONTRAST.has(n.reason)),
   );
   expect(
     unexplained.map(({ target, inShell, reason, related }) => ({ target, inShell, reason, related })),
@@ -150,7 +263,11 @@ export async function expectContrastEvaluated(page: Page, results: AxeResults, w
 
 /** Full-page WCAG 2.2 AA: no serious or critical violation, and contrast actually evaluated. */
 export async function expectNoSeriousA11yViolations(page: Page, where = "") {
-  const results = await new AxeBuilder({ page }).withTags(WCAG_TAGS).analyze();
+  // options() replaces the run options, so it goes before withTags (which adds runOnly to them).
+  const results = await new AxeBuilder({ page })
+    .options(CONTRAST_CHECK as Parameters<AxeBuilder["options"]>[0])
+    .withTags(WCAG_TAGS)
+    .analyze();
   const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
   expect(
     serious,
