@@ -11,7 +11,9 @@ export interface DraftSnapshot {
 }
 
 export interface LiveSnapshot {
-  version: 1;
+  version: 2;
+  /** The KalCode account that typed these drafts. A snapshot is only ever restored for it. */
+  viewer: string;
   /** Unix milliseconds. */
   savedAt: number;
   destination: string | null;
@@ -56,14 +58,14 @@ function keyedFields(root: ParentNode): Array<[string, HTMLInputElement | HTMLTe
   return result;
 }
 
-export function captureSnapshot(destination: string | null, root: ParentNode = document): LiveSnapshot {
+export function captureSnapshot(viewer: string, destination: string | null, root: ParentNode = document): LiveSnapshot {
   const drafts: DraftSnapshot[] = [];
   for (const [key, element] of keyedFields(root)) {
     if (!element.value || element.value.length > MAX_DRAFT_LENGTH) continue;
     drafts.push({ key, value: element.value });
     if (drafts.length >= MAX_DRAFTS) break;
   }
-  return { version: 1, savedAt: Date.now(), destination, drafts };
+  return { version: 2, viewer, savedAt: Date.now(), destination, drafts };
 }
 
 function storage(kind: "session" | "local"): Storage | null {
@@ -87,7 +89,9 @@ function isSnapshot(value: unknown): value is LiveSnapshot {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<LiveSnapshot>;
   return (
-    candidate.version === 1 &&
+    candidate.version === 2 &&
+    typeof candidate.viewer === "string" &&
+    candidate.viewer.length > 0 &&
     typeof candidate.savedAt === "number" &&
     (candidate.destination === null || typeof candidate.destination === "string") &&
     Array.isArray(candidate.drafts) &&
@@ -95,8 +99,12 @@ function isSnapshot(value: unknown): value is LiveSnapshot {
   );
 }
 
-/** Reads and removes the newest fresh snapshot (a reload's or a handoff's), if any. */
-export function takeSnapshot(now = Date.now()): LiveSnapshot | null {
+/**
+ * Reads and removes the newest fresh snapshot (a reload's or a handoff's) saved by `viewer`.
+ * Snapshots from another account (an expired session followed by a different sign-in) and older
+ * unbound ones are discarded, never restored.
+ */
+export function takeSnapshot(viewer: string, now = Date.now()): LiveSnapshot | null {
   let newest: LiveSnapshot | null = null;
   for (const key of [RELOAD_KEY, HANDOFF_KEY]) {
     const store = storage(key === RELOAD_KEY ? "session" : "local");
@@ -110,7 +118,12 @@ export function takeSnapshot(now = Date.now()): LiveSnapshot | null {
     if (!raw) continue;
     try {
       const parsed: unknown = JSON.parse(raw);
-      if (isSnapshot(parsed) && now - parsed.savedAt <= SNAPSHOT_MAX_AGE_MS && parsed.savedAt <= now + 60_000) {
+      if (
+        isSnapshot(parsed) &&
+        parsed.viewer === viewer &&
+        now - parsed.savedAt <= SNAPSHOT_MAX_AGE_MS &&
+        parsed.savedAt <= now + 60_000
+      ) {
         if (!newest || parsed.savedAt > newest.savedAt) newest = parsed;
       }
     } catch {

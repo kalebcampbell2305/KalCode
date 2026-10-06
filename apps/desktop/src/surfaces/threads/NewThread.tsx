@@ -30,6 +30,7 @@ import type { CreateThreadInput } from "../../ipc/client.ts";
 import { type KalCodeError, toKalCodeError } from "../../ipc/errors.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
+import { whileHoldingLiveReload } from "../../shell/liveUpdate/hold.ts";
 import { useNavigation } from "../../shell/navigation.tsx";
 import { MOD_LABEL } from "../../shell/shortcuts.ts";
 import { preselectLaunchAccount } from "../code/panes/agentLaunch.ts";
@@ -371,8 +372,13 @@ function NewThreadForm({
     chooseWorkspace(activeWorkspaceId);
   }, [activeWorkspaceId, options.workspaces, chooseWorkspace, cancelConfirmation]);
 
-  const submit = async (event?: FormEvent) => {
+  const submit = (event?: FormEvent) => {
     event?.preventDefault();
+    // A live UI update waits for the create, so the form is cleared before the page reloads.
+    return whileHoldingLiveReload(() => createThread());
+  };
+
+  const createThread = async () => {
     if (confirmation.busy) return;
     if (!task.trim()) {
       setError(null);

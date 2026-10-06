@@ -1,9 +1,11 @@
 import { useToast } from "@kalcode/ui/components";
 import { useEffect, useRef, useState } from "react";
+import { useAccount } from "../../account/AccountProvider.tsx";
 import { beginLiveReload, onHandoff, onUiStaged, reportHandoffReady } from "../../ipc/liveUpdate.ts";
 import { formatVersion } from "../../platform/version.ts";
 import { type Destination, useNavigation } from "../navigation.tsx";
 import { subscribeUpdated } from "./announce.ts";
+import { liveReloadHeld } from "./hold.ts";
 import styles from "./LiveUpdateHost.module.css";
 import { captureSnapshot, HANDOFF_KEY, RELOAD_KEY, restoreDrafts, saveSnapshot, takeSnapshot } from "./snapshot.ts";
 
@@ -41,10 +43,15 @@ export function LiveUpdateHost({
   openDetails.current = onOpenDetails;
   const reloadRef = useRef(reload);
   reloadRef.current = reload;
+  // Drafts belong to the signed-in KalCode account; they are saved and restored only for it.
+  const viewer = useAccount().snapshot.account?.id ?? null;
+  const viewerRef = useRef(viewer);
+  viewerRef.current = viewer;
 
   // Restore what the previous page saved, once.
   useEffect(() => {
-    const snapshot = takeSnapshot();
+    const current = viewerRef.current;
+    const snapshot = current ? takeSnapshot(current) : null;
     if (!snapshot) return;
     if (snapshot.destination && snapshot.destination !== currentRef.current) {
       navigate(snapshot.destination as Destination);
@@ -80,7 +87,7 @@ export function LiveUpdateHost({
     const apply = () => {
       if (timer !== null) clearInterval(timer);
       timer = null;
-      saveSnapshot(RELOAD_KEY, captureSnapshot(currentRef.current));
+      if (viewerRef.current) saveSnapshot(RELOAD_KEY, captureSnapshot(viewerRef.current, currentRef.current));
       void beginLiveReload()
         .catch(() => undefined)
         .finally(() => reloadRef.current());
@@ -91,7 +98,8 @@ export function LiveUpdateHost({
       if (timer !== null) return;
       timer = setInterval(() => {
         const quiet = document.hidden || Date.now() - lastInput >= QUIET_MS;
-        if (quiet && !modalOpen()) apply();
+        // A send or create in flight finishes first, so its composer is cleared before saving.
+        if (quiet && !modalOpen() && !liveReloadHeld()) apply();
       }, QUIET_POLL_MS);
     }).then((stop) => {
       if (disposed) stop();
@@ -111,7 +119,7 @@ export function LiveUpdateHost({
     let unlisten: (() => void) | null = null;
     void onHandoff((version) => {
       if (version) {
-        saveSnapshot(HANDOFF_KEY, captureSnapshot(currentRef.current));
+        if (viewerRef.current) saveSnapshot(HANDOFF_KEY, captureSnapshot(viewerRef.current, currentRef.current));
         setHandoff(version);
         void reportHandoffReady().catch(() => undefined);
       } else {

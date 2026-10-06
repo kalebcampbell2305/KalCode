@@ -2,6 +2,7 @@ import { ToastProvider } from "@kalcode/ui/components";
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { publishUpdated, resetAnnouncements } from "./announce.ts";
+import { resetLiveReloadHolds, whileHoldingLiveReload } from "./hold.ts";
 import { LiveUpdateHost, QUIET_MS } from "./LiveUpdateHost.tsx";
 import { HANDOFF_KEY, RELOAD_KEY, saveSnapshot } from "./snapshot.ts";
 
@@ -27,6 +28,11 @@ vi.mock("../../ipc/liveUpdate.ts", () => ({
 const navigation = vi.hoisted(() => ({ current: "code", navigate: vi.fn() }));
 vi.mock("../navigation.tsx", () => ({ useNavigation: () => navigation }));
 
+const viewer = vi.hoisted(() => ({ id: "acct_alice" as string | null }));
+vi.mock("../../account/AccountProvider.tsx", () => ({
+  useAccount: () => ({ snapshot: { account: viewer.id ? { id: viewer.id } : null } }),
+}));
+
 function mount(reload = vi.fn()) {
   render(
     <ToastProvider>
@@ -42,6 +48,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  viewer.id = "acct_alice";
+  resetLiveReloadHolds();
   vi.useRealTimers();
   vi.clearAllMocks();
   sessionStorage.clear();
@@ -50,6 +58,71 @@ afterEach(() => {
 });
 
 describe("LiveUpdateHost", () => {
+  it("waits for a send that outlasts the quiet window, so the sent text is never restored", async () => {
+    const reload = mount();
+    await act(async () => {});
+    const composer = document.createElement("textarea");
+    composer.setAttribute("aria-label", "Message the agent");
+    composer.value = "ship it";
+    document.body.append(composer);
+
+    // The send's IPC takes far longer than QUIET_MS; its composer clears only when it resolves.
+    let resolveSend: () => void = () => undefined;
+    const sending = whileHoldingLiveReload(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSend = () => {
+            composer.value = "";
+            resolve();
+          };
+        }),
+    );
+    act(() => handlers.staged?.("0.1.9+1900"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(QUIET_MS * 4);
+    });
+    expect(reload).not.toHaveBeenCalled();
+
+    resolveSend();
+    await act(async () => {
+      await sending;
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(reload).toHaveBeenCalledTimes(1);
+    const saved = JSON.parse(sessionStorage.getItem(RELOAD_KEY) ?? "null");
+    expect(saved.drafts).toEqual([]);
+  });
+
+  it("restores nothing for a different account than the one that saved the snapshot", async () => {
+    saveSnapshot(HANDOFF_KEY, {
+      version: 2,
+      viewer: "acct_alice",
+      savedAt: Date.now(),
+      destination: "settings",
+      drafts: [{ key: "textarea:Message the agent#0", value: "alice's draft" }],
+    });
+    viewer.id = "acct_bob";
+    mount();
+    await act(async () => {});
+    const composer = document.createElement("textarea");
+    composer.setAttribute("aria-label", "Message the agent");
+    document.body.append(composer);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(navigation.navigate).not.toHaveBeenCalled();
+    expect(composer.value).toBe("");
+  });
+
+  it("saves no drafts when nobody is signed in", async () => {
+    viewer.id = null;
+    mount();
+    await act(async () => {});
+    act(() => handlers.handoff?.("0.1.9+1901"));
+    expect(localStorage.getItem(HANDOFF_KEY)).toBeNull();
+    expect(ipc.reportHandoffReady).toHaveBeenCalledTimes(1);
+  });
+
   it("reloads into a staged UI only at a quiet moment, saving drafts first", async () => {
     const reload = mount();
     await act(async () => {});
@@ -75,6 +148,7 @@ describe("LiveUpdateHost", () => {
     expect(reload).toHaveBeenCalledTimes(1);
     const saved = JSON.parse(sessionStorage.getItem(RELOAD_KEY) ?? "null");
     expect(saved.destination).toBe("code");
+    expect(saved.viewer).toBe("acct_alice");
     expect(saved.drafts).toEqual([{ key: "textarea:Message the agent#0", value: "half-written prompt" }]);
   });
 
@@ -111,7 +185,13 @@ describe("LiveUpdateHost", () => {
   });
 
   it("returns to the saved place after a reload and announces the update once", async () => {
-    saveSnapshot(RELOAD_KEY, { version: 1, savedAt: Date.now(), destination: "settings", drafts: [] });
+    saveSnapshot(RELOAD_KEY, {
+      version: 2,
+      viewer: "acct_alice",
+      savedAt: Date.now(),
+      destination: "settings",
+      drafts: [],
+    });
     publishUpdated({ version: "0.1.9+1900", class: "ui", at: Date.now() });
     mount();
     await act(async () => {});
