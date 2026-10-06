@@ -442,3 +442,6 @@
   font-size: var(--type-small);
   text-align: center;
 }
+.planNote + .actions {
+  margin-top: var(--space-3);
+}

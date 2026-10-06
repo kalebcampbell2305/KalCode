@@ -20,10 +20,12 @@ export interface AccountOnboardingActions {
   startEmail(email: string): Promise<void>;
   startSocial(provider: SocialProvider): Promise<void>;
   pollEmail(): Promise<void>;
+  /** Also leaves an unfinished checkout and goes back to plan choice. */
   cancelAuth(): Promise<void>;
   activateFree(): Promise<void>;
   checkout(tier: PurchasableTier, interval: BillingInterval): Promise<void>;
   retry(): Promise<void>;
+  logout(): Promise<void>;
 }
 
 export interface AccountOnboardingProps {
@@ -96,6 +98,11 @@ export function AccountOnboarding({ snapshot, busy, error, actions }: AccountOnb
   const pollWhenBack = useRef({ busy, pollEmail: actions.pollEmail });
   pollWhenBack.current = { busy, pollEmail: actions.pollEmail };
   const emailPending = snapshot.phase === "email_pending";
+  // The email form closes once the link is sent; a failed request keeps it (and the address).
+  const signedOut = snapshot.phase === "signed_out";
+  useEffect(() => {
+    if (!signedOut) setMode(null);
+  }, [signedOut]);
   useEffect(() => {
     if (!emailPending) return;
     const onFocus = () => {
@@ -109,7 +116,6 @@ export function AccountOnboarding({ snapshot, busy, error, actions }: AccountOnb
     const normalized = email.trim().toLowerCase();
     if (!normalized || busy) return;
     await actions.startEmail(normalized);
-    setMode(null);
   };
 
   return (
@@ -254,18 +260,32 @@ export function AccountOnboarding({ snapshot, busy, error, actions }: AccountOnb
               })}
             </div>
             <p className={styles.planNote}>{UNLIMITED_NOTE}</p>
+            <div className={styles.actions}>
+              <Button variant="ghost" disabled={busy} onClick={() => void actions.logout()}>
+                Sign out
+              </Button>
+            </div>
           </div>
         ) : snapshot.phase === "confirming_plan" ? (
           <div className={styles.center} role="status" aria-busy={busy || undefined}>
             <ShieldCheck className={styles.heroIcon} aria-hidden="true" />
-            <p className={styles.eyebrow}>Checkout complete</p>
+            <p className={styles.eyebrow}>Checkout</p>
             <h1 id="account-title">Confirming plan</h1>
-            <p>Stay here while KalCode checks the confirmed payment and signed plan from the server.</p>
-            {error?.retryable ? (
-              <Button variant="primary" busy={busy} onClick={() => void actions.retry()}>
-                Check again
+            <p>Finish paying in your browser, then come back. KalCode unlocks your plan once the server confirms it.</p>
+            <div className={styles.actions}>
+              {error?.retryable ? (
+                <Button variant="primary" busy={busy} onClick={() => void actions.retry()}>
+                  Check again
+                </Button>
+              ) : null}
+              {/* Closed the checkout without paying: pick Free or another plan instead. */}
+              <Button variant="ghost" disabled={busy} onClick={() => void actions.cancelAuth()}>
+                Choose a different plan
               </Button>
-            ) : null}
+              <Button variant="ghost" disabled={busy} onClick={() => void actions.logout()}>
+                Sign out
+              </Button>
+            </div>
           </div>
         ) : (
           <div className={styles.center}>
