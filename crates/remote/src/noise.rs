@@ -56,12 +56,16 @@ impl StaticKeypair {
     pub fn generate() -> Result<Self, Error> {
         let mut private = Zeroizing::new([0u8; KEY_LEN]);
         getrandom::fill(private.as_mut_slice()).map_err(|e| Error::Random(e.to_string()))?;
-        Self::from_private(*private)
+        Self::from_secret(private)
     }
 
-    /// Rebuilds a keypair from its 32-byte private key.
+    /// Rebuilds a keypair from its 32-byte private key. The caller's copy is not scrubbed;
+    /// prefer [`Self::from_private_base64`] for stored keys.
     pub fn from_private(private: [u8; KEY_LEN]) -> Result<Self, Error> {
-        let private = Zeroizing::new(private);
+        Self::from_secret(Zeroizing::new(private))
+    }
+
+    fn from_secret(private: Zeroizing<[u8; KEY_LEN]>) -> Result<Self, Error> {
         let mut dh = DefaultResolver
             .resolve_dh(&DHChoice::Curve25519)
             .ok_or_else(|| Error::InvalidKey("Curve25519 is unavailable".into()))?;
@@ -81,7 +85,16 @@ impl StaticKeypair {
                 .decode(encoded.trim())
                 .map_err(|e| Error::InvalidKey(e.to_string()))?,
         );
-        Self::from_private(to_key(&bytes)?)
+        if bytes.len() != KEY_LEN {
+            return Err(Error::InvalidKey(format!(
+                "expected {KEY_LEN} bytes, got {}",
+                bytes.len()
+            )));
+        }
+        // Copied straight into scrubbed storage: no unscrubbed intermediate array.
+        let mut private = Zeroizing::new([0u8; KEY_LEN]);
+        private.copy_from_slice(&bytes);
+        Self::from_secret(private)
     }
 
     /// The private key as standard base64, for the OS secret store.

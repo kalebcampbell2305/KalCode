@@ -19,7 +19,7 @@ This document is the contract between the desktop host (`crates/remote` +
 | Encrypted transport | `Noise_IK_25519_ChaChaPoly_SHA256`, prologue `kalcode-remote/1`. Every byte after the handshake is AEAD-encrypted with per-direction keys. |
 | Device revocation | The desktop's device registry removes the device key; any live connection from it is closed immediately with `revoked`. Later handshakes get an encrypted `revoked` rejection, so the phone can show the truth and clear its pairing. |
 | Session-scoped credentials | No bearer tokens. Each connection derives fresh transport keys from ephemeral DH; the device's static private key never leaves its Keychain/Keystore. |
-| Replay protection | The handshake mixes fresh ephemerals from both sides, so a replayed first message cannot complete a session. Pairing codes are single use. Transport messages use Noise's strictly increasing nonces; a gap or repeat kills the connection. Every request carries a unique `id`; the host remembers the last 512 results per device and returns the stored result for a repeated id instead of acting twice. |
+| Replay protection | The handshake mixes fresh ephemerals from both sides, so a replayed first message cannot complete a session. Pairing codes are single use. Transport messages use Noise's strictly increasing nonces; a gap or repeat kills the connection. Every request carries a unique `id`; the host remembers the last 512 results per device and returns the stored result for a repeated id instead of acting twice (a repeat while the first is still running is answered `conflict`). |
 | Least privilege | Only the operations in §5 exist. There is no shell, file write, credential, permission-mode or settings operation. Approvals can be answered **Approve once** or **Deny** only. Every action is audited with `ActionOrigin::Remote { host_id: <device id> }`. |
 | No credentials on the phone | Provider credentials, API keys, signing keys and account sessions never cross the wire. Mobile receives labels (account label, provider name), never secrets. |
 | Unpaired devices | Get nothing: the handshake is rejected before any application data, so they cannot read source, provider sessions, credentials or project state. |
@@ -57,8 +57,22 @@ in parallel and keeps the first that completes a handshake.
 TCP. Each wire frame is a 2-byte big-endian length followed by that many bytes of Noise message
 (max 65535). After the handshake, the decrypted plaintext of consecutive frames forms one byte
 stream of **application messages**: each is a 4-byte big-endian length followed by UTF-8 JSON
-(max 8 MiB). A sender splits an application message across as many frames as needed (≤ 65519
-plaintext bytes per frame).
+(max 8 MiB desktop → device, **max 256 KiB device → desktop**; a larger declared length closes
+the connection). A sender splits an application message across as many frames as needed
+(≤ 65519 plaintext bytes per frame).
+
+### Limits (normative)
+
+| Limit | Value | Over the limit |
+|---|---|---|
+| Handshake frame (either direction) | 4 KiB | connection closed |
+| Handshakes in progress | 32 total, 4 per source IP | the TCP socket is closed before any Noise work |
+| Handshake fields `device`, `platform`, `model`, `app` | ≤ 64 characters, no control characters | `invalid` |
+| Device → desktop application message | 256 KiB | connection closed |
+| Requests running per connection | 16 | `res` with `unavailable` |
+| Request rate per device | `agent.launch` 5/min; `agent.prompt`, `agent.stop`, `agent.retry`, `needs.decide`, `voice.command`, `tidy.closeIdle` 30/min; reads (`agent.detail`, `agent.diff`, `agent.log`, `launch.options`, `run.detail`) 10/s, burst 20 | `res` with `refused`, message `rate limited` (the id is not remembered; a later retry runs) |
+| Live sessions per device | 2 | the oldest gets `bye replaced` |
+| Desktop write without progress | 10 s | connection closed; a closing connection gets 10 s to take its `bye` |
 
 ### Handshake (Noise IK)
 
@@ -66,12 +80,15 @@ plaintext bytes per frame).
    `{"v":1,"device":"Kaleb's iPhone","platform":"ios","model":"iPhone17,1","app":"1.0 (1)","pair":"<code or omitted>","ts":<unix secs>}`.
 2. Desktop → device: `e, ee, se` with payload JSON. Success:
    `{"ok":true,"wid":"ws_...","name":"...","deviceId":"dev_...","host":{"platform":"windows","version":"0.1.9","build":2007}}`.
-   Failure: `{"ok":false,"error":"unpaired"|"revoked"|"pairing_expired"|"not_entitled"|"busy"|"version"}`
-   and the desktop closes the socket.
+   Failure: `{"ok":false,"error":"unpaired"|"revoked"|"pairing_expired"|"not_entitled"|"busy"|"version"|"invalid"}`
+   and the desktop closes the socket. `invalid`: a `device`, `platform`, `model` or `app`
+   field is longer than 64 characters or contains control characters.
 
 A device with a known static key is accepted without a code. An unknown key needs a valid
 unexpired code; a used/expired code returns `pairing_expired`. A key that was revoked returns
-`revoked`. Handshake timeout: 10 s.
+`revoked`. Handshake timeout: 10 s. The code is checked at message 1 but spent (and the device
+registered) only when the device's encrypted `hello` arrives; if two handshakes race with the
+same code, exactly one is registered and the other connection is closed after its `hello`.
 
 ## 4. Application messages
 
@@ -82,7 +99,7 @@ Timestamps are RFC 3339 strings.
 
 | `t` | Fields | Meaning |
 |---|---|---|
-| `hello` | `{}` | Sent once after the handshake. The desktop answers `snapshot`. |
+| `hello` | `{}` | Sent once after the handshake. The desktop answers `snapshot`. Later `hello`s are ignored. |
 | `req` | `id` (unique string, UUID), `op`, `args` | Run an operation (§5). Answered by exactly one `res`. |
 | `ping` | `n` | Keepalive; answered by `pong` with the same `n`. |
 
@@ -95,7 +112,7 @@ Timestamps are RFC 3339 strings.
 | `res` | `id`, `ok`, `result`? / `error`? {`code`, `message`} | Result of a `req`. |
 | `notify` | `id`, `kind`, `title`, `body`, `link` | A notification-worthy event (§6). |
 | `pong` | `n` | Keepalive reply. |
-| `bye` | `reason` (`revoked`, `disabled`, `shutdown`, `not_entitled`) | Desktop is closing the connection on purpose. |
+| `bye` | `reason` (`revoked`, `disabled`, `shutdown`, `not_entitled`, `replaced`) | Desktop is closing the connection on purpose. `replaced`: the same device opened a newer session; the device keeps the newer one and changes no state. |
 
 `rev` increases by one for every snapshot/patch on that connection. A device that sees a gap
 reconnects (it never guesses). On every (re)connect the desktop sends a full snapshot, so a
@@ -179,6 +196,11 @@ Error codes: `not_found` (the target ended or no longer exists — never act on 
 `conflict` (state changed; refresh), `refused` (a safety rule declined; `message` says why),
 `not_entitled`, `unavailable`, `invalid`, `internal`.
 
+When a device is revoked or the desktop closes every connection (`bye`), operations still running
+for that connection are cancelled and their ids remembered as `unavailable`; nothing starts after
+a revocation. Operations of a connection that merely drops (or is `replaced`) run to completion
+and their results answer the retry.
+
 ### Offline queue (device)
 
 While **Reconnecting** (not Offline), the device may hold `agent.prompt` and `voice.command` for
@@ -220,7 +242,9 @@ device never shows stale state as live.
 | `needs.decide` result `status` | `approved` \| `denied` \| `already_answered` |
 | `voice.command` result `outcome` | `done` \| `partial` \| `refused` \| `clarify` |
 
-Handshake check order on the desktop: version → revoked → unpaired → `not_entitled` → pairing
-code. A revoked key stays revoked even with a valid code (re-pairing needs the device to forget
+Handshake check order on the desktop: version → `invalid` → revoked → unpaired → `not_entitled`
+→ pairing code. A revoked key stays revoked even with a valid code (re-pairing needs the device to forget
 the workstation and generate a new key). A session counts as accepted only after the device's
-encrypted `hello`, so a replayed first message never updates `lastSeenAt`.
+encrypted `hello`, so a replayed first message never updates `lastSeenAt` and never spends a
+pairing code. A device keeps the name it paired with; reconnects refresh `platform`, `model`
+and `app` only.

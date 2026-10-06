@@ -2,13 +2,18 @@
 //!
 //! ```text
 //! cargo run -p kalcode-remote --example devhost -- --data <dir> [--agents 6] [--port 47820]
-//!     [--name "Dev Workstation"] [--addr ip:port]... [--bind 0.0.0.0] [--revoke-all] [--light-terminal]
+//!     [--name "Dev Workstation"] [--addr ip:port]... [--bind 127.0.0.1] [--revoke-all] [--light-terminal]
 //! ```
+//!
+//! DEV ONLY. The host key sits in a plain file (`<data>/host-key.b64`), not the OS secret
+//! store, so never use this as a real workstation. It binds `127.0.0.1` unless `--bind` says
+//! otherwise (`--bind 0.0.0.0` to reach it from a phone on the LAN).
 //!
 //! Serves the real protocol (Noise IK, pairing, registry, patches, requests, notify) over a
 //! synthetic workstation whose agents keep changing state. The host key, workstation id and
 //! device registry persist in `--data`, so a paired phone reconnects across restarts. The
-//! pairing link is printed with a QR code and written to `<data>/pairing-link.txt`.
+//! pairing link is printed with a QR code and written to `<data>/pairing-link.txt`, which is
+//! deleted once the code is redeemed.
 //!
 //! Commands on stdin: `pair` (new pairing window), `devices`, `revoke <deviceId>`,
 //! `revoke-all`, `quit`.
@@ -53,7 +58,7 @@ fn parse_args() -> Result<Args, BoxError> {
         data: PathBuf::new(),
         agents: 6,
         port: DEFAULT_PORT,
-        bind: "0.0.0.0".into(),
+        bind: "127.0.0.1".into(),
         name: "Dev Workstation".into(),
         addrs: Vec::new(),
         revoke_all: false,
@@ -90,6 +95,18 @@ fn parse_args() -> Result<Args, BoxError> {
 async fn main() -> Result<(), BoxError> {
     let args = parse_args()?;
     std::fs::create_dir_all(&args.data)?;
+    const BANNER: [&str; 5] = [
+        "************************************************************************",
+        "*  DEV ONLY - insecure key storage, not for production.                *",
+        "*  The host key is a plain file in --data; anyone who can read it can  *",
+        "*  impersonate this workstation.                                       *",
+        "************************************************************************",
+    ];
+    eprintln!();
+    for line in BANNER {
+        eprintln!("{line}");
+    }
+    eprintln!();
 
     let key = load_or_create_key(&args.data.join("host-key.b64"))?;
     let workstation_id = load_or_create(&args.data.join("workstation-id.txt"), || {
@@ -151,6 +168,8 @@ async fn main() -> Result<(), BoxError> {
         });
     }
 
+    let link_path = args.data.join("pairing-link.txt");
+
     // Operator commands.
     {
         let (pairing, identity, registry, hub, addrs) = (
@@ -206,17 +225,28 @@ async fn main() -> Result<(), BoxError> {
 
     loop {
         let (tcp, peer) = listener.accept().await?;
+        // Admission before reading a byte; over the limit the socket is just dropped.
+        let Some(permit) = hub.admit(peer.ip()) else {
+            println!("x dropped {peer}: too many handshakes in progress");
+            continue;
+        };
         let _ = tcp.set_nodelay(true);
-        let (identity, registry, pairing, hub, sim) = (
+        let (identity, registry, pairing, hub, sim, link_path) = (
             identity.clone(),
             registry.clone(),
             pairing.clone(),
             hub.clone(),
             sim.clone(),
+            link_path.clone(),
         );
         tokio::spawn(async move {
-            match server::accept(tcp, &identity, &registry, &pairing, true).await {
+            let accepted = server::accept(tcp, &identity, &registry, &pairing, true).await;
+            drop(permit);
+            match accepted {
                 Ok(conn) => {
+                    if !pairing.is_open() && std::fs::remove_file(&link_path).is_ok() {
+                        println!("pairing link redeemed; removed {}", link_path.display());
+                    }
                     let device = conn.device.clone();
                     println!(
                         "+ {} ({}, {}) connected from {peer}",

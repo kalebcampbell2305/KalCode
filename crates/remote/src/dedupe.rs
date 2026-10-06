@@ -2,27 +2,31 @@
 //!
 //! Every request carries a unique `id`. The host remembers the last [`CAPACITY`] results per
 //! device and answers a repeated id with the stored result instead of acting twice, across
-//! reconnects. A repeat that arrives while the first is still running waits for its result.
+//! reconnects. A repeat that arrives while the first is still running is answered `conflict`
+//! by the connection driver; at most [`MAX_PENDING`] requests per device run at once.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Mutex, MutexGuard, PoisonError};
-
-use tokio::sync::watch;
 
 use crate::wire::Response;
 
 /// Results remembered per device.
 pub const CAPACITY: usize = 512;
 
+/// Requests running at once per device, across its sessions.
+pub const MAX_PENDING: usize = 64;
+
 /// What to do with an incoming request id.
 #[derive(Debug)]
 pub enum Begin {
-    /// First time: run it, then call [`Dedupe::finish`].
+    /// First time: run it, then call [`Dedupe::finish`] (or [`Dedupe::abandon`]).
     Run,
     /// Already answered: resend this.
     Done(Response),
-    /// Still running: wait for the value to become `Some`.
-    Pending(watch::Receiver<Option<Response>>),
+    /// Still running.
+    Pending,
+    /// The device already has [`MAX_PENDING`] requests running.
+    Full,
 }
 
 #[derive(Default)]
@@ -30,7 +34,7 @@ struct DeviceSlots {
     done: HashMap<String, Response>,
     /// Least recently used first.
     order: VecDeque<String>,
-    pending: HashMap<String, watch::Sender<Option<Response>>>,
+    pending: HashSet<String>,
 }
 
 /// Per-device LRU of request id → response.
@@ -56,20 +60,29 @@ impl Dedupe {
             touch(&mut slots.order, id);
             return Begin::Done(response);
         }
-        if let Some(sender) = slots.pending.get(id) {
-            return Begin::Pending(sender.subscribe());
+        if slots.pending.contains(id) {
+            return Begin::Pending;
         }
-        slots.pending.insert(id.to_owned(), watch::channel(None).0);
+        if slots.pending.len() >= MAX_PENDING {
+            return Begin::Full;
+        }
+        slots.pending.insert(id.to_owned());
         Begin::Run
     }
 
-    /// Stores the result of a request started with [`Begin::Run`] and wakes any waiters.
+    /// Forgets a request started with [`Begin::Run`] that was refused before it ran (rate
+    /// limited, too many in flight): a later retry with the same id runs normally.
+    pub fn abandon(&self, device: &str, id: &str) {
+        if let Some(slots) = self.lock().get_mut(device) {
+            slots.pending.remove(id);
+        }
+    }
+
+    /// Stores the result of a request started with [`Begin::Run`].
     pub fn finish(&self, device: &str, id: &str, response: Response) {
         let mut devices = self.lock();
         let slots = devices.entry(device.to_owned()).or_default();
-        if let Some(sender) = slots.pending.remove(id) {
-            sender.send_replace(Some(response.clone()));
-        }
+        slots.pending.remove(id);
         if slots.done.insert(id.to_owned(), response).is_some() {
             touch(&mut slots.order, id);
         } else {
@@ -109,18 +122,28 @@ mod tests {
     fn repeated_id_returns_stored_result() {
         let dedupe = Dedupe::new();
         assert!(matches!(dedupe.begin("dev_a", "r1"), Begin::Run));
-        let Begin::Pending(mut waiter) = dedupe.begin("dev_a", "r1") else {
-            panic!("expected pending")
-        };
+        assert!(matches!(dedupe.begin("dev_a", "r1"), Begin::Pending));
         let response = Response::success("r1", json!({"summary":"ok"}));
         dedupe.finish("dev_a", "r1", response.clone());
-        assert_eq!(waiter.borrow_and_update().clone(), Some(response.clone()));
         let Begin::Done(again) = dedupe.begin("dev_a", "r1") else {
             panic!("expected done")
         };
         assert_eq!(again, response);
         // Ids are per device.
         assert!(matches!(dedupe.begin("dev_b", "r1"), Begin::Run));
+    }
+
+    #[test]
+    fn pending_is_bounded_and_abandon_forgets() {
+        let dedupe = Dedupe::new();
+        for i in 0..MAX_PENDING {
+            assert!(matches!(dedupe.begin("d", &format!("p{i}")), Begin::Run));
+        }
+        assert!(matches!(dedupe.begin("d", "one-more"), Begin::Full));
+        assert!(matches!(dedupe.begin("other", "x"), Begin::Run));
+        dedupe.abandon("d", "p0");
+        assert!(dedupe.get("d", "p0").is_none());
+        assert!(matches!(dedupe.begin("d", "p0"), Begin::Run));
     }
 
     #[test]

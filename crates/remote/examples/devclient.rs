@@ -5,7 +5,9 @@
 //! ```
 //!
 //! Reads `<data>/pairing-link.txt`, pairs on first run (its own key is kept in
-//! `<data>/devclient-key.b64`, so later runs reconnect without a code), then checks: snapshot,
+//! `<data>/devclient-key.b64` and the workstation, without the code, in
+//! `<data>/devclient-workstation.json`, so later runs reconnect without a code even after the
+//! dev host deletes the redeemed link), then checks: snapshot,
 //! a patch, `launch.options`, `agent.diff`, `needs.decide` on an open approval, and ping/pong.
 //! Exits non-zero on any failure.
 
@@ -35,16 +37,26 @@ async fn main() -> Result<(), BoxError> {
         }
     }
     let data = data.ok_or("--data <dir> is required")?;
-    let payload =
-        PairingPayload::parse_link(&std::fs::read_to_string(data.join("pairing-link.txt"))?)?;
+    let workstation_path = data.join("devclient-workstation.json");
     let key_path = data.join("devclient-key.b64");
-    let (key, first_run) = match std::fs::read_to_string(&key_path) {
-        Ok(encoded) => (StaticKeypair::from_private_base64(&encoded)?, false),
-        Err(_) => {
-            let key = StaticKeypair::generate()?;
-            std::fs::write(&key_path, key.private_base64().as_str())?;
-            (key, true)
+    let paired_before = std::fs::read(&workstation_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<PairingPayload>(&bytes).ok())
+        .filter(|_| key_path.exists());
+    let (payload, first_run) = match paired_before {
+        Some(payload) => (payload, false),
+        None => {
+            let link = std::fs::read_to_string(data.join("pairing-link.txt"))
+                .map_err(|_| "no pairing link: type `pair` in the dev host first")?;
+            (PairingPayload::parse_link(&link)?, true)
         }
+    };
+    let key = if first_run {
+        let key = StaticKeypair::generate()?;
+        std::fs::write(&key_path, key.private_base64().as_str())?;
+        key
+    } else {
+        StaticKeypair::from_private_base64(&std::fs::read_to_string(&key_path)?)?
     };
     let addr = addr
         .or_else(|| payload.addrs.last().cloned())
@@ -64,6 +76,11 @@ async fn main() -> Result<(), BoxError> {
         "connected to {} ({}) as {}",
         conn.accepted.name, conn.accepted.wid, conn.accepted.device_id
     );
+    if first_run {
+        let mut remembered = payload.clone();
+        remembered.code.clear();
+        std::fs::write(&workstation_path, serde_json::to_vec_pretty(&remembered)?)?;
+    }
 
     let HostMessage::Snapshot { rev, state } = next(&mut conn).await? else {
         return Err("expected a snapshot".into());
