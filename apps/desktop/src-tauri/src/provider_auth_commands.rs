@@ -42,9 +42,6 @@ pub use cursor::*;
 mod e2e;
 
 const CODEX_TRUTH_TTL: Duration = Duration::from_secs(5 * 60);
-// Cancellation must allow the observer's 500 ms termination grace plus Windows'
-// bounded 5 s process-tree reap before treating the account as still busy.
-const ACCOUNT_VALIDATION_PREEMPT_TIMEOUT: Duration = Duration::from_secs(6);
 // Account model discovery is informational and starts asynchronously from the UI. Give an exact
 // account's startup refresh time to publish its auth truth instead of leaking that internal
 // single-flight as a user-visible error. This never cancels the incumbent validation.
@@ -66,64 +63,6 @@ enum RuntimeAuthError {
 }
 
 impl RuntimeAuthError {
-    /// A launch refusal with a stable code and fixed, user-safe copy. Only a provider that is
-    /// missing maps to a plain provider error; nothing here is a provider start failure.
-    fn into_provider_error(self) -> ProviderError {
-        use kalcode_contracts::threads::error_codes;
-        let refused = |code: &str, message: String| ProviderError::Refused {
-            code: code.to_owned(),
-            message,
-        };
-        let version = |window: &VersionWindow| {
-            refused(
-                error_codes::PROVIDER_VERSION_UNSUPPORTED,
-                window_unsupported_message(window),
-            )
-        };
-        match self {
-            Self::Account(error) => refused(error.code, error.message),
-            Self::ProviderUnavailable | Self::GeminiUnavailable => ProviderError::NotInstalled,
-            Self::Busy => refused(
-                error_codes::PROVIDER_ACCOUNT_BUSY,
-                "This account is busy with a sign-in or account change in KalCode. Finish it, then try launching the agent again."
-                    .into(),
-            ),
-            Self::Provider(CodexAccountAuthError::UnsupportedVersion) => {
-                version(&kalcode_providers::codex::MANAGED_VERSIONS)
-            }
-            Self::Gemini(GeminiAccountAuthError::UnsupportedVersion) => {
-                version(&kalcode_providers::gemini::MANAGED_VERSIONS)
-            }
-            Self::Claude(error) => match claude_failure_ipc(&error) {
-                Some((code, message)) if code == error_codes::PROVIDER_VERSION_UNSUPPORTED => {
-                    refused(code, message)
-                }
-                _ => refused(
-                    error_codes::PROVIDER_ACCOUNT_CHECK_FAILED,
-                    format!(
-                        "KalCode couldn't check this Claude Code account (reason: {}). Check your connection, then retry.",
-                        error.reason_code()
-                    ),
-                ),
-            },
-            Self::Provider(_) => refused(
-                error_codes::PROVIDER_ACCOUNT_CHECK_FAILED,
-                "KalCode couldn't check this Codex account. Check your connection, then retry."
-                    .into(),
-            ),
-            Self::Gemini(_) => refused(
-                error_codes::PROVIDER_ACCOUNT_CHECK_FAILED,
-                "KalCode couldn't check this Gemini CLI account. Check your connection, then retry."
-                    .into(),
-            ),
-            Self::Adapter(error) => error,
-            Self::ModelsUnavailable => refused(
-                "provider_models_unavailable",
-                "This provider does not expose a model catalog in this KalCode build.".into(),
-            ),
-        }
-    }
-
     fn into_ipc(self, command: &'static str) -> IpcError {
         if let Self::Claude(error) = &self
             && let Some((code, message)) = claude_failure_ipc(error)
@@ -585,9 +524,24 @@ impl ProviderRuntimeAuthority {
         }
     }
 
-    /// Supersedes one exact background validation before a foreground Codex plan read. The
-    /// provider process receives the cancellation token, proves cleanup, then the RAII validation
+    /// Asks one exact background validation to stop. The observer sees the token within one
+    /// receive poll, ends its read without recording a result, and tears down on its own thread.
+    fn cancel_account_validation(&self, provider: &str, account_id: &str) {
+        let key = (provider.to_owned(), account_id.to_owned());
+        let active = self
+            .inner
+            .active_validations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(canceled) = active.get(&key) {
+            canceled.store(true, Ordering::Release);
+        }
+    }
+
+    /// Cancels one exact background validation and waits for its RAII registration to be removed.
+    /// The provider process receives the cancellation token, proves cleanup, then the validation
     /// removes itself and wakes this waiter. No provider I/O runs while the registry mutex is held.
+    #[cfg(test)]
     fn preempt_account_validation(
         &self,
         provider: &str,
@@ -1361,18 +1315,18 @@ impl ProviderRuntimeAuthority {
     /// Give the real provider launch priority over passive observers for this exact account.
     /// Authentication is enforced by AccountStore's shared launch lease and the provider itself;
     /// missing plan/usage metadata never adds a synchronous network check or a launch requirement.
+    ///
+    /// The launch cancels the exact background observer and does not wait for its teardown. The
+    /// observer is credential-read-only and its shared lease coexists with sessions by design;
+    /// sign-in, sign-out and archive writers are still excluded by the profile lease. Teardown
+    /// (termination grace, process-tree reap and the guardian's durable quiescence proof) took
+    /// seconds under load, and waiting for it refused the user's launch as busy.
     pub fn prepare_account_launch(
         &self,
         provider: &ProviderId,
         account_id: &str,
     ) -> Result<(), ProviderError> {
-        if !self.preempt_account_validation(
-            provider.as_str(),
-            account_id,
-            ACCOUNT_VALIDATION_PREEMPT_TIMEOUT,
-        ) {
-            return Err(RuntimeAuthError::Busy.into_provider_error());
-        }
+        self.cancel_account_validation(provider.as_str(), account_id);
         Ok(())
     }
 
@@ -3265,11 +3219,18 @@ mod tests {
         let runtime = fixture.runtime.clone();
         let account_id = fixture.account.id.clone();
         let background = std::thread::spawn(move || runtime.refresh_codex_account(&account_id));
-        // Only waits for the observer to reach its delayed read (a cold cmd -> PowerShell start
-        // on Windows can take seconds on a loaded machine); the delay starts at the marker.
-        let entered_deadline = Instant::now() + Duration::from_secs(20);
-        while !marker.exists() && Instant::now() < entered_deadline {
+        // Only waits for the observer to reach its delayed read; the delay starts at the marker.
+        // A cold cmd -> PowerShell start took over 20 s under parallel test load, so this is a
+        // hang guard, and an observer that ends before reaching the read reports its result.
+        let entered_deadline = Instant::now() + Duration::from_secs(120);
+        while !marker.exists() && !background.is_finished() && Instant::now() < entered_deadline {
             std::thread::sleep(Duration::from_millis(5));
+        }
+        if !marker.exists() && background.is_finished() {
+            panic!(
+                "background observer ended before account/read: {:?}",
+                background.join().expect("background observer joins")
+            );
         }
         assert!(marker.exists(), "background observer entered account/read");
 
@@ -3278,8 +3239,8 @@ mod tests {
             .runtime
             .prepare_account_launch(&ProviderId::new(ProviderId::CODEX), &fixture.account.id)
             .expect("foreground launch proceeds after preemption");
-        // A preempting launch pays only the observer's termination grace; it never starts
-        // another account check. Waiting for the observer would take the whole delayed read.
+        // A preempting launch only cancels the observer: it neither waits for the observer's
+        // teardown nor starts another account check. Waiting for the read would take 45 s.
         assert!(
             started.elapsed() < DELAYED_OBSERVER_READ / 3,
             "launch must not wait for the observer's delayed account read: {:?}",
@@ -3298,6 +3259,34 @@ mod tests {
             Some("cached@example.test")
         );
         assert_eq!(refreshed.last_error_code, None);
+    }
+
+    /// Gate 37536759481: under parallel test load the preempted observer's teardown (terminate
+    /// grace, reap and the guardian's durable quiescence proof) outlasted the launch's 6 s wait,
+    /// and the user's launch was refused as `provider_account_busy`. A validation that is still
+    /// registered must be canceled, never block or refuse the launch.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn launch_never_waits_for_or_refuses_on_a_slow_observer_teardown() {
+        let fixture = Fixture::new();
+        let validation = fixture
+            .runtime
+            .begin_account_validation(ProviderId::CODEX, &fixture.account.id)
+            .expect("background validation");
+        let cancellation = validation.cancellation();
+
+        let started = Instant::now();
+        fixture
+            .runtime
+            .prepare_account_launch(&ProviderId::new(ProviderId::CODEX), &fixture.account.id)
+            .expect("launch proceeds while the observer is still tearing down");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "launch must not wait for observer teardown: {:?}",
+            started.elapsed()
+        );
+        assert!(cancellation.load(Ordering::Acquire), "observer canceled");
+        drop(validation);
     }
 
     #[cfg(any(windows, target_os = "macos"))]
