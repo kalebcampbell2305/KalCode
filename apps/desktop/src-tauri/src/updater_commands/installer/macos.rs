@@ -1277,16 +1277,11 @@ fn verify_app(
 
     let executable = app_executable(path);
     require_regular_file(&executable)?;
-    let architectures = checked_cancellable(
-        Command::new("/usr/bin/lipo").arg("-archs").arg(&executable),
-        lease,
-        cancel,
-    )?;
-    let architectures = std::str::from_utf8(&architectures.stdout)
-        .map_err(|_| installer_invalid())?
-        .split_whitespace()
-        .collect::<Vec<_>>();
-    if architectures.as_slice() != ["arm64"] {
+    // Read from the Mach-O header, never `/usr/bin/lipo`: that is an xcrun shim that fails on Macs
+    // without Xcode or the Command Line Tools, which would reject every update there.
+    let architectures =
+        kalcode_updater::macho::architectures(&executable).map_err(|_| installer_invalid())?;
+    if !kalcode_updater::macho::is_exactly_arm64(&architectures) {
         return Err(installer_invalid());
     }
     Ok(requirement)
