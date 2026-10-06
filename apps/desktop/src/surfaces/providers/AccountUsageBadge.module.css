@@ -131,13 +131,15 @@
   background: color-mix(in srgb, var(--color-text-faint) 22%, transparent);
 }
 
+/* Compact by default (cards, chips); roomier surfaces set --usage-meter-w. */
 .track {
-  width: 2.25rem;
+  width: var(--usage-meter-w, 2.25rem);
   height: 0.25rem;
 }
 
 /* Unknown usage: an empty dashed rail, never an invented number. */
 .track[data-empty] {
+  width: 2.25rem;
   background: none;
   border-top: 1px dashed color-mix(in srgb, var(--color-text-faint) 45%, transparent);
   height: 0;
