@@ -1,15 +1,15 @@
 {
- "images": [
-  {
-   "filename": "KalVoiceGlobe.png",
-   "idiom": "universal"
+  "images": [
+    {
+      "filename": "KalVoiceGlobe.png",
+      "idiom": "universal"
+    }
+  ],
+  "info": {
+    "author": "xcode",
+    "version": 1
+  },
+  "properties": {
+    "preserves-vector-representation": false
   }
- ],
- "info": {
-  "author": "xcode",
-  "version": 1
- },
- "properties": {
-  "preserves-vector-representation": false
- }
 }
