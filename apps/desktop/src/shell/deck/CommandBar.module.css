@@ -20,9 +20,10 @@
   gap: var(--space-2);
 }
 
-/* A lit hairline along the bottom edge under the brand, fading right. */
-.bar::after {
-  content: "";
+/* A lit hairline along the bottom edge under the brand, fading right. An aria-hidden element
+   (CommandBar.tsx), last in the bar like the ::after it replaces: axe's colour-contrast check
+   reports "incomplete" for any text under an absolute pseudo-element with a background. */
+.edge {
   position: absolute;
   left: 0;
   bottom: -1px;

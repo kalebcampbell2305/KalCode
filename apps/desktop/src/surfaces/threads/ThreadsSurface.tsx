@@ -85,6 +85,7 @@ export function ThreadsSurface() {
         >
           New thread
         </Button>
+        <span className={styles.headerRule} aria-hidden="true" />
       </header>
       <div className={styles.body}>
         <ThreadList

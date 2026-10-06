@@ -131,8 +131,10 @@
   transition: none;
 }
 
-.card::before {
-  content: "";
+/* The card's top edge: an aria-hidden element (first in the card), not ::before, so axe's
+   colour-contrast check evaluates the card's text (it reports "incomplete" for text under an
+   absolute pseudo-element with a background, even a 1px one). */
+.cardEdge {
   position: absolute;
   top: -1px;
   left: 12%;
@@ -144,11 +146,11 @@
   pointer-events: none;
 }
 
-.panel[data-phase="listening"] .card::before {
+.panel[data-phase="listening"] .cardEdge {
   opacity: 1;
 }
 
-.panel:is([data-phase="transcribing"], [data-phase="thinking"], [data-phase="executing"]) .card::before {
+.panel:is([data-phase="transcribing"], [data-phase="thinking"], [data-phase="executing"]) .cardEdge {
   background: linear-gradient(90deg, transparent, var(--status-working-line), transparent);
   opacity: 1;
 }

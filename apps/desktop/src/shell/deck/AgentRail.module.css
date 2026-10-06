@@ -334,8 +334,10 @@
   box-shadow: var(--glow-active);
 }
 
-.row[data-group="attention"]::before {
-  content: "";
+/* An aria-hidden element rendered only on rows that need the person (AgentRail.tsx), not
+   ::before: axe's colour-contrast check reports "incomplete" for the row's small time and state
+   text under an absolute pseudo-element with a background. */
+.attentionEdge {
   position: absolute;
   left: -1px;
   top: 18%;
