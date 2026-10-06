@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">KalCode Remote</string>
+    <string name="channel_needs_you">Needs you</string>
+    <string name="channel_needs_you_desc">Approvals and questions from your agents</string>
+    <string name="channel_updates">Agent and deployment updates</string>
+    <string name="channel_updates_desc">Agents finishing or failing, runs failing and deployments changing</string>
+    <string name="channel_link">Workstation connection</string>
+    <string name="channel_link_desc">Shown while KalCode Remote keeps the link to your workstation open after you leave the app</string>
+</resources>

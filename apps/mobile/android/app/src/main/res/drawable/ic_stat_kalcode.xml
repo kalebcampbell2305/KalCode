@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Status-bar glyph: the KalCode mascot's pixel head with its two eyes, monochrome. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M8,3h8v2h2v2h2v10h-2v2h-2v2h-8v-2h-2v-2h-2v-10h2v-2h2z M8.5,9h2.5v4.5h-2.5z M13,9h2.5v4.5h-2.5z M9.5,15.5h5v1.5h-5z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M3,2h2v2h-2z M1,5h2v2h-2z M5,0h2v2h-2z" />
+</vector>
