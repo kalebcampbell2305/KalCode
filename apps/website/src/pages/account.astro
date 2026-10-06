@@ -914,13 +914,13 @@ const localAgents = formatLimit(freePlan.limits.parallelAgents);
   async function startCheckout(tier: PlanId, interval: BillingInterval): Promise<void> {
     for (const button of checkoutButtons) button.disabled = true;
     // Same plan again after leaving Stripe: the same request id reopens that Checkout session.
-    const requestId = checkoutRequestId(sessionStore(), tier, interval, Date.now(), () =>
+    const checkoutId = checkoutRequestId(sessionStore(), tier, interval, Date.now(), () =>
       crypto.randomUUID().replaceAll("-", ""),
     );
     const response = await api("/v1/billing/checkout", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ tier, interval, requestId }),
+      body: JSON.stringify({ tier, interval, requestId: checkoutId }),
     });
     let body: { url?: string; error?: string } = {};
     try {
