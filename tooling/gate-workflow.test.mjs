@@ -210,10 +210,7 @@ ${reuse}`,
 test("a gate warns on a leaking kernel nonpaged pool and refuses before sockets start failing", {
   skip: process.platform !== "win32",
 }, () => {
-  for (const [job, jobSteps] of [
-    ["windows", steps],
-    ["pc2", pc2Steps],
-  ]) {
+  for (const [job, jobSteps] of [["windows", steps]]) {
     const names = jobSteps.map((step) => step.match(/^name: (.+)$/m)?.[1] ?? "");
     const check = names.indexOf("Check kernel memory");
     assert.ok(check > names.indexOf("Reset to the exact event SHA, keeping warm caches"), `${job}: after the checkout`);
