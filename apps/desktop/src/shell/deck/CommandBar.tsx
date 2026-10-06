@@ -26,7 +26,7 @@ import {
   Settings2,
   ShieldCheck,
 } from "lucide-react";
-import { forwardRef, type ReactNode, useMemo, useState } from "react";
+import { Children, forwardRef, type ReactNode, useMemo, useState } from "react";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { WorkspaceMenuContent } from "../../surfaces/code/WorkspaceMenu.tsx";
@@ -77,7 +77,13 @@ export function CommandBar({
         <ModeChip />
       </div>
       <div className={styles.center}>
-        <button type="button" className={styles.command} onClick={onOpenPalette} aria-keyshortcuts="Control+K Meta+K">
+        <button
+          type="button"
+          className={styles.command}
+          onClick={onOpenPalette}
+          aria-label="Search or run a command"
+          aria-keyshortcuts="Control+K Meta+K"
+        >
           <Search className={styles.commandIcon} aria-hidden="true" />
           <span className={styles.commandText}>Search or run a command</span>
           <kbd className={styles.kbd}>{MOD_LABEL} K</kbd>
@@ -120,7 +126,16 @@ const Chip = forwardRef<HTMLButtonElement, ChipProps>(function Chip(
       </span>
       <span className={styles.chipText}>
         <span className={styles.chipCaption}>{caption}</span>
-        <span className={styles.chipValue}>{children}</span>
+        <span className={styles.chipValue}>
+          {/* Bare text in this flex row cannot ellipsize ("Previe", "Bypas" in a 1200px window). */}
+          {Children.map(children, (child) =>
+            typeof child === "string" || typeof child === "number" ? (
+              <span className={styles.chipLabel}>{child}</span>
+            ) : (
+              child
+            ),
+          )}
+        </span>
       </span>
       {menu ? <ChevronDown className={styles.chipChevron} aria-hidden="true" /> : null}
     </button>
