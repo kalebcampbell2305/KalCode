@@ -1,4 +1,8 @@
 import { defineConfig, devices } from "@playwright/test";
+import { lowerLocalPriority } from "../../tooling/local-priority.mjs";
+
+// Local runs yield the CPU to the gate (tooling/local-priority.mjs); CI is unchanged.
+lowerLocalPriority();
 
 /**
  * E2E runs against the production build served by `wrangler dev` — the real Worker, static
