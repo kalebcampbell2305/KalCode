@@ -6,8 +6,10 @@ name: Gate (self-hosted)
 
 on:
   push:
-    # Gate the exact immutable candidate before the train updates main.
-    branches: [main, "merge-train/**"]
+    # Gate the exact immutable candidate before the train updates main. main itself is not gated on
+    # push: it only ever moves to a commit that already passed this gate (the train lands the exact
+    # gated candidate), so a push gate on main would re-run the same evidence and hold both PCs.
+    branches: ["merge-train/**"]
   pull_request:
     # Docs-only PRs skip the self-hosted gate. Later patterns win; release notes still gate.
     paths:
