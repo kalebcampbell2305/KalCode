@@ -74,3 +74,70 @@ export function readCheckoutIntent(raw: string | null, now: number): CheckoutInt
     return null;
   }
 }
+
+/**
+ * sessionStorage key prefix for the Checkout request id of one (plan, interval). The API keys a
+ * Checkout reservation by a hash of the request id and returns the same Stripe session for a
+ * repeated id, so reusing it lets someone who left Stripe (Back, cancel) click the same plan again
+ * and land on that session instead of `409 checkout_in_progress`.
+ */
+export const CHECKOUT_REQUEST_KEY_PREFIX = "kalcode:checkout-request:";
+
+/** The API's Checkout reservation lifetime; an older id names a reservation that no longer exists. */
+export const CHECKOUT_REQUEST_TTL_MS = 35 * 60 * 1000;
+
+const REQUEST_ID = /^[A-Za-z0-9_-]{8,128}$/;
+
+type RequestStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+
+function checkoutRequestKey(plan: PlanId, interval: BillingInterval): string {
+  return `${CHECKOUT_REQUEST_KEY_PREFIX}${plan}:${interval}`;
+}
+
+/**
+ * The request id to send for a Checkout of (plan, interval): the stored one while it is younger
+ * than the reservation lifetime, otherwise `create()`, stored for the next click. Blocked or
+ * missing storage only loses the reuse; Checkout still starts.
+ */
+export function checkoutRequestId(
+  storage: RequestStorage | null,
+  plan: PlanId,
+  interval: BillingInterval,
+  now: number,
+  create: () => string,
+): string {
+  const key = checkoutRequestKey(plan, interval);
+  try {
+    const stored = JSON.parse(storage?.getItem(key) ?? "null") as { id?: unknown; createdAt?: unknown } | null;
+    if (
+      stored &&
+      typeof stored.id === "string" &&
+      REQUEST_ID.test(stored.id) &&
+      typeof stored.createdAt === "number" &&
+      stored.createdAt <= now &&
+      now - stored.createdAt < CHECKOUT_REQUEST_TTL_MS
+    ) {
+      return stored.id;
+    }
+  } catch {
+    // Unreadable or malformed: start a new request.
+  }
+  const id = create();
+  try {
+    storage?.setItem(key, JSON.stringify({ id, createdAt: now }));
+  } catch {
+    // Storage blocked: this click still works, the next one starts a new request.
+  }
+  return id;
+}
+
+/** Forgets every stored Checkout request id (a paid plan is active, or the account has one). */
+export function forgetCheckoutRequests(storage: RequestStorage | null): void {
+  try {
+    for (const plan of PLANS) {
+      for (const interval of BILLING_INTERVALS) storage?.removeItem(checkoutRequestKey(plan.id, interval));
+    }
+  } catch {
+    // Storage blocked: nothing was stored.
+  }
+}

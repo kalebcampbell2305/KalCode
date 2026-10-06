@@ -9,6 +9,7 @@
  * SHA-256, signature) and what to do with it: the notes to read first, then the download.
  */
 import { type ReleaseManifest, RELEASES, formatBytes, formatReleaseDate, platformRows } from "../lib/releases";
+import { checksumCommand, signatureLabel } from "../scripts/release-refresh";
 import Icon from "./Icon.astro";
 
 interface Props {
@@ -24,27 +25,16 @@ const terms = latest?.channel === "stable"
   : { href: "/terms#preview", label: "KalCode preview terms" };
 // Release manifests published before Updates keep working, while new page links stay canonical.
 const notesUrl = latest?.notesUrl.replace(/^\/changelog(?=#|$)/, "/updates");
-
-function signatureLabel(os: (typeof rows)[number]["os"], signed: boolean): string {
-  if (signed) return "Code-signed";
-  return os === "macos" ? "Not code-signed or notarized" : "Not code-signed";
-}
-
-function checksumCommand(os: (typeof rows)[number]["os"], file: string): string {
-  if (os === "windows") return `Get-FileHash .\\${file} -Algorithm SHA256`;
-  if (os === "macos") return `shasum -a 256 "./${file}"`;
-  return `sha256sum "./${file}"`;
-}
 ---
 <ul class="platforms" role="list" data-platforms>
   {
     rows.map((row) => (
-      <li class="platform" id={row.os} data-os={row.os} data-state={row.state}>
+      <li class="platform" id={row.os} data-os={row.os} data-arch={row.state === "available" ? row.build.arch : undefined} data-state={row.state}>
         <div class="platform__info">
           <div class="platform__head">
             <h3 class="platform__name">{row.name}</h3>
             {row.state === "available" && latest ? (
-              <span class="chip chip--built">
+              <span class="chip chip--built" data-release-chip>
                 {releaseLabel} {latest.version}
               </span>
             ) : (
@@ -59,16 +49,16 @@ function checksumCommand(os: (typeof rows)[number]["os"], file: string): string 
                 <div>
                   <dt>Version</dt>
                   <dd>
-                    {latest.version} · published <time datetime={latest.publishedAt}>{formatReleaseDate(latest.publishedAt)}</time>
+                    <span data-release-version>{latest.version}</span> · published <time datetime={latest.publishedAt} data-release-published>{formatReleaseDate(latest.publishedAt)}</time>
                   </dd>
                 </div>
                 <div>
                   <dt>File</dt>
-                  <dd class="mono">{row.build.file}</dd>
+                  <dd class="mono" data-release-file>{row.build.file}</dd>
                 </div>
                 <div>
                   <dt>Size</dt>
-                  <dd>{formatBytes(row.build.size)}</dd>
+                  <dd data-release-size>{formatBytes(row.build.size)}</dd>
                 </div>
                 <div>
                   <dt>SHA-256</dt>
@@ -76,7 +66,7 @@ function checksumCommand(os: (typeof rows)[number]["os"], file: string): string 
                 </div>
                 <div>
                   <dt>Signature</dt>
-                  <dd>{signatureLabel(row.os, row.build.signed)}</dd>
+                  <dd data-release-signature>{signatureLabel(row.os, row.build.signed)}</dd>
                 </div>
               </dl>
             </>
@@ -105,7 +95,7 @@ function checksumCommand(os: (typeof rows)[number]["os"], file: string): string 
               )}
               <p class="platform__note">
                 <span class="platform__note-title">Checksum</span>
-                Verify the downloaded file with <code>{checksumCommand(row.os, row.build.file)}</code> and compare it with the SHA-256 above.
+                Verify the downloaded file with <code data-release-checksum>{checksumCommand(row.os, row.build.file)}</code> and compare it with the SHA-256 above.
               </p>
               {row.os === "macos" && (
                 <p class="platform__note">
@@ -125,7 +115,7 @@ function checksumCommand(os: (typeof rows)[number]["os"], file: string): string 
               )}
             </div>
             <div class="platform__action button-row">
-              <a class="button button--primary button--lg" href={row.build.url} download={row.build.file}>
+              <a class="button button--primary button--lg" href={row.build.url} download={row.build.file} data-release-download>
                 <Icon name="download" />
                 Download for {row.name}
               </a>
@@ -143,4 +133,8 @@ function checksumCommand(os: (typeof rows)[number]["os"], file: string): string 
 </ul>
 <script>
   import "../scripts/platform";
+  import { refreshLatestRelease } from "../scripts/release-refresh";
+
+  // A publish switches the download links before the site is rebuilt; show the build they serve.
+  void refreshLatestRelease(document);
 </script>

@@ -22,7 +22,7 @@ const { title, lead, eyebrow, status, statusKind = "dev", backdrop } = Astro.pro
 <header class:list={["page-head", { "world-head": backdrop }]}>
   {backdrop && <Backdrop variant={backdrop} />}
   <div class="container page-head__inner">
-    {status && <p class:list={["chip", `chip--${statusKind}`]}>{status}</p>}
+    {status && <p class:list={["chip", `chip--${statusKind}`]} data-page-status>{status}</p>}
     {eyebrow && <p class="eyebrow">{eyebrow}</p>}
     <h1 class="h1">{title}</h1>
     {lead && <p class="lead">{lead}</p>}

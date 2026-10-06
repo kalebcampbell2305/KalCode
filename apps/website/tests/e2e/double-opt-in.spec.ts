@@ -39,13 +39,15 @@ async function joinWithForm(page: Page, email: string): Promise<void> {
 /**
  * Collects console errors and page errors (CSP violations surface as console errors). The
  * browser's own "Failed to load resource" line for an API answer the page expects and handles
- * (410 for a used link) is not an error of the page.
+ * (410 for a used link, 404 for the unpublished local release manifest) is not an error of the page.
  */
 function watchErrors(page: Page): string[] {
   const errors: string[] = [];
   page.on("console", (message) => {
     if (message.type() !== "error") return;
     if (/^Failed to load resource: the server responded with a status of (400|410|502) /.test(message.text())) return;
+    // /download asks for the live release manifest; a local run has none published (404).
+    if (new URL(message.location().url, "http://localhost").pathname === "/releases/latest.json") return;
     errors.push(message.text());
   });
   page.on("pageerror", (error) => errors.push(error.message));
