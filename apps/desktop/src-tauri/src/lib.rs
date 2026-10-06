@@ -53,6 +53,8 @@ mod provider_commands;
 mod provider_health_commands;
 mod provider_pane_commands;
 mod provider_usage_commands;
+mod remote;
+mod remote_commands;
 mod resource_commands;
 mod runtime_shutdown;
 mod session_resolver;
@@ -727,6 +729,11 @@ pub fn run(removed_overrides: Vec<String>) {
                 provider_auth_commands::provider_gemini_login_wait,
                 provider_auth_commands::provider_gemini_login_cancel,
                 provider_auth_commands::provider_gemini_logout,
+                remote_commands::remote_status,
+                remote_commands::remote_set_enabled,
+                remote_commands::remote_pair_start,
+                remote_commands::remote_pair_cancel,
+                remote_commands::remote_device_revoke,
                 updater_commands::updater_status,
                 updater_commands::updater_set_channel,
                 updater_commands::updater_check,

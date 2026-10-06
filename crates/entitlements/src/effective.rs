@@ -164,6 +164,11 @@ mod tests {
         assert!(Tier::Pro.includes(FeatureId::TimeMachine));
         assert!(!Tier::Pro.includes(FeatureId::BenchmarkLab));
         assert!(Tier::Max.includes(FeatureId::BenchmarkLab));
+        // KalCode Remote is placed on MAX (the desktop narrows it to OWNER until the mobile app
+        // ships; see the desktop's `remote::entitled`).
+        assert!(!Tier::Pro.includes(FeatureId::Remote));
+        assert!(Tier::Max.includes(FeatureId::Remote));
+        assert!(Tier::Owner.includes(FeatureId::Remote));
         // No document: Free, which still has every safety feature.
         let effective = effective_entitlement(None, OffsetDateTime::now_utc());
         assert!(effective.includes_feature(FeatureId::EnvironmentDoctor));

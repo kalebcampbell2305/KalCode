@@ -78,6 +78,7 @@ import type {
 import type { ContextFileChoice, ContextInput, ContextSendResult, PromptReview } from "./context.ts";
 import { toKalCodeError } from "./errors.ts";
 import { HandoffsClient } from "./handoffs.ts";
+import type { RemoteStatus } from "./remote.ts";
 import type { ImportedTerminalImage, TerminalImageTarget } from "./terminalImages.ts";
 import type { CommandName, NativeTheme, Transport, Unsubscribe } from "./transport.ts";
 import type { UpdateChannel, UpdateStatus } from "./updater.ts";
@@ -263,6 +264,26 @@ export class KalCodeClient {
 
   updaterStatus(): Promise<UpdateStatus> {
     return this.call("updater_status");
+  }
+
+  remoteStatus(): Promise<RemoteStatus> {
+    return this.call("remote_status");
+  }
+
+  remoteSetEnabled(enabled: boolean): Promise<RemoteStatus> {
+    return this.call("remote_set_enabled", { enabled });
+  }
+
+  remotePairStart(): Promise<RemoteStatus> {
+    return this.call("remote_pair_start");
+  }
+
+  remotePairCancel(): Promise<RemoteStatus> {
+    return this.call("remote_pair_cancel");
+  }
+
+  remoteDeviceRevoke(deviceId: string): Promise<RemoteStatus> {
+    return this.call("remote_device_revoke", { deviceId });
   }
 
   updaterSetChannel(channel: UpdateChannel): Promise<UpdateStatus> {

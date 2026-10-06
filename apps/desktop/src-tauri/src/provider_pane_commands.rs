@@ -875,7 +875,10 @@ fn pane_creation_error(
 
 /// The provider-native effort a new pane starts with (`None`: the provider default). Gemini CLI
 /// has no effort setting.
-fn pane_effort(provider_id: &str, effort: Option<String>) -> Result<Option<String>, IpcError> {
+pub(crate) fn pane_effort(
+    provider_id: &str,
+    effort: Option<String>,
+) -> Result<Option<String>, IpcError> {
     let Some(effort) = effort
         .map(|effort| effort.trim().to_ascii_lowercase())
         .filter(|effort| !effort.is_empty() && effort != "default")

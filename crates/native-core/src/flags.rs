@@ -102,6 +102,10 @@ fn feature_state(feature: FeatureId) -> SurfaceState {
         | FeatureId::ProviderProfiles
         | FeatureId::NotificationCenter
         | FeatureId::AccountSignIn => SurfaceState::Available,
+        // KalCode Remote's desktop host is built and shipped. Who may use it is narrower than
+        // its MAX placement for now: the desktop allows only the OWNER tier until the mobile app
+        // can be installed (`remote::entitled`).
+        FeatureId::Remote => SurfaceState::Available,
     }
 }
 
@@ -225,7 +229,7 @@ mod tests {
         // Shipped in every channel: the pane system and provider terminals (Z7-W1), plus the
         // 0.1.5 features whose UI is unconditional (provider health/accounts, notifications,
         // KalCode sign-in).
-        const AVAILABLE: [FeatureId; 8] = [
+        const AVAILABLE: [FeatureId; 9] = [
             FeatureId::Memory,
             FeatureId::PaneSystem,
             FeatureId::ProviderPanes,
@@ -234,6 +238,7 @@ mod tests {
             FeatureId::ProviderProfiles,
             FeatureId::NotificationCenter,
             FeatureId::AccountSignIn,
+            FeatureId::Remote,
         ];
         for channel in [
             BuildChannel::Stable,

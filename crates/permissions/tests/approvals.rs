@@ -115,6 +115,37 @@ fn approve_once_and_deny_emit_events_and_audit() {
 }
 
 #[test]
+fn an_answer_from_a_remote_device_is_audited_with_its_origin() {
+    let h = Harness::new();
+    let a = open(&h, command("npm test"));
+    let via = ActionOrigin::Remote {
+        host_id: "dev_0123456789abcdef01234567".into(),
+    };
+    let approved = h
+        .service
+        .decide_from(&a.id, D::ApproveOnce, Actor::User, Some(&via))
+        .expect("approve");
+    assert_eq!(approved.status, ApprovalStatus::Approved);
+    let row = h
+        .service
+        .audit_log()
+        .expect("audit")
+        .into_iter()
+        .rfind(|row| row.kind == "approval.approved")
+        .expect("audited");
+    assert_eq!(row.actor, "user");
+    let detail: serde_json::Value = serde_json::from_str(&row.detail).expect("json");
+    assert_eq!(detail["via"]["kind"], "remote");
+    assert_eq!(detail["via"]["hostId"], "dev_0123456789abcdef01234567");
+    // The same rules as any answer: a second one is refused, never applied twice.
+    let err = h
+        .service
+        .decide_from(&a.id, D::Deny, Actor::User, Some(&via))
+        .expect_err("second");
+    assert_eq!(err.code, "approval_already_decided");
+}
+
+#[test]
 fn double_decide_and_races_resolve_exactly_once() {
     let h = Harness::new();
     let a = open(&h, command("npm test"));

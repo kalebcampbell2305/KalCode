@@ -1219,6 +1219,19 @@ impl PermissionService {
         decision: ApprovalDecision,
         actor: Actor,
     ) -> Result<ApprovalView> {
+        self.decide_from(request_id, decision, actor, None)
+    }
+
+    /// [`Self::decide`] for an answer the user gave somewhere other than this window, such as a
+    /// paired KalCode Remote device. `via` is recorded in the audit entry; every rule of
+    /// `decide` applies unchanged (only the user answers, only allowed decisions).
+    pub fn decide_from(
+        &self,
+        request_id: &str,
+        decision: ApprovalDecision,
+        actor: Actor,
+        via: Option<&ActionOrigin>,
+    ) -> Result<ApprovalView> {
         if actor != Actor::User {
             self.audit_refusal(
                 "approval.denied",
@@ -1343,12 +1356,18 @@ impl PermissionService {
                     thread_id: Some(&action.thread_id),
                     workspace_id: Some(&action.workspace_id),
                     request_id: Some(request_id),
-                    detail: json!({
-                        "decision": decision,
-                        "scopes": request.decision.scopes,
-                        "mode": request.permission_mode,
-                        "summary": clean_text(&action.summary, 300),
-                    }),
+                    detail: {
+                        let mut detail = json!({
+                            "decision": decision,
+                            "scopes": request.decision.scopes,
+                            "mode": request.permission_mode,
+                            "summary": clean_text(&action.summary, 300),
+                        });
+                        if let Some(via) = via {
+                            detail["via"] = json!(via);
+                        }
+                        detail
+                    },
                 },
             )?;
             let event = if status == ApprovalStatus::Denied {
