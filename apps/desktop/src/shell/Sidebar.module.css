@@ -212,6 +212,9 @@
   margin-top: auto;
   padding-top: var(--space-3);
   border-top: 1px solid var(--color-border);
+  /* Its own stacking context (no visual change: nothing in it uses z-index): axe 4.13 otherwise
+     sorts the z-index -1 .stars above the footer's in-flow text and cannot check its contrast. */
+  isolation: isolate;
 }
 
 /* The Account Hub, then the collapse control; stacked when the sidebar is collapsed. */

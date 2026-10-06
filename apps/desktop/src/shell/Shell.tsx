@@ -165,87 +165,89 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
     <DashboardDataBoundary>
       <DeckUiProvider>
         <DeckDataProvider>
-          <div className={styles.frame} data-space={spaceLevelOf(current)} data-app-shell="">
-            {/* The deep-space atmosphere: real, inert layers behind everything, never pseudo-elements
-                on the frame (axe's contrast check gives up on text under a large pseudo-element). */}
+          <div className={styles.space} data-space={spaceLevelOf(current)}>
+            {/* The deep-space atmosphere: real, inert layers behind the frame, never pseudo-elements
+                on it (axe's contrast check gives up on text under a large pseudo-element). */}
             <div className={styles.atmosphere} aria-hidden="true">
               <div className={styles.stars} />
               <div className={styles.nebula} />
             </div>
-            <NavigationBridge />
-            <a className={styles.skipLink} href="#main">
-              Skip to content
-            </a>
-            {/* Command Deck: top bar · (projects · page · agents). */}
-            <CommandBar onOpenPalette={() => setPaletteOpen(true)} sidebarCollapsed={settings.sidebarCollapsed} />
-            <div>
-              <NavigationBar />
-              <FavoritesBar />
-            </div>
-            <div
-              ref={deckRef}
-              className={styles.shell}
-              data-sidebar={settings.sidebarCollapsed ? "collapsed" : "expanded"}
-              data-rail={rail.enabled ? (rail.hidden ? "strip" : "shown") : "none"}
-              data-voice-slot={voice?.edge}
-              style={voice ? ({ "--voice-slot-h": `${voice.height}px` } as CSSProperties) : undefined}
-            >
-              <Sidebar collapsed={settings.sidebarCollapsed} onOpenPalette={() => setPaletteOpen(true)} />
-              {voice ? <div className={styles.voiceSlot} data-edge={voice.edge} aria-hidden="true" /> : null}
-              <WorkspaceRail />
-              <main
-                ref={mainRef}
-                id="main"
-                className={styles.main}
-                // A scrolling page is a keyboard stop, so text-only pages (and any page at a large
-                // Text size) can be scrolled without a mouse. Code scrolls inside its terminals.
-                tabIndex={current === "code" ? -1 : 0}
-                aria-label={destinationMeta(current).label}
-                data-surface={current}
+            <div className={styles.frame} data-app-shell="">
+              <NavigationBridge />
+              <a className={styles.skipLink} href="#main">
+                Skip to content
+              </a>
+              {/* Command Deck: top bar · (projects · page · agents). */}
+              <CommandBar onOpenPalette={() => setPaletteOpen(true)} sidebarCollapsed={settings.sidebarCollapsed} />
+              <div>
+                <NavigationBar />
+                <FavoritesBar />
+              </div>
+              <div
+                ref={deckRef}
+                className={styles.shell}
+                data-sidebar={settings.sidebarCollapsed ? "collapsed" : "expanded"}
+                data-rail={rail.enabled ? (rail.hidden ? "strip" : "shown") : "none"}
+                data-voice-slot={voice?.edge}
+                style={voice ? ({ "--voice-slot-h": `${voice.height}px` } as CSSProperties) : undefined}
               >
-                {current === "home" ? (
-                  <HomeSurface />
-                ) : current === "folder" ? (
-                  <FolderSurface />
-                ) : current === "kalvoice" && kalvoice ? (
-                  <KalVoicePage />
-                ) : current === "dashboard" ? (
-                  <Dashboard />
-                ) : current === "operations" ? (
-                  <OperationsPage
-                    client={operationsClient}
-                    threadOptions={threadOptions}
-                    providerAccounts={providerAccounts}
-                  />
-                ) : current === "code" ? null : current === "settings" ? (
-                  <SettingsPage />
-                ) : current === "providers" ? (
-                  <ProvidersPage />
-                ) : current === "threads" ? (
-                  <ThreadsSurface />
-                ) : current === "memory" ? (
-                  <UnifiedMemory />
-                ) : (
-                  <GatedSurface id={current} />
-                )}
-                {/* Code stays mounted once opened, hidden while another page is shown: its
+                <Sidebar collapsed={settings.sidebarCollapsed} onOpenPalette={() => setPaletteOpen(true)} />
+                {voice ? <div className={styles.voiceSlot} data-edge={voice.edge} aria-hidden="true" /> : null}
+                <WorkspaceRail />
+                <main
+                  ref={mainRef}
+                  id="main"
+                  className={styles.main}
+                  // A scrolling page is a keyboard stop, so text-only pages (and any page at a large
+                  // Text size) can be scrolled without a mouse. Code scrolls inside its terminals.
+                  tabIndex={current === "code" ? -1 : 0}
+                  aria-label={destinationMeta(current).label}
+                  data-surface={current}
+                >
+                  {current === "home" ? (
+                    <HomeSurface />
+                  ) : current === "folder" ? (
+                    <FolderSurface />
+                  ) : current === "kalvoice" && kalvoice ? (
+                    <KalVoicePage />
+                  ) : current === "dashboard" ? (
+                    <Dashboard />
+                  ) : current === "operations" ? (
+                    <OperationsPage
+                      client={operationsClient}
+                      threadOptions={threadOptions}
+                      providerAccounts={providerAccounts}
+                    />
+                  ) : current === "code" ? null : current === "settings" ? (
+                    <SettingsPage />
+                  ) : current === "providers" ? (
+                    <ProvidersPage />
+                  ) : current === "threads" ? (
+                    <ThreadsSurface />
+                  ) : current === "memory" ? (
+                    <UnifiedMemory />
+                  ) : (
+                    <GatedSurface id={current} />
+                  )}
+                  {/* Code stays mounted once opened, hidden while another page is shown: its
                     terminals, attachments and layout survive navigation instead of rebuilding. */}
-                {codeOpened.current ? (
-                  <div className={styles.codeSurface} hidden={current !== "code"}>
-                    {codePage}
-                  </div>
-                ) : null}
-              </main>
-              <AgentRail />
+                  {codeOpened.current ? (
+                    <div className={styles.codeSurface} hidden={current !== "code"}>
+                      {codePage}
+                    </div>
+                  ) : null}
+                </main>
+                <AgentRail />
+              </div>
+              <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+              {kalvoice ? <FloatingAssistant /> : null}
+              {kalvoice ? <PushToTalkActivity /> : null}
+              {kalvoice ? <SessionChoicePanel /> : null}
+              <ApprovalsPanel />
+              <ApprovalAnnouncer />
+              <NotificationCenter />
+              <UpdateReadyNotice client={client} onOpenDetails={openUpdateDetails} />
             </div>
-            <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
-            {kalvoice ? <FloatingAssistant /> : null}
-            {kalvoice ? <PushToTalkActivity /> : null}
-            {kalvoice ? <SessionChoicePanel /> : null}
-            <ApprovalsPanel />
-            <ApprovalAnnouncer />
-            <NotificationCenter />
-            <UpdateReadyNotice client={client} onOpenDetails={openUpdateDetails} />
           </div>
         </DeckDataProvider>
       </DeckUiProvider>
