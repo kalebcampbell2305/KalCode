@@ -37,7 +37,7 @@ import {
   PinOff,
   Zap,
 } from "lucide-react";
-import { type FormEvent, memo, useId, useMemo, useState } from "react";
+import { type FormEvent, memo, useEffect, useId, useMemo, useRef, useState } from "react";
 import { contentKey, leaves } from "../../../shell/panes/model.ts";
 import type { PaneController } from "../../../shell/panes/usePaneController.ts";
 import { AUTO_GROUPS, BADGES, type OrgBadge, type OrgItem, organize, type StackGroup, stackShown } from "./model.ts";
@@ -106,15 +106,32 @@ export const TerminalStack = memo(function TerminalStack({ organization, control
   const shown = stackShown(prefs.prefs, items.length);
   // On a narrow canvas the stack doesn't take the panes' width: the rail opens it over the canvas.
   const [overlay, setOverlay] = useState(false);
+  const railRef = useRef<HTMLButtonElement>(null);
+  const stackRef = useRef<HTMLElement>(null);
+  // The opened overlay takes keyboard focus; closing it gives focus back to the rail.
+  useEffect(() => {
+    if (overlay) stackRef.current?.focus({ preventScroll: true });
+  }, [overlay]);
+  const closeOverlay = () => {
+    setOverlay(false);
+    railRef.current?.focus({ preventScroll: true });
+  };
   const rail = (
     <div className={styles.stackRail} data-narrow-only={shown || undefined}>
       <Tooltip content="Show the terminal stack" side="right">
         <button
+          ref={railRef}
           type="button"
           className={styles.railButton}
           aria-label={`Show the terminal stack: ${items.length} items, ${working} working, ${waiting} waiting`}
           aria-expanded={shown ? overlay : false}
           onClick={() => (shown ? setOverlay((open) => !open) : prefs.setStackOpen(true))}
+          onKeyDown={(event) => {
+            if (overlay && event.key === "Escape") {
+              event.preventDefault();
+              setOverlay(false);
+            }
+          }}
         >
           <Layers aria-hidden="true" />
           {working > 0 ? (
@@ -149,13 +166,15 @@ export const TerminalStack = memo(function TerminalStack({ organization, control
     <>
       {rail}
       <aside
+        ref={stackRef}
         className={styles.stack}
         aria-label="Terminal stack"
+        tabIndex={-1}
         data-overlay={overlay || undefined}
         onKeyDown={(event) => {
           if (overlay && event.key === "Escape") {
             event.preventDefault();
-            setOverlay(false);
+            closeOverlay();
           }
         }}
       >
@@ -180,7 +199,7 @@ export const TerminalStack = memo(function TerminalStack({ organization, control
               size="sm"
               label="Hide the stack"
               icon={<PanelLeftClose />}
-              onClick={() => (overlay ? setOverlay(false) : prefs.setStackOpen(false))}
+              onClick={() => (overlay ? closeOverlay() : prefs.setStackOpen(false))}
             />
           </Tooltip>
         </div>
@@ -203,7 +222,7 @@ export const TerminalStack = memo(function TerminalStack({ organization, control
               onShow={show}
               onPin={(item) => prefs.togglePin(item.key)}
               onMove={(item, target) => prefs.moveTo(item.key, target)}
-              onNewGroup={(item) => setAdding({ moveKey: item.key })}
+              onNewGroup={prefs.prefs.grouping ? (item) => setAdding({ moveKey: item.key }) : null}
             />
           ))}
           {prefs.prefs.grouping ? (
@@ -242,7 +261,8 @@ interface GroupViewProps {
   onShow: (item: OrgItem) => void;
   onPin: (item: OrgItem) => void;
   onMove: (item: OrgItem, group: string | null) => void;
-  onNewGroup: (item: OrgItem) => void;
+  /** Null while grouping is off: a new group has nowhere to show. */
+  onNewGroup: ((item: OrgItem) => void) | null;
 }
 
 function StackGroupView({
@@ -352,7 +372,7 @@ interface ItemProps {
   onShow: (item: OrgItem) => void;
   onPin: (item: OrgItem) => void;
   onMove: (item: OrgItem, group: string | null) => void;
-  onNewGroup: (item: OrgItem) => void;
+  onNewGroup: ((item: OrgItem) => void) | null;
 }
 
 function StackItem({ item, focused, pinned, groupNames, currentGroup, onShow, onPin, onMove, onNewGroup }: ItemProps) {
@@ -409,9 +429,11 @@ function StackItem({ item, focused, pinned, groupNames, currentGroup, onShow, on
               </DropdownMenuRadioItem>
             ))}
           </DropdownMenuRadioGroup>
-          <DropdownMenuItem icon={<FolderPlus />} onSelect={() => onNewGroup(item)}>
-            New group…
-          </DropdownMenuItem>
+          {onNewGroup ? (
+            <DropdownMenuItem icon={<FolderPlus />} onSelect={() => onNewGroup(item)}>
+              New group…
+            </DropdownMenuItem>
+          ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
     </li>
