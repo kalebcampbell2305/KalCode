@@ -1,7 +1,5 @@
 import type { Notification } from "@kalcode/protocol";
 import { describe, expect, it } from "vitest";
-import { fleetFilterOf, fleetGroupOf } from "../../surfaces/dashboard/data/board.ts";
-import { thread } from "../../surfaces/dashboard/data/testing.ts";
 import { dayGroupOf, KIND_META, targetOf, withDayHeadings } from "./model.ts";
 
 function notification(overrides: Partial<Notification>): Notification {
@@ -32,15 +30,11 @@ describe("notification targets", () => {
     expect(
       targetOf(notification({ kind: "provider_disconnected", entityKind: "provider", entityId: "codex" })),
     ).toEqual({ kind: "provider", providerId: "codex" });
+    expect(targetOf(notification({ kind: "recovery_available", entityKind: null, entityId: null }))).toEqual({
+      kind: "dashboard",
+      chip: "idle",
+    });
     expect(targetOf(notification({ entityKind: "approval" }))).toEqual({ kind: "approvals" });
-  });
-
-  it("opens the Fleet group that actually holds the recovered (interrupted) agents", () => {
-    const target = targetOf(notification({ kind: "recovery_available", entityKind: null, entityId: null }));
-    expect(target).toEqual({ kind: "dashboard", chip: "done" });
-    if (target.kind !== "dashboard" || target.chip === undefined) throw new Error("expected a Fleet filter");
-    const recovered = thread({ runtimeKind: "interactive_pty", status: "interrupted", currentActivity: null });
-    expect(fleetFilterOf(target.chip)).toBe(fleetGroupOf(recovered));
   });
 
   it("gives every kind a glyph and a tone, never amber", () => {

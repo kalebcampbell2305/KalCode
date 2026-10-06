@@ -353,7 +353,7 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
                 onCommitted={applyWorktree}
                 expanded={expanded.has(thread.id)}
                 onToggleExpanded={toggleCard}
-                onDismiss={canDismiss(thread) ? onDismiss : undefined}
+                onDismiss={canDismiss(thread.status) ? onDismiss : undefined}
                 overlaps={overlaps.get(thread.id)}
               />
             </div>

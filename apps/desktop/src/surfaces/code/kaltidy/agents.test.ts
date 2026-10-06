@@ -1,4 +1,3 @@
-import { LAST_TURN_FAILED_ACTIVITY, READY_ACTIVITY } from "@kalcode/protocol";
 import { describe, expect, it, vi } from "vitest";
 import { KalCodeError } from "../../../ipc/errors.ts";
 import { ALL_STATUSES, thread } from "../../dashboard/data/testing.ts";
@@ -37,15 +36,6 @@ describe("agentCleanup", () => {
       interrupted: "finished",
       offline: "finished",
     });
-  });
-
-  it("clears an agent idle after a failed turn as failed (FAILED in the shared agent state)", () => {
-    const lastTurnFailed = agent({ status: "idle", currentActivity: LAST_TURN_FAILED_ACTIVITY });
-    expect(agentCleanup(lastTurnFailed)).toBe("failed");
-    expect(isClearableAgent(lastTurnFailed)).toBe(true);
-    // Only the failed turn: a plain idle or ready agent is still in use.
-    expect(agentCleanup(agent({ status: "idle", currentActivity: READY_ACTIVITY }))).toBeNull();
-    expect(agentCleanup(agent({ status: "idle", currentActivity: "Working on it" }))).toBeNull();
   });
 
   it("never treats a chat thread or an archived agent as clearable", () => {
@@ -99,18 +89,6 @@ describe("clearAgents", () => {
     const client = { archiveThread: vi.fn(async (id: string) => thread({ id })), stopThread: vi.fn() };
     expect(await clearAgents(client, list, "failed")).toEqual({ cleared: 1, failed: 0 });
     expect(client.archiveThread.mock.calls.map(([id]) => id)).toEqual([list[0]?.id]);
-  });
-
-  it("clears an agent idle after a failed turn: its archive ends the idle session", async () => {
-    const lastTurnFailed = agent({
-      name: "last turn failed",
-      status: "idle",
-      currentActivity: LAST_TURN_FAILED_ACTIVITY,
-    });
-    const client = { archiveThread: vi.fn(async (id: string) => thread({ id })), stopThread: vi.fn() };
-    expect(await clearAgents(client, [...list, lastTurnFailed], "failed")).toEqual({ cleared: 2, failed: 0 });
-    expect(client.archiveThread.mock.calls.map(([id]) => id)).toEqual([list[0]?.id, lastTurnFailed.id]);
-    expect(client.stopThread).not.toHaveBeenCalled();
   });
 
   it("clears finished and stopped agents, never working or waiting ones, and counts failures", async () => {

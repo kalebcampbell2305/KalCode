@@ -70,9 +70,9 @@ const STOPPABLE: ReadonlySet<ThreadStatus> = new Set([
 /** Finished, as KalTidy clears it: done, stopped or offline (the session is over). */
 const FINISHED: ReadonlySet<ThreadStatus> = new Set(["completed", "interrupted", "offline"]);
 
-/** The card's one-click remove (X): agents whose session is over (FAILED in the shared state too). */
-export function canDismiss(thread: Pick<ThreadSummary, "status" | "currentActivity" | "pendingApprovals">): boolean {
-  return fleetGroupOf(thread) === "failed" || FINISHED.has(thread.status);
+/** The card's one-click remove (X): agents whose session is over. */
+export function canDismiss(status: ThreadStatus): boolean {
+  return status === "failed" || FINISHED.has(status);
 }
 
 /** Exactly which agents a cleanup touches, and the commands each needs. */
@@ -191,7 +191,7 @@ export function useAgentCleanup(): AgentCleanup {
           return;
         }
         const thread = threads.find((t) => t.id === agentId);
-        if (thread && canDismiss(thread)) await run("dismiss", [{ thread, commands: ["archive"] }]);
+        if (thread && canDismiss(thread.status)) await run("dismiss", [{ thread, commands: ["archive"] }]);
       },
       clearFailed: async () => {
         if (kalTidy) await kalTidy.clearFailed();

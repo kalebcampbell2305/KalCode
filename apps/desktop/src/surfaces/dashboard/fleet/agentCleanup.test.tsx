@@ -1,10 +1,9 @@
 import type { ThreadStatus, ThreadSummary } from "@kalcode/protocol";
-import { DISPLAY_STATUS_OF, LAST_TURN_FAILED_ACTIVITY } from "@kalcode/protocol";
+import { DISPLAY_STATUS_OF } from "@kalcode/protocol";
 import { ToastProvider } from "@kalcode/ui/components";
 import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { clearAgents } from "../../code/kaltidy/agents.ts";
 import { KalTidyContext } from "../../code/kaltidy/kalTidyContext.ts";
 import { canDismiss, cleanupCounts, cleanupSteps, cleanupSummary, useAgentCleanup } from "./agentCleanup.ts";
 
@@ -87,27 +86,8 @@ describe("Fleet cleanup plans (only what the thread commands accept)", () => {
   });
 
   it("offers the card's X only for failed, finished, stopped or offline agents", () => {
-    const dismissable = every()
-      .filter(canDismiss)
-      .map((t) => t.status)
-      .sort();
+    const dismissable = (Object.keys(DISPLAY_STATUS_OF) as ThreadStatus[]).filter(canDismiss).sort();
     expect(dismissable).toEqual(["completed", "failed", "interrupted", "offline"]);
-    expect(canDismiss({ ...agent("idle"), currentActivity: LAST_TURN_FAILED_ACTIVITY })).toBe(true);
-  });
-
-  it("Clear failed (N) counts exactly the agents KalTidy then clears", async () => {
-    const lastTurnFailed = { ...agent("idle"), currentActivity: LAST_TURN_FAILED_ACTIVITY };
-    const threads = [...every(), agent("failed"), lastTurnFailed];
-    const client = { archiveThread: vi.fn(async (id: string) => ({ ...agent("completed"), id })), stopThread: vi.fn() };
-    const count = cleanupCounts(threads).failed;
-    expect(count).toBe(3);
-    const result = await clearAgents(client, threads, "failed");
-    expect(result).toEqual({ cleared: count, failed: 0 });
-    expect(client.archiveThread.mock.calls.map(([id]) => id).sort()).toEqual(
-      cleanupSteps(threads, "failed")
-        .map((s) => s.thread.id)
-        .sort(),
-    );
   });
 
   it("says what happened in one sentence", () => {

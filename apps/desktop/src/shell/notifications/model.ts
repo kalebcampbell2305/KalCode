@@ -32,8 +32,7 @@ export const KIND_META: Record<NotificationKind, { icon: LucideIcon; tone: Statu
 
 /** Where opening a notification takes the person: its entity, focused. */
 export function targetOf(notification: Notification): FocusTarget {
-  // Recovered agents are Interrupted (STOPPED in the shared agent state), which the Fleet shows in Done.
-  if (notification.kind === "recovery_available") return { kind: "dashboard", chip: "done" };
+  if (notification.kind === "recovery_available") return { kind: "dashboard", chip: "idle" };
   switch (notification.entityKind) {
     case "thread":
       return notification.entityId

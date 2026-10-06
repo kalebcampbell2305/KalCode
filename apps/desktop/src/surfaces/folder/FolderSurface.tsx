@@ -48,7 +48,7 @@ import { ScopedHeading, useSurfaceScope } from "../../shell/rail/surfaceScope.ts
 import { useThreadsIntent } from "../threads/intent.tsx";
 import { FileTree } from "./FileTree.tsx";
 import styles from "./Folder.module.css";
-import { changeOf, projectAgentCounts, type RecentFile, recentFilesFrom, splitPath } from "./folderModel.ts";
+import { changeOf, type RecentFile, recentFilesFrom, splitPath } from "./folderModel.ts";
 
 function fail(cause: unknown) {
   const e = toKalCodeError(cause);
@@ -159,7 +159,8 @@ function Project({ workspaceId }: { workspaceId: string }) {
   if (!workspace) return null;
   const name = entry?.name ?? workspace.name;
   const open = threads.state === "ready" ? threads.value.filter((t) => t.archivedAt === null) : [];
-  const { working, needs } = projectAgentCounts(open);
+  const working = open.filter((t) => displayStatusOf(t.status).chip === "working").length;
+  const needs = open.filter((t) => displayStatusOf(t.status).chip === "waiting_for_you").length;
   const running = workspaces.terminals.filter((t) => t.status === "running").length;
   const branch = git.state === "ready" ? git.value.branch : null;
   const changed =
