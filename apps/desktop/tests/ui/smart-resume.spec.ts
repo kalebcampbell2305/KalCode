@@ -92,6 +92,89 @@ test("manual startup keeps the saved desk one click away", async ({ page }) => {
   await expect(page.getByRole("heading", { level: 1, name: "kalcode-site" })).toBeVisible();
 });
 
+test("a full saved desk stays interactive while provider metadata is unavailable", async ({ page }, testInfo) => {
+  await page.goto("/");
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
+  await page.evaluate(async () => {
+    const path = "/src/ipc/memoryTransport.ts";
+    const { sharedMemoryTransport } = await import(path);
+    const transport = sharedMemoryTransport();
+    transport.workspaces.queueFolders("Full saved desk");
+    const workspace = await transport.invoke("workspace_open_dialog", {});
+    const children = [];
+    for (let i = 0; i < 32; i++) {
+      const agent = await transport.invoke("provider_pane_create", {
+        providerId: "codex",
+        workspaceId: workspace.id,
+        permissionMode: "bypass",
+        model: null,
+        effort: null,
+        providerAccountId: null,
+        name: `Saved agent ${i + 1}`,
+      });
+      await transport.invoke("thread_stop", { threadId: agent.id });
+      children.push({
+        kind: "leaf",
+        paneId: `full-desk-${i}`,
+        tabs: [{ kind: "agent", agentId: agent.id }],
+        activeTab: 0,
+        collapsed: false,
+      });
+    }
+    const modelPath = "/src/shell/panes/model.ts";
+    const { toRatios } = await import(modelPath);
+    transport.layouts.seed(workspace.id, {
+      schemaVersion: 1,
+      root: { kind: "split", axis: "horizontal", ratios: toRatios(children.map(() => 1)), children },
+      maximizedPaneId: null,
+      dock: [],
+    });
+    const original = transport.invoke.bind(transport);
+    transport.invoke = (command: string, args: Record<string, unknown>) =>
+      command === "provider_pane_info" ? new Promise(() => {}) : original(command, args);
+    const samples: number[] = [];
+    (window as unknown as { deskNavigationSamples: number[] }).deskNavigationSamples = samples;
+    let clickedAt = 0;
+    document.addEventListener(
+      "click",
+      () => {
+        clickedAt = performance.now();
+      },
+      true,
+    );
+    new MutationObserver(() => {
+      const started = clickedAt;
+      if (started) requestAnimationFrame(() => samples.push(performance.now() - started));
+    }).observe(document.querySelector("#main") as Element, {
+      attributes: true,
+      attributeFilter: ["data-surface"],
+    });
+  });
+  const navigation = page.getByRole("navigation", { name: "Primary" });
+  await navigation.getByRole("button", { name: "Code", exact: true }).click();
+  await expect(page.locator('[data-pane-id^="full-desk-"]')).toHaveCount(32);
+  for (let i = 0; i < 5; i++) {
+    await navigation.getByRole("button", { name: "Settings", exact: true }).click();
+    await expect(page.locator("#main")).toHaveAttribute("data-surface", "settings");
+    await navigation.getByRole("button", { name: "Code", exact: true }).click();
+    await expect(page.locator("#main")).toHaveAttribute("data-surface", "code");
+  }
+  const samples = await page.evaluate(() =>
+    (window as unknown as { deskNavigationSamples: number[] }).deskNavigationSamples.slice().sort((a, b) => a - b),
+  );
+  expect(samples.length).toBeGreaterThanOrEqual(10);
+  await testInfo.attach("full-desk-navigation-latency", {
+    body: JSON.stringify({
+      panes: 32,
+      metadata: "unresolved",
+      samples,
+      p50: samples[Math.floor(samples.length / 2)],
+      p95: samples[Math.ceil(samples.length * 0.95) - 1],
+    }),
+    contentType: "application/json",
+  });
+});
+
 test("the startup preference persists through the rendered Settings control", async ({ page }) => {
   await page.goto("/?scenario=code");
   await page
