@@ -93,6 +93,11 @@ fn exit(code: i64) -> ! {
     std::process::exit(i32::try_from(code).unwrap_or(1))
 }
 
+/// A task containing this token makes an interactive fake pane exit with the configured code,
+/// whatever context a launcher adds around it (a Squad member's task is followed by its Squad
+/// context, and pasted text reaches the fake through ConPTY as one line).
+const EXIT_TOKEN: &str = "FAKE_PROVIDER_EXIT";
+
 /// Appends one line per start to `runs.log` beside the executable: its file name and
 /// arguments. Tests use it to prove which copy ran (and that planted copies never did).
 ///
@@ -117,9 +122,9 @@ fn record_run(args: &[String]) {
 }
 
 /// Minimal deterministic Codex app-server used by managed-account persistence tests.
-/// It implements only the read-only handshake KalCode uses; it never reads credentials or
-/// contacts a provider. The first account read can be delayed so a launcher can prove it
-/// preempts background validation instead of waiting for it.
+/// It implements the read-only account and paginated model discovery calls KalCode uses; it
+/// never reads credentials or contacts a provider. The first account read can be delayed so a
+/// launcher can prove it preempts background validation instead of waiting for it.
 fn codex_app_server(config: &Value) -> ! {
     let Some(codex_home) = std::env::var_os("CODEX_HOME").map(PathBuf::from) else {
         exit(8);
@@ -185,6 +190,58 @@ fn codex_app_server(config: &Value) -> ! {
                     },
                     "requiresOpenaiAuth": true,
                 })
+            }
+            "model/list" => {
+                let params = request.get("params").and_then(Value::as_object);
+                if params
+                    .and_then(|value| value.get("includeHidden"))
+                    .and_then(Value::as_bool)
+                    != Some(false)
+                    || params
+                        .and_then(|value| value.get("limit"))
+                        .and_then(Value::as_u64)
+                        != Some(100)
+                {
+                    exit(8);
+                }
+                match params
+                    .and_then(|value| value.get("cursor"))
+                    .and_then(Value::as_str)
+                {
+                    None => serde_json::json!({
+                        "data": [{
+                            "id": "catalog-entry-a",
+                            "model": "codex-test-exact-a",
+                            "displayName": "Codex test exact A",
+                            "description": "Deterministic default model from the managed account fixture.",
+                            "defaultReasoningEffort": "high",
+                            "supportedReasoningEfforts": [
+                                {"reasoningEffort": "low", "description": "Fast fixture reasoning"},
+                                {"reasoningEffort": "high", "description": "Deep fixture reasoning"}
+                            ],
+                            "isDefault": true,
+                            "hidden": false
+                        }],
+                        "nextCursor": "page-2"
+                    }),
+                    Some("page-2") => serde_json::json!({
+                        "data": [{
+                            "id": "catalog-entry-b",
+                            "model": "codex-test-exact-b",
+                            "displayName": "Codex test exact B",
+                            "description": "Deterministic second-page model from the managed account fixture.",
+                            "defaultReasoningEffort": "medium",
+                            "supportedReasoningEfforts": [
+                                {"reasoningEffort": "medium", "description": "Balanced fixture reasoning"},
+                                {"reasoningEffort": "xhigh", "description": "Maximum fixture reasoning"}
+                            ],
+                            "isDefault": false,
+                            "hidden": false
+                        }],
+                        "nextCursor": null
+                    }),
+                    Some(_) => exit(8),
+                }
             }
             _ => continue,
         };
@@ -675,7 +732,7 @@ mod turns {
             let Some(text) = input.push_line(&line) else {
                 continue;
             };
-            if text == "exit" {
+            if text == "exit" || text.contains(super::EXIT_TOKEN) {
                 exit(get_i64(config, "exitCode", 0));
             }
             if kind == "codex" && text == "approve" {
@@ -974,7 +1031,7 @@ mod interactive {
                 prompt();
                 continue;
             }
-            if line == "exit" {
+            if line == "exit" || line.contains(super::EXIT_TOKEN) {
                 hooks.fire("SessionEnd", json!({"reason": "prompt_input_exit"}));
                 exit(get_i64(config, "exitCode", 0));
             }

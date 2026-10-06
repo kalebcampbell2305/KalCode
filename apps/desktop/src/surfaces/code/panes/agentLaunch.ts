@@ -1,4 +1,4 @@
-import type { ProviderAccount, ProviderAccountBinding } from "@kalcode/protocol";
+import type { ModelInfo, ProviderAccount, ProviderAccountBinding } from "@kalcode/protocol";
 import type { PaneProviderId } from "./paneChannel.ts";
 
 /**
@@ -13,6 +13,28 @@ export const AGENT_EFFORTS: Record<PaneProviderId, readonly string[]> = {
   cursor: [],
   "gemini-cli": [],
 };
+
+export type ModelEffortInfo = ModelInfo & {
+  defaultEffort?: string | null;
+  supportedEfforts?: readonly string[];
+};
+
+/** Account-reported model effort support wins; static provider support is the compatibility fallback. */
+export function effortsForModel(providerId: PaneProviderId, model: ModelEffortInfo | null): readonly string[] {
+  return model?.supportedEfforts?.length ? model.supportedEfforts : (AGENT_EFFORTS[providerId] ?? []);
+}
+
+/** Keeps an exact supported choice, otherwise uses the account model's reported default when present. */
+export function effortForModel(
+  providerId: PaneProviderId,
+  model: ModelEffortInfo | null,
+  current: string | null | undefined,
+): string {
+  const efforts = effortsForModel(providerId, model);
+  if (current === "") return "";
+  if (current && efforts.includes(current)) return current;
+  return model?.defaultEffort && efforts.includes(model.defaultEffort) ? model.defaultEffort : "";
+}
 
 /** The most agents one launch starts; plan limits are enforced natively on top of this. */
 export const MAX_AGENTS_PER_LAUNCH = 10;

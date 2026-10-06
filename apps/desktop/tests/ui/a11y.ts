@@ -281,6 +281,72 @@ async function settleForScan(page: Page) {
   });
 }
 
+/** axe's colour-contrast run died on a node it could not place on its grid (see below). */
+function gridBoundsFailure(results: AxeResults): string | null {
+  const node = results.incomplete
+    .find((r) => r.id === "color-contrast")
+    ?.nodes.find(
+      (n) =>
+        n.target.length === 1 &&
+        n.none.some(
+          (c) => c.id === "error-occurred" && /grid bounds/.test(String((c.data as { message?: string })?.message)),
+        ),
+    );
+  return node ? String(node.target[0]) : null;
+}
+
+/**
+ * axe 4.13 throws "Element midpoint exceeds the grid bounds" when a text node sits on the very edge
+ * of the window (a rounding error in its grid), and then skips colour contrast for the WHOLE page:
+ * one row at the bottom edge left every other text node unjudged. When that happens the offending
+ * element is scrolled to the middle of its scroller and colour contrast is run again for the whole
+ * page (up to three times, in case another node lands on an edge), and that run's colour-contrast
+ * results replace the failed ones. Every scroll position is put back afterwards.
+ */
+async function recheckGridBounds(page: Page, results: AxeResults): Promise<AxeResults> {
+  let failed = gridBoundsFailure(results);
+  if (!failed) return results;
+  await page.evaluate(() => {
+    const saved: [Element, number, number][] = [];
+    for (const el of document.querySelectorAll("*")) {
+      if (el.scrollTop || el.scrollLeft) saved.push([el, el.scrollTop, el.scrollLeft]);
+    }
+    (window as unknown as { __kcScroll?: unknown }).__kcScroll = { saved, x: window.scrollX, y: window.scrollY };
+  });
+  try {
+    for (let attempt = 0; failed && attempt < 3; attempt += 1) {
+      await page.evaluate((sel) => document.querySelector(sel)?.scrollIntoView({ block: "center" }), failed);
+      const again = await new AxeBuilder({ page })
+        .options(CONTRAST_CHECK as Parameters<AxeBuilder["options"]>[0])
+        .withRules(["color-contrast"])
+        .analyze();
+      for (const key of ["passes", "violations", "incomplete"] as const) {
+        results[key] = [...results[key].filter((r) => r.id !== "color-contrast"), ...again[key]];
+      }
+      failed = gridBoundsFailure(results);
+    }
+  } finally {
+    await page.evaluate(() => {
+      const w = window as unknown as { __kcScroll?: { saved: [Element, number, number][]; x: number; y: number } };
+      const state = w.__kcScroll;
+      if (!state) return;
+      for (const el of document.querySelectorAll("*")) {
+        if (el.scrollTop || el.scrollLeft) {
+          el.scrollTop = 0;
+          el.scrollLeft = 0;
+        }
+      }
+      for (const [el, top, left] of state.saved) {
+        el.scrollTop = top;
+        el.scrollLeft = left;
+      }
+      window.scrollTo(state.x, state.y);
+      delete w.__kcScroll;
+    });
+  }
+  return results;
+}
+
 /** Full-page WCAG 2.2 AA: no serious or critical violation, and contrast actually evaluated. */
 export async function expectNoSeriousA11yViolations(page: Page, where = "") {
   await settleForScan(page);
@@ -288,7 +354,8 @@ export async function expectNoSeriousA11yViolations(page: Page, where = "") {
   const results = await new AxeBuilder({ page })
     .options(CONTRAST_CHECK as Parameters<AxeBuilder["options"]>[0])
     .withTags(WCAG_TAGS)
-    .analyze();
+    .analyze()
+    .then((raw) => recheckGridBounds(page, raw));
   const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
   expect(
     serious,

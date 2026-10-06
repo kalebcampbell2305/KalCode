@@ -52,6 +52,11 @@ const AUTH_FAILURE_CODES = new Set([
   // account (`launch_with_active_account`) and fails the agent with this code.
   "provider_not_authenticated",
 ]);
+const MODEL_DISCOVERY_AUTH_FAILURE_CODES = new Set([
+  "provider_account_not_authenticated",
+  "cursor_session_expired",
+  "cursor_not_authenticated",
+]);
 
 type SessionFacts = Pick<
   ProviderAccount,
@@ -207,7 +212,7 @@ export function ProviderAccountSessionsProvider({ children }: { children: ReactN
       if (!account || account.authenticationState === "not_authenticated") return Promise.resolve();
       const existing = modelRequests.current.get(account.id);
       if (existing) return existing;
-      let expectedVersion = version(account.id);
+      const expectedVersion = version(account.id);
       const expectedEpoch = clientEpoch.current;
       const current = () =>
         live.current && clientEpoch.current === expectedEpoch && version(account.id) === expectedVersion;
@@ -222,33 +227,35 @@ export function ProviderAccountSessionsProvider({ children }: { children: ReactN
       task = (async () => {
         await Promise.resolve();
         try {
-          let result: AccountModels;
-          if (account.providerId === "cursor") {
-            const state = await client.refreshCursorAccount(account.id);
-            if (!current()) return;
-            if (state.account.id !== account.id || state.account.providerId !== account.providerId) {
-              throw new Error("Model response did not match the selected account");
-            }
-            if (!commit(state.account, expectedVersion)) return;
-            expectedVersion = version(account.id);
-            result = {
-              status: state.modelsError ? "unavailable" : "available",
-              items: state.models,
-              reason: state.modelsError,
-            };
-          } else {
-            const options = await client.threadOptions();
-            const provider = options.providers.find((provider) => provider.id === account.providerId);
-            result = { status: provider ? "available" : "unavailable", items: provider?.models ?? [], reason: null };
+          const catalog = await client.providerAccountModels(account.id);
+          if (!current()) return;
+          if (catalog.accountId !== account.id || catalog.providerId !== account.providerId) {
+            throw new Error("Model response did not match the selected account");
           }
+          const result: AccountModels = { status: "available", items: catalog.models, reason: null };
           if (current()) setAccountModels((previous) => new Map(previous).set(account.id, result));
         } catch (error) {
+          const failure = toKalCodeError(error);
+          if (MODEL_DISCOVERY_AUTH_FAILURE_CODES.has(failure.code) && current()) {
+            try {
+              const restored = (await client.listProviderAccounts()).find(
+                (candidate) => candidate.id === account.id && candidate.providerId === account.providerId,
+              );
+              if (restored && current() && restored.authenticationState === "not_authenticated") {
+                commit(restored, expectedVersion);
+                return;
+              }
+            } catch {
+              // Model discovery already has the safe provider error. A failed local metadata read
+              // cannot revoke a last-known valid session or broaden the affected account.
+            }
+          }
           if (current())
             setAccountModels((previous) =>
               new Map(previous).set(account.id, {
                 status: "unavailable",
                 items: [],
-                reason: toKalCodeError(error).message,
+                reason: failure.message,
               }),
             );
         } finally {

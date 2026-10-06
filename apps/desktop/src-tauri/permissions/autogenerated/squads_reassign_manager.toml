@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-squads-reassign-manager"
+description = "Enables the squads_reassign_manager command without any pre-configured scope."
+commands.allow = ["squads_reassign_manager"]
+
+[[permission]]
+identifier = "deny-squads-reassign-manager"
+description = "Denies the squads_reassign_manager command without any pre-configured scope."
+commands.deny = ["squads_reassign_manager"]

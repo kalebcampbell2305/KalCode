@@ -72,15 +72,34 @@ function at(record: OperationRecord): number {
   return Number.isNaN(t) ? 0 : t;
 }
 
-/** The agent's linked runs of the given kinds, newest first. */
+/** The agent's runs and explicitly dependent pipeline work, newest first. */
 export function linkedRuns(
   threadId: string,
   runs: readonly OperationRecord[] | undefined,
   kinds: readonly OperationRecord["spec"]["kind"][],
 ): OperationRecord[] {
-  return (runs ?? [])
-    .filter((r) => r.threadId === threadId && kinds.includes(r.spec.kind))
-    .sort((a, b) => at(b) - at(a));
+  const records = runs ?? [];
+  const linked = new Set(records.filter((run) => run.threadId === threadId).map((run) => run.id));
+  const dependents = new Map<string, string[]>();
+  for (const run of records) {
+    if (run.spec.kind === "agent" && run.threadId !== threadId) continue;
+    for (const dependency of run.spec.dependencies) {
+      const children = dependents.get(dependency) ?? [];
+      children.push(run.id);
+      dependents.set(dependency, children);
+    }
+  }
+  // Follow the canonical DAG rather than guessing from a project, task name or timestamp.
+  // The visited set also bounds malformed historical cycles.
+  const pending = [...linked];
+  for (let index = 0; index < pending.length; index++) {
+    for (const id of dependents.get(pending[index] ?? "") ?? []) {
+      if (linked.has(id)) continue;
+      linked.add(id);
+      pending.push(id);
+    }
+  }
+  return records.filter((r) => linked.has(r.id) && kinds.includes(r.spec.kind)).sort((a, b) => at(b) - at(a));
 }
 
 function plural(n: number, word: string): string {
@@ -220,7 +239,7 @@ function releaseRow(thread: ThreadSummary, evidence: OutcomeEvidence): Draft | n
       return row(`${latest.spec.kind === "release" ? "Release" : "Deploy"} failed`, "failed", latest.outcome);
     case "succeeded": {
       const environment = (evidence.environments ?? []).find((e) => e.runId === latest.id);
-      if (!environment) return row(`${verb}${version}`, "done", latest.outcome);
+      if (!environment) return row("Command succeeded", "muted", "Delivery has not been verified");
       const where = ENVIRONMENT_LABEL[environment.kind];
       const verified = environment.health === "healthy";
       return row(

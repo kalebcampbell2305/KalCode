@@ -19,7 +19,7 @@ async function openOperations(page: Page, scenario = "code") {
   await expect(page.getByRole("heading", { level: 1, name: "Operations" })).toBeVisible();
 }
 
-async function tab(page: Page, name: "Runs" | "Queue" | "Services" | "Environments" | "Activity") {
+async function tab(page: Page, name: "Runs" | "Queue" | "Squads" | "Services" | "Environments" | "Activity") {
   await page.getByRole("tablist", { name: "Operations views" }).getByRole("tab", { name, exact: true }).click();
 }
 
@@ -200,6 +200,8 @@ test("Operations tab navigation is keyboard accessible and passes axe", async ({
   await runs.focus();
   await page.keyboard.press("ArrowRight");
   await expect(page.getByRole("tab", { name: "Queue", exact: true })).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("tab", { name: "Squads", exact: true })).toHaveAttribute("aria-selected", "true");
   await page.keyboard.press("ArrowRight");
   await expect(page.getByRole("tab", { name: "Services", exact: true })).toHaveAttribute("aria-selected", "true");
   await expectNoSeriousA11yViolations(page);

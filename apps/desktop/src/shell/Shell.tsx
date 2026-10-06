@@ -217,6 +217,7 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
                   ) : current === "operations" ? (
                     <OperationsPage
                       client={operationsClient}
+                      squads={client.squads}
                       threadOptions={threadOptions}
                       providerAccounts={providerAccounts}
                     />

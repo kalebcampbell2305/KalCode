@@ -30,6 +30,73 @@ use kalcode_contracts::agent::{InteractiveSupport, StatusChannel};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+/// Normalizes the exact provider-native effort selected for an interactive coding pane.
+/// `None`, empty, and `default` retain the provider's own default. Provider adapters remain the
+/// capability authority, so orchestration and direct pane launch cannot drift into separate
+/// Claude/Codex policy tables.
+pub fn normalize_effort(
+    provider_id: &str,
+    effort: Option<&str>,
+) -> Result<Option<String>, &'static str> {
+    let Some(effort) = effort
+        .map(|effort| effort.trim().to_ascii_lowercase())
+        .filter(|effort| !effort.is_empty() && effort != "default")
+    else {
+        return Ok(None);
+    };
+    let supported = match provider_id {
+        kalcode_contracts::agent::ProviderId::CLAUDE_CODE => {
+            crate::claude::argv::valid_effort_name(&effort)
+        }
+        kalcode_contracts::agent::ProviderId::CODEX => {
+            crate::codex::argv::valid_effort_name(&effort)
+        }
+        _ => false,
+    };
+    supported
+        .then_some(Some(effort))
+        .ok_or("That provider doesn't support this effort level.")
+}
+
+/// Exact effort values the static provider adapter accepts, in native picker order. Dynamic
+/// account catalogs (such as Codex `model/list`) remain authoritative per model and do not use
+/// this fallback.
+pub fn supported_efforts(provider_id: &str) -> Vec<String> {
+    let values: &[&str] = match provider_id {
+        kalcode_contracts::agent::ProviderId::CLAUDE_CODE => crate::claude::argv::EFFORT_LEVELS,
+        kalcode_contracts::agent::ProviderId::CODEX => crate::codex::argv::EFFORT_LEVELS,
+        _ => &[],
+    };
+    values.iter().map(|value| (*value).to_owned()).collect()
+}
+
+#[cfg(test)]
+mod effort_tests {
+    use super::normalize_effort;
+    use kalcode_contracts::agent::ProviderId;
+
+    #[test]
+    fn one_effort_capability_path_serves_direct_and_orchestrated_panes() {
+        for provider in [ProviderId::CLAUDE_CODE, ProviderId::CODEX] {
+            assert_eq!(
+                normalize_effort(provider, Some(" HIGH ")).expect("supported effort"),
+                Some("high".into())
+            );
+            assert_eq!(
+                normalize_effort(provider, Some("default")).expect("provider default"),
+                None
+            );
+        }
+        for provider in [
+            ProviderId::GEMINI_CLI,
+            ProviderId::CURSOR,
+            "future-provider",
+        ] {
+            assert!(normalize_effort(provider, Some("high")).is_err());
+        }
+    }
+}
+
 /// Who decides a tool call an interactive session reports through its `PreToolUse` hook.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]

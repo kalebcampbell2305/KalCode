@@ -639,7 +639,7 @@ fn stopping_a_pane_ends_its_process_and_revokes_the_session() {
     assert!(matches!(
         pane.session
             .send(kalcode_contracts::agent::AgentInput::Text { text: "x".into() }),
-        Err(ProviderError::Unsupported)
+        Err(ProviderError::Refused { ref code, .. }) if code == "provider_input_not_ready"
     ));
 }
 

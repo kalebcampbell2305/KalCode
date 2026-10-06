@@ -285,6 +285,8 @@ export function createThreadsMemory(
         providerId: string,
       ) => { displayName: string; authenticationState?: ProviderAccount["authenticationState"] })
     | null = null,
+  /** Exact models reported for one managed account; provider options remain the no-account fallback. */
+  accountModelIds: ((accountId: string, providerId: string) => readonly string[]) | null = null,
 ): ThreadsMemory {
   const threads = new Map<string, MemThread>();
   const untitledPanes = new Set<string>();
@@ -725,15 +727,19 @@ export function createThreadsMemory(
         "provider_unavailable",
         `${providerId} isn't connected to KalCode. Connect it in Providers, then try again.`,
       );
-    const model = args.model == null || args.model === "" ? null : String(args.model);
-    if (model && !provider.models.some((m) => m.id === model))
-      invalid("invalid_model", `That model isn't available for ${provider.displayName}.`);
     const providerAccountId =
       args.providerAccountId == null || args.providerAccountId === "" ? null : String(args.providerAccountId);
     if (providerAccountId !== null && !UUID.test(providerAccountId))
       invalid("provider_account_id_invalid", "That provider account reference isn't valid.");
     const selectedAccount =
       providerAccountId === null || accountFor === null ? null : accountFor(providerAccountId, provider.id);
+    const model = args.model == null || args.model === "" ? null : String(args.model);
+    const availableModelIds =
+      providerAccountId !== null && accountModelIds !== null
+        ? accountModelIds(providerAccountId, provider.id)
+        : provider.models.map((candidate) => candidate.id);
+    if (model && !availableModelIds.includes(model))
+      invalid("invalid_model", `That model isn't available for ${provider.displayName}.`);
     const workspace = workspaces().find((w) => w.id === args.workspaceId);
     if (!workspace)
       return error(

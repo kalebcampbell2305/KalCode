@@ -86,7 +86,15 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "terminal_directory",
         sql: include_str!("../migrations/0025_terminal_directory.sql"),
     },
+    SQUADS_MIGRATION,
 ];
+
+/// Reusable Squad templates and launch relationships to canonical Operations.
+pub const SQUADS_MIGRATION: Migration = Migration {
+    version: 26,
+    name: "squads",
+    sql: include_str!("../migrations/0026_squads.sql"),
+};
 
 /// Shared, provider-independent project memory and its incremental full-text index.
 pub const UNIFIED_MEMORY_MIGRATION: Migration = Migration {
@@ -532,6 +540,20 @@ pub fn meta_set(conn: &Connection, key: &str, value: &str) -> Result<()> {
 mod tests {
     use super::*;
 
+    fn row_values(conn: &Connection, table: &str, id: &str) -> Vec<rusqlite::types::Value> {
+        let mut statement = conn
+            .prepare(&format!("SELECT * FROM {table} WHERE id = ?1"))
+            .expect("prepare preserved row");
+        let column_count = statement.column_count();
+        statement
+            .query_row([id], |row| {
+                (0..column_count)
+                    .map(|index| row.get(index))
+                    .collect::<std::result::Result<Vec<_>, _>>()
+            })
+            .expect("read preserved row")
+    }
+
     #[test]
     fn cursor_migration_preserves_accounts_bindings_and_terminal_history() {
         let mut conn = open_in_memory().expect("database");
@@ -663,6 +685,218 @@ mod tests {
             ))
             .expect("integrity"),
             0
+        );
+    }
+
+    #[test]
+    fn squads_migration_preserves_schema25_data_and_backup_recovers() {
+        const WORKSPACE_ID: &str = "11111111-1111-4111-8111-111111111111";
+        const ACCOUNT_ID: &str = "22222222-2222-4222-8222-222222222222";
+        const THREAD_ID: &str = "33333333-3333-4333-8333-333333333333";
+        const OPERATION_ID: &str = "44444444-4444-4444-8444-444444444444";
+        const SQUAD_ID: &str = "66666666-6666-4666-8666-666666666666";
+
+        let profile = tempfile::tempdir().expect("profile");
+        let database_path = profile.path().join("kalcode.db");
+        let backup_dir = profile.path().join("backups");
+        let schema25 = &MIGRATIONS[..MIGRATIONS.len() - 1];
+        assert_eq!(schema25.last().map(|migration| migration.version), Some(25));
+
+        let mut conn = open(&database_path).expect("schema 25 database");
+        migrate(&mut conn, schema25, None).expect("create schema 25");
+        conn.execute_batch(
+            "INSERT INTO workspaces (
+               id, name, root_path, created_at, last_opened_at, active_terminal_id
+             ) VALUES (
+               '11111111-1111-4111-8111-111111111111', 'Synthetic project',
+               'C:/synthetic/project', '2026-10-05T12:00:00Z',
+               '2026-10-05T12:01:00Z', 'terminal-preserved'
+             );
+             INSERT INTO terminals (
+               id, workspace_id, shell_id, title, position, created_at, started_at, launch_cwd
+             ) VALUES (
+               'terminal-preserved', '11111111-1111-4111-8111-111111111111',
+               'powershell', 'Preserved terminal', 0, '2026-10-05T12:00:00Z',
+               '2026-10-05T12:00:01Z', 'C:/synthetic/project'
+             );
+             INSERT INTO provider_accounts (
+               id, provider_id, display_name, provider_reported_identity,
+               authentication_state, is_default, created_at, last_used_at, last_checked_at
+             ) VALUES (
+               '22222222-2222-4222-8222-222222222222', 'codex', 'Synthetic account',
+               'synthetic@example.test', 'authenticated', 1, '2026-10-05T12:00:00Z',
+               '2026-10-05T12:02:00Z', '2026-10-05T12:03:00Z'
+             );
+             INSERT INTO threads (
+               id, name, provider_id, provider_name, model, account_label, workspace_id,
+               workspace_name, cwd, permission_mode, status, current_activity,
+               provider_session_id, created_at, last_activity_at, last_read_seq,
+               pending_approvals, input_tokens, output_tokens, cost_usd_micros,
+               provider_account_id, effort
+             ) VALUES (
+               '33333333-3333-4333-8333-333333333333', 'Preserved coding session', 'codex',
+               'Codex', 'o3', 'Synthetic account', '11111111-1111-4111-8111-111111111111',
+               'Synthetic project', 'C:/synthetic/project', 'approve', 'active',
+               'Running focused tests', 'synthetic-session', '2026-10-05T12:00:00Z',
+               '2026-10-05T12:04:00Z', 3, 0, 120, 45, 1000,
+               '22222222-2222-4222-8222-222222222222', 'high'
+             );
+             INSERT INTO operations (
+               id, workspace_id, name, kind, prompt, provider_id, provider_account_id,
+               model, effort, dependencies, priority, lane, environment, urls, env_keys,
+               source, status, branch, account_label, terminal_id, thread_id, created_at,
+               started_at, current_action, logs, position
+             ) VALUES (
+               '44444444-4444-4444-8444-444444444444',
+               '11111111-1111-4111-8111-111111111111', 'Preserved operation', 'agent',
+               'Continue verified work.', 'codex', '22222222-2222-4222-8222-222222222222',
+               'o3', 'high', '[]', 5, 'next', 'local', '[]', '[]', 'operations', 'running',
+               'feature/preserved', 'Synthetic account', 'terminal-preserved',
+               '33333333-3333-4333-8333-333333333333', '2026-10-05T12:00:00Z',
+               '2026-10-05T12:00:01Z', 'Running focused tests', 'synthetic redacted log', 11
+             );
+             INSERT INTO operation_moments (id, operation_id, at, kind, message) VALUES (
+               '55555555-5555-4555-8555-555555555555',
+               '44444444-4444-4444-8444-444444444444',
+               '2026-10-05T12:00:02Z', 'started', 'Synthetic operation started.'
+             );
+             UPDATE operations_state SET revision = 37, paused = 1 WHERE singleton = 1;",
+        )
+        .expect("seed realistic schema 25 rows");
+
+        let workspace_before = row_values(&conn, "workspaces", WORKSPACE_ID);
+        let account_before = row_values(&conn, "provider_accounts", ACCOUNT_ID);
+        let thread_before = row_values(&conn, "threads", THREAD_ID);
+        let operation_before = row_values(&conn, "operations", OPERATION_ID);
+        let state_before = conn
+            .query_row(
+                "SELECT revision, paused FROM operations_state WHERE singleton = 1",
+                [],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .expect("operations revision");
+
+        let outcome = migrate(&mut conn, MIGRATIONS, Some(&backup_dir)).expect("upgrade to 26");
+        assert_eq!((outcome.from_version, outcome.to_version), (25, 26));
+        let backup_path = outcome.backup.expect("pre-26 backup");
+        assert!(backup_path.is_file());
+        assert_eq!(
+            row_values(&conn, "workspaces", WORKSPACE_ID),
+            workspace_before
+        );
+        assert_eq!(
+            row_values(&conn, "provider_accounts", ACCOUNT_ID),
+            account_before
+        );
+        assert_eq!(row_values(&conn, "threads", THREAD_ID), thread_before);
+        let operation_after = row_values(&conn, "operations", OPERATION_ID);
+        assert_eq!(
+            &operation_after[..operation_before.len()],
+            operation_before.as_slice()
+        );
+        assert_eq!(
+            operation_after.last(),
+            Some(&rusqlite::types::Value::Null),
+            "the new attention reason is additive and empty for existing work"
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT revision, paused FROM operations_state WHERE singleton = 1",
+                [],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .expect("preserved operations revision"),
+            state_before
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .expect("post-migration integrity"),
+            0
+        );
+
+        let definition = format!(
+            r#"{{"id":"{SQUAD_ID}","name":"Migration squad","goal":"","members":[{{"key":"worker","name":"Worker","providerId":"codex","providerAccountId":"{ACCOUNT_ID}","model":"o3","effort":"high","role":"","task":null,"worktree":true,"dependsOn":[],"managerKey":null,"ownedPaths":[]}}]}}"#
+        );
+        conn.execute(
+            "INSERT INTO squad_definitions (id, name, goal, definition_json, updated_at)
+             VALUES (?1, 'Migration squad', '', ?2, '2026-10-05T12:05:00Z')",
+            params![SQUAD_ID, definition],
+        )
+        .expect("new Squad is writable after migration");
+        drop(conn);
+
+        let mut reopened = open(&database_path).expect("reopen migrated database");
+        let reopen =
+            migrate(&mut reopened, MIGRATIONS, Some(&backup_dir)).expect("idempotent reopen");
+        assert!(!reopen.applied_any());
+        assert!(reopen.backup.is_none());
+        assert_eq!(
+            reopened
+                .query_row(
+                    "SELECT definition_json FROM squad_definitions WHERE id = ?1",
+                    [SQUAD_ID],
+                    |row| row.get::<_, String>(0),
+                )
+                .expect("Squad survives reopen"),
+            definition
+        );
+        assert_eq!(
+            row_values(&reopened, "operations", OPERATION_ID),
+            operation_after
+        );
+        drop(reopened);
+
+        let backup = open_read_only(&backup_path).expect("open canonical backup");
+        assert_eq!(schema_version(&backup).expect("backup schema"), 25);
+        assert_eq!(
+            row_values(&backup, "workspaces", WORKSPACE_ID),
+            workspace_before
+        );
+        assert_eq!(
+            row_values(&backup, "provider_accounts", ACCOUNT_ID),
+            account_before
+        );
+        assert_eq!(row_values(&backup, "threads", THREAD_ID), thread_before);
+        assert_eq!(
+            row_values(&backup, "operations", OPERATION_ID),
+            operation_before
+        );
+        drop(backup);
+
+        let recovery_path = profile.path().join("recovered.db");
+        fs::copy(&backup_path, &recovery_path).expect("stage backup recovery");
+        let mut recovered = open(&recovery_path).expect("open recovered backup");
+        let recovery = migrate(&mut recovered, MIGRATIONS, None).expect("migrate recovered backup");
+        assert_eq!((recovery.from_version, recovery.to_version), (25, 26));
+        assert_eq!(
+            row_values(&recovered, "workspaces", WORKSPACE_ID),
+            workspace_before
+        );
+        assert_eq!(
+            row_values(&recovered, "provider_accounts", ACCOUNT_ID),
+            account_before
+        );
+        assert_eq!(row_values(&recovered, "threads", THREAD_ID), thread_before);
+        let recovered_operation = row_values(&recovered, "operations", OPERATION_ID);
+        assert_eq!(
+            &recovered_operation[..operation_before.len()],
+            operation_before.as_slice()
+        );
+        assert_eq!(
+            recovered_operation.last(),
+            Some(&rusqlite::types::Value::Null)
+        );
+        assert_eq!(
+            recovered
+                .query_row(
+                    "SELECT revision, paused FROM operations_state WHERE singleton = 1",
+                    [],
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+                )
+                .expect("recovered operations revision"),
+            state_before
         );
     }
 
