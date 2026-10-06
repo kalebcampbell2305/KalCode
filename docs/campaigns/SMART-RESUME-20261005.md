@@ -64,6 +64,8 @@ Explicit saved-layout reset now confirms replacement without stopping sessions. 
 
 Final root follow-up evidence: 80 focused UI/controller/IPC tests passed; a subsequent late-provider/pending-input regression passed in independent 46-test boundary review. All seven rendered recovery scenarios passed, and the final two changed reset/queued-input scenarios passed again after copy and ordering repairs. Desktop/protocol typechecks, whole-repository Biome (1368 files, existing website warnings), formatting and diff checks passed. The native test binary is rebuilt separately before the final restart reproof. Windows/macOS signed release and user-receivable production delivery are still pending.
 
+At final implementation commit `31635f0b98880b285a72b4340aecac2b12d7c076`, root independently reran DeskRecovery: 16/16 passed. The updated native binary rebuild was externally terminated by another session's temporary heavy-build guard, which kills other sessions' Cargo release builds while shared gates run. No compiler failure was reported and no cache was deleted. The required final native restart reproof remains pending; the shared exact-candidate `desktop-native-e2e` gate builds the executable and discovers this restart spec. Submission to that gate is not a claim that final native verification or delivery has passed.
+
 ## Compatibility and rollback
 
 No database migration or credential-store change. Protocol additions have defaults for older payloads. Local records are versioned. Drafts contain user-entered plaintext in the local account-scoped WebView profile; they are not an encrypted credential vault. A crash before a native transaction commits can still lose that transaction; URL updates no longer wait for the layout debounce.
