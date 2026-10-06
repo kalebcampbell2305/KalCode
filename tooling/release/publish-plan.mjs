@@ -1,3 +1,4 @@
+import { liveKeys } from "./live-update.mjs";
 import { semverPrecedenceKey } from "./publication-safety.mjs";
 
 const CONTENT = Object.freeze({
@@ -5,6 +6,7 @@ const CONTENT = Object.freeze({
   dmg: "application/x-apple-diskimage",
   json: "application/json; charset=utf-8",
   signature: "text/plain; charset=utf-8",
+  liveBundle: "application/octet-stream",
 });
 
 const TARGETS = Object.freeze({
@@ -277,6 +279,26 @@ export function buildPublishPlan({
             argv: put(bucket, keys.signature, artifact.signaturePath, CONTENT.signature, immutable),
           });
         }
+      }
+      // Live Update: the signed live descriptor envelope and the UI bundle, uploaded before the
+      // channel pointer moves so a client that sees the build can always fetch them.
+      for (const artifact of ordered) {
+        if (!artifact.live) continue;
+        const keys = liveKeys(channel, version, artifact.live.uiFile, artifact.target);
+        plan.push({
+          name: `${artifact.target} live update descriptor`,
+          kind: "live-envelope",
+          target: artifact.target,
+          key: keys.envelope,
+          argv: put(bucket, keys.envelope, artifact.live.envelopePath, CONTENT.json, immutable),
+        });
+        plan.push({
+          name: `${artifact.target} live update UI bundle`,
+          kind: "live-ui",
+          target: artifact.target,
+          key: keys.ui,
+          argv: put(bucket, keys.ui, artifact.live.uiPath, CONTENT.liveBundle, immutable),
+        });
       }
       if (includeImmutableUpdater) {
         const key = `releases/updater/${channel}/${version}/${updaterDescriptorSha256}.json`;

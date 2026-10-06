@@ -398,3 +398,36 @@ test("the canonical publisher consumes both verified platform packets before its
     source.indexOf("createPlatformUpdaterManifest") < source.indexOf("buildVersionClaimStatement(pointerCandidate)"),
   );
 });
+
+test("a build's live update descriptor and UI bundle upload before the pointer, keyed under the build", () => {
+  const live = {
+    envelopePath: "C:stagelive-windows-x86_64.json",
+    uiPath: "C:stageKalCode_ui.kui",
+    uiFile: "KalCode_ui.kui",
+  };
+  const base = {
+    bucket: "kalcode-downloads",
+    version: VERSION,
+    channel: "stable",
+    downloadManifestPath: "C:stagelatest.json",
+    updaterManifestPath: "C:stagestable.json",
+    updaterDescriptorSha256: DESCRIPTOR_SHA,
+    downloadDescriptorSha256: DOWNLOAD_SHA,
+    includeDownloadDescriptor: true,
+    includeUpdater: true,
+  };
+  const plan = buildPublishPlan({ ...base, artifacts: [{ ...windows, live }, mac] });
+  const envelope = plan.find(({ kind }) => kind === "live-envelope");
+  const ui = plan.find(({ kind }) => kind === "live-ui");
+  assert.equal(envelope.key, `releases/updater/stable/${VERSION}/live/windows-x86_64.json`);
+  assert.equal(ui.key, `releases/updater/stable/${VERSION}/live/KalCode_ui.kui`);
+  assert.match(ui.argv.join(" "), /immutable/);
+  // Uploaded before the immutable updater descriptor, which precedes the pointer advance.
+  assert.ok(plan.indexOf(ui) < plan.findIndex(({ kind }) => kind === "updater-descriptor"));
+  assert.equal(new Set(plan.map(({ key }) => key)).size, plan.length);
+
+  const without = buildPublishPlan({ ...base, artifacts: [windows, mac] });
+  assert.equal(without.filter(({ kind }) => kind.startsWith("live-")).length, 0);
+  const local = buildPublishPlan({ ...base, includeUpdater: false, artifacts: [{ ...windows, live }] });
+  assert.equal(local.filter(({ kind }) => kind.startsWith("live-")).length, 0);
+});

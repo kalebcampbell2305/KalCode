@@ -727,6 +727,27 @@ impl RuntimeCoordinator {
     /// lease and the retained bundle, all within `timeout`. A caller that still holds a lease can
     /// never satisfy it. Sign-out holds no lease: `account_logout` drains without waiting on
     /// itself, and this waits for its credential clearing through the account's own obligation.
+    /// Provider processes running now (interactive panes plus thread sessions), read without
+    /// taking an account lease. `None` when no runtime is bound, so nothing is known; Live
+    /// Update's handoff gate then stays closed.
+    pub fn running_provider_work(&self) -> Option<usize> {
+        let bundle = self
+            .bundle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()?;
+        let panes = bundle
+            .panes
+            .as_ref()
+            .map_or(0, |panes| panes.running_panes());
+        let sessions = bundle
+            .threads
+            .as_ref()
+            .and_then(|threads| threads.runtime_handle())
+            .map_or(0, |runtime| runtime.running_session_count());
+        Some(panes + sessions)
+    }
+
     pub fn drain_for_exit(&self, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
         if !self.account.seal_sign_outs_for_exit(timeout) {

@@ -17,6 +17,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use url::Url;
 
+pub mod live;
 pub mod mac_swap;
 
 pub const MAX_UPDATE_BYTES: u64 = 512 * 1024 * 1024;

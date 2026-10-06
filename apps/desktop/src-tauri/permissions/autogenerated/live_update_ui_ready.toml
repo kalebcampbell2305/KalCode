@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-live-update-ui-ready"
+description = "Enables the live_update_ui_ready command without any pre-configured scope."
+commands.allow = ["live_update_ui_ready"]
+
+[[permission]]
+identifier = "deny-live-update-ui-ready"
+description = "Denies the live_update_ui_ready command without any pre-configured scope."
+commands.deny = ["live_update_ui_ready"]

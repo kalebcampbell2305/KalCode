@@ -3222,6 +3222,7 @@ name = "kalcode-updater"
 version = "0.0.0"
 dependencies = [
  "base64 0.22.1",
+ "flate2",
  "hex",
  "minisign",
  "minisign-verify",

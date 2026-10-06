@@ -154,6 +154,29 @@ afterAll(async () => {
 });
 
 describe("authoritative multi-platform updater routes against local R2", () => {
+  it("serves a published build's live update descriptor and UI bundle, and nothing for unpublished builds", async () => {
+    const envelope = JSON.stringify({ schemaVersion: 1, descriptor: "e30=", signature: "c2ln" });
+    const bundle = new Uint8Array(2048).map((_, index) => index % 13);
+    const live = `/releases/updater/${CHANNEL}/${VERSION}/live`;
+    await proxy.env.RELEASES.put(`${live}/windows-x86_64.json`.slice(1), envelope);
+    await proxy.env.RELEASES.put(`${live}/KalCode_2.0.0_ui.kui`.slice(1), bundle);
+    await proxy.env.RELEASES.put(`releases/updater/${CHANNEL}/9.9.9/live/windows-x86_64.json`, envelope);
+
+    const descriptorResponse = await request(`${live}/windows-x86_64.json`);
+    expect(descriptorResponse.status).toBe(200);
+    expect(await descriptorResponse.text()).toBe(envelope);
+    expect(descriptorResponse.headers.get("cache-control")).toContain("immutable");
+    const ui = await request(`${live}/KalCode_2.0.0_ui.kui`);
+    expect(ui.status).toBe(200);
+    expect(new Uint8Array(await ui.arrayBuffer())).toEqual(bundle);
+
+    // Only published builds, and only the two live file shapes.
+    expect((await request(`/releases/updater/${CHANNEL}/9.9.9/live/windows-x86_64.json`)).status).toBe(404);
+    expect((await request(`${live}/darwin-aarch64.json`)).status).toBe(404);
+    expect((await request(`${live}/notes.txt`)).status).toBe(404);
+    expect((await request(`${live}/..%2Fstable.json`)).status).toBe(404);
+  });
+
   it("serves both staged platforms and only their bound signatures before customer pointer activation", async () => {
     const staged = {
       ...downloadDepsFromEnv({

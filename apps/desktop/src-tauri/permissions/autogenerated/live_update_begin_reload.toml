@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-live-update-begin-reload"
+description = "Enables the live_update_begin_reload command without any pre-configured scope."
+commands.allow = ["live_update_begin_reload"]
+
+[[permission]]
+identifier = "deny-live-update-begin-reload"
+description = "Denies the live_update_begin_reload command without any pre-configured scope."
+commands.deny = ["live_update_begin_reload"]

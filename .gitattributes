@@ -4,5 +4,7 @@
 *.ico binary
 *.icns binary
 *.woff2 binary
+# Live Update UI bundles (gzip), as test fixtures.
+*.kui binary
 # Notices are SHA-256-pinned upstream bytes, including their original line endings.
 third_party/kalvoice-notices/*.txt -text

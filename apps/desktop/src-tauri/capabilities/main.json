@@ -27,6 +27,10 @@
     "allow-account-set-display-name",
     "allow-runtime-status",
     "allow-runtime-retry",
+    "allow-live-update-status",
+    "allow-live-update-ui-ready",
+    "allow-live-update-begin-reload",
+    "allow-live-update-handoff-ready",
 
     "allow-context-file-pick",
     "allow-context-preview-create",

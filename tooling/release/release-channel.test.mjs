@@ -179,7 +179,24 @@ test("the production binary probe must report the exact version, native channel,
     version: "0.1.5",
     channel: "beta",
     testHooks: false,
+    nativeFingerprint: null,
   });
+  const fingerprint = "a".repeat(64);
+  assert.equal(
+    validateBuildInfo(JSON.stringify({ ...JSON.parse(output), nativeFingerprint: fingerprint }), {
+      version: "0.1.5",
+      requestedReleaseChannel: "beta",
+    }).nativeFingerprint,
+    fingerprint,
+  );
+  assert.throws(
+    () =>
+      validateBuildInfo(JSON.stringify({ ...JSON.parse(output), nativeFingerprint: "dev" }), {
+        version: "0.1.5",
+        requestedReleaseChannel: "beta",
+      }),
+    /invalid native fingerprint/,
+  );
 
   assert.throws(
     () => validateBuildInfo(output, { version: "0.1.6", requestedReleaseChannel: "beta" }),

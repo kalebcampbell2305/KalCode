@@ -30,6 +30,11 @@ fn is_bootstrap_command(command: &str) -> bool {
             | "runtime_status"
             | "runtime_retry"
             | "updater_status"
+            // Live Update's health report must work on every screen, sign-in included.
+            | "live_update_status"
+            | "live_update_ui_ready"
+            | "live_update_begin_reload"
+            | "live_update_handoff_ready"
             | "boot"
             | "window_ready"
             | "settings_get"

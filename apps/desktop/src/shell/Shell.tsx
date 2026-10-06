@@ -40,6 +40,7 @@ import { NotificationsProvider } from "./notifications/NotificationsProvider.tsx
 // Z7-W2: Home, the project page, the workspace list and Git status as pane contents.
 import "./rail/paneContents.tsx";
 import { FavoritesBar } from "./favorites/FavoritesBar.tsx";
+import { LiveUpdateHost } from "./liveUpdate/LiveUpdateHost.tsx";
 import { RailProvider, useRail } from "./rail/RailProvider.tsx";
 import { SearchProvider, useSearchOpen } from "./rail/search/SearchProvider.tsx";
 import { useRailShortcut } from "./rail/useRailShortcut.ts";
@@ -247,6 +248,7 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
               <ApprovalAnnouncer />
               <NotificationCenter />
               <UpdateReadyNotice client={client} onOpenDetails={openUpdateDetails} />
+              <LiveUpdateHost onOpenDetails={openUpdateDetails} />
             </div>
           </div>
         </DeckDataProvider>

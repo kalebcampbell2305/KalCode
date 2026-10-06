@@ -6,10 +6,12 @@ import { AccountProvider } from "./account/AccountProvider.tsx";
 import { AccountClient } from "./ipc/account.ts";
 import { KalCodeClient } from "./ipc/client.ts";
 import { toKalCodeError } from "./ipc/errors.ts";
+import { reportUiReady } from "./ipc/liveUpdate.ts";
 import { resolveTransport } from "./ipc/transport.ts";
 import { RuntimeProvider } from "./runtime/RuntimeProvider.tsx";
 import { applyAppearance, systemPrefersDark, systemPrefersMoreContrast } from "./shell/appearance.ts";
 import { Mark } from "./shell/Brand.tsx";
+import { publishUpdated } from "./shell/liveUpdate/announce.ts";
 import { Shell } from "./shell/Shell.tsx";
 import { NoRuntime } from "./surfaces/startup/NoRuntime.tsx";
 import { StartupError } from "./surfaces/startup/StartupError.tsx";
@@ -61,6 +63,14 @@ export function App() {
     if (!client) return;
     const frame = requestAnimationFrame(() => {
       void client.windowReady().catch(() => undefined);
+      // Live Update's health report: this UI rendered. A page served by a UI that was replaced
+      // while it loaded loads again; a finished update is announced once.
+      void reportUiReady()
+        .then((ready) => {
+          if (ready.reload) window.location.reload();
+          else if (ready.updated) publishUpdated(ready.updated);
+        })
+        .catch(() => undefined);
     });
     return () => cancelAnimationFrame(frame);
   }, [result]);

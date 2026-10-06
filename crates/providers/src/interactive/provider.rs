@@ -134,6 +134,15 @@ impl PaneRegistry {
         self.get(thread_id).map(|s| s.info())
     }
 
+    /// How many provider panes still have a running process. Live Update never replaces the
+    /// shell process while one does, because the pane's process would end with it.
+    pub fn running_count(&self) -> usize {
+        lock(&self.panes)
+            .values()
+            .filter(|shared| shared.info().running)
+            .count()
+    }
+
     /// Replays the pane's scrollback to `listener`, then streams output (Z1 semantics).
     pub fn attach(
         &self,

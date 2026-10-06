@@ -12,7 +12,16 @@
 // for bounded beta/dev builds; stable builds always require KalVoice's local engine. Whisper needs
 // libclang via LIBCLANG_PATH — see docs/DEVELOPMENT.md. Exact compiled features are recorded.
 //
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { verifyComponentNotices } from "./component-notices.mjs";
@@ -50,6 +59,7 @@ import {
   TAURI_CONF,
   writeJson,
 } from "./lib.mjs";
+import { liveDescriptorBytes, liveEnvelope, liveFileNames, nativeFingerprint, packUiBundle } from "./live-update.mjs";
 import {
   buildChannelContract,
   buildEnvironment,
@@ -121,6 +131,8 @@ if (channel.requestedReleaseChannel === "stable" && !kalvoiceLocalSttIncluded) {
 assertCleanTree("A release build");
 const version = releaseVersion();
 const commit = headCommit();
+// Live Update's compatibility contract, compiled into the shell and published with the build.
+const shellFingerprint = nativeFingerprint({ commit });
 const product = productName();
 if (product !== "KalCode") fail(`release productName must remain KalCode (found ${product})`);
 const conf = readJson(TAURI_CONF);
@@ -171,6 +183,7 @@ let guardianSha256 = null;
 let hookSignature = null;
 let hookSha256 = null;
 let childEnvironment = buildEnvironment(process.env, channel.compiledChannel);
+childEnvironment.KALCODE_NATIVE_FINGERPRINT = shellFingerprint;
 let buildFailure = null;
 try {
   signingWorkspace = mkdtempSync(join(tmpdir(), "kalcode-release-signing-"));
@@ -357,6 +370,9 @@ try {
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error));
 }
+if (buildInfo.nativeFingerprint !== shellFingerprint) {
+  fail("the built shell does not carry this commit's native fingerprint");
+}
 // The build must not have changed tracked files (e.g. a lockfile), or the artifact would not
 // match the recorded commit.
 assertCleanTree("After the build, the working tree");
@@ -388,6 +404,43 @@ if (signingMode.sign) {
   if (!existsSync(updaterV2SignaturePath) || statSync(updaterV2SignaturePath).size === 0) {
     fail("the updater signer did not produce the target-bound Windows detached signature");
   }
+}
+
+// Live Update: the UI this installer embeds, as a bundle a running KalCode with the same native
+// fingerprint applies without a restart, plus the signed descriptor that binds it to this build.
+const liveNames = liveFileNames(file);
+const uiBundle = packUiBundle(join(DESKTOP_DIR, "dist"));
+writeFileSync(join(outDir, liveNames.ui), uiBundle.bytes);
+const liveDescriptor = liveDescriptorBytes({
+  version,
+  channel: channel.requestedReleaseChannel,
+  target: WINDOWS_UPDATER_TARGET,
+  commit,
+  nativeFingerprint: shellFingerprint,
+  ui: {
+    file: liveNames.ui,
+    size: uiBundle.size,
+    sha256: uiBundle.sha256,
+    expandedSize: uiBundle.expandedSize,
+    files: uiBundle.files,
+  },
+});
+writeFileSync(join(outDir, liveNames.descriptor), liveDescriptor);
+let liveEnvelopeFile = null;
+if (signingMode.sign) {
+  const descriptorSignature = join(outDir, `${liveNames.descriptor}.sig`);
+  signUpdaterArtifact({
+    artifactPath: join(outDir, liveNames.descriptor),
+    signaturePath: descriptorSignature,
+    version,
+    target: WINDOWS_UPDATER_TARGET,
+    channel: channel.requestedReleaseChannel,
+  });
+  liveEnvelopeFile = `live-${liveNames.envelope}`;
+  writeFileSync(
+    join(outDir, liveEnvelopeFile),
+    liveEnvelope(liveDescriptor, readFileSync(descriptorSignature, "utf8")),
+  );
 }
 
 const size = statSync(staged).size;
@@ -478,6 +531,17 @@ const record = {
     channel: channel.requestedReleaseChannel,
     channelBound: signingMode.sign,
     publicKeyConfigured: signingMode.sign,
+  },
+  live: {
+    schemaVersion: 1,
+    nativeFingerprint: shellFingerprint,
+    descriptorFile: liveNames.descriptor,
+    envelopeFile: liveEnvelopeFile,
+    uiFile: liveNames.ui,
+    uiSize: uiBundle.size,
+    uiSha256: uiBundle.sha256,
+    uiFiles: uiBundle.files,
+    signed: liveEnvelopeFile !== null,
   },
   ...channelContract,
   compiledChannelVerification: {

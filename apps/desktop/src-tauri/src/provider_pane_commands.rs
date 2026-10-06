@@ -209,6 +209,11 @@ fn routing() -> DecisionRouting {
 }
 
 impl ProviderPanesState {
+    /// Provider panes whose process is still running (see `live_update::live_work`).
+    pub(crate) fn running_panes(&self) -> usize {
+        self.panes.running_count()
+    }
+
     pub(crate) fn handoff_info(&self, thread_id: &str) -> Option<PaneInfo> {
         self.panes.info(thread_id)
     }
