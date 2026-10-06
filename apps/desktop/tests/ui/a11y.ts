@@ -261,8 +261,29 @@ export async function expectContrastEvaluated(page: Page, results: AxeResults, w
   }
 }
 
+/**
+ * Puts the page in a state every scan judges the same way. Playwright leaves the pointer wherever
+ * it last clicked, and the Tooltip under it opens 350 ms later (or one under a view that remounts
+ * beneath a still pointer): when that lands inside axe's run, a tooltip half way through its
+ * entrance is scanned (lane 10 gate run 37417037628: a tooltip "partially obscured" by the brand
+ * lettering, green on retry). So park the pointer on the brand mark, which has no hover UI (its
+ * pointerleave also cancels a pending tooltip), and let finite animations finish: a tooltip
+ * leaving, a menu or dialog entering. A tooltip opened by keyboard focus stays and is judged.
+ */
+async function settleForScan(page: Page) {
+  await page.mouse.move(0, 0);
+  await page.evaluate(async () => {
+    const finite = document
+      .getAnimations()
+      .filter((a) => a.playState === "running" && a.effect?.getComputedTiming().endTime !== Number.POSITIVE_INFINITY);
+    const timeout = new Promise((resolve) => setTimeout(resolve, 2_000));
+    await Promise.race([Promise.all(finite.map((a) => a.finished.catch(() => undefined))), timeout]);
+  });
+}
+
 /** Full-page WCAG 2.2 AA: no serious or critical violation, and contrast actually evaluated. */
 export async function expectNoSeriousA11yViolations(page: Page, where = "") {
+  await settleForScan(page);
   // options() replaces the run options, so it goes before withTags (which adds runOnly to them).
   const results = await new AxeBuilder({ page })
     .options(CONTRAST_CHECK as Parameters<AxeBuilder["options"]>[0])
