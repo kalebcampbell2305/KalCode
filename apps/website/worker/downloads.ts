@@ -383,6 +383,11 @@ async function notFound(request: Request, url: URL, deps: DownloadDeps): Promise
   });
 }
 
+/** The updater's "no release on this channel" answer (`NO_CONTENT` in `updater_commands.rs`). */
+function noChannelRelease(): Response {
+  return new Response(null, { status: 204, headers: { "cache-control": MANIFEST_CACHE } });
+}
+
 function unavailable(request: Request): Response {
   return new Response(
     request.method === "HEAD" ? null : "Downloads are temporarily unavailable. Please try again in a few minutes.",
@@ -551,7 +556,13 @@ async function route(request: Request, url: URL, deps: DownloadDeps, match: Rout
       const version =
         parts.length === 1 ? undefined : match.file.endsWith(".json") ? (parts[1] ?? "").slice(0, -5) : parts[1];
       const row = await published(deps, channel, version);
-      if (!row) return notFound(request, url, deps);
+      if (!row) {
+        // A preview channel with nothing published has no update. The native client reads 204 as
+        // "up to date"; a 404 there reads as a network failure and Settings tells the user to check
+        // their connection forever. A missing Stable pointer is a production fault and stays 404.
+        if (match.mutable && channel !== "stable") return noChannelRelease();
+        return notFound(request, url, deps);
+      }
       const body = await readPublishedDescriptor(bucket, row.updater_descriptor_key, row.updater_descriptor_sha256);
       const descriptor = parseUpdaterDescriptor(JSON.parse(body), channel as UpdaterChannel, row.version);
       if (!descriptor) throw new Error("Invalid updater descriptor");
