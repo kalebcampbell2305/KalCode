@@ -110,7 +110,7 @@ describe("AccountDisplayName", () => {
   it("gives every failure a next action", () => {
     for (const code of ["invalid_display_name", "rate_limited", "authentication_required", "x"]) {
       expect(displayNameErrorMessage({ code, message: "m", retryable: false })).toMatch(
-        /Use 1–64|Save again|Sign in again|Save to try again/,
+        /Use at most 64 characters|Save again|Sign in again|Save to try again/,
       );
     }
   });

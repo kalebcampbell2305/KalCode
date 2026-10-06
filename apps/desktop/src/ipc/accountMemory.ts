@@ -178,6 +178,12 @@ export function createAccountMemory(scenario: AccountMemoryScenario) {
       return snapshot;
     },
     async account_auth_cancel() {
+      // Like native: an unfinished checkout goes back to plan choice, keeping the session.
+      if (snapshot.phase === "confirming_plan") {
+        confirmingTier = null;
+        snapshot = unactivated(snapshot.account?.email, snapshot.account?.displayName ?? null);
+        return snapshot;
+      }
       pendingEmail = null;
       snapshot = signedOut();
       return snapshot;
