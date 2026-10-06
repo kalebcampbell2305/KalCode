@@ -25,6 +25,11 @@ describe("global shortcuts", () => {
     expect(globalShortcut(key(",", { metaKey: true }), "macos")).toBe("open-settings");
     expect(globalShortcut(key("ArrowLeft", { altKey: true, ctrlKey: true }), "windows")).toBeNull();
   });
+
+  it("leaves Option+Arrow to word movement on macOS", () => {
+    expect(globalShortcut(key("ArrowLeft", { altKey: true }), "macos")).toBeNull();
+    expect(globalShortcut(key("ArrowRight", { altKey: true }), "macos")).toBeNull();
+  });
   it("uses Command on macOS and Control on Windows", () => {
     expect(globalShortcut(key("k", { metaKey: true }), "macos")).toBe("open-palette");
     expect(globalShortcut(key("K", { ctrlKey: true }), "windows")).toBe("open-palette");

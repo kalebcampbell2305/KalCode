@@ -21,7 +21,9 @@ export function globalShortcut(
   event: GlobalShortcutEvent,
   platform: DesktopPlatform = DESKTOP_PLATFORM,
 ): GlobalShortcut | null {
-  if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+  // Alt+Arrow is Back/Forward on Windows. On macOS, Option+Arrow moves by word in every text field
+  // and terminal, so navigation there is Command+[ and Command+] only.
+  if (platform !== "macos" && event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
     if (event.key === "ArrowLeft") return "back";
     if (event.key === "ArrowRight") return "forward";
   }
