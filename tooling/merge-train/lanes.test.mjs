@@ -12,6 +12,7 @@ import {
   createTrain,
   deltaPreservesEvidence,
   isReleaseRecordPath,
+  machineLeasePath,
   planLanes,
   releaseRecordResolver,
   riskZones,
@@ -374,6 +375,101 @@ describe("merge lanes", { concurrency: true }, () => {
     const silent = makeTrain(env, cloneOf(env, "fourth"), { isProcessAlive: () => true, now: () => t });
     await silent.run({ maxRounds: 1, timeoutMs: 0 });
     assert.equal(existsSync(leasePath), false, "the lease is released when run returns");
+  });
+
+  test("the coordinator lease is machine-wide: separate clones share one lease path and refuse each other", async () => {
+    const env = setup();
+    const leasePath = join(env.dir, "machine", "coordinator.lock");
+    mkdirSync(join(env.dir, "machine"), { recursive: true });
+    const t = 2_000_000;
+    // A coordinator in another clone/account (different cwd, its own lanesDir) holds the machine-wide lease.
+    writeFileSync(
+      leasePath,
+      JSON.stringify({ pid: 515151, owner: "other-account", cwd: "C:/kc-wt-mt9", startedAt: t, heartbeatAt: t }),
+    );
+    const mine = makeTrain(env, cloneOf(env, "mine"), {
+      lanesDir: join(env.dir, "my-own-lanes"),
+      leasePath,
+      isProcessAlive: () => true,
+      now: () => t + 1000,
+    });
+    assert.throws(
+      () => mine.acquireLease(),
+      /coordinator already running \(pid 515151, owner other-account, in C:\/kc-wt-mt9/,
+    );
+    assert.throws(
+      () => mine.acquireLease(),
+      new RegExp(`one coordinator per machine: ${leasePath.replace(/\\/g, "\\\\")}`),
+    );
+    await assert.rejects(mine.run({ maxRounds: 1 }), /coordinator already running/);
+    assert.deepEqual(trainBranches(env), [], "the refused coordinator pushed nothing");
+
+    // The same owner (KALCODE_TRAIN_OWNER) borrows the live lease and never releases it on the holder's behalf.
+    const sameOwner = makeTrain(env, cloneOf(env, "same-owner"), {
+      leasePath,
+      leaseOwner: "other-account",
+      isProcessAlive: () => true,
+      now: () => t + 2000,
+    });
+    const borrowed = sameOwner.acquireLease();
+    borrowed.beat();
+    borrowed();
+    const after = JSON.parse(readFileSync(leasePath, "utf8"));
+    assert.equal(after.pid, 515151, "the holder keeps its lease");
+    assert.equal(after.heartbeatAt, t + 2000, "a borrower keeps the shared lease fresh");
+
+    // A dead holder is replaced; the new record names its owner and checkout, and release frees the path.
+    const next = makeTrain(env, cloneOf(env, "next"), {
+      leasePath,
+      leaseOwner: "kalcode-44",
+      isProcessAlive: () => false,
+      now: () => t + 3000,
+    });
+    const release = next.acquireLease();
+    const taken = JSON.parse(readFileSync(leasePath, "utf8"));
+    assert.equal(taken.pid, process.pid);
+    assert.equal(taken.owner, "kalcode-44");
+    release();
+    assert.equal(existsSync(leasePath), false);
+  });
+
+  test("a live coordinator on the old per-checkout lease still blocks the machine-wide lease", async () => {
+    const env = setup();
+    const lanes = join(env.dir, "lanes");
+    mkdirSync(lanes, { recursive: true });
+    const t = 3_000_000;
+    writeFileSync(join(lanes, "coordinator.lock"), JSON.stringify({ pid: 22644, startedAt: t, heartbeatAt: t }));
+    const leasePath = join(env.dir, "machine", "coordinator.lock");
+    const mine = makeTrain(env, cloneOf(env, "mine"), { leasePath, isProcessAlive: () => true, now: () => t + 1000 });
+    assert.throws(() => mine.acquireLease(), /coordinator already running \(pid 22644/);
+    assert.equal(existsSync(leasePath), false, "the refused caller never wrote the machine-wide lease");
+    await assert.rejects(mine.run({ maxRounds: 1 }), /coordinator already running/);
+    assert.deepEqual(trainBranches(env), [], "nothing was pushed");
+    const later = makeTrain(env, cloneOf(env, "later"), {
+      leasePath,
+      isProcessAlive: () => true,
+      now: () => t + 10 * 60_000,
+    });
+    later.acquireLease()();
+  });
+
+  test("machineLeasePath is one fixed path per machine, independent of the checkout", () => {
+    assert.equal(
+      machineLeasePath({ env: { ProgramData: "C:\\ProgramData" }, platform: "win32" }),
+      join("C:\\ProgramData", "KalCode", "merge-train", "coordinator.lock"),
+    );
+    assert.equal(
+      machineLeasePath({ env: {}, platform: "win32" }),
+      join("C:\\ProgramData", "KalCode", "merge-train", "coordinator.lock"),
+    );
+    assert.equal(
+      machineLeasePath({ env: {}, platform: "darwin" }),
+      join("/Users/Shared/KalCode/merge-train", "coordinator.lock"),
+    );
+    assert.equal(
+      machineLeasePath({ env: { KALCODE_TRAIN_LOCK_DIR: "/x/lock" }, platform: "win32" }),
+      join("/x/lock", "coordinator.lock"),
+    );
   });
 
   test("a candidate whose base is no longer main is retired and never re-pushed", async () => {

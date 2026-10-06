@@ -25,6 +25,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  renameSync,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -366,6 +367,8 @@ export function createTrain({
   hooks = {},
   abandonAfterMs = 20 * 60_000,
   leaseMs = 5 * 60_000,
+  leasePath = null,
+  leaseOwner = null,
   isProcessAlive = (pid) => {
     try {
       process.kill(pid, 0);
@@ -1404,26 +1407,75 @@ export function createTrain({
   }
 
   /**
-   * One coordinator per machine, many lanes. A second `run` refuses instead of racing (two rogue loops once
-   * re-pushed stale candidates for hours). The lease carries a heartbeat; a dead or silent holder is replaced.
+   * One coordinator per machine, many lanes. `run`, `build` and `land` all take this lease, so a second
+   * coordinator refuses instead of racing (two rogue loops once re-pushed stale candidates for hours, and on
+   * 2026-10-06 a second account's `build` loop cancelled the coordinator's gates for hours). The CLI keeps it at
+   * one machine-wide path (`machineLeasePath`), never per checkout. The lease carries a heartbeat; a dead or
+   * silent holder is replaced. Processes that share a non-empty `leaseOwner` (KALCODE_TRAIN_OWNER) act under one
+   * lease, so a coordinator's own hand-driven `build`/`land` are not refused by its `run`.
    */
   function acquireLease() {
     const noop = Object.assign(() => {}, { beat: () => {} });
-    if (!lanesDir) return noop;
-    const path = join(lanesDir, "coordinator.lock");
+    const path = leasePath ?? (lanesDir && join(lanesDir, "coordinator.lock"));
+    if (!path) return noop;
     mkdirSync(dirname(path), { recursive: true });
-    let held = null;
-    try {
-      held = JSON.parse(readFileSync(path, "utf8"));
-    } catch {}
-    if (held && held.pid !== process.pid && isProcessAlive(held.pid) && now() - Number(held.heartbeatAt) < leaseMs) {
-      throw new Error(`coordinator already running (pid ${held.pid}, since ${new Date(held.startedAt).toISOString()})`);
+    const read = () => {
+      try {
+        return JSON.parse(readFileSync(path, "utf8"));
+      } catch {
+        return null;
+      }
+    };
+    // A coordinator still on the per-checkout lease (target/lanes/coordinator.lock, before the machine-wide path)
+    // is honoured too, so a mixed rollout can never run two coordinators.
+    const legacyPath = lanesDir && join(lanesDir, "coordinator.lock");
+    if (legacyPath && resolve(legacyPath) !== resolve(path)) {
+      let legacy = null;
+      try {
+        legacy = JSON.parse(readFileSync(legacyPath, "utf8"));
+      } catch {}
+      if (
+        legacy &&
+        legacy.pid !== process.pid &&
+        isProcessAlive(legacy.pid) &&
+        now() - Number(legacy.heartbeatAt) < leaseMs
+      ) {
+        throw new Error(
+          `coordinator already running (pid ${legacy.pid}, since ${new Date(legacy.startedAt).toISOString()}); ` +
+            `one coordinator per machine: ${legacyPath}`,
+        );
+      }
     }
-    const lease = { pid: process.pid, startedAt: now(), heartbeatAt: now() };
-    writeFileSync(path, `${JSON.stringify(lease)}\n`);
+    const held = read();
+    const sharedOwner = Boolean(leaseOwner) && held?.owner === leaseOwner;
+    const live = held && isProcessAlive(held.pid) && now() - Number(held.heartbeatAt) < leaseMs;
+    if (live && held.pid !== process.pid && !sharedOwner) {
+      const who = [held.owner && `owner ${held.owner}`, held.cwd && `in ${held.cwd}`].filter(Boolean).join(", ");
+      throw new Error(
+        `coordinator already running (pid ${held.pid}${who ? `, ${who}` : ""}, since ${new Date(held.startedAt).toISOString()}); ` +
+          `one coordinator per machine: ${path}`,
+      );
+    }
+    if (live && sharedOwner && held.pid !== process.pid) {
+      // Borrow the owner's lease: keep it fresh, never release it on the holder's behalf.
+      return Object.assign(() => {}, {
+        beat: () => {
+          const current = read();
+          if (current?.owner === leaseOwner)
+            writeFileSync(path, `${JSON.stringify({ ...current, heartbeatAt: now() })}\n`);
+        },
+      });
+    }
+    const lease = { pid: process.pid, owner: leaseOwner || null, cwd: repo, startedAt: now(), heartbeatAt: now() };
+    // Write then re-read: of two simultaneous takers, only the one whose record survives proceeds.
+    const tmp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}`;
+    writeFileSync(tmp, `${JSON.stringify(lease)}\n`);
+    renameSync(tmp, path);
+    if (read()?.pid !== process.pid)
+      throw new Error(`coordinator lease taken concurrently; one coordinator per machine: ${path}`);
     const release = () => {
       try {
-        if (JSON.parse(readFileSync(path, "utf8")).pid === process.pid) unlinkSync(path);
+        if (read()?.pid === process.pid) unlinkSync(path);
       } catch {}
     };
     return Object.assign(release, {
@@ -1611,6 +1663,22 @@ export function createTrain({
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
+/**
+ * The machine-wide coordinator lease: one file for every checkout, clone, worktree and account on this machine
+ * (the per-checkout target/lanes lease let a second coordinator run beside the first). KALCODE_TRAIN_LOCK_DIR
+ * overrides the directory.
+ */
+export function machineLeasePath({ env = process.env, platform = process.platform } = {}) {
+  const dir =
+    env.KALCODE_TRAIN_LOCK_DIR ||
+    (platform === "win32"
+      ? join(env.ProgramData || "C:\\ProgramData", "KalCode", "merge-train")
+      : platform === "darwin"
+        ? "/Users/Shared/KalCode/merge-train"
+        : "/var/tmp/kalcode-merge-train");
+  return join(dir, "coordinator.lock");
+}
+
 /** Shared lanes dir: the primary checkout's target/lanes when it exists (all worktrees see it), else local. */
 export function resolveLanesDir(toplevel, commonDir) {
   const primary = join(dirname(resolve(commonDir)), "target", "lanes");
@@ -1659,6 +1727,8 @@ async function main(argv) {
     mergeLog: join(lanesDir, "merge-log.md"),
     onLanded,
     resolvers: [releaseRecordResolver],
+    leasePath: machineLeasePath(),
+    leaseOwner: process.env.KALCODE_TRAIN_OWNER || null,
   });
   if (opts.command === "submit") {
     const n = Number(opts.positional[0].replace(/^#/, ""));
@@ -1675,14 +1745,20 @@ async function main(argv) {
         process.stdout.write(`lane ${lane.id}: ${lane.numbers.map((n) => `#${n}`).join(" ")}\n`);
     return 0;
   }
-  if (opts.command === "build") {
-    const m = await train.buildAll();
-    if (opts.json) process.stdout.write(`${JSON.stringify(m, null, 2)}\n`);
-    return 0;
-  }
-  if (opts.command === "land") {
-    const result = opts.pr ? await train.landPr(opts.pr) : await train.land(opts.positional[0]);
-    return result.landed ? 0 : 1;
+  // build and land push candidates or main, so they take the machine-wide coordinator lease, as run does.
+  if (opts.command === "build" || opts.command === "land") {
+    const release = train.acquireLease();
+    try {
+      if (opts.command === "build") {
+        const m = await train.buildAll();
+        if (opts.json) process.stdout.write(`${JSON.stringify(m, null, 2)}\n`);
+        return 0;
+      }
+      const result = opts.pr ? await train.landPr(opts.pr) : await train.land(opts.positional[0]);
+      return result.landed ? 0 : 1;
+    } finally {
+      release();
+    }
   }
   if (opts.command === "run") {
     const r = await train.run({
