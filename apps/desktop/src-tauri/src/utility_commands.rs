@@ -161,6 +161,13 @@ impl UtilityState {
         Ok(hub)
     }
 
+    /// File previews (Project files, Git status, the command palette, favorites) ship on every
+    /// channel and read through `utility_file_read`: a read-only read of a workspace file by a
+    /// handle a listing issued, with open-then-verify. They must not depend on the Dock's gate.
+    fn preview_hub(&self) -> Result<Arc<UtilityHub>, IpcError> {
+        self.available_hub()
+    }
+
     /// The hub even where the Dock itself is gated. Only read-only reads of KalCode's own state
     /// use it (KalTidy's scan of what runs in KalCode's terminals).
     fn available_hub(&self) -> Result<Arc<UtilityHub>, IpcError> {
@@ -1016,7 +1023,17 @@ fn find_in_index(
                 return Ok(out);
             }
             if keep(rel.as_str()) && !out.iter().any(|f| f.display_path == rel.as_str()) {
-                out.push(git.handles().issue(root, &rel)?);
+                // A link the index listed (pointing outside the workspace, or dangling) gets no
+                // handle; skip it rather than fail the whole search.
+                match git.handles().issue(root, &rel) {
+                    Ok(file) => out.push(file),
+                    Err(error) => {
+                        tracing::debug!(
+                            event = "utility.file_find_skipped",
+                            error_code = error.code
+                        );
+                    }
+                }
             }
         }
     }
@@ -1285,7 +1302,10 @@ pub async fn utility_file_read(
     workspace_id: String,
     handle: FileHandle,
 ) -> Result<TextFile, IpcError> {
-    let hub = command_hub(&runtime_access, &utilities)?;
+    // Not gated by the Utility Dock: file previews ship on every channel (see `preview_hub`).
+    runtime_access.revalidate()?;
+    utilities.revalidate()?;
+    let hub = utilities.preview_hub()?;
     let root = hub
         .workspace_root(&workspace_id)
         .map_err(|e| e.log_and_convert("utility_file_read"))?;
@@ -1372,6 +1392,104 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// On Stable the Utility Dock is gated (`enabled: false`), but file previews (Project files,
+    /// Git status, the command palette, favorites) still read through `utility_file_read`; its
+    /// hub must not carry the Dock's "isn't in this build" refusal.
+    #[test]
+    fn file_previews_work_where_the_utility_dock_is_gated() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let core = Arc::new(
+            kalcode_core::Core::open(kalcode_core::CoreConfig {
+                paths: kalcode_core::Paths::new(temp.path().join("app")),
+                app_version: "0.0.0-utility-test".into(),
+                channel: kalcode_core::flags::BuildChannel::Stable,
+            })
+            .expect("open core"),
+        );
+        let ws = temp.path().join("ws");
+        std::fs::create_dir_all(&ws).expect("mkdir ws");
+        std::fs::write(ws.join("notes.txt"), "inside").expect("write");
+        let workspace = core.open_workspace(&ws).expect("workspace");
+        let permissions = kalcode_permissions::PermissionService::new(
+            Arc::clone(&core),
+            Arc::new(kalcode_permissions::NoWorkspaces),
+            Arc::new(kalcode_permissions::NoThreads),
+        )
+        .expect("permissions");
+        let hub = UtilityHub {
+            store: Store::open(&core).expect("store"),
+            core,
+            http: HttpSession::new(),
+            sqlite: SqliteSessions::new(),
+            sampler: Mutex::new(ProcessSampler::new()),
+            listeners: ports::ListenerCache::default(),
+            permissions: Arc::new(permissions),
+            confirmer: Arc::new(kalcode_core::confirm::DenyAll),
+            git: Arc::new(GitCore::with_git(
+                &temp.path().join("data"),
+                Err(KalError::internal("no_git", "not needed")),
+            )),
+            data_dir: temp.path().join("data"),
+            version: "0.0.0".into(),
+            enabled: false,
+            operations: Mutex::new(HashMap::new()),
+        };
+        let state = UtilityState(Some(Arc::new(hub)));
+        assert_eq!(
+            state.hub().err().map(|e| e.code),
+            Some("not_in_this_build".to_owned()),
+            "the Dock's own tools stay gated"
+        );
+        let hub = state.preview_hub().expect("previews are not gated");
+        let root = hub.workspace_root(&workspace.id).expect("root");
+        let found = find_in_index(&hub.git, &root, &["notes"], |_| true, 5).expect("find");
+        let (resolved, file) = hub
+            .git
+            .handles()
+            .open(&root, &found[0].handle)
+            .expect("open by handle");
+        let text = files::read_text(file, found[0].clone()).expect("read");
+        assert_eq!(resolved.rel.as_str(), "notes.txt");
+        assert_eq!(text.text, "inside");
+    }
+
+    /// The Diff Tool's file search: a link in the workspace that resolves outside it (or
+    /// nowhere) matches the query but gets no handle, and the other matches are still returned.
+    #[test]
+    fn file_search_skips_links_that_leave_the_workspace() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let ws = temp.path().join("ws");
+        let outside = temp.path().join("outside");
+        std::fs::create_dir_all(&ws).expect("mkdir ws");
+        std::fs::create_dir_all(&outside).expect("mkdir outside");
+        std::fs::write(ws.join("notes.txt"), "inside").expect("write");
+        let link = ws.join("notes-link");
+        #[cfg(windows)]
+        let linked = {
+            use std::os::windows::process::CommandExt as _;
+            std::process::Command::new("cmd")
+                .creation_flags(0x0800_0000)
+                .args(["/C", "mklink", "/J"])
+                .arg(&link)
+                .arg(&outside)
+                .output()
+                .is_ok_and(|o| o.status.success())
+        };
+        #[cfg(unix)]
+        let linked = std::os::unix::fs::symlink(&outside, &link).is_ok();
+        assert!(linked, "directory link");
+
+        let git = GitCore::with_git(
+            &temp.path().join("data"),
+            Err(KalError::internal("no_git", "not needed")),
+        );
+        let root =
+            kalcode_git::WorkspaceRoot::new(&kalcode_contracts::ids::new_id(), &ws).expect("root");
+        let found = find_in_index(&git, &root, &["notes"], |_| true, 50).expect("search");
+        let paths: Vec<&str> = found.iter().map(|f| f.display_path.as_str()).collect();
+        assert_eq!(paths, ["notes.txt"]);
     }
 
     #[test]
