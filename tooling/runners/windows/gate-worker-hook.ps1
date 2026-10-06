@@ -12,7 +12,6 @@ $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 if ($identity.Name -ne "$env:COMPUTERNAME\$($plan.Account)") { throw 'Wrong gate worker account.' }
 $pool = 'C:\ProgramData\KalCodeGatePool'
 $leases = Join-Path $pool 'leases'
-$leasePath = Join-Path $leases "slot-$Slot.json"
 
 # Only the current runner job and its descendants are deprioritized; never touch user agents.
 $owner = Get-CimInstance Win32_Process -Filter "ProcessId=$PID"
@@ -25,6 +24,8 @@ $ownerProcess = Get-Process -Id $owner.ProcessId -ErrorAction Stop
 $started = $ownerProcess.StartTime.ToUniversalTime().ToString('o')
 $ownerProcess.PriorityClass = 'BelowNormal'
 $deadline = [DateTime]::UtcNow.AddSeconds($WaitSeconds)
+# A lease whose owner started before the last OS boot is stale, even when its PID was reused.
+$bootTime = Get-GateWorkerBootTime
 $lastReason = ''
 do {
     $lock = $null
@@ -34,26 +35,12 @@ do {
             if (($_.Exception.HResult -band 0xffff) -ne 32) { throw }
         }
         if ($null -ne $lock) {
-            $active = 0
-            foreach ($file in Get-ChildItem $leases -Filter 'slot-*.json') {
-                $lease = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json
-                $process = Get-Process -Id $lease.pid -ErrorAction SilentlyContinue
-                if ($null -eq $process) {
-                    Remove-Item -LiteralPath $file.FullName
-                    continue
-                }
-                # Unreadable ownership is occupied, never a reason to remove another live lease.
-                $sameProcess = $true
-                try { $sameProcess = $process.StartTime.ToUniversalTime().ToString('o') -eq $lease.started }
-                catch { $sameProcess = $true }
-                if (-not $sameProcess) { Remove-Item -LiteralPath $file.FullName; continue }
-                if ($file.FullName -eq $leasePath -and $lease.pid -eq $owner.ProcessId -and $lease.started -eq $started) {
-                    if ($Phase -eq 'After') { Remove-Item -LiteralPath $file.FullName; exit 0 }
-                    exit 0
-                }
-                $active++
-            }
-            if ($Phase -eq 'After') { exit 0 }
+            # This slot runs one job at a time: in Before, a lease for this slot that is not this job's is
+            # replaced. Other slots' live leases are never removed; After removes only this job's lease.
+            $sweep = Invoke-GateWorkerLeaseSweep -LeaseDirectory $leases -Slot $Slot -Phase $Phase `
+                -OwnerPid $owner.ProcessId -OwnerStarted $started -BootTime $bootTime
+            if ($sweep.Current -or $Phase -eq 'After') { exit 0 }
+            $active = $sweep.Active
             $sample = $null
             try { $sample = Get-GateWorkerResources } catch { Write-Warning 'Resource sampling unavailable.' }
             $reason = Test-GateWorkerAdmission -Sample $sample -Active $active
@@ -61,11 +48,7 @@ do {
                 Write-Warning "Gate slot ${Slot}: resource telemetry is unreadable; admitting the only active gate without it."
             }
             if ($reason -eq 'allowed' -or $reason -eq 'allowed_without_telemetry') {
-                if (Test-Path -LiteralPath $leasePath) { throw 'Worker already has a different active job.' }
-                [ordered]@{ slot = $Slot; pid = $owner.ProcessId; started = $started
-                    admitted = [DateTime]::UtcNow.ToString('o'); sample = $sample
-                    sha = $env:GITHUB_SHA; run = $env:GITHUB_RUN_ID; attempt = $env:GITHUB_RUN_ATTEMPT; hostName = 'DESKTOP-KOOB7VV' } |
-                    ConvertTo-Json -Compress | Set-Content -LiteralPath $leasePath -Encoding UTF8
+                Set-GateWorkerLease -LeaseDirectory $leases -Slot $Slot -OwnerPid $owner.ProcessId -OwnerStarted $started -Sample $sample
                 Write-Host "Gate slot $Slot admitted; background priority, isolated ports/caches."
                 exit 0
             }

@@ -43,7 +43,7 @@ foreach ($case in @(
 }
 $reserved=$healthy.Clone();$reserved.FreeGiB=19
 Assert-Equal (Test-GateWorkerAdmission $reserved 2) 'memory_pressure' 'Reserve headroom for newly admitted jobs and user agents'
-foreach ($file in @('gate-worker-pool.psm1','gate-worker-hook.ps1','setup-gate-worker-pool.ps1','invoke-gate-worker-pool-install.ps1','diagnose-gate-worker-pool.ps1','add-gate-workers.ps1','repair-gate-worker-hooks.ps1','install-gate-pool-hooks.ps1')) {
+foreach ($file in @('gate-worker-pool.psm1','gate-worker-hook.ps1','setup-gate-worker-pool.ps1','invoke-gate-worker-pool-install.ps1','diagnose-gate-worker-pool.ps1','add-gate-workers.ps1','repair-gate-worker-hooks.ps1','install-gate-pool-hooks.ps1','test-gate-worker-leases.ps1')) {
     $tokens=$null;$parseErrors=$null
     $fileAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot $file),[ref]$tokens,[ref]$parseErrors)
     if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
