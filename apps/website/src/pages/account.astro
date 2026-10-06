@@ -435,6 +435,8 @@ const localAgents = formatLimit(freePlan.limits.parallelAgents);
   import {
     CHECKOUT_INTENT_KEY,
     type CheckoutIntent,
+    checkoutRequestId,
+    forgetCheckoutRequests,
     parseCheckoutIntent,
     readCheckoutIntent,
     serializeCheckoutIntent,
@@ -861,6 +863,7 @@ const localAgents = formatLimit(freePlan.limits.parallelAgents);
     for (let attempt = 0; attempt < 15; attempt += 1) {
       const tier = await loadAccount();
       if (tier && tier !== "free" && tier !== "pending") {
+        forgetCheckoutRequests(sessionStore());
         message(`${tierName(tier)} is active.`);
         return;
       }
@@ -898,17 +901,26 @@ const localAgents = formatLimit(freePlan.limits.parallelAgents);
     else message("Billing is available after you start a paid subscription.");
   });
 
+  /** This tab's sessionStorage, or null where the browser blocks it. */
+  function sessionStore(): Storage | null {
+    try {
+      return sessionStorage;
+    } catch {
+      return null;
+    }
+  }
+
   /** Opens Stripe-hosted Checkout. The server picks the Price from (tier, interval); the browser never sends one. */
   async function startCheckout(tier: PlanId, interval: BillingInterval): Promise<void> {
     for (const button of checkoutButtons) button.disabled = true;
+    // Same plan again after leaving Stripe: the same request id reopens that Checkout session.
+    const requestId = checkoutRequestId(sessionStore(), tier, interval, Date.now(), () =>
+      crypto.randomUUID().replaceAll("-", ""),
+    );
     const response = await api("/v1/billing/checkout", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        tier,
-        interval,
-        requestId: crypto.randomUUID().replaceAll("-", ""),
-      }),
+      body: JSON.stringify({ tier, interval, requestId }),
     });
     let body: { url?: string; error?: string } = {};
     try {
@@ -921,11 +933,12 @@ const localAgents = formatLimit(freePlan.limits.parallelAgents);
       return;
     }
     for (const button of checkoutButtons) button.disabled = !CHECKOUT_ENABLED;
+    if (body.error === "manage_existing_subscription") forgetCheckoutRequests(sessionStore());
     message(
       body.error === "manage_existing_subscription"
         ? "Use Manage billing to change your current plan."
         : body.error === "checkout_in_progress"
-          ? "A checkout you started recently is still open. Finish it in its Stripe tab, or try again in about 30 minutes."
+          ? "A checkout you started recently is still open. Choose the same plan and billing period to return to it, or try again in about 30 minutes."
           : `Checkout for ${intentLabel(tier, interval)} could not be started. Choose it below to try again.`,
     );
   }
