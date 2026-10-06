@@ -153,7 +153,14 @@ enum Unsubscribed {
 /// Cancelling closes the microphone at once and discards the audio. Without this, a reload
 /// while the key is held released the key, the key-up was never recognized, and the microphone
 /// stayed open invisibly until the recording cap.
-fn end_orphaned_session(voice: &VoiceController, unsubscribed: Unsubscribed) -> bool {
+///
+/// The session's interactive priority span ends with it, like every other discard: a span left
+/// open kept agent and local-model starts waiting on a session that no longer exists.
+fn end_orphaned_session(
+    voice: &VoiceController,
+    priority_spans: &Mutex<HashMap<String, kalcode_resources::InteractiveSpan>>,
+    unsubscribed: Unsubscribed,
+) -> bool {
     if unsubscribed != Unsubscribed::LastGone {
         return false;
     }
@@ -161,6 +168,12 @@ fn end_orphaned_session(voice: &VoiceController, unsubscribed: Unsubscribed) -> 
         return false;
     };
     let ended = voice.cancel(Some(&session_id));
+    if ended {
+        priority_spans
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&session_id);
+    }
     tracing::info!(
         event = "kalvoice.session_orphaned",
         mode = match mode {
@@ -1230,7 +1243,7 @@ pub fn on_page_load_started(app: &AppHandle, webview: &str) {
         return;
     };
     reset_push_to_talk(&runtime);
-    end_orphaned_session(&runtime.voice, unsubscribed);
+    end_orphaned_session(&runtime.voice, &runtime.priority_spans, unsubscribed);
     // Queued rather than inline: this runs inside the webview's page-load callback.
     defer_talk_key_sync(app, &runtime, "unsubscribed");
 }
@@ -3344,9 +3357,36 @@ mod tests {
         // session must end here instead of recording invisibly until the two-minute cap.
         let dir = tempfile::tempdir().unwrap_or_else(|error| panic!("tempdir: {error}"));
         let (voice, stopped) = held_session(dir.path());
-        assert!(end_orphaned_session(&voice, Unsubscribed::LastGone));
+        assert!(end_orphaned_session(
+            &voice,
+            &Mutex::new(HashMap::new()),
+            Unsubscribed::LastGone
+        ));
         assert_eq!(voice.listening(), None);
         assert_eq!(stopped.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn reloading_the_page_while_listening_releases_the_background_start_priority() {
+        // The announced session holds an interactive span that defers agent and local-model
+        // starts. Discarding it on reload must end that span, not leave it to its 10 s bound.
+        let dir = tempfile::tempdir().unwrap_or_else(|error| panic!("tempdir: {error}"));
+        let (voice, _) = held_session(dir.path());
+        let (id, _) = voice.listening().unwrap_or_else(|| panic!("listening"));
+        let priority = kalcode_resources::InteractivePriority::default();
+        let spans = Mutex::new(HashMap::from([(id, priority.begin())]));
+        assert!(priority.active());
+        assert!(end_orphaned_session(&voice, &spans, Unsubscribed::LastGone));
+        assert!(
+            !priority.active(),
+            "an orphaned session kept deferring background starts"
+        );
+        assert!(
+            spans
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .is_empty()
+        );
     }
 
     #[test]
@@ -3615,8 +3655,17 @@ mod tests {
     fn a_child_webview_load_or_a_remaining_page_leaves_the_session_alone() {
         let dir = tempfile::tempdir().unwrap_or_else(|error| panic!("tempdir: {error}"));
         let (voice, stopped) = held_session(dir.path());
-        assert!(!end_orphaned_session(&voice, Unsubscribed::NotSubscribed));
-        assert!(!end_orphaned_session(&voice, Unsubscribed::OthersRemain));
+        let spans = Mutex::new(HashMap::new());
+        assert!(!end_orphaned_session(
+            &voice,
+            &spans,
+            Unsubscribed::NotSubscribed
+        ));
+        assert!(!end_orphaned_session(
+            &voice,
+            &spans,
+            Unsubscribed::OthersRemain
+        ));
         assert!(voice.listening().is_some());
         assert_eq!(stopped.load(Ordering::SeqCst), 0);
     }
