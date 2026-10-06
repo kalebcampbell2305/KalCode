@@ -125,11 +125,21 @@ describe("environments", () => {
   it("picks the furthest-promoted environment of the workspace", () => {
     const environments = [
       env({ kind: "local" }),
-      env({ kind: "production", workspaceId: "w2" }),
-      env({ kind: "preview" }),
+      env({ kind: "production", workspaceId: "w2", runId: "r2" }),
+      env({ kind: "preview", runId: "r1" }),
     ];
     expect(primaryEnvironment(environments, "w1")?.kind).toBe("preview");
     expect(primaryEnvironment(environments, "w3")).toBeNull();
+  });
+
+  it("never lets an environment with no recorded deployment outrank Local", () => {
+    // What Operations reports for a plain folder: Local plus never-deployed placeholders.
+    const placeholders = (["preview", "staging", "production"] as const).map((kind) =>
+      env({ kind, deploymentStatus: "unknown", health: "unknown" }),
+    );
+    const environments = [env({ kind: "local" }), ...placeholders];
+    expect(primaryEnvironment(environments, "w1")?.kind).toBe("local");
+    expect(primaryEnvironment(placeholders, "w1")).toBeNull();
   });
 
   it("only calls an environment healthy or failed when that was observed", () => {

@@ -98,12 +98,18 @@ export const ENVIRONMENT_LABELS: Record<OperationEnvironment["kind"], string> = 
   production: "Production",
 };
 
-/** The furthest-promoted environment Operations observed for a workspace, if any. */
+/**
+ * The furthest-promoted environment Operations observed for a workspace, if any. Operations also
+ * lists preview/staging/production placeholders with no recorded deployment run; those were never
+ * observed, so they never outrank Local.
+ */
 export function primaryEnvironment(
   environments: readonly OperationEnvironment[],
   workspaceId: string | null,
 ): OperationEnvironment | null {
-  const mine = environments.filter((e) => workspaceId === null || e.workspaceId === workspaceId);
+  const mine = environments.filter(
+    (e) => (workspaceId === null || e.workspaceId === workspaceId) && (e.kind === "local" || e.runId !== null),
+  );
   return [...mine].sort((a, b) => ENV_RANK[b.kind] - ENV_RANK[a.kind])[0] ?? null;
 }
 
