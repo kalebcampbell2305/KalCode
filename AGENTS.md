@@ -238,6 +238,23 @@ Bugs, crashes, broken workflows, stale state, failed provider integrations, upda
 - Prevent issues with focused regression tests, truthful state handling, safe recovery, provider/session isolation, good error handling, restart/reconnect testing, update-path verification and real production checks.
 - A bug found during other work is fixed, or reported to the owner as open with its reproduction. It is never silently ignored.
 
+### Full audit standard (owner directive 2026-10-05)
+
+> "WHEN KALCODE IS ASKED FOR A FULL AUDIT, AUDIT THE REAL CURRENT PRODUCT END TO END.
+>
+> DO NOT STOP AT STATIC ANALYSIS OR A REPORT.
+>
+> REPRODUCE REAL ISSUES, FIX ROOT CAUSES, ADD FOCUSED REGRESSION COVERAGE, VISUALLY INSPECT USER-FACING CHANGES, MERGE VALIDATED FIXES TO MAIN, SHIP THEM THROUGH THE REAL PRODUCTION PIPELINE, AND VERIFY USERS RECEIVE THEM.
+>
+> PRESERVE VALID WORK.
+> DO NOT REOPEN SOLVED ISSUES.
+> DO NOT CREATE UNNECESSARY REWRITES.
+> DO NOT LOWER THE QUALITY BAR.
+>
+> THE TARGET IS ZERO KNOWN REPRODUCIBLE USER-FACING ISSUES."
+
+Applies to Claude Code, Codex and every future agent. Start from current `origin/main`, active branches and the live feed/website, never an old checkout. Split the audit into independent read-only areas run in parallel (terminal/PTY, agent state, providers/accounts/usage, persistence, security, Browser/KalVoice/Operations, updater, API/website/billing), with one canonical writer per conflicting area and owned areas (for example the updater) handed to their owner as exact findings. Every confirmed issue goes REPRODUCE → ROOT CAUSE → SMALLEST FIX → FOCUSED REGRESSION TEST → small PR per root cause through the merge train → ship → verify production. The final report lists what was audited, fixed (root cause, commit/build), verified, and only genuine remaining blockers with the reason.
+
 ## Permanent terminal containment and agent identity rule (owner directive 2026-10-03)
 
 An agent is always a real provider coding terminal/session in Code. Agent commands never create chat Threads. Opening four Claude Code agents creates four fresh Claude Code terminals in the current workspace; opening six Codex agents creates six fresh Codex terminals. Each binds its provider account, exact model, effort and working directory. Agent Fleet focuses that same terminal. Threads remain a separate product concept. Preserve terminal identity through resource waits, retry, restoration and runtime errors; never fall back to chat execution or Threads navigation.
