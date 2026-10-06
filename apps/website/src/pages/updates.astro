@@ -3,6 +3,7 @@ import { PLANS, formatKalVoiceAllowance } from "@kalcode/protocol/plans";
 import PageHead from "../components/PageHead.astro";
 import XLink from "../components/XLink.astro";
 import Base from "../layouts/Base.astro";
+import { NOTES_019 } from "../lib/release-notes";
 import { RELEASES, channelLabel, formatReleaseDate, signedStableRelease } from "../lib/releases";
 import { getPage } from "../lib/site";
 
@@ -83,7 +84,17 @@ const BUILDS_019 = [
 const servedBuild = Number(
   stable019?.platforms.map((platform) => platform.pinnedUrl.match(/\+(\d+)\//)?.[1]).find(Boolean) ?? 0,
 );
-const builds019 = BUILDS_019.filter((entry) => entry.build <= servedBuild);
+// Builds newer than the condensed entries above come straight from their published release notes
+// (docs/releases/0.1.9+<build>.md, written by the release tooling), so a shipped build is never
+// missing here. The build /download serves carries its publication date.
+const newestCondensed = Math.max(...BUILDS_019.map((entry) => entry.build));
+const fromNotes = NOTES_019.filter((notes) => notes.build > newestCondensed).map((notes) => ({
+  ...notes,
+  publishedAt: notes.build === servedBuild ? stable019?.publishedAt : undefined,
+}));
+const builds019 = [...fromNotes, ...BUILDS_019]
+  .filter((entry) => entry.build <= servedBuild)
+  .sort((a, b) => b.build - a.build);
 ---
 <Base title={page.title} description={page.description} path={page.path} world>
   <PageHead
@@ -130,7 +141,9 @@ const builds019 = BUILDS_019.filter((entry) => entry.build <= servedBuild);
                         <li class:list={["build", { "build--latest": index === 0 }]} id={`build-${entry.build}`}>
                           <div class="build__meta">
                             <span class="build__number">Build {entry.build}</span>
-                            <time datetime={entry.publishedAt}>{formatReleaseDate(entry.publishedAt)}</time>
+                            {entry.publishedAt && (
+                              <time datetime={entry.publishedAt}>{formatReleaseDate(entry.publishedAt)}</time>
+                            )}
                             {index === 0 && <span class="build__latest">Latest</span>}
                           </div>
                           <div class="build__body">
