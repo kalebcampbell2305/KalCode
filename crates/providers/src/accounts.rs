@@ -1661,6 +1661,9 @@ mod tests {
             .expect("fixture json"),
         )
         .expect("legacy config");
+        // Hang guards only: the ordering is asserted below (launch waits for the release). A
+        // loaded gate machine took over 5 s to reach the post-write pause.
+        const HANG_GUARD: Duration = Duration::from_secs(30);
         let (written_tx, written_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
 
@@ -1686,7 +1689,7 @@ mod tests {
                                 )?;
                                 written_tx.send(()).expect("migration wrote marker");
                                 release_rx
-                                    .recv_timeout(Duration::from_secs(5))
+                                    .recv_timeout(HANG_GUARD)
                                     .expect("release migration");
                                 Ok(())
                             },
@@ -1695,7 +1698,7 @@ mod tests {
                 )
             });
             written_rx
-                .recv_timeout(Duration::from_secs(5))
+                .recv_timeout(HANG_GUARD)
                 .expect("migration reached post-write pause");
 
             let release = scope.spawn(move || {
