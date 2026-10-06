@@ -123,3 +123,82 @@ test("Squad editor responds immediately and stays clear for a large team at a na
     axe.violations.filter((violation) => violation.impact === "serious" || violation.impact === "critical"),
   ).toEqual([]);
 });
+
+test("Squad deletion reviews the exact dependent Recipes and recovers if that set changes", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/?scenario=account-ready-max");
+  await goTo(page, "Operations");
+  await page.getByRole("tab", { name: "Squads", exact: true }).click();
+  const saved = page.locator(`[data-squad-id="${ORION.squadId}"]`);
+
+  await saved.getByRole("button", { name: "Delete" }).click();
+  const confirmation = saved.getByRole("group", { name: "Delete Orion Release Crew" });
+  await expect(confirmation).toContainText("1 dependent Recipe will also be deleted");
+  await expect(confirmation).toContainText("Orion updater release");
+
+  await page.evaluate(async ({ squadId }) => {
+    const path = "/src/ipc/memoryTransport.ts";
+    const { sharedMemoryTransport } = await import(path);
+    const transport = sharedMemoryTransport();
+    const invoke = transport.invoke.bind(transport);
+    let inject = true;
+    transport.invoke = async (command: string, args: Record<string, unknown>) => {
+      if (command === "squads_delete" && inject) {
+        inject = false;
+        await invoke("recipe_save", {
+          recipe: {
+            id: "00000000-0000-4000-8000-00000000a099",
+            name: "Late release check",
+            squadId,
+            goal: null,
+          },
+        });
+      }
+      return invoke(command, args);
+    };
+  }, ORION);
+
+  await confirmation.getByRole("button", { name: "Delete squad" }).click();
+  await expect(confirmation.getByRole("alert")).toContainText("changed");
+  await expect(confirmation).not.toContainText("Late release check");
+  await confirmation.getByRole("button", { name: "Review latest Recipes" }).click();
+  await expect(confirmation).toContainText("2 dependent Recipes will also be deleted");
+  await expect(confirmation).toContainText("Late release check");
+  await page.getByRole("button", { name: "Dismiss notification" }).click();
+
+  await page.setViewportSize({ width: 1280, height: 860 });
+  await confirmation.scrollIntoViewIfNeeded();
+  const shot = testInfo.outputPath("squad-delete-recipes-confirmation-1280x860.png");
+  await page.screenshot({ path: shot });
+  await testInfo.attach("Squad Recipe deletion confirmation", { path: shot, contentType: "image/png" });
+
+  await page.setViewportSize({ width: 900, height: 760 });
+  await expect(confirmation.getByRole("button", { name: "Cancel" })).toBeVisible();
+  await expect(confirmation.getByRole("button", { name: "Delete squad" })).toBeVisible();
+  const ownership = saved.getByText(/Worktree ownership overlaps/);
+  const ownershipBox = await ownership.boundingBox();
+  const launchBox = await saved.getByRole("button", { name: "Launch" }).boundingBox();
+  const recipeNameBox = await page.getByText("Orion updater release", { exact: true }).last().boundingBox();
+  expect(ownershipBox).not.toBeNull();
+  expect(launchBox).not.toBeNull();
+  expect(recipeNameBox).not.toBeNull();
+  if (!ownershipBox || !launchBox || !recipeNameBox) throw new Error("Responsive Squad layout was not measurable");
+  expect(ownershipBox.width).toBeGreaterThan(140);
+  expect(launchBox.y).toBeGreaterThan(ownershipBox.y + ownershipBox.height);
+  expect(recipeNameBox.width).toBeGreaterThan(100);
+  const narrowShot = testInfo.outputPath("squad-delete-recipes-confirmation-900x760.png");
+  await saved.screenshot({ path: narrowShot });
+  await testInfo.attach("Squad Recipe deletion confirmation narrow", {
+    path: narrowShot,
+    contentType: "image/png",
+  });
+  const recipesShot = testInfo.outputPath("squad-recipes-900x760.png");
+  const recipesSection = page.getByRole("heading", { name: "Squad recipes" }).locator("../../..");
+  await recipesSection.screenshot({ path: recipesShot });
+  await testInfo.attach("Squad Recipes narrow", { path: recipesShot, contentType: "image/png" });
+
+  await confirmation.getByRole("button", { name: "Cancel" }).click();
+  await expect(confirmation).toHaveCount(0);
+  await expect(saved).toBeVisible();
+});

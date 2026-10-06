@@ -13,7 +13,7 @@ export type SquadsCommandName =
 export interface SquadsApi {
   snapshot(): Promise<SquadsSnapshot>;
   save(definition: SquadDefinition): Promise<SquadDefinition>;
-  delete(id: string): Promise<void>;
+  delete(id: string, expectedRecipes?: SquadRecipe[]): Promise<void>;
   saveRecipe(recipe: SquadRecipe): Promise<SquadRecipe>;
   deleteRecipe(id: string): Promise<void>;
   launch(squadId: string, workspaceId: string, requestId: string, goalOverride?: string | null): Promise<SquadLaunch>;
@@ -36,8 +36,8 @@ export class SquadsClient implements SquadsApi {
   save(definition: SquadDefinition): Promise<SquadDefinition> {
     return this.invoke("squads_save", { definition });
   }
-  delete(id: string): Promise<void> {
-    return this.invoke("squads_delete", { id });
+  delete(id: string, expectedRecipes?: SquadRecipe[]): Promise<void> {
+    return this.invoke("squads_delete", expectedRecipes === undefined ? { id } : { id, expectedRecipes });
   }
   saveRecipe(recipe: SquadRecipe): Promise<SquadRecipe> {
     return this.invoke("recipe_save", { recipe });

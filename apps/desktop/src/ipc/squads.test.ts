@@ -40,6 +40,29 @@ describe("canonical squad commands", () => {
     });
   });
 
+  it("distinguishes an unconfirmed delete from the exact Recipe set the person reviewed", async () => {
+    const invoke = vi.fn().mockResolvedValue(undefined);
+    const client = new SquadsClient(invoke);
+    const recipes = [
+      {
+        id: "00000000-0000-4000-8000-00000000c002",
+        name: "Release readiness",
+        squadId: "00000000-0000-4000-8000-00000000c001",
+        goal: null,
+      },
+    ];
+
+    await client.delete("squad");
+    await client.delete("squad", []);
+    await client.delete("squad", recipes);
+
+    expect(invoke.mock.calls).toEqual([
+      ["squads_delete", { id: "squad" }],
+      ["squads_delete", { id: "squad", expectedRecipes: [] }],
+      ["squads_delete", { id: "squad", expectedRecipes: recipes }],
+    ]);
+  });
+
   it("propagates native failures instead of claiming local success", async () => {
     const error = new Error("Reconnect the selected account");
     const invoke = vi.fn().mockRejectedValue(error);

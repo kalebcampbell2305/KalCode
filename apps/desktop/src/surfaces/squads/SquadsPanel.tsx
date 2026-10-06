@@ -46,6 +46,7 @@ import { Dialog } from "radix-ui";
 import { type FormEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useOptionalAccount } from "../../account/AccountProvider.tsx";
 import { planTier } from "../../ipc/account.ts";
+import { toKalCodeError } from "../../ipc/errors.ts";
 import type { OperationsApi } from "../../ipc/operations.ts";
 import type { SquadsApi } from "../../ipc/squads.ts";
 import { focusOperationsTarget } from "../../kalvoice/sceneOperations.ts";
@@ -69,6 +70,13 @@ import styles from "./SquadsPanel.module.css";
 
 const REFRESH_MS = 2_500;
 const ROLE_TEMPLATES = ["implementation", "test", "review", "release"] as const;
+
+interface SquadDeleteReview {
+  squadId: string;
+  squadName: string;
+  recipes: SquadRecipe[];
+  failure: string | null;
+}
 
 function uid(prefix: string): string {
   const value = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -300,11 +308,11 @@ export function SquadsPanel({
   const [launchBusy, setLaunchBusy] = useState<string | null>(null);
   const [pendingLaunch, setPendingLaunch] = useState<{ key: string; requestId: string } | null>(null);
   const [memberBusy, setMemberBusy] = useState<string | null>(null);
-  const [deleteArmed, setDeleteArmed] = useState<string | null>(null);
+  const [deleteReview, setDeleteReview] = useState<SquadDeleteReview | null>(null);
   const [recipeDraft, setRecipeDraft] = useState<{ name: string; squadId: string; goal: string } | null>(null);
   const [handoffSource, setHandoffSource] = useState<string | null>(null);
   const mounted = useRef(true);
-  const loadFlight = useRef<Promise<void> | null>(null);
+  const loadFlight = useRef<Promise<SquadsSnapshot | null> | null>(null);
   const catalogRequest = useRef(0);
   const editorTouched = useRef(false);
   const editorHeading = useId();
@@ -331,7 +339,7 @@ export function SquadsPanel({
   }, []);
 
   const load = useCallback(
-    async (quiet = false): Promise<void> => {
+    async (quiet = false): Promise<SquadsSnapshot | null> => {
       if (loadFlight.current) {
         await loadFlight.current;
         return load(quiet);
@@ -340,18 +348,20 @@ export function SquadsPanel({
       const request = (async () => {
         try {
           const next = await client.snapshot();
-          if (!mounted.current) return;
+          if (!mounted.current) return null;
           setSnapshot(next);
           setError(null);
+          return next;
         } catch (reason) {
           if (mounted.current) setError(reason instanceof Error ? reason : new Error("Squads are unavailable."));
+          return null;
         } finally {
           if (mounted.current && !quiet) setRefreshing(false);
         }
       })();
       loadFlight.current = request;
       try {
-        await request;
+        return await request;
       } finally {
         if (loadFlight.current === request) loadFlight.current = null;
       }
@@ -505,6 +515,54 @@ export function SquadsPanel({
       }
     },
     [load, memberBusy, onOperationsChanged, toast],
+  );
+
+  const deleteSquad = useCallback(
+    async (review: SquadDeleteReview) => {
+      const key = `delete:${review.squadId}`;
+      if (memberBusy) return;
+      setMemberBusy(key);
+      try {
+        await client.delete(review.squadId, structuredClone(review.recipes));
+        await load(true);
+        setDeleteReview(null);
+        onOperationsChanged?.();
+        toast.show({ tone: "success", title: "Squad deleted" });
+      } catch (reason) {
+        const failure = toKalCodeError(reason);
+        await load(true);
+        setDeleteReview((current) =>
+          current?.squadId === review.squadId ? { ...current, failure: failure.message } : current,
+        );
+        toast.show({
+          tone: "danger",
+          title: failure.code === "squad_recipe_confirmation_stale" ? "Recipes changed" : "Squad wasn't deleted",
+          description: failure.message,
+        });
+      } finally {
+        setMemberBusy(null);
+      }
+    },
+    [client, load, memberBusy, onOperationsChanged, toast],
+  );
+
+  const reviewLatestRecipes = useCallback(
+    async (squadId: string) => {
+      const latest = await load();
+      if (!latest) return;
+      const latestSquad = latest.squads.find((candidate) => candidate.id === squadId);
+      if (!latestSquad) {
+        setDeleteReview(null);
+        return;
+      }
+      setDeleteReview({
+        squadId,
+        squadName: latestSquad.name,
+        recipes: structuredClone(latest.recipes.filter((recipe) => recipe.squadId === squadId)),
+        failure: null,
+      });
+    },
+    [load],
   );
 
   const stopLaunch = useCallback(
@@ -746,6 +804,7 @@ export function SquadsPanel({
           <div className={styles.library}>
             {snapshot.squads.map((squad) => {
               const conflicts = ownershipCollisions(squad.members);
+              const review = deleteReview?.squadId === squad.id ? deleteReview : null;
               return (
                 <article key={squad.id} className={styles.squadCard} data-squad-id={squad.id}>
                   <div className={styles.squadMain}>
@@ -807,22 +866,78 @@ export function SquadsPanel({
                     >
                       Edit
                     </Button>
-                    <Button
-                      size="sm"
-                      variant={deleteArmed === squad.id ? "danger" : "ghost"}
-                      icon={<Trash2 aria-hidden="true" />}
-                      onClick={() => {
-                        if (deleteArmed !== squad.id) {
-                          setDeleteArmed(squad.id);
-                          return;
+                    {!review ? (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        icon={<Trash2 aria-hidden="true" />}
+                        onClick={() =>
+                          setDeleteReview({
+                            squadId: squad.id,
+                            squadName: squad.name,
+                            recipes: structuredClone(snapshot.recipes.filter((recipe) => recipe.squadId === squad.id)),
+                            failure: null,
+                          })
                         }
-                        void mutateMember(`delete:${squad.id}`, () => client.delete(squad.id), "Squad deleted");
-                        setDeleteArmed(null);
-                      }}
-                    >
-                      {deleteArmed === squad.id ? "Delete squad" : "Delete"}
-                    </Button>
+                      >
+                        Delete
+                      </Button>
+                    ) : null}
                   </div>
+                  {review ? (
+                    <fieldset className={styles.deleteReview} aria-label={`Delete ${review.squadName}`}>
+                      <span className={styles.deleteReviewIcon}>
+                        <ShieldAlert aria-hidden="true" />
+                      </span>
+                      <div className={styles.deleteReviewCopy}>
+                        <strong>Delete {review.squadName}?</strong>
+                        <p>
+                          {review.recipes.length === 0
+                            ? "No dependent Recipes will be deleted."
+                            : `${review.recipes.length} dependent ${review.recipes.length === 1 ? "Recipe" : "Recipes"} will also be deleted.`}
+                        </p>
+                        {review.recipes.length > 0 ? (
+                          <ul aria-label="Dependent Recipes">
+                            {review.recipes.map((recipe) => (
+                              <li key={recipe.id}>{recipe.name}</li>
+                            ))}
+                          </ul>
+                        ) : null}
+                        {review.failure ? <p role="alert">{review.failure}</p> : null}
+                      </div>
+                      <div className={styles.deleteReviewActions}>
+                        {review.failure ? (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            busy={refreshing}
+                            disabled={Boolean(memberBusy)}
+                            onClick={() => void reviewLatestRecipes(squad.id)}
+                          >
+                            Review latest Recipes
+                          </Button>
+                        ) : null}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={Boolean(memberBusy)}
+                          onClick={() => setDeleteReview(null)}
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="danger"
+                          icon={<Trash2 aria-hidden="true" />}
+                          busy={memberBusy === `delete:${squad.id}`}
+                          disabled={Boolean(memberBusy)}
+                          onClick={() => void deleteSquad(review)}
+                        >
+                          Delete squad
+                        </Button>
+                      </div>
+                    </fieldset>
+                  ) : null}
                 </article>
               );
             })}

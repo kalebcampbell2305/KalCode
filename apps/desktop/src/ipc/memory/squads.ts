@@ -180,6 +180,30 @@ function id(value: unknown, code: string, label: string): string {
   return value;
 }
 
+function confirmedRecipe(value: unknown): SquadRecipe {
+  if (typeof value !== "object" || value === null) {
+    fail("squad_recipe_confirmation_invalid", "Review the dependent Recipes again before deleting this Squad.");
+  }
+  const source = value as SquadRecipe;
+  const recipe: SquadRecipe = {
+    id: id(source.id, "recipe_id_invalid", "That Recipe id"),
+    name: text(source.name, "recipe_name_invalid", "Recipe name", 120),
+    squadId: id(source.squadId, "squad_id_invalid", "That Squad id"),
+    goal:
+      source.goal == null
+        ? null
+        : rejectSecret(boundedMultiline(source.goal, "squad_goal_invalid", "Recipe goal", 16_384)) || null,
+  };
+  if (recipe.name !== source.name || recipe.goal !== (source.goal ?? null)) {
+    fail("squad_recipe_confirmation_stale", "Recipes changed. Review their exact saved contents before deleting.");
+  }
+  return recipe;
+}
+
+function sortedRecipes(values: readonly SquadRecipe[]): SquadRecipe[] {
+  return values.toSorted((left, right) => left.id.localeCompare(right.id));
+}
+
 function requestId(value: unknown): string {
   if (typeof value !== "string") fail("squad_request_invalid", "That launch request isn't valid.");
   const next = value.trim();
@@ -677,6 +701,31 @@ export function createSquadsMemory(options: SquadsMemoryOptions): SquadsMemory {
     squads_delete: (args) => {
       options.requireCore();
       const definition = resolve(args.id, squads, "squad");
+      const dependent = sortedRecipes(recipes.filter((recipe) => recipe.squadId === definition.id));
+      if (!Object.hasOwn(args, "expectedRecipes")) {
+        if (dependent.length > 0) {
+          fail(
+            "squad_recipes_require_confirmation",
+            "This Squad has saved Recipes. Review them before deleting the Squad.",
+            true,
+          );
+        }
+      } else {
+        if (!Array.isArray(args.expectedRecipes)) {
+          fail("squad_recipe_confirmation_invalid", "Review the dependent Recipes again before deleting this Squad.");
+        }
+        const expected = sortedRecipes(args.expectedRecipes.map(confirmedRecipe));
+        if (new Set(expected.map((recipe) => recipe.id)).size !== expected.length) {
+          fail("squad_recipe_confirmation_duplicate", "The Recipe confirmation contains a duplicate.");
+        }
+        if (JSON.stringify(expected) !== JSON.stringify(dependent)) {
+          fail(
+            "squad_recipe_confirmation_stale",
+            "Recipes changed while deletion was being reviewed. Refresh and review the latest Recipes.",
+            true,
+          );
+        }
+      }
       squads = squads.filter((candidate) => candidate.id !== definition.id);
       recipes = recipes.filter((recipe) => recipe.squadId !== definition.id);
     },

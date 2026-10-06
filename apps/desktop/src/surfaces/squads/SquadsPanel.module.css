@@ -185,6 +185,14 @@
   gap: var(--space-3);
 }
 
+.library {
+  container: squad-library / inline-size;
+}
+
+.recipeList {
+  container: recipe-library / inline-size;
+}
+
 .launch,
 .squadCard {
   overflow: hidden;
@@ -474,6 +482,74 @@
 
 .cardActions > button {
   width: 100%;
+}
+
+.deleteReview {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--space-3);
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border-right: 0;
+  border-bottom: 0;
+  border-left: 0;
+  border-top: 1px solid var(--color-danger);
+  background: var(--color-danger-soft);
+}
+
+.deleteReviewIcon {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  place-items: center;
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-md);
+  color: var(--color-danger-text);
+  background: var(--color-surface-1);
+}
+
+.deleteReviewIcon svg {
+  width: 1rem;
+}
+
+.deleteReviewCopy {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-1);
+}
+
+.deleteReviewCopy > strong {
+  color: var(--color-text);
+  font-size: var(--text-sm);
+}
+
+.deleteReviewCopy p,
+.deleteReviewCopy ul {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--type-small);
+  line-height: var(--leading-normal);
+}
+
+.deleteReviewCopy ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  padding-left: var(--space-4);
+}
+
+.deleteReviewCopy [role="alert"] {
+  color: var(--color-danger-text);
+}
+
+.deleteReviewActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
 }
 
 .recipeForm {
@@ -791,6 +867,78 @@
   }
 }
 
+@container squad-library (max-width: 36rem) {
+  .squadCard {
+    grid-template-columns: 1fr;
+  }
+
+  .squadMain {
+    padding: var(--space-4);
+  }
+
+  .roster,
+  .ownershipNote {
+    padding-left: 0;
+    margin-left: 0;
+  }
+
+  .ownershipNote {
+    align-items: flex-start;
+  }
+
+  .cardActions {
+    flex-flow: row wrap;
+    justify-content: flex-start;
+    min-width: 0;
+    border-top: 1px solid var(--color-border-subtle);
+    border-left: 0;
+  }
+
+  .cardActions > button {
+    width: auto;
+  }
+
+  .deleteReview {
+    grid-template-columns: 1fr;
+  }
+
+  .deleteReviewIcon {
+    display: none;
+  }
+
+  .deleteReviewActions {
+    grid-column: auto;
+    justify-content: flex-start;
+  }
+}
+
+@container recipe-library (max-width: 36rem) {
+  .recipeRow {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .recipeRow > button:first-of-type {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .recipeRow > button:last-of-type {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: start;
+  }
+}
+
+@media (max-width: 70rem) {
+  .deleteReview {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .deleteReviewActions {
+    grid-column: 1 / -1;
+  }
+}
+
 @media (max-width: 56rem) {
   .hero {
     grid-template-columns: auto minmax(0, 1fr);
@@ -876,6 +1024,19 @@
   .ownershipNote {
     padding-left: 0;
     margin-left: 0;
+  }
+
+  .deleteReview {
+    grid-template-columns: 1fr;
+  }
+
+  .deleteReviewIcon {
+    display: none;
+  }
+
+  .deleteReviewActions {
+    grid-column: auto;
+    justify-content: flex-start;
   }
 
   .recipeForm,

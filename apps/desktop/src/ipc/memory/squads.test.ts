@@ -274,6 +274,44 @@ describe("Squads memory runtime", () => {
     ).rejects.toMatchObject({ code: "squad_launch_request_conflict" });
   });
 
+  it("deletes dependent Recipes only after an exact atomic confirmation", async () => {
+    const f = setup();
+    const saved = definition();
+    const first: SquadRecipe = {
+      id: "00000000-0000-4000-8000-00000000c002",
+      name: "Release readiness",
+      squadId: saved.id,
+      goal: null,
+    };
+    const second: SquadRecipe = {
+      id: "00000000-0000-4000-8000-00000000c003",
+      name: "Ship desktop",
+      squadId: saved.id,
+      goal: "Publish the verified build",
+    };
+    await f.invoke("squads_save", { definition: saved });
+    await f.invoke("recipe_save", { recipe: first });
+    await f.invoke("recipe_save", { recipe: second });
+
+    await expect(f.invoke("squads_delete", { id: saved.id })).rejects.toMatchObject({
+      code: "squad_recipes_require_confirmation",
+    });
+    await expect(
+      f.invoke("squads_delete", { id: saved.id, expectedRecipes: [{ ...first, name: "Changed" }, second] }),
+    ).rejects.toMatchObject({ code: "squad_recipe_confirmation_stale" });
+    await expect(
+      f.invoke("squads_delete", { id: saved.id, expectedRecipes: [first, first, second] }),
+    ).rejects.toMatchObject({ code: "squad_recipe_confirmation_duplicate" });
+    await expect(
+      f.invoke("squads_delete", { id: saved.id, expectedRecipes: [{ ...first, name: ` ${first.name} ` }, second] }),
+    ).rejects.toMatchObject({ code: "squad_recipe_confirmation_stale" });
+
+    await f.invoke("squads_delete", { id: saved.id, expectedRecipes: [second, first] });
+    const after = (await f.invoke("squads_snapshot")) as SquadsSnapshot;
+    expect(after.squads).toEqual([]);
+    expect(after.recipes).toEqual([]);
+  });
+
   it("replays an exact Recipe request after Recipe deletion without resolving its source again", async () => {
     const f = setup();
     const base = definition();

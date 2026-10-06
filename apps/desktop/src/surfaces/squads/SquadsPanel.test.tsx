@@ -3,6 +3,7 @@ import type {
   ProviderAccount,
   SquadDefinition,
   SquadLaunch,
+  SquadRecipe,
   SquadsSnapshot,
   ThreadOptions,
   ThreadSummary,
@@ -331,6 +332,114 @@ describe("SquadsPanel", () => {
     expect(screen.getByTitle(/Lead · implementation · Codex · Work · gpt-6\.1-sol · High effort/)).toBeVisible();
     await userEvent.setup().click(screen.getByRole("button", { name: "Open terminal" }));
     expect(seams.focus).toHaveBeenCalledWith({ kind: "agent", agentId: "thread-lead", workspaceId: "workspace" });
+  });
+
+  it("freezes the dependent Recipe consent and makes a stale set explicit before deletion", async () => {
+    const initial = snapshot();
+    const added: SquadRecipe = {
+      id: "recipe-ship",
+      name: "Ship desktop",
+      squadId: squad.id,
+      goal: "Publish the verified build",
+    };
+    const changed: SquadsSnapshot = { ...initial, recipes: [...initial.recipes, added] };
+    const deleted: SquadsSnapshot = { ...changed, squads: [], recipes: [] };
+    const client = squads(initial);
+    vi.mocked(client.snapshot)
+      .mockResolvedValueOnce(initial)
+      .mockResolvedValueOnce(changed)
+      .mockResolvedValueOnce(changed)
+      .mockResolvedValueOnce(deleted);
+    vi.mocked(client.delete)
+      .mockRejectedValueOnce({
+        category: "validation",
+        code: "squad_recipe_confirmation_stale",
+        message: "Recipes changed while deletion was being reviewed.",
+        retryable: true,
+      })
+      .mockResolvedValueOnce(undefined);
+    const user = userEvent.setup();
+    view(client, operations());
+    await screen.findAllByRole("heading", { name: squad.name });
+    const card = document.querySelector<HTMLElement>(`[data-squad-id="${squad.id}"]`);
+    expect(card).not.toBeNull();
+
+    await user.click(within(card as HTMLElement).getByRole("button", { name: "Delete" }));
+    const confirmation = within(card as HTMLElement).getByRole("group", { name: `Delete ${squad.name}` });
+    expect(confirmation).toHaveTextContent("1 dependent Recipe will also be deleted");
+    expect(confirmation).toHaveTextContent("Release readiness");
+    expect(confirmation).not.toHaveTextContent("Ship desktop");
+    expect(client.delete).not.toHaveBeenCalled();
+
+    await user.click(within(confirmation).getByRole("button", { name: "Delete squad" }));
+    await within(confirmation).findByRole("alert");
+    expect(confirmation).toHaveTextContent("Recipes changed while deletion was being reviewed.");
+    expect(confirmation).not.toHaveTextContent("Ship desktop");
+    expect(client.delete).toHaveBeenLastCalledWith(squad.id, initial.recipes);
+
+    await user.click(within(confirmation).getByRole("button", { name: "Review latest Recipes" }));
+    expect(confirmation).toHaveTextContent("2 dependent Recipes will also be deleted");
+    expect(confirmation).toHaveTextContent("Ship desktop");
+    await user.click(within(confirmation).getByRole("button", { name: "Delete squad" }));
+    await waitFor(() => expect(document.querySelector(`[data-squad-id="${squad.id}"]`)).toBeNull());
+    expect(client.delete).toHaveBeenLastCalledWith(squad.id, changed.recipes);
+  });
+
+  it("reads a fresh snapshot after deletion when an older refresh is already in flight", async () => {
+    const initial = snapshot();
+    const deleted: SquadsSnapshot = { ...initial, squads: [], recipes: [] };
+    let resolveOldRead: ((value: SquadsSnapshot) => void) | undefined;
+    const oldRead = new Promise<SquadsSnapshot>((resolve) => {
+      resolveOldRead = resolve;
+    });
+    const client = squads(initial);
+    vi.mocked(client.snapshot)
+      .mockResolvedValueOnce(initial)
+      .mockImplementationOnce(() => oldRead)
+      .mockResolvedValueOnce(deleted);
+    vi.mocked(client.delete).mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    view(client, operations());
+    await screen.findAllByRole("heading", { name: squad.name });
+    const card = document.querySelector<HTMLElement>(`[data-squad-id="${squad.id}"]`);
+    expect(card).not.toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await user.click(within(card as HTMLElement).getByRole("button", { name: "Delete" }));
+    const confirmation = within(card as HTMLElement).getByRole("group", { name: `Delete ${squad.name}` });
+    await user.click(within(confirmation).getByRole("button", { name: "Delete squad" }));
+    await waitFor(() => expect(client.delete).toHaveBeenCalledWith(squad.id, initial.recipes));
+
+    resolveOldRead?.(initial);
+    await waitFor(() => expect(document.querySelector(`[data-squad-id="${squad.id}"]`)).toBeNull());
+    expect(client.snapshot).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps the reviewed deletion visible while the irreversible request is in flight", async () => {
+    const initial = snapshot();
+    const deleted: SquadsSnapshot = { ...initial, squads: [], recipes: [] };
+    let finishDelete: (() => void) | undefined;
+    const deleting = new Promise<void>((resolve) => {
+      finishDelete = resolve;
+    });
+    const client = squads(initial);
+    vi.mocked(client.snapshot).mockResolvedValueOnce(initial).mockResolvedValueOnce(deleted);
+    vi.mocked(client.delete).mockImplementationOnce(() => deleting);
+    const user = userEvent.setup();
+    view(client, operations());
+    await screen.findAllByRole("heading", { name: squad.name });
+    const card = document.querySelector<HTMLElement>(`[data-squad-id="${squad.id}"]`);
+    expect(card).not.toBeNull();
+
+    await user.click(within(card as HTMLElement).getByRole("button", { name: "Delete" }));
+    const confirmation = within(card as HTMLElement).getByRole("group", { name: `Delete ${squad.name}` });
+    await user.click(within(confirmation).getByRole("button", { name: "Delete squad" }));
+    await waitFor(() => expect(client.delete).toHaveBeenCalled());
+    expect(within(confirmation).getByRole("button", { name: "Cancel" })).toBeDisabled();
+    expect(confirmation).toBeVisible();
+
+    finishDelete?.();
+    await waitFor(() => expect(document.querySelector(`[data-squad-id="${squad.id}"]`)).toBeNull());
   });
 
   it("never saves a fake provider-default account and opens the canonical connect flow", async () => {
