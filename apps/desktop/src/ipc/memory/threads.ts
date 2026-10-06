@@ -993,6 +993,10 @@ export function createThreadsMemory(
     thread_resume: (args) => {
       const t = get(args);
       if (t.archived) invalid("thread_archived", "This thread is archived.");
+      if (args.allowPendingInput !== undefined && typeof args.allowPendingInput !== "boolean") {
+        error("internal", "ipc_rejected", "KalCode couldn't complete that request.");
+      }
+      const allowPendingInput = args.allowPendingInput !== false;
       const text = args.text == null || String(args.text).trim() === "" ? null : validPrompt(args.text);
       if (text) admitPrompt(threadTarget(t), text, args.promptReviewId);
       else if (args.promptReviewId != null) {
@@ -1002,8 +1006,15 @@ export function createThreadsMemory(
           "A prompt confirmation cannot be used when no prompt is being sent.",
         );
       }
+      if (!allowPendingInput && t.summary.resumeHasPendingInput === true) {
+        invalid(
+          "thread_resume_has_pending_input",
+          "This session has a queued task that was not sent. Choose Resume queued task to send it.",
+        );
+      }
       if (t.live) {
         if (t.summary.status !== "paused") invalid("thread_already_running", "This thread is already running.");
+        t.summary = { ...t.summary, resumeHasPendingInput: false };
         setStatus(t, "idle");
         if (text) send(t, text);
         return summary(t);
@@ -1015,6 +1026,7 @@ export function createThreadsMemory(
           "provider_unavailable",
           `${t.summary.providerName} isn't connected to KalCode. Connect it in Providers, then try again.`,
         );
+      t.summary = { ...t.summary, resumeHasPendingInput: false };
       setStatus(t, "starting", "Resuming");
       startSession(t, provider.supportsResume ? t.providerSessionId : null, text);
       return summary(t);

@@ -35,6 +35,17 @@ describe("desk recovery", () => {
     ).toEqual(["open"]);
   });
 
+  it("holds a queued prompt for the dedicated queued-task action instead of automatic recovery", () => {
+    const ready = agent("ready");
+    const queued = agent("queued", { resumeHasPendingInput: true });
+    const open = new Set([ready.id, queued.id]);
+
+    expect(recoveryCandidates([ready, queued], open, new Set()).map((entry) => entry.id)).toEqual(["ready"]);
+    expect(
+      recoveryCandidates([ready, queued], open, new Set(), { allowPendingInput: true }).map((entry) => entry.id),
+    ).toEqual(["ready", "queued"]);
+  });
+
   it("deduplicates concurrent recovery, bounds launches and rechecks closed work", async () => {
     const queue = new RestoreQueue(2);
     const open = new Set(["a", "b", "c"]);

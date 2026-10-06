@@ -767,8 +767,18 @@ export class KalCodeClient {
     return this.call("thread_interrupt", { threadId });
   }
 
-  resumeThread(threadId: string, text?: string, promptReviewId?: string | null): Promise<ThreadSummary> {
-    return this.call("thread_resume", { threadId, text: text ?? null, promptReviewId: promptReviewId ?? null });
+  resumeThread(
+    threadId: string,
+    text?: string,
+    promptReviewId?: string | null,
+    allowPendingInput = true,
+  ): Promise<ThreadSummary> {
+    return this.call("thread_resume", {
+      threadId,
+      text: text ?? null,
+      promptReviewId: promptReviewId ?? null,
+      allowPendingInput,
+    });
   }
 
   stopThread(threadId: string): Promise<ThreadSummary> {

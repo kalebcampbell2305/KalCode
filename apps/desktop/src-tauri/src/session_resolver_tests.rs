@@ -80,6 +80,7 @@ fn summary(
         archived_at: archived.then(|| "2026-09-28T12:30:00Z".into()),
         resumable: false,
         restart_recoverable: None,
+        resume_has_pending_input: false,
         permission_profile_id: None,
         runtime_kind: None,
         terminal_id: None,

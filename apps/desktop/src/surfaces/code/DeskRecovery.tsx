@@ -1,5 +1,6 @@
 import { Button } from "@kalcode/ui/components";
 import { History, Play, RotateCcw } from "lucide-react";
+import { AlertDialog } from "radix-ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useDeskRestore } from "../../runtime/deskRestore.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
@@ -9,6 +10,7 @@ import { allContents } from "../../shell/panes/model.ts";
 import type { PaneController } from "../../shell/panes/usePaneController.ts";
 import { recoveryCandidates, restoreQueue } from "./continuity.ts";
 import styles from "./DeskRecovery.module.css";
+import confirmStyles from "./kaltidy/KalTidy.module.css";
 import type { ProviderPanes } from "./panes/useProviderPanes.ts";
 
 export function ContinueDeskNotice() {
@@ -60,6 +62,7 @@ export function DeskRecovery({
   const { navigate } = useNavigation();
   const [busy, setBusy] = useState(false);
   const [failures, setFailures] = useState<string[]>([]);
+  const [confirmingReset, setConfirmingReset] = useState(false);
   const latest = useRef({ controller, panes, active });
   latest.current = { controller, panes, active };
   const mounted = useRef(true);
@@ -69,7 +72,7 @@ export function DeskRecovery({
       mounted.current = false;
     };
   }, []);
-  const candidates = useCallback(() => {
+  const candidates = useCallback((allowPendingInput = false) => {
     const { controller: current, panes: providers } = latest.current;
     const open = new Set(
       allContents(current.layout).flatMap((content) => (content.kind === "agent" ? [content.agentId] : [])),
@@ -78,15 +81,26 @@ export function DeskRecovery({
       providers.panes.map((p) => p.thread),
       open,
       new Set(providers.panes.filter((p) => p.info?.running).map((p) => p.thread.id)),
+      { allowPendingInput },
     );
   }, []);
+  const queuedCandidates = useCallback(
+    () => candidates(true).filter((thread) => thread.resumeHasPendingInput === true),
+    [candidates],
+  );
   const restoring = useRef(false);
   const admitted = useRef(new Set<string>());
   const manualAdmission = useRef(new Map<string, number>());
   const recover = useCallback(
-    async (requestedIds: readonly string[], retryIds: readonly string[] = [], manualRevision?: number) => {
+    async (
+      requestedIds: readonly string[],
+      retryIds: readonly string[] = [],
+      manualRevision?: number,
+      allowPendingInput = false,
+    ) => {
       if (restoring.current) return false;
-      const eligible = new Set(candidates().map((thread) => thread.id));
+      const eligibleThreads = allowPendingInput ? queuedCandidates() : candidates();
+      const eligible = new Set(eligibleThreads.map((thread) => thread.id));
       const ids = [...new Set(requestedIds)].filter((id) => eligible.has(id));
       if (ids.length === 0) return false;
       restoring.current = true;
@@ -100,13 +114,21 @@ export function DeskRecovery({
       try {
         const failed = await queue.restore(
           ids,
-          (id) => mounted.current && latest.current.active && candidates().some((thread) => thread.id === id),
+          (id) =>
+            mounted.current &&
+            latest.current.active &&
+            (allowPendingInput ? queuedCandidates() : candidates()).some((thread) => thread.id === id),
           async (id) => {
             // Check native facts again after waiting in the bounded queue. An explicit stop wins.
             const thread = await client.getThread(id);
             if (!thread.restartRecoverable || !thread.resumable || thread.status !== "interrupted") return;
-            if (!mounted.current || !candidates().some((candidate) => candidate.id === id)) return;
-            const updated = await client.resumeThread(id);
+            if (allowPendingInput && thread.resumeHasPendingInput !== true) return;
+            const stillEligible = (allowPendingInput ? queuedCandidates() : candidates()).some(
+              (candidate) => candidate.id === id,
+            );
+            if (!mounted.current || !stillEligible) return;
+            // Native rechecks this boolean and the durable queued-input marker in the same claim.
+            const updated = await client.resumeThread(id, undefined, null, allowPendingInput);
             if (mounted.current) latest.current.panes.updated(updated);
             if (updated.status === "failed" || updated.status === "offline") throw new Error("Restore failed");
           },
@@ -124,7 +146,7 @@ export function DeskRecovery({
       }
       return true;
     },
-    [client, candidates],
+    [client, candidates, queuedCandidates],
   );
   const candidateKey = candidates()
     .map((thread) => thread.id)
@@ -145,6 +167,7 @@ export function DeskRecovery({
   }, [active, automatic, request, controller.ready, controller.loadError, panes.loaded, busy, candidateKey, recover]);
 
   const pending = candidates().length;
+  const queued = queuedCandidates().length;
   const openIds = new Set(
     allContents(controller.layout).flatMap((content) => (content.kind === "agent" ? [content.agentId] : [])),
   );
@@ -160,18 +183,75 @@ export function DeskRecovery({
   ).length;
   if (active && controller.loadError)
     return (
-      <section className={styles.notice} aria-label="Desk recovery">
-        <History className={styles.icon} aria-hidden="true" />
-        <div className={styles.copy}>
-          <p className={styles.title}>Your saved desk couldn't load</p>
-          <p className={styles.detail}>{controller.loadError} Your saved layout has been kept.</p>
-        </div>
-        <Button size="sm" variant="primary" icon={<RotateCcw />} onClick={controller.retryLoad}>
-          Retry restore
-        </Button>
-      </section>
+      <>
+        <section className={styles.notice} aria-label="Desk recovery" aria-busy={controller.resettingSavedLayout}>
+          <History className={styles.icon} aria-hidden="true" />
+          <div className={styles.copy}>
+            <p className={styles.title}>Your saved desk couldn't load</p>
+            <p className={styles.detail}>{controller.loadError} Your visible desk is still available.</p>
+          </div>
+          <div className={styles.actions}>
+            <Button
+              size="sm"
+              variant="primary"
+              icon={<RotateCcw />}
+              disabled={controller.resettingSavedLayout}
+              onClick={controller.retryLoad}
+            >
+              Retry restore
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              busy={controller.resettingSavedLayout}
+              onClick={() => setConfirmingReset(true)}
+            >
+              {controller.resettingSavedLayout ? "Resetting saved layout" : "Reset saved layout"}
+            </Button>
+          </div>
+        </section>
+        <AlertDialog.Root
+          open={confirmingReset}
+          onOpenChange={(open) => !controller.resettingSavedLayout && setConfirmingReset(open)}
+        >
+          <AlertDialog.Portal>
+            <AlertDialog.Overlay className={confirmStyles.overlay} />
+            <AlertDialog.Content className={confirmStyles.confirm}>
+              <div className={confirmStyles.head}>
+                <span className={confirmStyles.mark} data-tone="danger" aria-hidden="true">
+                  <RotateCcw />
+                </span>
+                <div className={confirmStyles.headText}>
+                  <AlertDialog.Title className={confirmStyles.title}>Reset saved pane arrangement?</AlertDialog.Title>
+                  <AlertDialog.Description className={confirmStyles.description}>
+                    This replaces the saved pane arrangement and Browser locations with the desk currently shown.
+                    Running terminals and agents stay open.
+                  </AlertDialog.Description>
+                </div>
+              </div>
+              <div className={confirmStyles.confirmActions}>
+                <AlertDialog.Cancel asChild>
+                  <Button variant="ghost" disabled={controller.resettingSavedLayout}>
+                    Cancel
+                  </Button>
+                </AlertDialog.Cancel>
+                <AlertDialog.Action asChild>
+                  <Button
+                    variant="danger"
+                    busy={controller.resettingSavedLayout}
+                    onClick={() => void controller.resetSavedLayout()}
+                  >
+                    Reset saved layout
+                  </Button>
+                </AlertDialog.Action>
+              </div>
+            </AlertDialog.Content>
+          </AlertDialog.Portal>
+        </AlertDialog.Root>
+      </>
     );
-  if (!active || !controller.ready || (!pending && !busy && !unresolvedFailures.length && !unavailable)) return null;
+  if (!active || !controller.ready || (!pending && !queued && !busy && !unresolvedFailures.length && !unavailable))
+    return null;
   return (
     <section className={styles.notice} aria-label="Desk recovery" aria-busy={busy}>
       <History className={styles.icon} aria-hidden="true" />
@@ -179,25 +259,33 @@ export function DeskRecovery({
         <p className={styles.title}>
           {busy
             ? "Bringing your agents back"
-            : unresolvedFailures.length || unavailable
-              ? "Your desk is back. Some agents need a fresh start."
-              : "Continue where I left off"}
+            : queued
+              ? queued === 1
+                ? "Queued task waiting"
+                : "Queued tasks waiting"
+              : unresolvedFailures.length || unavailable
+                ? "Your desk is back. Some agents need a fresh start."
+                : "Continue where I left off"}
         </p>
         <p className={styles.detail}>
           {busy
             ? "Your workspace is ready to use while provider sessions reconnect."
-            : unavailable
-              ? "Open an ended agent to start a fresh session with its saved project and task context."
-              : unresolvedFailures.length
-                ? "Open the affected agent for its error and recovery options. Your other panes are ready."
-                : `${pending} saved ${pending === 1 ? "agent can" : "agents can"} resume. Ended commands stay in Run history.`}
+            : queued
+              ? queued === 1
+                ? "1 agent has a queued prompt. Automatic restore leaves it unsent. Choose Resume queued task to continue."
+                : `${queued} agents have queued prompts. Automatic restore leaves them unsent. Choose Resume queued tasks to continue.`
+              : unavailable
+                ? "Open an ended agent to start a fresh session with its saved project and task context."
+                : unresolvedFailures.length
+                  ? "Open the affected agent for its error and recovery options. Your other panes are ready."
+                  : `${pending} saved ${pending === 1 ? "agent can" : "agents can"} resume. Ended commands stay in Run history.`}
         </p>
       </div>
       <div className={styles.actions}>
         {pending > 0 ? (
           <Button
             size="sm"
-            variant="primary"
+            variant={queued ? "secondary" : "primary"}
             icon={unresolvedFailures.length ? <RotateCcw /> : <Play />}
             busy={busy}
             onClick={() => {
@@ -209,6 +297,20 @@ export function DeskRecovery({
             }}
           >
             {unresolvedFailures.length ? "Retry recovery" : "Continue where I left off"}
+          </Button>
+        ) : null}
+        {queued > 0 ? (
+          <Button
+            size="sm"
+            variant="primary"
+            icon={<Play />}
+            busy={busy}
+            onClick={() => {
+              const ids = queuedCandidates().map((thread) => thread.id);
+              void recover(ids, ids, undefined, true);
+            }}
+          >
+            {queued === 1 ? "Resume queued task" : "Resume queued tasks"}
           </Button>
         ) : null}
         <Button size="sm" variant="ghost" onClick={() => navigate("operations")}>

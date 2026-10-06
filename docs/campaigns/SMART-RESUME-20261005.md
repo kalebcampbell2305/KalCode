@@ -54,6 +54,16 @@ The combined layout-retry review additionally found that interim fallback intera
 
 The counts above are receipts for distinct commands, not an aggregate unique-test count. Test fixtures use isolated fake providers; no paid provider call or owner credential mutation was required. The native restart receipt proves the feature on Windows. Main integration, signed packages, macOS execution, updater availability and production delivery remain separate release facts and are not claimed here.
 
+## Shared-review follow-ups
+
+The owner explicitly authorized the current shared train with PC2 gates. The previously included main-PC-only gate-policy merge was reverted on this feature branch; no private coordinator or direct main update was used. Gate/train regressions passed 58/58; the close-ownership policy documentation passed the 38-test lifecycle suite.
+
+The shared review identified implicit delivery of a previously submitted, undelivered prompt during automatic recovery. The existing durable delivery marker now supplies boolean-only `resumeHasPendingInput` truth. Generic recovery passes `allowPendingInput: false`, checked again atomically before native launch admission. A separate visible **Resume queued task** action permits delivery. Native restart/held-input and neighboring explicit-resume proofs each passed 1/1; generated protocol output and backward-compatible omit-false serialization were verified. Account-scoped draft retention on sign-out and reversible archive was retained deliberately; removing it would lose continuity.
+
+Explicit saved-layout reset now confirms replacement without stopping sessions. Independent review drove regressions for concurrent workspace reset admission, A-to-B-to-A stale reads, edits and intentional closes during a pending reset, and failures completed while another workspace is visible. Native invalid stored rows already fall back to `null`; the added rendered reset test injects an invalid IPC payload and does not claim ordinary native schema corruption causes a permanent lock.
+
+Final root follow-up evidence: 80 focused UI/controller/IPC tests passed; a subsequent late-provider/pending-input regression passed in independent 46-test boundary review. All seven rendered recovery scenarios passed, and the final two changed reset/queued-input scenarios passed again after copy and ordering repairs. Desktop/protocol typechecks, whole-repository Biome (1368 files, existing website warnings), formatting and diff checks passed. The native test binary is rebuilt separately before the final restart reproof. Windows/macOS signed release and user-receivable production delivery are still pending.
+
 ## Compatibility and rollback
 
 No database migration or credential-store change. Protocol additions have defaults for older payloads. Local records are versioned. Drafts contain user-entered plaintext in the local account-scoped WebView profile; they are not an encrypted credential vault. A crash before a native transaction commits can still lose that transaction; URL updates no longer wait for the layout debounce.

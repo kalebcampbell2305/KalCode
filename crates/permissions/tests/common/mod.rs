@@ -106,6 +106,7 @@ pub fn thread_summary(id: &str, workspace_id: &str, mode: PermissionMode) -> Thr
         archived_at: None,
         resumable: false,
         restart_recoverable: None,
+        resume_has_pending_input: false,
         permission_profile_id: None,
         runtime_kind: None,
         terminal_id: None,

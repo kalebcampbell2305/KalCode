@@ -1,5 +1,5 @@
 import type { ThreadSummary } from "@kalcode/protocol";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import { emptyLayout, makeLeaf } from "../../shell/panes/model.ts";
 import type { PaneController } from "../../shell/panes/usePaneController.ts";
@@ -52,7 +52,7 @@ it("automatically resumes eligible saved agents exactly once after mounting", as
   await waitFor(() => expect(state.client.resumeThread).toHaveBeenCalledTimes(1));
   view.rerender(<DeskRecovery controller={{ ...controller }} panes={{ ...panes }} active />);
   await waitFor(() => expect(panes.refresh).toHaveBeenCalledTimes(1));
-  expect(state.client.resumeThread).toHaveBeenCalledWith(agent.id);
+  expect(state.client.resumeThread).toHaveBeenCalledWith(agent.id, undefined, null, false);
   expect(state.client.resumeThread).toHaveBeenCalledTimes(1);
 });
 
@@ -63,6 +63,89 @@ it("manual restore waits for one click and retains the saved layout", async () =
   fireEvent.click(screen.getByRole("button", { name: "Continue where I left off" }));
   await waitFor(() => expect(state.client.resumeThread).toHaveBeenCalledTimes(1));
   expect(controller.layout).toEqual(layout);
+});
+
+it("holds a queued prompt through automatic and generic recovery until its dedicated action", async () => {
+  state.automatic = false;
+  const queued = { ...agent, id: "queued", resumeHasPendingInput: true };
+  const safe = { ...agent, id: "safe" };
+  const mixedLayout = {
+    ...emptyLayout(),
+    root: makeLeaf([
+      { kind: "agent", agentId: safe.id },
+      { kind: "agent", agentId: queued.id },
+    ]),
+  };
+  const mixedController = { ...controller, layout: mixedLayout } as PaneController;
+  panes = {
+    ...panes,
+    panes: [
+      { thread: safe, info: null },
+      { thread: queued, info: null },
+    ],
+  } as ProviderPanes;
+  state.client.getThread.mockImplementation(async (id: string) => (id === queued.id ? queued : safe));
+  state.client.resumeThread.mockImplementation(async (id: string) => ({
+    ...(id === queued.id ? queued : safe),
+    status: "idle",
+    resumeHasPendingInput: false,
+  }));
+
+  render(<DeskRecovery controller={mixedController} panes={panes} active />);
+  expect(
+    screen.getByText(
+      "1 agent has a queued prompt. Automatic restore leaves it unsent. Choose Resume queued task to continue.",
+    ),
+  ).toBeVisible();
+
+  fireEvent.click(screen.getByRole("button", { name: "Continue where I left off" }));
+  await waitFor(() => expect(state.client.resumeThread).toHaveBeenCalledWith(safe.id, undefined, null, false));
+  expect(state.client.resumeThread).not.toHaveBeenCalledWith(queued.id, undefined, null, false);
+  expect(state.client.resumeThread).not.toHaveBeenCalledWith(queued.id, undefined, null, true);
+
+  fireEvent.click(screen.getByRole("button", { name: "Resume queued task" }));
+  await waitFor(() => expect(state.client.resumeThread).toHaveBeenCalledWith(queued.id, undefined, null, true));
+  expect(state.client.resumeThread).toHaveBeenCalledTimes(2);
+});
+
+it("does not automatically submit a queued prompt", async () => {
+  const queued = { ...agent, resumeHasPendingInput: true };
+  panes = { ...panes, panes: [{ thread: queued, info: null }] } as ProviderPanes;
+  state.client.getThread.mockResolvedValue(queued);
+
+  render(<DeskRecovery controller={controller} panes={panes} active />);
+  await act(async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+
+  expect(screen.getByRole("button", { name: "Resume queued task" })).toBeVisible();
+  expect(state.client.resumeThread).not.toHaveBeenCalled();
+});
+
+it("confirms a saved-layout reset and explains that live work stays open", async () => {
+  const resetSavedLayout = vi.fn().mockResolvedValue(undefined);
+  render(
+    <DeskRecovery
+      controller={
+        {
+          ...controller,
+          loadError: "The saved layout is invalid.",
+          retryLoad: vi.fn(),
+          resettingSavedLayout: false,
+          resetSavedLayout,
+        } as PaneController
+      }
+      panes={panes}
+      active
+    />,
+  );
+
+  expect(screen.getByText(/Your visible desk is still available/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Reset saved layout" }));
+  const dialog = screen.getByRole("alertdialog");
+  expect(within(dialog).getByText(/Browser locations/)).toBeInTheDocument();
+  expect(within(dialog).getByText(/Running terminals and agents stay open/)).toBeInTheDocument();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Reset saved layout" }));
+
+  await waitFor(() => expect(resetSavedLayout).toHaveBeenCalledOnce());
 });
 
 it("an in-Code Continue click also admits a provider that becomes available later", async () => {
@@ -87,9 +170,9 @@ it("an in-Code Continue click also admits a provider that becomes available late
 
   const view = render(<DeskRecovery controller={twoAgentController} panes={initialPanes} active />);
   fireEvent.click(screen.getByRole("button", { name: "Continue where I left off" }));
-  await waitFor(() => expect(state.client.resumeThread).toHaveBeenCalledWith(agent.id));
+  await waitFor(() => expect(state.client.resumeThread).toHaveBeenCalledWith(agent.id, undefined, null, false));
   expect(state.continueDesk).toHaveBeenCalledOnce();
-  expect(state.client.resumeThread).not.toHaveBeenCalledWith(late.id);
+  expect(state.client.resumeThread).not.toHaveBeenCalledWith(late.id, undefined, null, false);
 
   view.rerender(
     <DeskRecovery
@@ -104,7 +187,7 @@ it("an in-Code Continue click also admits a provider that becomes available late
       active
     />,
   );
-  await waitFor(() => expect(state.client.resumeThread).toHaveBeenCalledWith(late.id));
+  await waitFor(() => expect(state.client.resumeThread).toHaveBeenCalledWith(late.id, undefined, null, false));
   expect(state.client.resumeThread).toHaveBeenCalledTimes(2);
 });
 
@@ -159,6 +242,29 @@ it("keeps a prior manual Continue intent until a provider capability becomes ava
 
   view.rerender(<DeskRecovery controller={controller} panes={panes} active />);
   await waitFor(() => expect(state.client.resumeThread).toHaveBeenCalledTimes(1));
+});
+
+it("does not let an earlier generic Continue intent submit queued input discovered after provider refresh", async () => {
+  state.automatic = false;
+  state.request = 1;
+  const unavailable = { ...agent, resumable: false, resumeHasPendingInput: true };
+  const queued = { ...unavailable, resumable: true };
+  state.client.getThread.mockResolvedValue(queued);
+  const view = render(
+    <DeskRecovery controller={controller} panes={{ ...panes, panes: [{ thread: unavailable, info: null }] }} active />,
+  );
+  await act(async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+  expect(state.client.resumeThread).not.toHaveBeenCalled();
+
+  view.rerender(
+    <DeskRecovery controller={controller} panes={{ ...panes, panes: [{ thread: queued, info: null }] }} active />,
+  );
+  const resumeQueued = await screen.findByRole("button", { name: "Resume queued task" });
+  expect(state.client.resumeThread).not.toHaveBeenCalled();
+
+  fireEvent.click(resumeQueued);
+  await waitFor(() => expect(state.client.resumeThread).toHaveBeenCalledWith(queued.id, undefined, null, true));
+  expect(state.client.resumeThread).toHaveBeenCalledTimes(1);
 });
 
 it("does not recover a late-capability agent in manual mode without a Continue intent", async () => {

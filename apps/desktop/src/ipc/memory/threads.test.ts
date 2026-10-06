@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { KalCodeClient } from "../client.ts";
 import { KalCodeError } from "../errors.ts";
 import { createMemoryTransport } from "../memoryTransport.ts";
-import { nameFromPrompt } from "./threads.ts";
+import { createThreadsMemory, nameFromPrompt } from "./threads.ts";
 
 /** The workspace threads are created in: a folder opened through Z1's (fake) folder picker. */
 let WORKSPACE = "";
@@ -67,6 +67,58 @@ describe("nameFromPrompt (mirrors crates/threads/src/naming.rs)", () => {
 });
 
 describe("memory thread runtime", () => {
+  it("keeps queued input stopped until the dedicated resume action allows it", () => {
+    const runtime = createThreadsMemory(
+      () => undefined,
+      () => undefined,
+    );
+    const id = "0192f3c4-0000-7000-8000-0000000000f1";
+    const queued: ThreadSummary = {
+      id,
+      name: "Queued recovery",
+      providerId: "claude-code",
+      providerName: "Claude Code",
+      model: null,
+      effort: null,
+      providerAccountId: null,
+      accountLabel: null,
+      workspaceId: "0192f3c4-0000-7000-8000-0000000000f2",
+      workspaceName: "kalcode",
+      permissionMode: "approve",
+      status: "interrupted",
+      currentActivity: "Interrupted when KalCode closed",
+      createdAt: new Date(0).toISOString(),
+      lastActivityAt: new Date(0).toISOString(),
+      pendingApprovals: 0,
+      unreadMessages: 0,
+      filesChanged: 0,
+      branch: null,
+      error: null,
+      archivedAt: null,
+      resumable: true,
+      restartRecoverable: true,
+      resumeHasPendingInput: true,
+      permissionProfileId: null,
+      runtimeKind: "interactive_pty",
+      terminalId: null,
+      worktreeId: null,
+    };
+    runtime.seedFixture(queued);
+
+    expect(() => runtime.handlers.thread_resume({ threadId: id, allowPendingInput: false })).toThrowError(
+      expect.objectContaining({ code: "thread_resume_has_pending_input" }),
+    );
+    expect(runtime.handlers.thread_get({ threadId: id })).toMatchObject({
+      status: "interrupted",
+      resumeHasPendingInput: true,
+    });
+
+    expect(runtime.handlers.thread_resume({ threadId: id, allowPendingInput: true })).toMatchObject({
+      status: "idle",
+      resumeHasPendingInput: false,
+    });
+  });
+
   it("uses a clean provider default, accepts one task title, and preserves explicit manual names", async () => {
     const { client, transport } = await setup();
     const pane = () =>

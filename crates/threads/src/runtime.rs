@@ -1538,6 +1538,19 @@ impl ThreadRuntime {
         text: Option<&str>,
         review_id: Option<&str>,
     ) -> Result<ThreadSummary> {
+        self.resume_reviewed_with_options(thread_id, text, review_id, true)
+    }
+
+    /// Resumes with an explicit queued-input policy. Existing callers allow pending input, which
+    /// preserves the owner-invoked Resume behavior. Automatic and generic recovery pass `false`
+    /// so the durable claim refuses before starting or sending a recorded user turn.
+    pub fn resume_reviewed_with_options(
+        &self,
+        thread_id: &str,
+        text: Option<&str>,
+        review_id: Option<&str>,
+        allow_pending_input: bool,
+    ) -> Result<ThreadSummary> {
         validate::thread_id(thread_id)?;
         let text = text
             .filter(|t| !t.trim().is_empty())
@@ -1559,7 +1572,8 @@ impl ThreadRuntime {
             }
             None => None,
         };
-        self.inner.resume(thread_id, admitted)?;
+        self.inner
+            .resume(thread_id, admitted, allow_pending_input)?;
         self.inner.summary(thread_id)
     }
 
@@ -1574,7 +1588,7 @@ impl ThreadRuntime {
             let ran_out = row.status == ThreadStatus::Interrupted
                 && row.error_code.as_deref() == Some(error_codes::RESOURCES_UNAVAILABLE);
             if ran_out {
-                self.inner.resume(thread_id, None)?;
+                self.inner.resume(thread_id, None, true)?;
             }
         }
         self.inner.summary(thread_id)
@@ -2408,6 +2422,7 @@ impl Inner {
             archived_at: row.archived_at,
             resumable,
             restart_recoverable: Some(false),
+            resume_has_pending_input: row.resume_has_pending_input,
             permission_profile_id: row.permission_profile_id,
             runtime_kind: None,
             terminal_id: None,
@@ -4087,7 +4102,12 @@ impl Inner {
         )
     }
 
-    fn resume(&self, thread_id: &str, text: Option<AdmittedPrompt>) -> Result<()> {
+    fn resume(
+        &self,
+        thread_id: &str,
+        text: Option<AdmittedPrompt>,
+        allow_pending_input: bool,
+    ) -> Result<()> {
         let row = self.row(thread_id)?;
         if row.archived_at.is_some() {
             return Err(archived());
@@ -4180,6 +4200,11 @@ impl Inner {
                 && admitted.target.provider_account_id != current.provider_account_id
             {
                 return Err(thread_account_changed());
+            }
+            // Summary truth is advisory; this check shares the durable claim transaction so a
+            // queued turn created after the UI read cannot be sent by automatic recovery.
+            if !allow_pending_input && store::has_undelivered(tx, thread_id)? {
+                return Err(thread_resume_has_pending_input());
             }
             store::set_cwd(tx, thread_id, &cwd, &workspace.name)?;
             // New text supersedes a message that never reached the provider.
@@ -4503,6 +4528,13 @@ fn waiting_for_resources() -> KalError {
     KalError::validation(
         "thread_waiting_for_resources",
         "This thread is waiting to start and starts on its own, or choose Start Anyway. Stop it to cancel.",
+    )
+}
+
+fn thread_resume_has_pending_input() -> KalError {
+    KalError::validation(
+        "thread_resume_has_pending_input",
+        "This session has a queued task that was not sent. Choose Resume queued task to send it.",
     )
 }
 

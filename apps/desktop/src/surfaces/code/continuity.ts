@@ -1,10 +1,16 @@
 import type { ThreadSummary } from "@kalcode/protocol";
 
+export interface RecoveryCandidateOptions {
+  /** Only a dedicated action that says the queued prompt will be sent may enable this. */
+  allowPendingInput?: boolean;
+}
+
 /** Only persisted open panes interrupted by app exit are automatic recovery candidates. */
 export function recoveryCandidates(
   agents: readonly ThreadSummary[],
   openIds: ReadonlySet<string>,
   liveIds: ReadonlySet<string>,
+  options: RecoveryCandidateOptions = {},
 ): ThreadSummary[] {
   return agents.filter(
     (agent) =>
@@ -12,6 +18,7 @@ export function recoveryCandidates(
       agent.status === "interrupted" &&
       agent.restartRecoverable === true &&
       agent.resumable &&
+      (options.allowPendingInput === true || agent.resumeHasPendingInput !== true) &&
       agent.archivedAt === null &&
       openIds.has(agent.id) &&
       !liveIds.has(agent.id),

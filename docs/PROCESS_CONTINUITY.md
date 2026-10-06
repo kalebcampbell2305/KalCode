@@ -8,11 +8,15 @@ Settings → Continue where I left off controls automatic restoration per KalCod
 
 A failed saved-layout read leaves a usable shell and keeps the stored layout untouched. A shared retry path backs off from one second to thirty seconds and also supports immediate manual retry. Background attempts preserve the visible shell; workspace changes cancel stale attempts.
 
+If repeated reads or a returned payload remain unusable, **Reset saved layout** explicitly replaces the saved arrangement with the visible desk after confirmation. Cancel preserves the saved arrangement. Reset does not stop sessions; failed writes remain actionable. Ordinary invalid database layout rows already fall back through the native layout reader.
+
 Canonical workspace/layout stores preserve stable panes, tab order, geometry, terminal names, Browser locations and widgets. The existing focused-pane preference restores focus. Provider identities appear before runtime metadata. Heavy pane bodies hydrate progressively: focused content first, then two visible panes per animation frame. Hidden mounted panes retain identity. Provider-info reads are bounded to four concurrent requests; superseded queues stop claiming work.
 
 Layout mutations write a bounded local recovery journal before the debounced native write. It excludes Browser URLs and clears only after its exact native write succeeds. Failed layout reads leave the saved authority untouched and expose **Retry restore**. Native Browser state owns URLs and its existing retry path.
 
 Unsent Thread and New Thread drafts are scoped to the KalCode account, workspace and thread in the local application profile. Restore never sends. Successful send clears only the submitted text, preserving edits made during send. Draft storage is bounded; unavailable storage and oversize/corrupt records are surfaced. This is user-content persistence, not provider credential storage.
+
+Signing out preserves that account's drafts for its next sign-in, and reversible thread archiving retains drafts. Another signed-in account uses a different draft namespace. These local profile records are not an OS security boundary or an encrypted vault.
 
 Recent navigation retains at most 200 validated entries per account, including stable target IDs. Raw Browser URLs and runtime handles are excluded. Existing pinned/favorite and workspace stores remain authoritative. Back navigation preserves real visits without inserting a transient startup visit during automatic Code restoration.
 
@@ -21,6 +25,7 @@ Recent navigation retains at most 200 validated entries per account, including s
 | Saved state | Restart behavior |
 | --- | --- |
 | Open coding pane interrupted by application exit, with native resume support and a stored provider session | Eligible for bounded automatic resume; native facts are rechecked before launch |
+| Recoverable session with a previously submitted but undelivered prompt | Preserved without automatic delivery; **Resume queued task** explicitly sends the saved prompt |
 | Intentionally stopped or closed coding session | Remains ended; never automatically resumed |
 | Completed/failed session or ended local command | Preserved as history; commands are never replayed |
 | Provider cannot resume the conversation | Historical state with **Start fresh session**, preserving task name and working directory; original thread stays in history |
@@ -30,6 +35,8 @@ Recent navigation retains at most 200 validated entries per account, including s
 `ThreadSummary.restartRecoverable` is an additive fact stamped by the native provider-pane owner from durable interactive identity and canonical app-shutdown/crash activity. It is independent of `resumable`. The shared thread runtime atomically claims the persisted resume state and rechecks it under the live-session mutex before launch. Concurrent recovery cannot overwrite a live session; Stop wins over stale queued resume.
 
 Recovery orchestration permits two concurrent background launches and deduplicates attempts for the current runtime client. Failed automatic attempts require explicit retry. This schedules startup recovery; it does not cap user-requested agents or deny startup for high CPU. **New agent** always creates a fresh thread/provider session.
+
+`resumeHasPendingInput` exposes only the existing durable delivery marker's boolean state, never prompt text. Automatic recovery and generic **Continue where I left off** pass `allowPendingInput: false`; the native resume transaction checks the marker again before claiming launch. Only the dedicated queued-task action permits delivery. Existing explicit Resume callers retain their established behavior.
 
 Closing a pane stops its owned live session through the canonical stop path before removing the pane. Cancel preserves it. Docking/hiding remains the explicit way to keep work running without displaying it.
 

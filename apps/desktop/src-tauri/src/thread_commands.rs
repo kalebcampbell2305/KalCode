@@ -1471,13 +1471,19 @@ pub fn thread_resume(
     thread_id: String,
     text: Option<String>,
     prompt_review_id: Option<String>,
+    allow_pending_input: Option<bool>,
 ) -> Result<ThreadSummary, IpcError> {
     _runtime_access.revalidate()?;
     validate_optional_prompt_review(text.as_deref(), prompt_review_id.as_deref())?;
     state.ensure_providers(app.core.as_ref());
     state
         .runtime()?
-        .resume_reviewed(&thread_id, text.as_deref(), prompt_review_id.as_deref())
+        .resume_reviewed_with_options(
+            &thread_id,
+            text.as_deref(),
+            prompt_review_id.as_deref(),
+            allow_pending_input.unwrap_or(true),
+        )
         .map_err(|e| e.log_and_convert("thread_resume"))
 }
 
