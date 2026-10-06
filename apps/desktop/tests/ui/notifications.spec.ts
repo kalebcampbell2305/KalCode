@@ -113,6 +113,9 @@ test("a provider signing out and a crash recovery link to where they can be hand
     { type: "provider.disconnected", payload: { providerId: "claude-code", accountLabel: null } },
     {},
   );
+  // The recovery leaves the thread Interrupted, as the native runtime does (12 already is); the
+  // simulated core events below raise the notification.
+  await memory(page, "setThreadStatus", fixtureId(2, 9), "interrupted", null);
   for (const n of [9, 12]) {
     await memory(
       page,
@@ -132,9 +135,15 @@ test("a provider signing out and a crash recovery link to where they can be hand
   await bell(page).click();
   await expect(item(page, "2 threads can be resumed")).toBeVisible();
   await opener(page, "2 threads can be resumed").click();
+  // Recovered threads are Interrupted: STOPPED in the shared agent state (`agentStateOf`), which the
+  // Fleet files under Done, so the notification opens Done and both recovered agents are in it.
   await expect(
-    page.getByRole("group", { name: "Filter agents" }).getByRole("button", { name: /^Idle/ }),
+    page.getByRole("group", { name: "Filter agents" }).getByRole("button", { name: /^Done/ }),
   ).toHaveAttribute("aria-pressed", "true");
+  const fleet = page.getByRole("region", { name: "Agents" });
+  for (const name of ["Draft release notes", "Migrate logger to structured output"]) {
+    await expect(fleet.getByRole("article", { name })).toBeVisible();
+  }
   await bell(page).click();
   await opener(page, "Claude Code is signed out").click();
   await expect(page.getByRole("heading", { level: 1, name: "Providers" })).toBeVisible();

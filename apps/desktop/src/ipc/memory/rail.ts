@@ -43,7 +43,7 @@ import type {
   WorkspaceGroup,
   WorkspaceRailEntry,
 } from "@kalcode/protocol";
-import { displayStatusOf } from "@kalcode/protocol";
+import { agentStateOf, displayStatusOf, isAgentBusy } from "@kalcode/protocol";
 import type { EmitOptions } from "./dashboard.ts";
 
 type Handler = (args: Record<string, unknown>) => unknown;
@@ -619,6 +619,16 @@ const IGNORED = new Set(["node_modules/"]);
 // The memory runtime
 // ------------------------------------------------------------------------------------------
 
+/** Starting, working or testing in the shared agent state (native `rail::is_working`). */
+export function isWorking(t: ThreadSummary): boolean {
+  return isAgentBusy(agentStateOf(t));
+}
+
+/** Waiting on the person, never a failure (native `rail::needs_you`, the Fleet's Needs you). */
+export function needsYou(t: ThreadSummary): boolean {
+  return agentStateOf(t) === "needs_you";
+}
+
 export function createRailMemory(options: RailMemoryOptions): RailMemory {
   const { requireCore, emit } = options;
   const rows = new Map<string, RailRow>();
@@ -644,8 +654,6 @@ export function createRailMemory(options: RailMemoryOptions): RailMemory {
     (options.threadHandlers.thread_list?.({ workspaceId: null, includeArchived: true }) ?? []) as ThreadSummary[];
   const terminals = (workspaceId: string) =>
     (options.workspaceHandlers.terminal_list?.({ workspaceId }) ?? []) as TerminalInfo[];
-  const isWorking = (t: ThreadSummary) => displayStatusOf(t.status).chip === "working";
-  const needsYou = (t: ThreadSummary) => displayStatusOf(t.status).chip === "waiting_for_you";
 
   const entryFor = (w: Workspace, all: ThreadSummary[], active: string | null): WorkspaceRailEntry => {
     const r = rows.get(w.id) ?? emptyRow();

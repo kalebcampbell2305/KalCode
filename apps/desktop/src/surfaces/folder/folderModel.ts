@@ -2,7 +2,14 @@
  * Pure helpers for the folder/project surface: Git status letters and words, file-size text,
  * and recent files merged from the event log (paths only; contents are never read).
  */
-import type { EventEnvelope, GitFileChange, StatusFile } from "@kalcode/protocol";
+import {
+  agentStateOf,
+  type EventEnvelope,
+  type GitFileChange,
+  isAgentBusy,
+  type StatusFile,
+  type ThreadSummary,
+} from "@kalcode/protocol";
 
 export interface ChangeInfo {
   /** One-letter code, as in `git status --short`. */
@@ -70,4 +77,22 @@ export function recentFilesFrom(events: readonly EventEnvelope[], limit = 12): R
     if (out.length >= limit) break;
   }
   return out;
+}
+
+/**
+ * The project page's agent counts, in the shared agent state (the same as the native rail's
+ * `is_working` / `needs_you`): Working is starting, working or testing; Needs you is an approval or
+ * a reply, never a failure.
+ */
+export function projectAgentCounts(
+  threads: readonly Pick<ThreadSummary, "status" | "currentActivity" | "pendingApprovals">[],
+): { working: number; needs: number } {
+  let working = 0;
+  let needs = 0;
+  for (const thread of threads) {
+    const state = agentStateOf(thread);
+    if (isAgentBusy(state)) working += 1;
+    if (state === "needs_you") needs += 1;
+  }
+  return { working, needs };
 }
