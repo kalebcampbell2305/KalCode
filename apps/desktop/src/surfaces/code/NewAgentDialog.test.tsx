@@ -348,6 +348,23 @@ describe("restored accounts in the Code launcher", () => {
     );
   });
 
+  it("holds a place for providers still being detected so the list doesn't jump when they arrive", async () => {
+    const claude = makeAccount("claude-a", "Claude A", true);
+    const codex = makeAccount("codex-a", "Codex A", true, "codex");
+    const options = deferred<ThreadOptions>();
+    runtime.client = clientWith([claude, codex], () => options.promise);
+    render(dialog({ offered: [] }));
+    await screen.findByRole("option", { name: /Claude A/ });
+    const detecting = () => [...document.querySelectorAll("[data-detecting]")];
+    // Codex and Gemini CLI are unconfirmed: placeholders, hidden from assistive tech, not choices.
+    expect(detecting()).toHaveLength(2);
+    for (const placeholder of detecting()) expect(placeholder).toHaveAttribute("aria-hidden", "true");
+    expect(screen.queryByRole("option", { name: /Codex A/ })).not.toBeInTheDocument();
+    options.resolve(threadOptions(["claude-code", "codex"]));
+    expect(await screen.findByRole("option", { name: /Codex A/ })).toBeInTheDocument();
+    expect(detecting()).toHaveLength(0);
+  });
+
   it("remembers the last launch per provider and repeats it from Recent in one click", async () => {
     const personal = makeAccount("personal", "Personal", true);
     const work = makeAccount("work", "Work", false);

@@ -46,10 +46,6 @@
   --phase-line: var(--status-failed-line);
 }
 
-.panel[data-attention] .body {
-  width: 28rem;
-}
-
 .panel[data-attention] .card {
   border-color: var(--phase-line);
 }
@@ -83,13 +79,18 @@
   outline-offset: 2px;
 }
 
+/* The bar is as wide as its one-line header, so the state ("Waiting for system resources") always
+   reads in full. Views with a message below it are at least 28rem; the message (.detail / .more)
+   wraps inside that width instead of widening the bar. */
 .body {
   width: max-content;
+  max-width: calc(100vw - 2 * var(--space-4));
 }
 
+.panel[data-attention] .body,
 .panel[data-view="expanded"] .body,
 .panel:is([data-phase="listening"], [data-phase="transcribing"], [data-phase="done"], [data-phase="error"]) .body {
-  width: 28rem;
+  min-width: 28rem;
 }
 
 /* Press and hold the orb to talk (quietly — the key is the main input). */
@@ -304,6 +305,14 @@
 
 .panel[data-phase="idle"] .stateName {
   color: var(--color-text-secondary);
+}
+
+/* Width 0 + min-width 100%: below the header, these never add to the bar's intrinsic width, then
+   fill whatever width the header gave it. */
+.detail,
+.more {
+  width: 0;
+  min-width: calc(100% - 2 * var(--space-1-5));
 }
 
 .detail {

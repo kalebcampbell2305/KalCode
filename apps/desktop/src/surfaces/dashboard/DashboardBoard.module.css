@@ -542,6 +542,18 @@
   pointer-events: none;
 }
 
+/* Provider marks inside a sentence. An inline-flex mark with no baseline-aligned item takes its
+   baseline from the glyph's bottom edge, which lifts the name above the sentence and leaves the
+   commas between marks sitting low. Baseline-align the name (the glyph stays centred) so the mark
+   shares the sentence's baseline. (Doubled class: wins over the shared mark's alignment.) */
+.inlineMark.inlineMark {
+  align-items: baseline;
+}
+
+.inlineMark > :first-child {
+  align-self: center;
+}
+
 .noMatch {
   display: flex;
   flex-direction: column;

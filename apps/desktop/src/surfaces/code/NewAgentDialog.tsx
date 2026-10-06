@@ -236,6 +236,9 @@ export function NewAgentDialog({
   const providers = PANE_PROVIDERS.filter(
     (p) => p === "claude-code" || p === "cursor" || offered.includes(p) || (optionProviders?.has(p) ?? false),
   );
+  // Providers still being detected hold their place as skeleton rows, so the list (and the
+  // centred dialog) doesn't jump when Codex / Gemini CLI arrive a moment later.
+  const detecting = optionProviders === null ? PANE_PROVIDERS.filter((p) => !providers.includes(p)) : [];
   const providerKnown = providers.includes(requested);
   const providerPending = !providerKnown && optionProviders === null;
   const providerId: PaneProviderId = providerKnown || providerPending ? requested : "claude-code";
@@ -680,7 +683,19 @@ export function NewAgentDialog({
                     tabIndex={0}
                     onKeyDown={onListKey}
                   >
-                    {groups.map((group) => {
+                    {PANE_PROVIDERS.map((listed) => {
+                      const group = groups.find((g) => g.providerId === listed);
+                      if (!group) {
+                        return detecting.includes(listed) ? (
+                          <div key={listed} className={styles.group} data-detecting="" aria-hidden="true">
+                            <div className={styles.groupHead}>
+                              <ProviderGlyph provider={listed} size="xs" />
+                              <span>{providerIdentity(listed).name}</span>
+                            </div>
+                            <span className={`${styles.skeleton} ${styles.skeletonRow}`} />
+                          </div>
+                        ) : null;
+                      }
                       const groupName = providerIdentity(group.providerId).name;
                       return (
                         // biome-ignore lint/a11y/useSemanticElements: an ARIA listbox group of options, not form fields.
