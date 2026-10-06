@@ -2685,3 +2685,69 @@ fn existing_memory_service_stops_provider_context_after_verified_downgrade() {
         1
     );
 }
+
+/// Pro vector document: issued at 1_790_000_000, expiring 7 days later.
+const PRO_DOCUMENT_EXPIRES_AT: i64 = 1_790_604_800;
+
+fn ready_pro_account(api: &Arc<FakeApi>, clock: &Arc<MutableClock>) -> AccountRuntime {
+    let store = Arc::new(TestStore::default());
+    AccountSessionStore::new(store.as_ref())
+        .expect("store")
+        .save_full(
+            Some(&SessionSecret::new(signed_in().token, 1_900_000_000).expect("session")),
+            None,
+            None,
+            None,
+        )
+        .expect("seed");
+    queue_pro_authority(api);
+    let verifier =
+        Verifier::from_keys([("test-vectors-1", test_key().as_str())]).expect("test verifier");
+    let runtime = AccountRuntime::with_dependencies(api.clone(), store, verifier, clock.clone());
+    assert_eq!(
+        runtime.bootstrap().expect("bootstrap").phase,
+        AccountPhase::Ready
+    );
+    runtime
+}
+
+fn queue_pro_authority(api: &FakeApi) {
+    api.accounts
+        .lock()
+        .expect("queue")
+        .push_back(Ok(api_account(true)));
+    api.entitlements
+        .lock()
+        .expect("queue")
+        .push_back(Ok(EntitlementResponse {
+            token: vector_token("cases", "pro"),
+        }));
+}
+
+#[test]
+fn a_same_account_refresh_keeps_long_lived_work_valid_until_authority_really_ends() {
+    let api = Arc::new(FakeApi::default());
+    let clock = Arc::new(MutableClock(AtomicI64::new(NOW)));
+    let runtime = ready_pro_account(&api, &clock);
+    let lease = runtime.acquire_active_lease().expect("active lease");
+
+    api.refreshes
+        .lock()
+        .expect("queue")
+        .push_back(Ok(signed_in()));
+    queue_pro_authority(&api);
+    assert_eq!(
+        runtime.refresh().expect("refresh").phase,
+        AccountPhase::Ready
+    );
+
+    // The refresh bumps the authority revision: a one-shot command lease ends, but services that
+    // live as long as the runtime (integrations) keep working for the same account.
+    assert!(!runtime.validate_active_lease(&lease));
+    assert!(runtime.validate_active_account(&lease, ACCOUNT_ID));
+    assert!(!runtime.validate_active_account(&lease, "another-account"));
+
+    // Expiry of the signed document still ends them, exactly like sign-out.
+    clock.0.store(PRO_DOCUMENT_EXPIRES_AT, Ordering::SeqCst);
+    assert!(!runtime.validate_active_account(&lease, ACCOUNT_ID));
+}

@@ -984,6 +984,25 @@ impl AccountRuntime {
         self.fetch_authority(generation)
     }
 
+    /// Whether long-lived work started under `lease` may continue: the same account is still
+    /// active in the same sign-in generation. Unlike [`Self::validate_active_lease`], a
+    /// same-account refresh (a renewed plan document, or offline grace) keeps it valid; sign-out,
+    /// expiry, revocation or another account ends it. Per-command admission keeps using the
+    /// exact lease.
+    pub fn validate_active_account(&self, lease: &AuthorityLease, account_id: &str) -> bool {
+        let Ok(current) = self.acquire_active_lease() else {
+            return false;
+        };
+        current.generation == lease.generation
+            && self
+                .lock_state()
+                .snapshot
+                .account
+                .as_ref()
+                .is_some_and(|account| account.id == account_id)
+            && self.validate_active_lease(&current)
+    }
+
     #[cfg(any(test, feature = "e2e"))]
     pub fn logout(&self) -> Result<AccountSnapshot, AccountRuntimeError> {
         // Registered before revoking, so an exit preflight either waits for this sign-out to
