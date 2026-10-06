@@ -1987,10 +1987,21 @@ impl ThreadRuntime {
         self.inner.shutting_down.store(true, Ordering::SeqCst);
         let mut first_error = None;
         for id in self.inner.running_ids() {
-            if let Err(error) = self.inner.stop(&id, SHUTDOWN_ACTIVITY) {
-                tracing::warn!(event = "thread.shutdown_failed", thread_id = %id, error = %error.diagnostic());
-                if first_error.is_none() {
-                    first_error = Some(error);
+            match self.inner.stop(&id, SHUTDOWN_ACTIVITY) {
+                Ok(()) => {}
+                // running_ids() snapshots the live threads, then we stop each in turn. A held or
+                // waiting thread can reach a terminal state on its own between the snapshot and the
+                // stop (its wait ends, or a concurrent transition lands). It is then already
+                // stopped, which is exactly what shutdown wants, so "not running" is success here,
+                // not a shutdown failure.
+                Err(error) if error.code == "thread_not_running" => {
+                    tracing::debug!(event = "thread.shutdown_already_stopped", thread_id = %id);
+                }
+                Err(error) => {
+                    tracing::warn!(event = "thread.shutdown_failed", thread_id = %id, error = %error.diagnostic());
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
                 }
             }
         }
