@@ -22,6 +22,7 @@ import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { useThreadSummaries } from "../../surfaces/dashboard/data/DashboardData.tsx";
 import { FilePreview } from "../context/FilePreview.tsx";
 import { useOptionalSearchActions } from "../rail/search/SearchProvider.tsx";
+import { KEYBOARD_REORDER_ATTRIBUTE } from "../shortcuts.ts";
 import styles from "./Favorites.module.css";
 import { type FavoriteEntry, favoriteTargetKey } from "./model.ts";
 import { visibleFavorites } from "./selection.ts";
@@ -185,6 +186,7 @@ export function FavoritesBar() {
                           data-unavailable={Boolean(reason) || undefined}
                           aria-label={`${entry.title}${reason ? ": Unavailable" : ""}`}
                           aria-describedby={instructionId}
+                          {...{ [KEYBOARD_REORDER_ATTRIBUTE]: "" }}
                           aria-busy={opening === entry.key || undefined}
                           title={`${entry.title} · ${entry.target.kind}${reason ? ` — ${reason}` : ""}`}
                           draggable

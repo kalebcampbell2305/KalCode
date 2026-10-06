@@ -7,6 +7,9 @@ import {
   type NavigationLocation,
   visitLocation,
 } from "./navigationHistory.ts";
+import { globalShortcut } from "./shortcuts.ts";
+
+const MODIFIER_KEYS = new Set(["Alt", "AltGraph", "Control", "Meta", "Shift", "OS"]);
 
 export type NavigationRestorer = (
   entry: NavigationEntry,
@@ -171,8 +174,15 @@ export function useNavigationHistory(initial: Destination, visible: ReadonlySet<
   );
   const getIntentRevision = useCallback(() => intentRevision.current, []);
   useEffect(() => {
-    const interrupt = () => {
+    const interrupt = (event: Event) => {
       if (!replaying.current) return;
+      // The Back/Forward chord that started this replay (window capture runs first) and the
+      // modifier held for it are not a newer intent; cancelling here would strand keyboard Back.
+      if (event instanceof KeyboardEvent) {
+        if (MODIFIER_KEYS.has(event.key)) return;
+        const shortcut = globalShortcut(event);
+        if (shortcut === "back" || shortcut === "forward") return;
+      }
       generation.current += 1;
       replaying.current = false;
     };
