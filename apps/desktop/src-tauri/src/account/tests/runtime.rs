@@ -2751,3 +2751,42 @@ fn a_same_account_refresh_keeps_long_lived_work_valid_until_authority_really_end
     clock.0.store(PRO_DOCUMENT_EXPIRES_AT, Ordering::SeqCst);
     assert!(!runtime.validate_active_account(&lease, ACCOUNT_ID));
 }
+
+#[test]
+fn a_running_account_renews_its_signed_plan_before_it_expires() {
+    let api = Arc::new(FakeApi::default());
+    let clock = Arc::new(MutableClock(AtomicI64::new(NOW)));
+    let runtime = ready_pro_account(&api, &clock);
+
+    // A fresh document has nothing to renew.
+    assert!(!runtime.entitlement_renewal_due());
+
+    // A day before it lapses, it is due; the renewal fetches a new signed document.
+    clock.0.store(
+        PRO_DOCUMENT_EXPIRES_AT - account::runtime::ENTITLEMENT_RENEW_BEFORE_SECONDS + 60,
+        Ordering::SeqCst,
+    );
+    assert!(runtime.entitlement_renewal_due());
+    api.refreshes
+        .lock()
+        .expect("queue")
+        .push_back(Ok(signed_in()));
+    queue_pro_authority(&api);
+    assert_eq!(
+        runtime.refresh().expect("renewal").phase,
+        AccountPhase::Ready
+    );
+    assert!(api.refreshes.lock().expect("queue").is_empty());
+    assert!(api.entitlements.lock().expect("queue").is_empty());
+    assert!(runtime.acquire_active_lease().is_ok());
+}
+
+#[test]
+fn signed_out_and_unactivated_accounts_never_renew_a_plan_document() {
+    let api = Arc::new(FakeApi::default());
+    let store = Arc::new(TestStore::default());
+    let runtime = runtime(api.clone(), store);
+    assert!(!runtime.entitlement_renewal_due());
+    sign_in_unactivated(&runtime, &api);
+    assert!(!runtime.entitlement_renewal_due());
+}

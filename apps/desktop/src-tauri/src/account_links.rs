@@ -1,6 +1,7 @@
 //! Native-only OAuth callback delivery. URLs remain in bounded memory and never enter logs.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use tauri::async_runtime::{Sender, channel};
 use tauri_plugin_deep_link::DeepLinkExt;
@@ -38,11 +39,59 @@ fn enqueue_warm(
     }
 }
 
+/// How often the renewal thread looks at the signed plan document's expiry (a cheap local check).
+const RENEWAL_CHECK_INTERVAL: Duration = Duration::from_secs(60);
+/// The fewest seconds between two renewal requests, so an offline device or a document that is
+/// already short-lived (a lapsing subscription) never hammers the account service.
+const RENEWAL_RETRY_INTERVAL: Duration = Duration::from_secs(30 * 60);
+
+/// Keeps a long-running KalCode's signed plan document fresh. Without this, the document
+/// fetched at launch expires after at most 7 days (sooner near a subscription renewal) and the
+/// runtime coordinator drains every running agent and terminal although the plan is still paid.
+fn start_entitlement_renewal(account: &Arc<AccountRuntime>, coordinator: &Arc<RuntimeCoordinator>) {
+    let account = Arc::downgrade(account);
+    let coordinator = Arc::downgrade(coordinator);
+    let spawned = std::thread::Builder::new()
+        .name("kalcode-entitlement-renewal".into())
+        .spawn(move || {
+            let mut last_attempt: Option<Instant> = None;
+            loop {
+                std::thread::sleep(RENEWAL_CHECK_INTERVAL);
+                let (Some(account), Some(coordinator)) = (account.upgrade(), coordinator.upgrade())
+                else {
+                    return;
+                };
+                if coordinator.lifecycle.phase() == crate::runtime_lifecycle::Phase::AppExiting {
+                    return;
+                }
+                if !account.entitlement_renewal_due()
+                    || last_attempt.is_some_and(|at| at.elapsed() < RENEWAL_RETRY_INTERVAL)
+                {
+                    continue;
+                }
+                // The same admission as the Account Center's Refresh, so renewal never races a
+                // sign-out or runtime drain.
+                let Ok(admission) = AccountMutation::acquire(&coordinator) else {
+                    continue;
+                };
+                last_attempt = Some(Instant::now());
+                if account.refresh().is_err() {
+                    tracing::warn!(event = "account.entitlement_renewal_failed");
+                }
+                drop(admission);
+            }
+        });
+    if spawned.is_err() {
+        tracing::warn!(event = "account.entitlement_renewal_unavailable");
+    }
+}
+
 pub fn start(
     app: &tauri::AppHandle,
     account: Arc<AccountRuntime>,
     coordinator: Arc<RuntimeCoordinator>,
 ) {
+    start_entitlement_renewal(&account, &coordinator);
     let (sender, mut receiver) = channel(MAX_QUEUED_CALLBACKS);
     let warm_sender = sender.clone();
     let warm_app = app.clone();
