@@ -2,13 +2,13 @@ import type { AgentEvent, EventEnvelope, ThreadSummary } from "@kalcode/protocol
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { KalCodeClient } from "../client.ts";
 import { KalCodeError } from "../errors.ts";
-import { createMemoryTransport } from "../memoryTransport.ts";
+import { createMemoryTransport, type MemoryScenario } from "../memoryTransport.ts";
 import { createThreadsMemory, nameFromPrompt } from "./threads.ts";
 
 /** The workspace threads are created in: a folder opened through Z1's (fake) folder picker. */
 let WORKSPACE = "";
 
-async function setup(scenario: "default" | "threads" | "no-providers" = "default") {
+async function setup(scenario: MemoryScenario = "default") {
   const transport = createMemoryTransport(scenario, { detectDelayMs: 0 });
   const client = new KalCodeClient(transport);
   const events: EventEnvelope[] = [];
@@ -389,6 +389,16 @@ describe("memory thread runtime", () => {
     const thread = await create(client, "summarize the README", { providerId: "codex" });
     expect(thread).toMatchObject({ providerId: "codex", providerName: "Codex", model: null });
     expect(await code(create(client, "x", { providerId: "codex", model: "gpt-9" }))).toBe("invalid_model");
+  });
+
+  it("offers Codex through a validated managed runtime when the native CLI is missing", async () => {
+    const { client } = await setup("providers-managed-runtime");
+    const statuses = await client.listProviders();
+    expect(statuses.find((status) => status.id === "codex")).toMatchObject({
+      detection: { state: "not_installed" },
+      managedRuntime: { version: "0.160.0", source: "last_known_good" },
+    });
+    expect((await client.threadOptions()).providers.map((provider) => provider.id)).toContain("codex");
   });
 
   it("accepts only exact models reported for the selected provider account", async () => {

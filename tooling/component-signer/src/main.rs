@@ -18,12 +18,14 @@ const STORE_MAGIC: &[u8] = b"KALCODE-COMPONENT-DISTRIBUTION-KEY-V1\0";
 const DEFAULT_STORE_FILE: &str = "component-distribution-signing.dpapi";
 const COMPONENT_TYPE: &str = "kalcode-local-component.v1";
 const CATALOG_TYPE: &str = "kalcode-local-component-catalog.v1";
+const PROVIDER_COMPATIBILITY_TYPE: &str = "kalcode-provider-compatibility.v1";
 const ALGORITHM: &str = "EdDSA";
 const COMPONENT_ORIGIN: &str = "https://kalcoded.com";
 const MAX_STORE_BYTES: u64 = 16 * 1024;
 const MAX_JSON_BYTES: u64 = 192 * 1024;
 const MAX_COMPONENT_TOKEN_BYTES: usize = 32 * 1024;
 const MAX_CATALOG_TOKEN_BYTES: usize = 192 * 1024;
+const MAX_PROVIDER_COMPATIBILITY_TOKEN_BYTES: usize = 64 * 1024;
 const MAX_ARTIFACT_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const MAX_ARTIFACT_URL_BYTES: usize = 2048;
 const MAX_LIFETIME_SECONDS: i64 = 30 * 24 * 60 * 60;
@@ -131,6 +133,50 @@ struct ComponentCatalog {
     key_id: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ProviderCompatibilityManifest {
+    schema_version: u32,
+    revision: u64,
+    issued_at: i64,
+    expires_at: i64,
+    key_id: String,
+    providers: Vec<ProviderCompatibilityRule>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ProviderCompatibilityRule {
+    provider: String,
+    stable_floor: Option<String>,
+    tested_versions: Vec<String>,
+    known_bad: Vec<KnownBadRule>,
+    protocol_constraints: Vec<ProtocolConstraint>,
+    capability_disables: Vec<CapabilityDisable>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct KnownBadRule {
+    versions: String,
+    reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ProtocolConstraint {
+    cli_versions: String,
+    protocol: String,
+    protocol_versions: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CapabilityDisable {
+    cli_versions: String,
+    capabilities: Vec<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Header {
@@ -156,7 +202,7 @@ struct StatusDocument {
 }
 
 fn usage() -> &'static str {
-    "usage: kalcode-component-signer init|status|public-key|sign-manifest|verify-manifest|sign-catalog|verify-catalog [options]"
+    "usage: kalcode-component-signer init|status|public-key|sign-manifest|verify-manifest|sign-catalog|verify-catalog|sign-provider-compatibility|verify-provider-compatibility [options]"
 }
 
 fn option(args: &[String], name: &str) -> Result<String> {
@@ -226,6 +272,86 @@ fn safe_token(value: &str, max: usize) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+}
+
+fn safe_lower_token(value: &str, max: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= max
+        && value.as_bytes()[0].is_ascii_lowercase()
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"._-".contains(&byte)
+        })
+}
+
+fn valid_semver_identifier(value: &str, prerelease: bool) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        && (!prerelease
+            || !value.bytes().all(|byte| byte.is_ascii_digit())
+            || value.len() == 1
+            || !value.starts_with('0'))
+}
+
+/// Strict SemVer without a dependency on the product workspace. Provider-policy publication
+/// accepts only a canonical spelling that the runtime `semver` parser also accepts.
+fn valid_semver(value: &str) -> bool {
+    if value.is_empty() || value.len() > 128 || !value.is_ascii() {
+        return false;
+    }
+    let mut build_split = value.split('+');
+    let Some(core_and_pre) = build_split.next() else {
+        return false;
+    };
+    let build = build_split.next();
+    if build_split.next().is_some()
+        || build.is_some_and(|part| {
+            part.split('.')
+                .any(|identifier| !valid_semver_identifier(identifier, false))
+        })
+    {
+        return false;
+    }
+    let (core, prerelease) = core_and_pre
+        .split_once('-')
+        .map_or((core_and_pre, None), |(core, pre)| (core, Some(pre)));
+    if prerelease.is_some_and(|part| {
+        part.split('.')
+            .any(|identifier| !valid_semver_identifier(identifier, true))
+    }) {
+        return false;
+    }
+    let parts = core.split('.').collect::<Vec<_>>();
+    parts.len() == 3
+        && parts.iter().all(|part| {
+            !part.is_empty()
+                && part.bytes().all(|byte| byte.is_ascii_digit())
+                && (part.len() == 1 || !part.starts_with('0'))
+                && part.parse::<u64>().is_ok()
+        })
+}
+
+/// Provider compatibility policy intentionally uses one small canonical VersionReq subset:
+/// one or more explicit SemVer comparators joined by commas. This covers floors, ceilings,
+/// exact known-bad versions, prereleases, and closed ranges without wildcards or ambiguous
+/// shorthand. The runtime parser remains the final consumer-side authority.
+fn valid_version_req(value: &str) -> bool {
+    if value.is_empty()
+        || value.len() > 128
+        || !value.is_ascii()
+        || value.contains(char::is_whitespace)
+    {
+        return false;
+    }
+    let comparators = value.split(',').collect::<Vec<_>>();
+    (1..=8).contains(&comparators.len())
+        && comparators.iter().all(|comparator| {
+            let version = [">=", "<=", ">", "<", "=", "~", "^"]
+                .into_iter()
+                .find_map(|operator| comparator.strip_prefix(operator));
+            version.is_some_and(|version| !version.contains('+') && valid_semver(version))
+        })
 }
 
 fn safe_source_id(value: &str) -> bool {
@@ -392,6 +518,81 @@ fn validate_catalog_shape(catalog: &ComponentCatalog) -> Result<()> {
         || !is_key_id(&catalog.key_id)
     {
         return Err("component catalog document is invalid".to_owned());
+    }
+    Ok(())
+}
+
+fn validate_provider_compatibility(
+    manifest: &ProviderCompatibilityManifest,
+    expected_kid: &str,
+) -> Result<()> {
+    if manifest.schema_version != 1
+        || manifest.revision == 0
+        || !time_window_is_valid(manifest.issued_at, manifest.expires_at)
+        || manifest.key_id != expected_kid
+        || !is_key_id(&manifest.key_id)
+        || !(1..=32).contains(&manifest.providers.len())
+    {
+        return Err("provider compatibility document is invalid".to_owned());
+    }
+    let mut providers = BTreeSet::new();
+    for provider in &manifest.providers {
+        if !safe_lower_token(&provider.provider, 64)
+            || !providers.insert(provider.provider.as_str())
+            || provider
+                .stable_floor
+                .as_deref()
+                .is_some_and(|version| !valid_semver(version) || version.contains(['-', '+']))
+            || provider.tested_versions.len() > 128
+            || provider.known_bad.len() > 64
+            || provider.protocol_constraints.len() > 64
+            || provider.capability_disables.len() > 64
+        {
+            return Err("provider compatibility rule is invalid".to_owned());
+        }
+        let mut tested = BTreeSet::new();
+        if provider
+            .tested_versions
+            .iter()
+            .any(|version| !valid_semver(version) || !tested.insert(version.as_str()))
+        {
+            return Err("provider tested versions are invalid".to_owned());
+        }
+        let mut known_bad = BTreeSet::new();
+        if provider.known_bad.iter().any(|rule| {
+            !valid_version_req(&rule.versions)
+                || !safe_lower_token(&rule.reason, 160)
+                || !known_bad.insert((rule.versions.as_str(), rule.reason.as_str()))
+        }) {
+            return Err("provider known-bad rules are invalid".to_owned());
+        }
+        let mut protocols = BTreeSet::new();
+        if provider.protocol_constraints.iter().any(|constraint| {
+            !valid_version_req(&constraint.cli_versions)
+                || !safe_lower_token(&constraint.protocol, 128)
+                || !valid_version_req(&constraint.protocol_versions)
+                || !protocols.insert((
+                    constraint.cli_versions.as_str(),
+                    constraint.protocol.as_str(),
+                    constraint.protocol_versions.as_str(),
+                ))
+        }) {
+            return Err("provider protocol constraints are invalid".to_owned());
+        }
+        let mut disables = BTreeSet::new();
+        if provider.capability_disables.iter().any(|disable| {
+            if !valid_version_req(&disable.cli_versions)
+                || !(1..=128).contains(&disable.capabilities.len())
+            {
+                return true;
+            }
+            let mut capabilities = BTreeSet::new();
+            disable.capabilities.iter().any(|capability| {
+                !safe_lower_token(capability, 128) || !capabilities.insert(capability.as_str())
+            }) || !disables.insert(disable.cli_versions.as_str())
+        }) {
+            return Err("provider capability-disable rules are invalid".to_owned());
+        }
     }
     Ok(())
 }
@@ -956,6 +1157,52 @@ fn verify_catalog(public_key: &Path, token_path: &Path) -> Result<()> {
     check_current_time(catalog.issued_at, catalog.expires_at, current_unix()?)
 }
 
+fn sign_provider_compatibility(store: &Path, input: &Path, output: &Path) -> Result<()> {
+    ensure_distinct_paths(&[
+        (store, "component key store"),
+        (input, "provider compatibility input"),
+        (output, "provider compatibility output"),
+    ])?;
+    if output.exists() {
+        return Err("provider compatibility output already exists".to_owned());
+    }
+    let manifest: ProviderCompatibilityManifest = read_json(input, "provider compatibility input")?;
+    let (kid, key) = load_key(store)?;
+    validate_provider_compatibility(&manifest, &kid)?;
+    check_current_time(manifest.issued_at, manifest.expires_at, current_unix()?)?;
+    let token = sign_document(&manifest, PROVIDER_COMPATIBILITY_TYPE, &kid, &key)?;
+    if token.len() > MAX_PROVIDER_COMPATIBILITY_TOKEN_BYTES {
+        return Err("provider compatibility token exceeds its safety limit".to_owned());
+    }
+    let verified: ProviderCompatibilityManifest = verify_document(
+        &token,
+        PROVIDER_COMPATIBILITY_TYPE,
+        &key.verifying_key(),
+        &kid,
+    )?;
+    if verified != manifest {
+        return Err("new provider compatibility token failed verification".to_owned());
+    }
+    write_atomic_new(
+        output,
+        format!("{token}\n").as_bytes(),
+        "provider compatibility output",
+    )
+}
+
+fn verify_provider_compatibility(public_key: &Path, token_path: &Path) -> Result<()> {
+    ensure_distinct_paths(&[
+        (public_key, "component public key"),
+        (token_path, "provider compatibility token"),
+    ])?;
+    let (kid, public) = parse_public_key(public_key)?;
+    let token = read_token(token_path, MAX_PROVIDER_COMPATIBILITY_TOKEN_BYTES)?;
+    let manifest: ProviderCompatibilityManifest =
+        verify_document(&token, PROVIDER_COMPATIBILITY_TYPE, &public, &kid)?;
+    validate_provider_compatibility(&manifest, &kid)?;
+    check_current_time(manifest.issued_at, manifest.expires_at, current_unix()?)
+}
+
 fn print_json<T: Serialize>(value: &T) -> Result<()> {
     let text = serde_json::to_string(value)
         .map_err(|_| "component signer output could not be encoded".to_owned())?;
@@ -1031,6 +1278,25 @@ fn run(args: &[String]) -> Result<()> {
             println!("component catalog verified");
             Ok(())
         }
+        "sign-provider-compatibility" => {
+            ensure_options(tail, &["--store", "--input", "--output"])?;
+            sign_provider_compatibility(
+                &store_path(tail)?,
+                Path::new(&option(tail, "--input")?),
+                Path::new(&option(tail, "--output")?),
+            )?;
+            println!("provider compatibility policy created and verified");
+            Ok(())
+        }
+        "verify-provider-compatibility" => {
+            ensure_options(tail, &["--public-key-file", "--token"])?;
+            verify_provider_compatibility(
+                Path::new(&option(tail, "--public-key-file")?),
+                Path::new(&option(tail, "--token")?),
+            )?;
+            println!("provider compatibility policy verified");
+            Ok(())
+        }
         _ => Err(usage().to_owned()),
     }
 }
@@ -1096,6 +1362,156 @@ mod tests {
 
     fn token(key: &SigningKey, manifest: &ComponentManifest) -> String {
         sign_document(manifest, COMPONENT_TYPE, "component-test-1", key).expect("sign")
+    }
+
+    fn provider_compatibility() -> ProviderCompatibilityManifest {
+        let (issued_at, expires_at) = times();
+        ProviderCompatibilityManifest {
+            schema_version: 1,
+            revision: 7,
+            issued_at,
+            expires_at,
+            key_id: "component-test-1".to_owned(),
+            providers: vec![ProviderCompatibilityRule {
+                provider: "codex".to_owned(),
+                stable_floor: Some("0.160.0".to_owned()),
+                tested_versions: vec![
+                    "0.160.0".to_owned(),
+                    "0.161.0".to_owned(),
+                    "0.162.0-rc.1".to_owned(),
+                ],
+                known_bad: vec![KnownBadRule {
+                    versions: ">=0.161.2,<0.161.3".to_owned(),
+                    reason: "codex.config-isolation-regression".to_owned(),
+                }],
+                protocol_constraints: vec![ProtocolConstraint {
+                    cli_versions: ">=0.160.0,<1.0.0".to_owned(),
+                    protocol: "app-server".to_owned(),
+                    protocol_versions: ">=1.0.0,<2.0.0".to_owned(),
+                }],
+                capability_disables: vec![CapabilityDisable {
+                    cli_versions: ">=0.162.0-alpha.1,<0.162.0".to_owned(),
+                    capabilities: vec!["managed-profiles".to_owned()],
+                }],
+            }],
+        }
+    }
+
+    #[test]
+    fn provider_compatibility_is_a_strict_domain_separated_declarative_document() {
+        let key = SigningKey::from_bytes(&[13; 32]);
+        let manifest = provider_compatibility();
+        validate_provider_compatibility(&manifest, "component-test-1")
+            .expect("valid provider policy");
+        let signed = sign_document(
+            &manifest,
+            PROVIDER_COMPATIBILITY_TYPE,
+            "component-test-1",
+            &key,
+        )
+        .expect("sign provider policy");
+        let verified: ProviderCompatibilityManifest = verify_document(
+            &signed,
+            PROVIDER_COMPATIBILITY_TYPE,
+            &key.verifying_key(),
+            "component-test-1",
+        )
+        .expect("verify provider policy");
+        assert_eq!(verified, manifest);
+        assert!(
+            verify_document::<ProviderCompatibilityManifest>(
+                &signed,
+                CATALOG_TYPE,
+                &key.verifying_key(),
+                "component-test-1"
+            )
+            .is_err(),
+            "a provider policy must not verify in the component-catalog domain"
+        );
+    }
+
+    #[test]
+    fn provider_compatibility_rejects_code_urls_grants_and_unknown_fields() {
+        let value = serde_json::to_value(provider_compatibility()).expect("serialize policy");
+        for (field, forbidden) in [
+            ("url", json!("https://evil.example/policy")),
+            ("command", json!(["powershell", "-Command", "download"])),
+            ("capabilityEnables", json!(["shell"])),
+            ("adapterCode", json!("arbitrary remote code")),
+        ] {
+            let mut changed = value.clone();
+            changed
+                .as_object_mut()
+                .expect("object")
+                .insert(field.to_owned(), forbidden);
+            assert!(
+                serde_json::from_value::<ProviderCompatibilityManifest>(changed).is_err(),
+                "unknown executable field {field} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn provider_compatibility_rejects_malformed_ranges_duplicates_and_grant_shaped_tokens() {
+        let mut invalid = provider_compatibility();
+        invalid.providers[0].known_bad[0].versions = "anything || curl evil.example".to_owned();
+        assert!(validate_provider_compatibility(&invalid, "component-test-1").is_err());
+
+        let mut duplicate = provider_compatibility();
+        duplicate.providers.push(duplicate.providers[0].clone());
+        assert!(validate_provider_compatibility(&duplicate, "component-test-1").is_err());
+
+        let mut command_like = provider_compatibility();
+        command_like.providers[0].capability_disables[0].capabilities =
+            vec!["--dangerously-bypass-approvals-and-sandbox".to_owned()];
+        assert!(validate_provider_compatibility(&command_like, "component-test-1").is_err());
+
+        let mut wrong_key = provider_compatibility();
+        wrong_key.key_id = "another-key".to_owned();
+        assert!(validate_provider_compatibility(&wrong_key, "component-test-1").is_err());
+    }
+
+    #[test]
+    fn provider_policy_input_is_rejected_before_signing_key_access() {
+        let temp = TempDir::new().expect("temp");
+        let input = temp.path().join("provider-policy.json");
+        let output = temp.path().join("stable.jws");
+        let mut value = serde_json::to_value(provider_compatibility()).expect("serialize policy");
+        value
+            .as_object_mut()
+            .expect("object")
+            .insert("command".to_owned(), json!("npm install -g anything"));
+        fs::write(&input, serde_json::to_vec(&value).expect("json")).expect("input");
+        let error = sign_provider_compatibility(&temp.path().join("absent.dpapi"), &input, &output)
+            .expect_err("remote command field must be rejected");
+        assert!(error.contains("input"), "{error}");
+        assert!(!output.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn provider_policy_sign_and_verify_round_trip_uses_the_distribution_key() {
+        let temp = TempDir::new().expect("temp");
+        let store = temp.path().join("component-key.dpapi");
+        let public_key = temp.path().join("component-public-key.json");
+        let input = temp.path().join("provider-policy.json");
+        let output = temp.path().join("stable.jws");
+        let public = initialize(&store, "component-test-1").expect("key");
+        fs::write(
+            &public_key,
+            serde_json::to_vec(&public).expect("public key json"),
+        )
+        .expect("public key");
+        fs::write(
+            &input,
+            serde_json::to_vec(&provider_compatibility()).expect("policy json"),
+        )
+        .expect("policy");
+
+        sign_provider_compatibility(&store, &input, &output).expect("sign policy");
+        verify_provider_compatibility(&public_key, &output).expect("verify policy");
+        let token = read_token(&output, MAX_PROVIDER_COMPATIBILITY_TOKEN_BYTES).expect("token");
+        assert!(!token.contains('\n'));
     }
 
     #[test]

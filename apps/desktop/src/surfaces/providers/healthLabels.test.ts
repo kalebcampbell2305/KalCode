@@ -20,6 +20,22 @@ import {
 const [claude, codex, gemini] = providerCatalog() as [ProviderStatus, ProviderStatus, ProviderStatus];
 const NOW = Date.parse("2026-09-25T12:30:00Z");
 
+const recoveredCodex = {
+  ...codex,
+  detection: {
+    providerId: "codex",
+    displayName: "Codex",
+    state: "not_installed",
+    displayPath: null,
+    version: null,
+    minimumVersion: null,
+    auth: "unknown",
+    message: null,
+    checkedAt: "2026-09-25T12:00:00Z",
+  },
+  managedRuntime: { version: "0.160.0", source: "last_known_good" },
+} as ProviderStatus;
+
 function health(partial: Partial<ProviderHealth> = {}): ProviderHealth {
   return {
     providerId: "codex",
@@ -166,6 +182,30 @@ describe("provider health labels", () => {
     expect(recoveryHint(health({ recoverability: "unknown", reasonCode: "not_checked" }))?.text).toBe(
       "Choose Check again to check it.",
     );
+  });
+
+  it("treats successful managed fallback as recovery instead of an installation error", () => {
+    const missing = health({
+      state: "unavailable",
+      detection: "not_installed",
+      auth: "unknown",
+      version: null,
+      recoverability: "install",
+      reasonCode: "not_installed",
+      reason: "Codex is not installed.",
+    });
+    expect(healthStateLabel(missing, recoveredCodex)).toEqual({
+      tone: "success",
+      label: "Managed runtime ready",
+      detail: "Using KalCode's last known good runtime, version 0.160.0.",
+    });
+    expect(healthSummary(missing, recoveredCodex)).toEqual({ text: "Managed runtime ready", tone: "ok" });
+    expect(recoveryHint(missing, recoveredCodex)).toBeNull();
+    expect(versionText(missing, recoveredCodex)).toBe("Managed runtime 0.160.0 Â· native CLI not installed");
+    expect(signInText(missing, recoveredCodex, { total: 1, signedIn: 1 })).toMatchObject({
+      tone: "success",
+      label: "Signed in",
+    });
   });
 
   it("summarizes each provider in one short line for the dashboard", () => {

@@ -126,10 +126,10 @@ function HealthPanel({
     ? { total: own.length, signedIn: own.filter((a) => a.authenticationState === "authenticated").length }
     : null;
   const state: KeyValueItem[] = [
-    { key: "health", label: "Health", value: <StatusValue label={healthStateLabel(health)} /> },
+    { key: "health", label: "Health", value: <StatusValue label={healthStateLabel(health, status)} /> },
     { key: "process", label: "Process", value: processText(health) },
     { key: "sign-in", label: "Sign-in", value: <StatusValue label={signInText(health, status, signIns)} /> },
-    { key: "version", label: "Version", value: versionText(health) },
+    { key: "version", label: "Version", value: versionText(health, status) },
     { key: "latency", label: "First output", value: latencyText(health) },
   ];
   const observed: KeyValueItem[] = [

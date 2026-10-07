@@ -14,8 +14,39 @@ const STATES: Record<HealthState, Omit<Label, "detail">> = {
   unknown: { tone: "idle", label: "Unknown" },
 };
 
+type ManagedRuntimeInfo = NonNullable<ProviderStatus["managedRuntime"]>;
+
+type RuntimeAwareStatus = Partial<Pick<ProviderStatus, "authCheck" | "installCommand" | "signInCommand">> & {
+  managedRuntime?: ManagedRuntimeInfo | null;
+};
+
+function managedRuntime(status?: RuntimeAwareStatus | null): ManagedRuntimeInfo | null {
+  return status?.managedRuntime ?? null;
+}
+
+function managedRuntimeDetail(runtime: ManagedRuntimeInfo): string {
+  return runtime.source === "last_known_good"
+    ? `Using KalCode's last known good runtime, version ${runtime.version}.`
+    : `Using KalCode's validated isolated runtime, version ${runtime.version}.`;
+}
+
+function recoveredNativeFailure(
+  health: Pick<ProviderHealth, "reasonCode">,
+  status?: RuntimeAwareStatus | null,
+): ManagedRuntimeInfo | null {
+  const runtime = managedRuntime(status);
+  return runtime && ["not_installed", "outdated", "detection_failed"].includes(health.reasonCode ?? "")
+    ? runtime
+    : null;
+}
+
 /** Overall state: StatusIndicator tone + words, with the snapshot's own reason. */
-export function healthStateLabel(health: Pick<ProviderHealth, "state" | "reason">): Label {
+export function healthStateLabel(
+  health: Pick<ProviderHealth, "state" | "reason" | "reasonCode">,
+  status?: RuntimeAwareStatus | null,
+): Label {
+  const runtime = recoveredNativeFailure(health, status);
+  if (runtime) return { tone: "success", label: "Managed runtime ready", detail: managedRuntimeDetail(runtime) };
   return { ...STATES[health.state], detail: health.reason };
 }
 
@@ -48,9 +79,18 @@ export interface AccountSignIns {
  */
 export function signInText(
   health: Pick<ProviderHealth, "providerId" | "auth" | "displayName" | "detection">,
-  status?: Pick<ProviderStatus, "authCheck"> | null,
+  status?: RuntimeAwareStatus | null,
   accounts?: AccountSignIns | null,
 ): Label {
+  if (managedRuntime(status) && health.auth === "unknown" && accounts && accounts.total > 0) {
+    return accounts.signedIn > 0
+      ? {
+          tone: "success",
+          label: "Signed in",
+          detail: `${plural(accounts.signedIn, "account")} signed in on this computer.`,
+        }
+      : { tone: "waiting", label: "Signed out", detail: "Sign in from Accounts." };
+  }
   if (health.detection !== "installed" && health.detection !== "outdated") {
     return { tone: "idle", label: "Not checked", detail: null };
   }
@@ -83,7 +123,14 @@ export function signInText(
 }
 
 /** Version against the adapter's declared minimum. */
-export function versionText(health: Pick<ProviderHealth, "version" | "minimumVersion">): string {
+export function versionText(
+  health: Pick<ProviderHealth, "version" | "minimumVersion" | "detection">,
+  status?: RuntimeAwareStatus | null,
+): string {
+  const runtime = managedRuntime(status);
+  if (runtime && health.detection !== "installed" && health.detection !== "outdated") {
+    return `Managed runtime ${runtime.version} Â· native CLI not installed`;
+  }
   const version = health.version ? `Version ${health.version}` : "Version not detected";
   return health.minimumVersion
     ? `${version} · needs ${health.minimumVersion} or later`
@@ -147,9 +194,18 @@ export interface RecoveryHint {
 export function recoveryHint(
   health: Pick<ProviderHealth, "recoverability" | "displayName" | "minimumVersion" | "reasonCode"> &
     Partial<Pick<ProviderHealth, "providerId">>,
-  status?: Pick<ProviderStatus, "installCommand" | "signInCommand"> | null,
+  status?: RuntimeAwareStatus | null,
 ): RecoveryHint | null {
   const name = health.displayName;
+  const recovered = recoveredNativeFailure(health, status);
+  if (
+    recovered &&
+    (health.recoverability === "install" ||
+      health.recoverability === "update" ||
+      (health.recoverability === "restart" && health.reasonCode === "detection_failed"))
+  ) {
+    return null;
+  }
   switch (health.recoverability) {
     case "none":
       return null;
@@ -203,7 +259,11 @@ const WIDGET_TONES: Record<HealthState, WidgetTone> = {
 };
 
 /** One short line for compact places (the Dashboard's Provider health widget). */
-export function healthSummary(health: ProviderHealth): { text: string; tone: WidgetTone } {
+export function healthSummary(
+  health: ProviderHealth,
+  status?: RuntimeAwareStatus | null,
+): { text: string; tone: WidgetTone } {
+  if (recoveredNativeFailure(health, status)) return { text: "Managed runtime ready", tone: "ok" };
   const tone = WIDGET_TONES[health.state];
   switch (health.state) {
     case "unknown":

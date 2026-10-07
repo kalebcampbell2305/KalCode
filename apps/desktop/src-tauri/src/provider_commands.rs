@@ -25,15 +25,112 @@ impl ProviderState {
         let guardian = runtime
             .probe_guardian()
             .map_err(|_| "provider_guardian_unavailable")?;
-        Ok(Self(Arc::new(ProviderRegistry::installation_only_guarded(
+        let registry = Arc::new(ProviderRegistry::installation_only_guarded(
             DetectEnv::from_process(),
-            guardian,
-        ))))
+            guardian.clone(),
+        ));
+        watch_installations(&registry, guardian, runtime.managed_profiles());
+        Ok(Self(registry))
     }
 
     pub fn registry(&self) -> Arc<ProviderRegistry> {
         Arc::clone(&self.0)
     }
+}
+
+/// Each runtime generation owns its observer through a weak registry reference. Updates warm
+/// new launch state only; active terminals and their immutable runtime leases are never touched.
+fn watch_installations(
+    registry: &Arc<ProviderRegistry>,
+    guardian: kalcode_providers::guardian::ProviderProbeGuardian,
+    profiles: kalcode_providers::managed::ManagedProfiles,
+) {
+    let registry = Arc::downgrade(registry);
+    let _ = std::thread::Builder::new()
+        .name("provider-installation-watch".into())
+        .spawn(move || {
+            let source = DetectEnv::from_process();
+            let spec = kalcode_providers::catalog::codex_spec();
+            let env = source.provider_env(&spec.env_policy);
+            let store = profiles.runtime_store();
+            let mut initial = true;
+            let mut policy_revision = None;
+            // Keep the current prewarm pinned so a first user launch can reuse validated bytes
+            // without rehashing the distribution. Old active sessions retain their own leases.
+            let mut _warm_runtime = None;
+            loop {
+                let Some(current) = registry.upgrade() else {
+                    break;
+                };
+                let mut changes = current.changed_installations();
+                let next_policy = kalcode_providers::compatibility::active_snapshot().revision();
+                if next_policy != policy_revision
+                    && !changes.iter().any(|(id, _)| id.as_str() == "codex")
+                {
+                    changes.push((
+                        kalcode_contracts::agent::ProviderId::new("codex"),
+                        source.resolve_executable_only(&spec),
+                    ));
+                }
+                policy_revision = next_policy;
+                for (provider, executable) in changes {
+                    // Startup already has a shared detection job. Later changes refresh its
+                    // cached status and health without waiting for a failed user launch.
+                    if !initial {
+                        current.detect_one(&provider);
+                    }
+                    if provider.as_str() == kalcode_contracts::agent::ProviderId::CODEX
+                        && let Ok(cwd) = profiles.compatibility_probe_dir()
+                    {
+                        let warmed = kalcode_providers::codex::runtime::prewarm_managed_runtime(
+                            executable.as_deref(),
+                            &env,
+                            &cwd,
+                            &store,
+                            |label| {
+                                guardian.prepare_job(label).map_err(|_| {
+                                    kalcode_contracts::agent::ProviderError::Start(
+                                        "Provider compatibility check could not start".into(),
+                                    )
+                                })
+                            },
+                            None,
+                        );
+                        match warmed {
+                            Ok(runtime) => {
+                                use kalcode_providers::codex::runtime::ManagedRuntimeSource;
+                                let source = match runtime.source() {
+                                    ManagedRuntimeSource::ValidatedSnapshot => "validated_snapshot",
+                                    ManagedRuntimeSource::LastKnownGood => "last_known_good",
+                                    ManagedRuntimeSource::InstalledDirect => "installed_direct",
+                                };
+                                let readiness = kalcode_providers::model::ManagedRuntimeReadiness {
+                                    version: runtime.version().to_string(),
+                                    source: source.into(),
+                                };
+                                _warm_runtime = Some(runtime);
+                                current.set_managed_runtime(provider.clone(), Some(readiness));
+                            }
+                            Err(_) => {
+                                current.set_managed_runtime(provider.clone(), None);
+                                _warm_runtime = None;
+                                tracing::debug!(
+                                    event = "provider.compatibility_prewarm_unavailable"
+                                );
+                            }
+                        }
+                    }
+                }
+                initial = false;
+                drop(current);
+                // Background maintenance respects cross-process leases and the current/previous
+                // recovery pointers. A finished old session releases its bytes on the next pass.
+                if store.prune_unleased("codex", 2).is_err() {
+                    tracing::debug!(event = "provider.runtime_maintenance_deferred");
+                }
+                std::thread::sleep(std::time::Duration::from_secs(30));
+            }
+        });
 }
 
 /// Makes sure a detection exists (blocking) and records the resulting `provider.*` events when

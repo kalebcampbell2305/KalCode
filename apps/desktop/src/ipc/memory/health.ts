@@ -9,8 +9,8 @@
  *   Claude Code  healthy: 2 active sessions, latency samples, no failures, stable trend.
  *   Codex        degraded: 2 recent failures (last `turn_failed`), capacity available.
  *   Gemini CLI   healthy with sign-in unknown (`auth_unknown`), one hour of data.
- * Observations apply only to a provider detection found usable; a provider that isn't installed
- * is unavailable/install, never "healthy". A rate limit appears ONLY in the explicit
+ * Observations apply only to a provider runtime found usable; a provider without a native or
+ * validated managed runtime is unavailable/install, never "healthy". A rate limit appears ONLY in the explicit
  * `providers-backoff` scenario (Codex, `backoffUntil: null`): KalCode never invents one.
  *
  * `?health=error` makes the health commands fail (the UI must not block on them).
@@ -235,7 +235,10 @@ function fail(error: IpcError): never {
 }
 
 function usable(status: ProviderStatus): boolean {
-  return status.detection?.state === "installed" && status.detection.auth !== "not_authenticated";
+  return (
+    status.managedRuntime !== undefined ||
+    (status.detection?.state === "installed" && status.detection.auth !== "not_authenticated")
+  );
 }
 
 export function createHealthMemory(options: {

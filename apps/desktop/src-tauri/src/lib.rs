@@ -50,6 +50,7 @@ pub mod permission_commands;
 mod provider_account_commands;
 mod provider_auth_commands;
 mod provider_commands;
+mod provider_compatibility;
 mod provider_health_commands;
 mod provider_pane_commands;
 mod provider_usage_commands;
@@ -635,6 +636,7 @@ pub fn run(removed_overrides: Vec<String>) {
             let fixture_account = account::e2e::runtime_from_environment(&resolve_data_dir(app)?)?;
             let state = start(app, &removed_overrides);
             let startup_healthy = state.core.is_some();
+            provider_compatibility::start(&state.paths.data_dir);
             #[cfg(feature = "e2e")]
             let account = fixture_account.unwrap_or_else(|| {
                 Arc::new(account::runtime::AccountRuntime::production(Arc::new(
