@@ -26,12 +26,14 @@ final class VoiceCapture {
 
     var isListening: Bool { phase == .listening }
 
+    static let onDeviceUnavailableMessage = "Voice commands aren't available for this language on this iPhone. Type a command instead."
+
     func start() async {
         guard phase == .idle || phase != .listening else { return }
         transcript = ""
         phase = .preparing
         guard let recognizer else {
-            phase = .unavailable("Speech recognition isn't available for your language on this device. Type a command instead.")
+            phase = .unavailable(Self.onDeviceUnavailableMessage)
             return
         }
         let speech = await Self.requestSpeechAuthorization()
@@ -39,6 +41,13 @@ final class VoiceCapture {
             phase = .unavailable(speech == .restricted
                 ? "Speech recognition is restricted on this device. Type a command instead."
                 : "KalVoice needs Speech Recognition. Turn it on in Settings → KalCode Remote, or type a command.")
+            return
+        }
+        // Recognition runs on this iPhone only — never on a server. Without an on-device model
+        // for the language, KalVoice doesn't capture audio at all. (Checked after authorization,
+        // since the recognizer may not report on-device support before it's granted.)
+        guard recognizer.supportsOnDeviceRecognition else {
+            phase = .unavailable(Self.onDeviceUnavailableMessage)
             return
         }
         guard await AVAudioApplication.requestRecordPermission() else {
@@ -58,7 +67,7 @@ final class VoiceCapture {
             let request = SFSpeechAudioBufferRecognitionRequest()
             request.shouldReportPartialResults = true
             request.addsPunctuation = true
-            if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
+            request.requiresOnDeviceRecognition = true
 
             let input = engine.inputNode
             let format = input.outputFormat(forBus: 0)

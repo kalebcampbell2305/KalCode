@@ -27,7 +27,7 @@ enum ErrorCopy {
             switch code {
             case "conflict": return "The state changed — refreshed."
             case "refused": return "KalCode declined this for safety."
-            case "not_entitled": return "Remote is part of KalCode MAX."
+            case "not_entitled": return "KalCode Remote isn't enabled for this account on \(workstation)."
             case "unavailable": return "That isn't available on \(workstation) right now."
             case "invalid": return "KalCode couldn't read that request."
             default: return "Something went wrong on \(workstation)."
@@ -71,8 +71,8 @@ enum ErrorCopy {
                                    message: "Pairing codes work once and only for a few minutes. On \(name), show a new code and scan it again.",
                                    canRetry: false, needsNewCode: true)
             case .notEntitled:
-                return PairFailure(title: "Remote is part of KalCode MAX",
-                                   message: "\(name)'s plan doesn't include Remote. Upgrade to KalCode MAX on your workstation, then pair again.",
+                return PairFailure(title: "Remote isn't enabled on this workstation",
+                                   message: "\(name) hasn't enabled KalCode Remote for this account. Turn it on in KalCode on your workstation, then pair again.",
                                    canRetry: false)
             case .version:
                 return PairFailure(title: "Update needed",
@@ -128,7 +128,7 @@ enum ErrorCopy {
         case .disabled:
             return ("Remote is turned off on \(name)", "Turn it on in KalCode → Settings → Remote.")
         case .notEntitled:
-            return ("Remote is part of KalCode MAX", "\(name)'s plan doesn't include Remote.")
+            return ("Remote isn't enabled on this workstation", "\(name) hasn't enabled KalCode Remote for this account. Turn it on in KalCode on your workstation, then pair again.")
         case .versionMismatch:
             return ("Update needed", "This app and KalCode on \(name) speak different versions. Update both to the latest.")
         case .replaced:
