@@ -344,7 +344,7 @@ export function RecipesProvider({ children }: { children: ReactNode }) {
         client.listWorkspaces(),
         client.listProviderAccounts(),
         client.listProviders().catch(() => [] as ProviderStatus[]),
-        client.listProviderAccountBindings().catch(() => [] as ProviderAccountBinding[]),
+        client.listProviderAccountBindings(),
         client.squads.snapshot().catch(() => null),
       ]);
       const activeWorkspaceId = live.current.workspaces.active?.id ?? null;

@@ -82,6 +82,10 @@ pub(crate) struct TurnLaunch {
     /// Provider session id to resume from the first turn on.
     pub resume_session_id: Option<String>,
     pub guardian_profile: Option<SharedProfileLease>,
+    /// Owns the immutable provider-runtime snapshot selected for this session. Headless providers
+    /// start one process per turn, so retaining this lease prevents an in-place global CLI update
+    /// from changing the bytes used by later turns in an already-running session.
+    pub _runtime_lease: Option<crate::managed_runtime::RuntimeLease>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -506,6 +510,7 @@ pub(crate) fn provider_message(text: &str) -> String {
 mod tests {
     use super::*;
     use std::io;
+    use std::path::Path;
     use std::time::Instant;
 
     /// Hang guard for a test child process and its turn worker: never a latency assertion.
@@ -582,7 +587,90 @@ mod tests {
             cwd: std::env::current_dir()?,
             resume_session_id: None,
             guardian_profile: None,
+            _runtime_lease: None,
         })
+    }
+
+    #[test]
+    fn a_turn_session_lease_keeps_its_old_runtime_while_new_sessions_adopt_updates() {
+        use crate::managed_runtime::{RuntimeLayout, RuntimeStore};
+
+        let temp = tempfile::tempdir().expect("temp");
+        let source = temp.path().join("global-codex");
+        std::fs::create_dir_all(&source).expect("source");
+        std::fs::write(source.join("codex"), b"old runtime").expect("old runtime");
+        let layout = RuntimeLayout::new(&source, Path::new("codex"), [PathBuf::from("codex")])
+            .expect("old layout");
+        let store = RuntimeStore::new(temp.path().join("kalcode-runtimes"));
+        let old = store
+            .stage("codex", &layout)
+            .and_then(|staged| store.promote_validated(&staged, "0.160.0"))
+            .expect("old lease");
+        let old_snapshot = old.snapshot_id().to_owned();
+        let old_executable = old.executable().to_path_buf();
+
+        let session = TurnSession::start(
+            Box::new(TestAdapter),
+            TurnLaunch {
+                executable: old_executable.clone(),
+                env: std::env::vars_os().collect(),
+                cwd: std::env::current_dir().expect("cwd"),
+                resume_session_id: None,
+                guardian_profile: None,
+                _runtime_lease: Some(old),
+            },
+            Box::new(|_: AgentEvent| {}),
+        );
+
+        std::fs::write(source.join("codex"), b"middle runtime").expect("update runtime");
+        let updated_layout =
+            RuntimeLayout::new(&source, Path::new("codex"), [PathBuf::from("codex")])
+                .expect("new layout");
+        let updated = store
+            .stage("codex", &updated_layout)
+            .and_then(|staged| store.promote_validated(&staged, "0.161.0"))
+            .expect("new lease");
+
+        std::fs::write(source.join("codex"), b"latest runtime").expect("second update");
+        let latest_layout =
+            RuntimeLayout::new(&source, Path::new("codex"), [PathBuf::from("codex")])
+                .expect("latest layout");
+        let latest = store
+            .stage("codex", &latest_layout)
+            .and_then(|staged| store.promote_validated(&staged, "0.162.0"))
+            .expect("latest lease");
+        drop(updated);
+
+        assert_eq!(
+            store.prune_unleased("codex", 0).expect("prune while live"),
+            0,
+            "the active session's lease must protect a snapshot older than current/previous"
+        );
+
+        let retained = session
+            .shared
+            .launch
+            ._runtime_lease
+            .as_ref()
+            .expect("session runtime lease");
+        assert_eq!(retained.snapshot_id(), old_snapshot);
+        assert_eq!(retained.executable(), old_executable);
+        assert_eq!(
+            std::fs::read(retained.executable()).unwrap(),
+            b"old runtime"
+        );
+        assert_eq!(
+            std::fs::read(latest.executable()).unwrap(),
+            b"latest runtime"
+        );
+
+        drop(session);
+        assert_eq!(
+            store.prune_unleased("codex", 0).expect("prune after exit"),
+            1,
+            "the old snapshot may be reclaimed after its session ends"
+        );
+        assert!(!old_executable.exists());
     }
 
     fn quiesced_child(shared: &Shared) -> Result<Arc<SupervisedChild>, ProviderError> {

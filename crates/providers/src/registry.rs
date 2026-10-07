@@ -10,6 +10,8 @@
 //! completed check (a session launch before the first check finished) wait for the running one
 //! instead of starting another.
 
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::thread;
 
@@ -35,6 +37,9 @@ pub struct ProviderRegistry {
     probe_guardian: Option<ProviderProbeGuardian>,
     /// Provider Health, told about every detection (PH). Optional: detection works without it.
     health: OnceLock<Arc<HealthMonitor>>,
+    installations:
+        Mutex<HashMap<&'static str, Option<crate::managed_runtime::InstallationFingerprint>>>,
+    managed_runtimes: Mutex<HashMap<ProviderId, crate::model::ManagedRuntimeReadiness>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -118,6 +123,8 @@ impl ProviderRegistry {
             check_finished: Condvar::new(),
             probe_guardian: None,
             health: OnceLock::new(),
+            installations: Mutex::new(HashMap::new()),
+            managed_runtimes: Mutex::new(HashMap::new()),
         }
     }
 
@@ -168,8 +175,8 @@ impl ProviderRegistry {
         let events = changes(status.detection.as_ref(), &detected);
         status.detection = Some(detected.detection);
         status.detection_error_code = detected.error_code.map(str::to_owned);
-        let snapshot = statuses.clone();
         drop(statuses);
+        let snapshot = self.list();
         if let Some(health) = self.health.get() {
             health.detected(&snapshot);
         }
@@ -178,20 +185,71 @@ impl ProviderRegistry {
 
     /// The cached statuses (detection is `None` for providers not checked yet).
     pub fn list(&self) -> Vec<ProviderStatus> {
-        lock(&self.statuses).clone()
+        let mut statuses = lock(&self.statuses).clone();
+        let managed = lock(&self.managed_runtimes);
+        for status in &mut statuses {
+            status.managed_runtime = managed.get(&status.id).cloned();
+        }
+        statuses
     }
 
-    /// Providers that can run a session right now: KalCode has an adapter, the CLI is installed
-    /// at a supported version, and it is not known to be signed out. Callers that let the user
+    /// Published only after the adapter actually probes the selected runtime. The caller keeps
+    /// its immutable runtime lease alive until this readiness is replaced or cleared.
+    pub fn set_managed_runtime(
+        &self,
+        id: ProviderId,
+        readiness: Option<crate::model::ManagedRuntimeReadiness>,
+    ) {
+        let mut managed = lock(&self.managed_runtimes);
+        if let Some(readiness) = readiness {
+            managed.insert(id, readiness);
+        } else {
+            managed.remove(&id);
+        }
+        drop(managed);
+        if let Some(health) = self.health.get() {
+            health.detected(&self.list());
+        }
+    }
+
+    /// Metadata-only update observation. It never signals or restarts a provider process.
+    /// The first observation includes missing installations so adapters can recover an owned runtime.
+    pub fn changed_installations(&self) -> Vec<(ProviderId, Option<PathBuf>)> {
+        let mut previous = lock(&self.installations);
+        let mut changed = Vec::new();
+        for spec in &self.specs {
+            let executable = self.env.resolve_executable_only(spec);
+            let fingerprint = executable.as_deref().and_then(|path| {
+                crate::managed_runtime::installation_fingerprint(
+                    path,
+                    &self.env.provider_env(&spec.env_policy),
+                )
+            });
+            let is_changed = match previous.get(spec.provider_id) {
+                Some(old) => old != &fingerprint,
+                None => true,
+            };
+            previous.insert(spec.provider_id, fingerprint);
+            if is_changed {
+                changed.push((ProviderId::new(spec.provider_id), executable));
+            }
+        }
+        changed
+    }
+
+    /// Providers with an installed CLI or a separately validated managed runtime. Managed-account
+    /// authentication remains authoritative at session launch. Callers that let the user
     /// pick a provider (threads, KalVoice) choose from this list. Uses the cached detection.
     pub fn usable(&self) -> Vec<ProviderId> {
-        lock(&self.statuses)
+        self.list()
             .iter()
             .filter(|s| s.adapter == crate::model::AdapterState::Implemented)
             .filter(|s| {
-                s.detection.as_ref().is_some_and(|d| {
-                    d.state == DetectionState::Installed && d.auth != AuthState::NotAuthenticated
-                })
+                s.managed_runtime.is_some()
+                    || s.detection.as_ref().is_some_and(|d| {
+                        d.state == DetectionState::Installed
+                            && d.auth != AuthState::NotAuthenticated
+                    })
             })
             .map(|s| s.id.clone())
             .collect()
@@ -298,8 +356,8 @@ impl ProviderRegistry {
             status.detection = Some(detected.detection);
             status.detection_error_code = detected.error_code.map(str::to_owned);
         }
-        let snapshot = statuses.clone();
         drop(statuses);
+        let snapshot = self.list();
         if let Some(health) = self.health.get() {
             health.detected(&snapshot);
         }
@@ -365,6 +423,91 @@ fn changes(previous: Option<&ProviderDetection>, next: &Detected) -> Vec<EventPa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validated_managed_runtime_is_launchable_without_faking_machine_installation() {
+        let registry = ProviderRegistry::with_specs(DetectEnv::from_process(), vec![]);
+        let id = ProviderId::new("codex");
+        assert!(!registry.usable().contains(&id));
+        registry.set_managed_runtime(
+            id.clone(),
+            Some(crate::model::ManagedRuntimeReadiness {
+                version: "0.161.0".into(),
+                source: "last_known_good".into(),
+            }),
+        );
+        assert!(registry.usable().contains(&id));
+        let rows = registry.list();
+        let row = rows.iter().find(|row| row.id == id).unwrap();
+        assert!(
+            row.detection.is_none(),
+            "machine detection must remain truthful"
+        );
+        assert_eq!(row.managed_runtime.as_ref().unwrap().version, "0.161.0");
+        registry.set_managed_runtime(id.clone(), None);
+        assert!(
+            !registry.usable().contains(&id),
+            "failed revalidation clears availability"
+        );
+    }
+
+    #[test]
+    fn installation_observer_detects_updates_and_removal_without_starting_processes() {
+        let dir = tempfile::tempdir().unwrap();
+        let executable = dir
+            .path()
+            .join(if cfg!(windows) { "tool.exe" } else { "tool" });
+        let spec = DetectionSpec {
+            provider_id: "codex",
+            display_name: "Codex",
+            executable: "tool",
+            install_dirs: &[],
+            appdata_dirs: &[],
+            local_appdata_dirs: &[],
+            minimum_version: None,
+            auth: None,
+            env_policy: crate::env::EnvPolicy::BASE,
+        };
+        let env = DetectEnv {
+            vars: vec![
+                ("PATH".into(), std::env::join_paths([dir.path()]).unwrap()),
+                ("PATHEXT".into(), ".EXE".into()),
+            ],
+            windows: cfg!(windows),
+            probe_timeout: None,
+            system_root: Some(dir.path().to_owned()),
+        };
+        let registry = ProviderRegistry::with_specs(env, vec![spec]);
+        assert_eq!(
+            registry.changed_installations(),
+            vec![(ProviderId::new("codex"), None)]
+        );
+        assert!(registry.changed_installations().is_empty());
+        // Deliberately non-executable contents: the observer must only inspect metadata.
+        std::fs::write(&executable, b"first runtime").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        assert_eq!(registry.changed_installations().len(), 1);
+        assert!(registry.changed_installations().is_empty());
+        std::fs::write(&executable, b"new compatible runtime revision").unwrap();
+        assert_eq!(registry.changed_installations().len(), 1);
+        assert!(registry.changed_installations().is_empty());
+        std::fs::remove_file(&executable).unwrap();
+        assert_eq!(
+            registry.changed_installations(),
+            vec![(ProviderId::new("codex"), None)]
+        );
+        assert!(registry.changed_installations().is_empty());
+        assert!(
+            registry
+                .list()
+                .iter()
+                .all(|status| status.detection.is_none())
+        );
+    }
 
     fn detected(state: DetectionState, version: Option<&str>) -> Detected {
         Detected {

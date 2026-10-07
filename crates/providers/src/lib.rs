@@ -24,6 +24,7 @@ pub mod catalog;
 pub mod claude;
 pub mod claude_account_auth;
 pub mod codex;
+pub mod compatibility;
 pub mod cursor;
 pub mod detect;
 pub mod env;
@@ -35,6 +36,7 @@ pub mod interactive;
 pub mod launch;
 pub mod launch_probe;
 pub mod managed;
+pub mod managed_runtime;
 pub mod model;
 pub mod native_config;
 #[cfg(unix)]

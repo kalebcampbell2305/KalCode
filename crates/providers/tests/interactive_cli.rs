@@ -520,6 +520,11 @@ fn managed_codex_launches_without_a_plan_metadata_resolver() {
 #[test]
 fn three_managed_codex_agents_keep_account_model_effort_workspace_and_distinct_sessions() {
     let rig = Rig::new_managed(PaneCli::Codex, Some(CloudConfigEligibility::Unknown));
+    let expected_work = if cfg!(target_os = "macos") {
+        rig.work.path().canonicalize().expect("canonical workspace")
+    } else {
+        rig.work.path().to_path_buf()
+    };
     let account = new_id();
     let workspace = new_id();
     let mut panes = Vec::new();
@@ -548,7 +553,7 @@ fn three_managed_codex_agents_keep_account_model_effort_workspace_and_distinct_s
                 .any(|arg| arg == "model_reasoning_effort='high'"),
             "{args:?}"
         );
-        assert_eq!(rig.launch_cwd(), rig.work.path());
+        assert_eq!(rig.launch_cwd(), expected_work);
     }
     assert_eq!(
         &*rig.resolved_accounts.lock().unwrap(),

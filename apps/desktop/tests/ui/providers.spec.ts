@@ -244,7 +244,7 @@ test.describe("providers", () => {
     await openProviders(page, "providers-none");
     for (const [name, command] of [
       ["Claude Code", "irm https://claude.ai/install.ps1 | iex"],
-      ["Codex", "npm install -g @openai/codex@0.160.0"],
+      ["Codex", "npm install -g @openai/codex"],
       ["Gemini CLI", "npm install -g @google/gemini-cli@0.61.0"],
     ] as const) {
       const region = section(page, name);
@@ -256,6 +256,21 @@ test.describe("providers", () => {
     }
     await page.getByRole("button", { name: "Activity", exact: true }).click();
     await expect(page.getByRole("region", { name: "Runtime health" }).getByText("0 of 4 installed")).toBeVisible();
+  });
+
+  test("a validated managed runtime stays ready without an install detour", async ({ page }) => {
+    await openProviders(page, "providers-managed-runtime");
+    const codex = section(page, "Codex");
+    await expect(codex.getByText("Ready for threads when signed in.", { exact: true })).toBeVisible();
+    await expect(codex.getByText("Global CLI", { exact: true })).toBeVisible();
+    await expect(codex.getByText("Not installed", { exact: true })).toBeVisible();
+    await expect(codex.getByText("KalCode runtime", { exact: true })).toBeVisible();
+    await expect(codex.getByText("Ready, version 0.160.0", { exact: true })).toBeVisible();
+    await expect(
+      codex.getByText("KalCode is using its last known good Codex runtime for managed accounts."),
+    ).toBeVisible();
+    await expect(codex.getByRole("button", { name: "Copy install command for Codex" })).toHaveCount(0);
+    await expect(codex.getByText("Signed in (1 account)", { exact: true })).toBeVisible();
   });
 
   test("an outdated CLI explains what to do; sign-in stays the accounts' state", async ({ page }) => {

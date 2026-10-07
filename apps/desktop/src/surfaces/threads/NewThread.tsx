@@ -2,7 +2,6 @@ import type {
   PermissionMode,
   ProviderAccount,
   ProviderAccountBinding,
-  ProviderStatus,
   ThreadOptions,
   ThreadSummary,
 } from "@kalcode/protocol";
@@ -29,7 +28,7 @@ import { usePromptConfirmation } from "../../context/usePromptConfirmation.ts";
 import type { CreateThreadInput } from "../../ipc/client.ts";
 import { type KalCodeError, toKalCodeError } from "../../ipc/errors.ts";
 import { usePersistentDraft } from "../../runtime/drafts.ts";
-import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
+import { useEvents, useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
 import { MOD_LABEL } from "../../shell/shortcuts.ts";
@@ -54,6 +53,7 @@ interface NewThreadProps {
 /** New thread flow: provider, model, workspace, permission mode (the saved default, else Auto), task. */
 export function NewThread({ onCreated, onCancel, prefill }: NewThreadProps) {
   const { client } = useRuntime();
+  const { events } = useEvents();
   const { navigate } = useNavigation();
   const [options, setOptions] = useState<ThreadOptions | null>(null);
   const sessions = useOptionalProviderAccountSessions();
@@ -68,6 +68,45 @@ export function NewThread({ onCreated, onCancel, prefill }: NewThreadProps) {
   const [bindings, setBindings] = useState<ProviderAccountBinding[]>([]);
   const [unavailable, setUnavailable] = useState<UnavailableProvider[]>([]);
   const [loadError, setLoadError] = useState<KalCodeError | null>(null);
+  const [formStarted, setFormStarted] = useState(false);
+  const optionRequest = useRef(0);
+  const providerEventSource = useRef(client);
+  const lastProviderSeq = useRef<number | null>(null);
+  const providerRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const loadOptions = useCallback(
+    async (reportError: boolean) => {
+      if (providerEventSource.current !== client) {
+        providerEventSource.current = client;
+        lastProviderSeq.current = null;
+        if (providerRefreshTimer.current) clearTimeout(providerRefreshTimer.current);
+        providerRefreshTimer.current = null;
+        optionRequest.current += 1;
+      }
+      const request = ++optionRequest.current;
+      try {
+        const next = await client.threadOptions();
+        const chatOptions = { ...next, providers: next.providers.filter((provider) => provider.id !== "cursor") };
+        if (request !== optionRequest.current) return;
+        setOptions(chatOptions);
+        if (reportError) setLoadError(null);
+        // Availability detail is supplementary. Show the ready provider/model/workspace controls
+        // immediately and fill diagnostics later without holding the form on a slow status read.
+        void client
+          .listProviders()
+          .then((statuses) => {
+            if (request !== optionRequest.current) return;
+            setUnavailable(
+              unavailableProviders(statuses, new Set(chatOptions.providers.map((provider) => provider.id))),
+            );
+          })
+          .catch(() => {});
+      } catch (error) {
+        if (request === optionRequest.current && reportError) setLoadError(toKalCodeError(error));
+      }
+    },
+    [client],
+  );
 
   const load = useCallback(() => {
     setLoadError(null);
@@ -84,21 +123,54 @@ export function NewThread({ onCreated, onCancel, prefill }: NewThreadProps) {
         setBindingsReady(true);
       })
       .catch((error) => setLoadError(toKalCodeError(error)));
-    client
-      .threadOptions()
-      .then((next) => {
-        const chatOptions = { ...next, providers: next.providers.filter((provider) => provider.id !== "cursor") };
-        setOptions(chatOptions);
-        void client
-          .listProviders()
-          .then((statuses: ProviderStatus[]) => {
-            setUnavailable(unavailableProviders(statuses, new Set(chatOptions.providers.map((p) => p.id))));
-          })
-          .catch(() => undefined);
-      })
-      .catch((error) => setLoadError(toKalCodeError(error)));
-  }, [client, sharedSessions]);
+    void loadOptions(true);
+  }, [client, loadOptions, sharedSessions]);
   useEffect(load, [load]);
+
+  const formReady = Boolean(
+    options &&
+      accounts &&
+      bindingsReady &&
+      !earlySigningIn &&
+      options.providers.length > 0 &&
+      options.workspaces.length > 0,
+  );
+  useEffect(() => {
+    if (formReady) setFormStarted(true);
+  }, [formReady]);
+
+  useEffect(() => {
+    if (providerEventSource.current !== client) {
+      providerEventSource.current = client;
+      lastProviderSeq.current = null;
+      if (providerRefreshTimer.current) clearTimeout(providerRefreshTimer.current);
+      providerRefreshTimer.current = null;
+      optionRequest.current += 1;
+    }
+    const newest = events[0]?.seq ?? 0;
+    if (lastProviderSeq.current === null) {
+      lastProviderSeq.current = newest;
+      return;
+    }
+    const since = lastProviderSeq.current;
+    lastProviderSeq.current = Math.max(since, newest);
+    const changed = events.some(
+      (event) => event.seq > since && (event.type === "provider.detected" || event.type === "provider.health_changed"),
+    );
+    if (!changed || providerRefreshTimer.current) return;
+    providerRefreshTimer.current = setTimeout(() => {
+      providerRefreshTimer.current = null;
+      void loadOptions(false);
+    }, 80);
+  }, [client, events, loadOptions]);
+
+  useEffect(
+    () => () => {
+      optionRequest.current += 1;
+      if (providerRefreshTimer.current) clearTimeout(providerRefreshTimer.current);
+    },
+    [],
+  );
   const reloadAccounts = async () => {
     if (sessions) await sessions.reload();
     else setAccounts(await client.listProviderAccounts());
@@ -151,7 +223,7 @@ export function NewThread({ onCreated, onCancel, prefill }: NewThreadProps) {
           <h2 className={styles.title}>New thread</h2>
           <p className={styles.description}>Give a provider a task in one of your workspaces.</p>
         </header>
-        {!options || !accounts || !bindingsReady || earlySigningIn || options.providers.length === 0
+        {!options || !accounts || !bindingsReady || earlySigningIn || (options.providers.length === 0 && !formStarted)
           ? earlyPicker
           : null}
         {loadError ? (
@@ -178,7 +250,7 @@ export function NewThread({ onCreated, onCancel, prefill }: NewThreadProps) {
             <Skeleton width="65%" />
             <Skeleton width="40%" />
           </div>
-        ) : options.providers.length === 0 ? (
+        ) : options.providers.length === 0 && !formStarted ? (
           <EmptyState
             art={<PlugZap />}
             title="No provider is ready for threads"
@@ -333,6 +405,8 @@ function NewThreadForm({
   const taskRef = useRef<HTMLTextAreaElement>(null);
 
   const provider = options.providers.find((p) => p.id === providerId);
+  const providerAvailable = provider !== undefined;
+  const selectedProviderUnavailable = providerId !== "" && !providerAvailable;
   const providerAccounts = sortAccounts(
     accounts.filter((account) => account.providerId === providerId && account.archivedAt === null),
   );
@@ -412,8 +486,9 @@ function NewThreadForm({
   const reportedIdentity = providerAccount?.providerReportedIdentity;
   // biome-ignore lint/correctness/useExhaustiveDependencies: reconnecting to a different provider identity invalidates account model discovery.
   useEffect(() => {
-    if (providerAccount && authenticationState !== "not_authenticated") void discoverModels?.(providerAccount.id);
-  }, [discoverModels, providerAccount, authenticationState, reportedIdentity]);
+    if (providerAvailable && providerAccount && authenticationState !== "not_authenticated")
+      void discoverModels?.(providerAccount.id);
+  }, [discoverModels, providerAvailable, providerAccount, authenticationState, reportedIdentity]);
 
   useEffect(() => {
     taskRef.current?.focus();
@@ -448,7 +523,7 @@ function NewThreadForm({
       taskRef.current?.focus();
       return;
     }
-    if (!providerAccountId || !accountReady) return;
+    if (!provider || !providerAccountId || !accountReady) return;
     if (modelUnavailable) return;
     setError(null);
     const submittedTask = task;
@@ -559,6 +634,8 @@ function NewThreadForm({
               <Select
                 id={`${id}-provider`}
                 value={providerId}
+                aria-invalid={selectedProviderUnavailable || undefined}
+                aria-describedby={selectedProviderUnavailable ? `${id}-provider-error` : undefined}
                 onChange={(event) => {
                   confirmation.cancel();
                   const nextProvider = event.target.value;
@@ -567,6 +644,11 @@ function NewThreadForm({
                   setModel("");
                 }}
               >
+                {selectedProviderUnavailable ? (
+                  <option value={providerId} disabled>
+                    {providerIdentity(providerId).name} · Unavailable
+                  </option>
+                ) : null}
                 {options.providers.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.displayName}
@@ -574,6 +656,11 @@ function NewThreadForm({
                 ))}
               </Select>
             </Field>
+            {selectedProviderUnavailable ? (
+              <p id={`${id}-provider-error`} className={styles.error} role="alert">
+                The selected provider is no longer available. Choose another provider to continue.
+              </p>
+            ) : null}
             {selectedAccountUnavailable && providerAccounts.length > 0 ? (
               <Field htmlFor={`${id}-replacement-account`} label="Account">
                 <Select
@@ -627,7 +714,7 @@ function NewThreadForm({
                 aria-invalid={modelUnavailable || undefined}
                 aria-describedby={modelUnavailable ? `${id}-model-error` : undefined}
                 onFocus={() => {
-                  if (providerAccountId && accountReady) void discoverModels?.(providerAccountId);
+                  if (providerAvailable && providerAccountId && accountReady) void discoverModels?.(providerAccountId);
                 }}
                 onChange={(event) => {
                   confirmation.cancel();
@@ -784,7 +871,7 @@ function NewThreadForm({
             type="submit"
             variant="primary"
             busy={confirmation.busy}
-            disabled={!task.trim() || !accountReady || modelUnavailable}
+            disabled={!task.trim() || selectedProviderUnavailable || !accountReady || modelUnavailable}
           >
             Start thread
           </Button>

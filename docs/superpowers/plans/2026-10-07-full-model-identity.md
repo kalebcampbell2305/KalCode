@@ -46,6 +46,15 @@ bounded launch intent and delegates unsupported combinations to the authenticate
 provider when no native capability snapshot exists; it does not duplicate live
 discovery during validation and execution.
 
+Further independent review proved two boundary defects and their repairs:
+Operations consults the discovered default model without rewriting a persisted
+null model selection (59 tests pass), and Recipe preparation stops when project
+account bindings cannot be read instead of choosing another account (85 focused
+and neighboring Recipe tests pass). Provider readiness refresh preserves an open
+thread draft even when the last provider disappears, blocks submission and model
+discovery for that unavailable selection, and requires an explicit replacement
+(25 stable-form tests pass).
+
 ## Rollback
 
 Use a forward corrective release through the shared train, retaining migration 0028 and its schema registration. An older schema reader cannot open an upgraded profile. Preserve subsequent work; never reset shared main or rewrite another worker's history. The pre-change source reference is `rollback/full-model-identity-20261007`; it is not a database downgrade instruction. See `docs/providers/full-model-identity.md` for the rollback and recovery contract.

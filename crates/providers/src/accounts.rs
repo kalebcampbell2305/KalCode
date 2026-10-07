@@ -2358,8 +2358,13 @@ mod tests {
     #[test]
     fn restart_restores_multiple_accounts_without_losing_safe_state() {
         let temp = tempfile::tempdir().expect("temp");
+        let temp_root = if cfg!(target_os = "macos") {
+            temp.path().canonicalize().expect("canonical temp")
+        } else {
+            temp.path().to_path_buf()
+        };
         let config = || CoreConfig {
-            paths: Paths::new(temp.path()),
+            paths: Paths::new(&temp_root),
             app_version: "0.0.0-test".into(),
             channel: BuildChannel::Development,
         };
@@ -2439,7 +2444,7 @@ mod tests {
 
         let core = Arc::new(Core::open(config()).expect("second core"));
         let store = AccountStore::new(core.clone());
-        let profiles = ManagedProfiles::new(temp.path().join("profiles")).expect("profiles");
+        let profiles = ManagedProfiles::new(temp_root.join("profiles")).expect("profiles");
         for expected in before {
             let after = store.get(&expected.id).expect("after restart");
             assert_eq!(after.authentication_state, expected.authentication_state);

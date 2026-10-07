@@ -147,6 +147,8 @@ function EditorForm({ initial }: { initial: LaunchRecipe | null }) {
   const [squads, setSquads] = useState<SquadDefinition[]>([]);
   const [accounts, setAccounts] = useState<Record<string, ProviderAccount[]>>({});
   const [bindings, setBindings] = useState<ProviderAccountBinding[] | null>(null);
+  const [bindingError, setBindingError] = useState<string | null>(null);
+  const [bindingRequest, setBindingRequest] = useState(0);
   const launchMemory = useMemo(() => readLaunchMemory(), []);
 
   useEffect(() => {
@@ -160,16 +162,26 @@ function EditorForm({ initial }: { initial: LaunchRecipe | null }) {
     };
   }, [client]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: bindingRequest is the explicit retry signal.
   useEffect(() => {
     let live = true;
+    setBindings(null);
+    setBindingError(null);
     client
       .listProviderAccountBindings()
-      .catch(() => [] as ProviderAccountBinding[])
-      .then((list) => live && setBindings(list));
+      .then((list) => {
+        if (!live) return;
+        setBindings(list);
+      })
+      .catch(() => {
+        if (!live) return;
+        setBindings(null);
+        setBindingError("Default account couldn't be resolved because project account choices are unavailable.");
+      });
     return () => {
       live = false;
     };
-  }, [client]);
+  }, [bindingRequest, client]);
 
   const providersUsed = [...new Set(draft.components.flatMap((p) => (p.kind === "agent" ? [p.providerId] : [])))];
   const requested = useRef(new Set<string>());
@@ -481,6 +493,19 @@ function EditorForm({ initial }: { initial: LaunchRecipe | null }) {
                                 </option>
                               ))}
                             </Select>
+                            {!part.providerAccountId && bindingError ? (
+                              <p className={styles.error} role="alert">
+                                {bindingError}{" "}
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => setBindingRequest((request) => request + 1)}
+                                >
+                                  Retry account choices
+                                </Button>
+                              </p>
+                            ) : null}
                           </PartField>
                           <PartField id={id(`${part.key}-model`)} label="Model" optional>
                             <TextInput

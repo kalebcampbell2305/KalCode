@@ -355,6 +355,7 @@ pub fn statuses() -> Vec<ProviderStatus> {
             display_name: claude.display_name.into(),
             detection: None,
             detection_error_code: None,
+            managed_runtime: None,
             auth_check: claude.auth_check_command(),
             capabilities: claude_capabilities(),
             adapter: AdapterState::Implemented,
@@ -369,6 +370,7 @@ pub fn statuses() -> Vec<ProviderStatus> {
             display_name: codex.display_name.into(),
             detection: None,
             detection_error_code: None,
+            managed_runtime: None,
             auth_check: codex.auth_check_command(),
             capabilities: codex_capabilities(),
             adapter: AdapterState::Implemented,
@@ -377,9 +379,7 @@ pub fn statuses() -> Vec<ProviderStatus> {
                           per turn resumed by thread id"
                 .into(),
             sign_in_command: "codex login".into(),
-            install_command: crate::codex::MANAGED_VERSIONS
-                .install_command()
-                .unwrap_or_else(|| "npm install -g @openai/codex".into()),
+            install_command: "npm install -g @openai/codex".into(),
             docs_url: "https://github.com/openai/codex".into(),
         },
         ProviderStatus {
@@ -387,6 +387,7 @@ pub fn statuses() -> Vec<ProviderStatus> {
             display_name: gemini.display_name.into(),
             detection: None,
             detection_error_code: None,
+            managed_runtime: None,
             auth_check: gemini.auth_check_command(),
             capabilities: gemini_capabilities(),
             adapter: AdapterState::Implemented,
@@ -405,6 +406,7 @@ pub fn statuses() -> Vec<ProviderStatus> {
             display_name: "Cursor".into(),
             detection: None,
             detection_error_code: None,
+            managed_runtime: None,
             auth_check: Some("cursor-agent status --format json".into()),
             capabilities: crate::cursor::capabilities(),
             adapter: AdapterState::Implemented,
@@ -561,5 +563,15 @@ mod tests {
                 assert!(!valid_model_selector(provider_id, invalid));
             }
         }
+    }
+
+    #[test]
+    fn codex_install_command_tracks_the_current_stable_release() {
+        let codex = statuses()
+            .into_iter()
+            .find(|status| status.id.as_str() == ProviderId::CODEX)
+            .expect("Codex catalog entry");
+
+        assert_eq!(codex.install_command, "npm install -g @openai/codex");
     }
 }

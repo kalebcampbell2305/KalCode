@@ -35,11 +35,13 @@ import {
   detectionLabel,
   fidelityLabel,
   type Label,
+  managedRuntimeLabel,
   managedSignInLabel,
   modeLabel,
   modelList,
   needsInstall,
   needsSignIn,
+  providerRuntimeReady,
   settingGroups,
   toolItems,
 } from "./providerLabels.ts";
@@ -241,13 +243,17 @@ function ProviderSection({
   // A managed provider signs in per KalCode account, so its accounts are the one authority. The
   // CLI's own standalone login (what detection checks) is a different profile KalCode doesn't use.
   const managed = isBrowserAuthProvider(status.id);
-  const installed = detection !== null && detection.state !== "not_installed" && detection.state !== "error";
-  const auth = managed ? (installed ? managedSignInLabel(accounts) : null) : authLabel(status);
+  const runtimeReady = providerRuntimeReady(status);
+  // Account truth is independent from launch readiness. Keep a known managed-account session
+  // visible while an installed CLI is outdated, even though that CLI cannot launch threads.
+  const showManagedAccountState = runtimeReady || detection?.state === "outdated";
+  const auth = managed ? (showManagedAccountState ? managedSignInLabel(accounts) : null) : authLabel(status);
+  const managedRuntime = managedRuntimeLabel(status);
 
   const setup: KeyValueItem[] = [
     {
       key: "status",
-      label: "Status",
+      label: managedRuntime ? "Global CLI" : "Status",
       value:
         !detection && checking ? (
           <span role="status" aria-busy="true" className={styles.pending}>
@@ -259,7 +265,10 @@ function ProviderSection({
         ),
     },
   ];
-  if (managed && installed) {
+  if (managedRuntime) {
+    setup.push({ key: "managed-runtime", label: "KalCode runtime", value: <StatusValue label={managedRuntime} /> });
+  }
+  if (managed && showManagedAccountState) {
     const signedIn = accounts?.some((account) => account.authenticationState === "authenticated") ?? false;
     setup.push({
       key: "auth",
@@ -353,7 +362,7 @@ function ProviderSection({
       id={sectionId}
       className={styles.provider}
       title={<ProviderMark provider={status.id} name={status.displayName} tile size="md" />}
-      description={adapter.description}
+      description={managedRuntime ? "Ready for threads when signed in." : adapter.description}
       // "Adapter ready" beside "Not installed" reads as a contradiction; the status row says it all.
       actions={
         needsInstall(status) ? null : (

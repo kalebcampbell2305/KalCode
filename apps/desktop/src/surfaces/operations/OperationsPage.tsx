@@ -1285,7 +1285,7 @@ function TaskEditor({
         displayName: spec.model,
         isDefault: false,
       })
-    : null;
+    : (modelOptions.find((model) => model.isDefault) ?? null);
   const effortOptions = effortsForModel(
     spec.providerId as PaneProviderId,
     selectedModel,

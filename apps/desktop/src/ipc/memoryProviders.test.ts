@@ -44,6 +44,11 @@ describe("memory transport providers", () => {
     expect(boot.info.flags.surfaces.find((s) => s.id === "providers")?.state).toBe("available");
   });
 
+  it("recommends the current stable Codex CLI instead of pinning a compatibility minor", async () => {
+    const codex = (await client().listProviders()).find((provider) => provider.id === "codex");
+    expect(codex?.installCommand).toBe("npm install -g @openai/codex");
+  });
+
   it("mirrors the native Codex and Gemini CLI permission mappings", async () => {
     const [claude, codex, gemini] = await client().listProviders();
     const setting = (mode: string, status = codex) =>

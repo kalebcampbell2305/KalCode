@@ -1711,6 +1711,83 @@ describe("OperationsPage", () => {
     );
   });
 
+  it.each([
+    ["preserves", undefined, false],
+    ["rejects", [] as readonly string[], true],
+  ] as const)(
+    "%s a saved effort for Provider default according to its fresh default-model metadata",
+    async (_behavior, supportedEfforts, unavailable) => {
+      const selected = account("codex-work", "Work");
+      const pending = queued(`default-model-effort-${unavailable ? "unsupported" : "unknown"}`, 1);
+      pending.spec = {
+        ...pending.spec,
+        kind: "agent",
+        prompt: "Continue",
+        command: null,
+        providerId: "codex",
+        providerAccountId: selected.id,
+        model: null,
+        effort: "future-fast",
+      };
+      seams.snapshot = { ...baseSnapshot(), items: [pending] };
+      seams.accountStates = new Map([
+        [
+          selected.id,
+          {
+            models: {
+              status: "available",
+              source: "runtime",
+              observedAt: Date.now(),
+              reason: null,
+              items: [
+                {
+                  id: "account/default-v2",
+                  displayName: "Account Default V2",
+                  isDefault: true,
+                  defaultEffort: null,
+                  ...(supportedEfforts === undefined ? {} : { supportedEfforts }),
+                },
+              ],
+            },
+          },
+        ],
+      ]);
+      const client = operations();
+      vi.mocked(client.update).mockResolvedValue(pending);
+      const user = userEvent.setup();
+      render(
+        <ToastProvider>
+          <OperationsPage
+            client={client}
+            threadOptions={async () => options}
+            providerAccounts={async () => [selected]}
+          />
+        </ToastProvider>,
+      );
+
+      await user.click(screen.getByRole("tab", { name: "Queue" }));
+      await user.click(screen.getByRole("button", { name: "Edit" }));
+      expect(await screen.findByRole("combobox", { name: "Model" })).toHaveValue("");
+      expect(screen.getByRole("combobox", { name: "Effort" })).toHaveValue("future-fast");
+      const save = screen.getByRole("button", { name: "Save task" });
+      if (unavailable) {
+        expect(
+          screen.getByText(/This effort is unavailable for Account Default V2 · account\/default-v2/i),
+        ).toBeVisible();
+        expect(save).toBeDisabled();
+        expect(client.update).not.toHaveBeenCalled();
+      } else {
+        expect(screen.queryByText(/This effort is unavailable/i)).not.toBeInTheDocument();
+        expect(save).toBeEnabled();
+        await user.click(save);
+        await waitFor(() => expect(client.update).toHaveBeenCalledTimes(1));
+        expect(vi.mocked(client.update).mock.calls[0]?.[1]).toEqual(
+          expect.objectContaining({ model: null, effort: "future-fast" }),
+        );
+      }
+    },
+  );
+
   it("blocks only an effort that fresh runtime metadata proves unavailable", async () => {
     const selected = account("codex-work", "Work");
     const pending = queued("missing-effort", 1);

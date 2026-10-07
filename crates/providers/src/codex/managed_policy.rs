@@ -1,5 +1,4 @@
-//! Account-isolated Codex launch policy for the certified Codex CLI release lines
-//! ([`crate::codex::MANAGED_VERSIONS`]).
+//! Account-isolated Codex launch policy for capability-verified Codex runtimes.
 //!
 //! A launch uses a dedicated `CODEX_HOME` per account, so each account keeps its own sign-in and
 //! sessions. That profile's `config.toml` is rewritten before every launch from the user's

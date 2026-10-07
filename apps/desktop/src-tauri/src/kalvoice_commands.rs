@@ -849,6 +849,14 @@ impl DesktopProviders {
     }
 }
 
+fn provider_choice_availability(
+    status: &kalcode_providers::ProviderStatus,
+    launchable: &[ProviderId],
+) -> Option<bool> {
+    (status.adapter == kalcode_providers::AdapterState::Implemented)
+        .then(|| launchable.contains(&status.id))
+}
+
 impl ProviderDirectory for DesktopProviders {
     fn connected(&self) -> Vec<ProviderChoice> {
         let usable = self.registry.usable();
@@ -856,19 +864,14 @@ impl ProviderDirectory for DesktopProviders {
         self.registry
             .list()
             .into_iter()
-            .filter(|s| s.adapter == kalcode_providers::AdapterState::Implemented)
-            .filter(|s| {
-                s.detection
-                    .as_ref()
-                    .is_some_and(|d| d.state == kalcode_contracts::agent::DetectionState::Installed)
-            })
             .filter_map(|s| {
+                let available = provider_choice_availability(&s, &usable)?;
                 let _account = accounts
                     .resolve(s.id.as_str(), &ProviderAccountScopes::default())
                     .ok()
                     .flatten()?;
                 Some(ProviderChoice {
-                    available: usable.contains(&s.id),
+                    available,
                     display_name: provider_display_name(&s.id),
                     id: s.id,
                 })
@@ -3230,6 +3233,36 @@ pub fn kalvoice_open_microphone_settings(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn managed_runtime_readiness_keeps_native_missing_truth_and_remains_launchable() {
+        let mut status = kalcode_providers::catalog::statuses()
+            .into_iter()
+            .find(|status| status.id.as_str() == ProviderId::CODEX)
+            .expect("Codex status");
+        status.detection = Some(kalcode_contracts::agent::ProviderDetection {
+            provider_id: status.id.clone(),
+            display_name: status.display_name.clone(),
+            state: kalcode_contracts::agent::DetectionState::NotInstalled,
+            display_path: None,
+            version: None,
+            minimum_version: None,
+            auth: kalcode_contracts::agent::AuthState::Unknown,
+            message: None,
+            checked_at: "cached".into(),
+        });
+        let launchable = vec![ProviderId::new(ProviderId::CODEX)];
+
+        assert_eq!(
+            provider_choice_availability(&status, &launchable),
+            Some(true)
+        );
+        assert_eq!(
+            status.detection.as_ref().unwrap().state,
+            kalcode_contracts::agent::DetectionState::NotInstalled
+        );
+        assert_eq!(provider_choice_availability(&status, &[]), Some(false));
+    }
 
     #[test]
     fn shutdown_gate_rejects_new_work_and_waits_without_holding_the_task_lock() {

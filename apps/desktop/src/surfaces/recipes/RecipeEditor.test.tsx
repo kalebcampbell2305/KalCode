@@ -4,13 +4,26 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RecipeEditor, validateRecipe } from "./RecipeEditor.tsx";
 
-const seams = vi.hoisted(() => ({
-  library: {} as Record<string, unknown>,
-  providerSessions: null as Record<string, unknown> | null,
-  listProviderAccounts: vi.fn(async () => [] as ProviderAccount[]),
-  listProviderAccountBindings: vi.fn(async () => []),
+const seams = vi.hoisted(() => {
+  const listProviderAccounts = vi.fn(async () => [] as ProviderAccount[]);
+  const listProviderAccountBindings = vi.fn(async () => []);
+  return {
+    library: {} as Record<string, unknown>,
+    providerSessions: null as Record<string, unknown> | null,
+    listProviderAccounts,
+    listProviderAccountBindings,
+    client: {
+      listProviderAccounts,
+      listProviderAccountBindings,
+      squads: { snapshot: vi.fn(async () => ({ squads: [] })) },
+    },
+  };
+});
+vi.mock("../../runtime/recipes/RecipeLaunchProvider.tsx", () => ({
+  useRecipeLibrary: () => seams.library,
+  resolveRecipeDefaultAccount: (accounts: ProviderAccount[]) =>
+    accounts.find((candidate) => candidate.isDefault && candidate.archivedAt === null) ?? null,
 }));
-vi.mock("../../runtime/recipes/RecipeLaunchProvider.tsx", () => ({ useRecipeLibrary: () => seams.library }));
 vi.mock("../providers/ProviderAccountSessions.tsx", () => ({
   useOptionalProviderAccountSessions: () => seams.providerSessions,
 }));
@@ -18,13 +31,7 @@ vi.mock("../../runtime/WorkspaceProvider.tsx", () => ({
   useWorkspaces: () => ({ workspaces: [{ id: "w1", name: "KalCode" }], active: { id: "w1", name: "KalCode" } }),
 }));
 vi.mock("../../runtime/RuntimeProvider.tsx", () => ({
-  useRuntime: () => ({
-    client: {
-      listProviderAccounts: seams.listProviderAccounts,
-      listProviderAccountBindings: seams.listProviderAccountBindings,
-      squads: { snapshot: async () => ({ squads: [] }) },
-    },
-  }),
+  useRuntime: () => ({ client: seams.client }),
 }));
 
 function account(overrides: Partial<ProviderAccount> = {}): ProviderAccount {
@@ -235,6 +242,34 @@ describe("RecipeEditor", () => {
     expect(save).toHaveBeenCalledWith(
       expect.objectContaining({ components: [expect.objectContaining({ effort: "future-effort" })] }),
     );
+  });
+
+  it("keeps an implicit account unresolved and offers retry when bindings cannot be read", async () => {
+    const sessions = modelSessions("available");
+    seams.providerSessions = sessions.value;
+    seams.listProviderAccountBindings.mockRejectedValueOnce(new Error("Bindings unavailable"));
+    seams.library = {
+      recipes: [],
+      save,
+      editor: {
+        open: vi.fn(),
+        close,
+        recipe: recipeAgent({ providerAccountId: null }),
+        isOpen: true,
+      },
+    };
+    const user = userEvent.setup();
+
+    render(<RecipeEditor />);
+
+    expect(await screen.findByText(/Default account couldn't be resolved/)).toBeVisible();
+    expect(sessions.discoverModels).not.toHaveBeenCalled();
+
+    seams.listProviderAccountBindings.mockResolvedValue([]);
+    await user.click(screen.getByRole("button", { name: "Retry account choices" }));
+    await waitFor(() => expect(seams.listProviderAccountBindings).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(sessions.discoverModels).toHaveBeenCalledWith("account-a"));
+    expect(screen.queryByText(/Default account couldn't be resolved/)).not.toBeInTheDocument();
   });
 
   it("validates variable keys", () => {

@@ -1,4 +1,4 @@
-import type { ProviderAccount, ProviderHealth, ProviderId } from "@kalcode/protocol";
+import type { ProviderAccount, ProviderHealth, ProviderId, ProviderStatus } from "@kalcode/protocol";
 import { Button, ProviderMark, Skeleton } from "@kalcode/ui/components";
 import { RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -35,6 +35,7 @@ export function ProviderHealthWidget() {
   const { events } = useEvents();
   const { navigate } = useNavigation();
   const [providers, setProviders] = useState<ProviderHealth[] | null>(null);
+  const [statuses, setStatuses] = useState<ProviderStatus[] | null>(null);
   const [failed, setFailed] = useState(false);
   const [accounts, setAccounts] = useState<ProviderAccount[]>([]);
   const [checking, setChecking] = useState(false);
@@ -62,6 +63,10 @@ export function ProviderHealthWidget() {
         // Health is supplementary and never blocks anything (PH-06).
         if (!cancelled) setFailed(true);
       },
+    );
+    client.listProviders().then(
+      (list) => !cancelled && setStatuses(list),
+      () => !cancelled && setStatuses([]),
     );
     return () => {
       cancelled = true;
@@ -107,7 +112,7 @@ export function ProviderHealthWidget() {
       </>
     );
   }
-  if (!providers) {
+  if (!providers || !statuses) {
     return (
       <div role="status" aria-busy="true">
         <span className="visually-hidden">Loading provider health</span>
@@ -119,7 +124,7 @@ export function ProviderHealthWidget() {
     <>
       <ul className={styles.list} aria-label="Providers">
         {providers.map((provider) => {
-          const state = healthSummary(provider);
+          const state = healthSummary(provider, statuses.find((status) => status.id === provider.providerId) ?? null);
           const checked = provider.checkedAt;
           const signIn =
             provider.reasonCode === "not_checked" ? accountSignInState(accounts, provider.providerId) : null;

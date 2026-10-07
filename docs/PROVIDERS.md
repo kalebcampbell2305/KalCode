@@ -5,7 +5,7 @@ CLI; Claude Code adapter) · Codex and Gemini CLI adapters, their panes and Prov
 PROVIDERS-2 (`docs/campaigns/PROVIDERS-2.md`) · Code: `crates/providers` · Contract:
 `crates/contracts/src/agent.rs`, `health.rs` · Facts verified 2026-09-24/25 against official docs,
 the providers' published SDK/source type definitions and the installed CLIs (Claude Code 2.1.288,
-codex-cli 0.160.0; Gemini CLI not installed) · Launch and permission hardening: SEC-0.1.1
+Codex CLI, including the 0.161 stable-update regression; Gemini CLI not installed) · Launch and permission hardening: SEC-0.1.1
 (`docs/campaigns/SEC-0.1.1.md`)
 
 ## 1. Principles
@@ -594,36 +594,85 @@ skips system settings/defaults files whose directory is not administrator/root o
 them for Gemini behavior and never redirects `GEMINI_CLI_SYSTEM_SETTINGS_PATH`/
 `GEMINI_CLI_SYSTEM_DEFAULTS_PATH` into a managed profile, for sessions, panes or sign-in.
 
-### 8.7.1 Managed-profile CLI versions (certified compatibility lines)
+### 8.7.1 Provider capability compatibility
 
-Managed Codex and Gemini profiles depend on how the CLI loads configuration, credentials and
-flags, so they run only certified releases. Certification is per **compatibility line**:
-`MAJOR.MINOR` (for 0.x releases, `0.MINOR`). A version is accepted when it is a release build (no
-pre-release or build suffix) in a certified line and at or above that line's certified floor.
-Later patch releases in a certified line are accepted, so a provider patch release does not break
-signed-in users; a new line or major fails closed until its first release is certified on the real
-binary and added (`crates/providers/src/version_window.rs`, `codex::MANAGED_VERSIONS`,
-`gemini::MANAGED_VERSIONS`). Thread start, panes and sign-in use the same predicate. A refusal
-names the version found, the supported lines and the command that installs the newest certified
-release (`npm install -g @openai/codex@0.160.0`, `npm install -g @google/gemini-cli@0.61.0`).
+Managed Codex profiles use capability and protocol negotiation, not a single allowed minor line.
+`codex::compatibility::CodexCapabilities` records the parsed SemVer, release channel, managed-profile
+support, interactive and headless sessions, resume, model selection, reasoning-effort visibility,
+MCP, tools, structured output, app-server support, no-daemon behavior and configuration overrides.
+The adapter proves required commands and flags from bounded help probes, then proves the isolated
+managed-profile app-server handshake and schema. Account, model and workspace-dependent features
+remain `Unknown` until the provider reports them; KalCode never turns version presence into a fake
+capability.
 
-| CLI | Certified lines (floor) | Refused examples |
-| --- | --- | --- |
-| Codex CLI | 0.155 (0.155.1), 0.156 (0.156.0), 0.157 (0.157.0), 0.158 (0.158.0), 0.159 (0.159.0), 0.160 (0.160.0) | 0.155.0, 0.161.0, 0.160.0-alpha.1, 1.0.0 |
-| Gemini CLI | 0.61 (0.61.0) | 0.60.x, 0.62.0, 0.61.0-preview.1, 1.0.0 |
+SemVer controls channel classification only. `0.161.0` is stable. Versions such as
+`0.162.0-alpha.16`, `0.162.0-beta.1` and `0.162.0-rc.1` are actual prereleases and use the explicit
+experimental compatibility path. Admission follows this order:
 
-Certification (2026-09-28) ran the official npm packages installed into scratch prefixes
+| Observed Codex runtime | Result |
+| --- | --- |
+| Known good and required probes pass | Use normally |
+| Unknown newer stable and required probes pass | Use normally; a new minor is not an error |
+| Prerelease and required probes pass | Use through the experimental compatibility path |
+| Signed known-bad rule or a required probe fails | Use the last-known-good KalCode runtime when available |
+| No compatible runtime after recovery | Return `provider_capability_unavailable`; never claim KalCode only supports one minor |
+
+Probe results are cached by a binary stamp that includes the canonical executable, file identity
+and launcher-affecting environment. Replacing the binary invalidates the cache. Startup prewarms
+compatibility asynchronously; a terminal appears without waiting for a remote lookup. The account
+manager also re-resolves Codex for each new operation, including when Codex was missing when KalCode
+started and was installed later. An agent already running keeps the exact process/runtime it
+started with. New agents use the newly validated runtime, so adopting an update never kills or
+restarts unrelated work.
+
+`managed_runtime::RuntimeStore` keeps immutable, content-addressed KalCode-owned runtime snapshots.
+It never overwrites or downgrades the user's global Codex installation, and it never copies the
+user's credentials or configuration into a provider distribution. A candidate becomes current
+only after its capability and startup probes pass. A failed or corrupt candidate leaves the prior
+validated snapshot available; active runtime leases keep older sessions valid until they finish.
+Distribution copying and integrity hashing run in the background prewarmer. A foreground launch
+reuses an already pinned snapshot when available; otherwise it probes and launches the installed
+CLI directly while background preparation continues. It never waits for a distribution copy.
+Background retention preserves the current and previous recovery snapshots and every active
+cross-process lease, then removes unleased older snapshots and abandoned staging directories.
+Managed runtime readiness is separate from native installation detection: a verified recovery
+runtime remains selectable when the global CLI is missing, without reporting that global CLI as
+installed. Threads, KalVoice, provider health and launch menus consume that same readiness.
+
+`compatibility.rs` is the provider-neutral policy layer for Codex, Claude Code, Gemini, Cursor and
+future CLI adapters. Provider-specific probes stay in their adapters. A remote compatibility
+manifest is declarative JWS data verified with application-trusted Ed25519 keys. It can specify a
+stable floor, tested versions, known-bad ranges, protocol constraints and capability disables. It
+can only narrow local probe results; it cannot grant a capability or execute downloaded code.
+Documents have a bounded schema, size, revision and lifetime, are written atomically as immutable
+cache entries, and fall back to the verified last-known-good entry when offline or when a download
+is corrupt. Remote revision rollback is rejected using verified persisted revisions and the
+current in-process revision. This protects distribution integrity, not against the OS account
+owner deleting all application state. Policy publication uses
+`tooling/provider-compatibility/compatibility.mjs` and the existing protected distribution signer;
+the desktop only downloads the fixed HTTPS policy endpoint and never executes policy content.
+To roll back a policy decision, publish the previous declarative content with a higher signed
+revision. Downloaded older revisions cannot replace newer verified rules. App rollback is a
+revert PR and a newer signed internal build; keep provider profiles and authentication intact.
+
+Gemini keeps its existing 0.61 managed-profile compatibility window until its adapter moves to the
+shared capability layer. Claude Code keeps its documented current release requirement. Codex's
+install recommendation is deliberately unpinned (`npm install -g @openai/codex`); KalCode never
+asks a person to downgrade a normal stable provider update.
+
+Historical certification (2026-09-28 through 2026-10-03) ran the official npm packages installed into scratch prefixes
 (`npm install --prefix <scratch>/codex-<v> @openai/codex@<v>`), never a global install, with no
 sign-in, prompt or quota. Codex: `codex::managed_policy::tests::certifies_codex_native_config_parity`
 (`--version` format `codex-cli <v>`, the user's native MCP configuration reaching the managed
 session while a stale profile copy does not, and every headless `exec --json --ignore-rules --ignore-user-config` argv, including
 `exec resume`, accepted) and `tests/codex_certification_real.rs` (production sign-in path under
-the guardian: version gate, app-server `initialize` reporting the managed `codexHome`,
+the guardian: capability admission, app-server `initialize` reporting the managed `codexHome`,
 `account/read` shape, `account/login/start` returning an official-origin `authUrl` and a
 `loginId`, and `account/login/cancel`); select a binary with `KALCODE_CERTIFY_CODEX` and pin its
 version with `KALCODE_CERTIFY_CODEX_VERSION`. Gemini: `tests/gemini_sign_in_real.rs`
 (`KALCODE_REAL_GEMINI`). Codex 0.159.0 and 0.160.0 were certified on 2026-10-03 with the same two
-tests on Windows and macOS.
+tests on Windows and macOS. These rows are evidence of tested releases, not an allowlist that
+rejects a later stable minor.
 
 | Package | dist.integrity (sha512, prefix) | Result |
 | --- | --- | --- |
