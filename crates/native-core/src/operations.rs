@@ -1901,6 +1901,16 @@ fn bump_revision(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Whether an Operations run owns this exact thread: Operations reserve the thread identity
+/// before launch, and only Operations recovery may decide what happens to it after a restart.
+pub fn owns_thread(conn: &Connection, thread_id: &str) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM operations WHERE thread_id = ?1)",
+        [thread_id],
+        |row| row.get(0),
+    )?)
+}
+
 fn operation_status(conn: &Connection, id: &str) -> Result<OperationStatus> {
     dependency_status(conn, id)?.ok_or_else(not_found)
 }

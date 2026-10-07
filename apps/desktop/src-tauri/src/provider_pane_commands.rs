@@ -175,6 +175,22 @@ pub struct ProviderPanesState {
     /// `<data>/sessions`: pane markers survive restarts.
     sessions_dir: PathBuf,
     routing: DecisionRouting,
+    /// Whether an Operations run owns a thread. Such panes are never offered to Smart Resume:
+    /// Operations recovery owns them and never relaunches work automatically.
+    operation_owned: Option<OperationOwner>,
+}
+
+type OperationOwner = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
+/// Reads ownership from the durable Operations ledger. Unreadable means owned: a pane is only
+/// offered for automatic restore when it is provably not Operations work.
+fn operation_owner(core: &Arc<kalcode_core::Core>) -> OperationOwner {
+    let core = Arc::downgrade(core);
+    Arc::new(move |thread_id: &str| {
+        core.upgrade().is_none_or(|core| {
+            kalcode_core::operations::owns_thread(&core.reader(), thread_id).unwrap_or(true)
+        })
+    })
 }
 
 /// `kalcode-hook` next to the KalCode executable. Debug and `e2e` builds may point at another
@@ -271,13 +287,15 @@ impl ProviderPanesState {
         } else {
             ThreadRuntimeKind::Headless
         });
+        let recoverable = interactive
+            && summary.archived_at.is_none()
+            && interrupted_by_application_exit(summary.status, summary.current_activity.as_deref());
         summary.restart_recoverable = Some(
-            interactive
-                && summary.archived_at.is_none()
-                && interrupted_by_application_exit(
-                    summary.status,
-                    summary.current_activity.as_deref(),
-                ),
+            recoverable
+                && !self
+                    .operation_owned
+                    .as_ref()
+                    .is_some_and(|owned| owned(&summary.id)),
         );
     }
 
@@ -304,6 +322,7 @@ impl ProviderPanesState {
             unavailable: Some(reason),
             sessions_dir: app.paths.data_dir.join("sessions"),
             routing: DEFAULT_DECISION_ROUTING,
+            operation_owned: app.core.as_ref().map(operation_owner),
         };
         let visible = app
             .info
@@ -419,6 +438,7 @@ impl ProviderPanesState {
             unavailable: None,
             sessions_dir: app.paths.data_dir.join("sessions"),
             routing,
+            operation_owned: app.core.as_ref().map(operation_owner),
         }
     }
 
@@ -1258,6 +1278,7 @@ mod tests {
             unavailable: None,
             sessions_dir,
             routing: DEFAULT_DECISION_ROUTING,
+            operation_owned: None,
         }
     }
 
@@ -1406,6 +1427,33 @@ mod tests {
         assert!(!created.resumable);
         assert_eq!(created.terminal_id, None);
         assert_eq!(created.worktree_id, None);
+    }
+
+    #[test]
+    fn operations_owned_panes_are_never_offered_for_automatic_restore() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let sessions = dir.path().join("sessions");
+        let owned_id = kalcode_contracts::ids::new_id();
+        let mut state = pane_state(sessions.clone());
+        let owned = owned_id.clone();
+        state.operation_owned = Some(Arc::new(move |thread_id: &str| thread_id == owned));
+
+        // An Operations-owned pane (a Squad member or a queued agent run) that KalCode's exit
+        // interrupted stays with Operations recovery, which never relaunches work automatically.
+        let mut operation_pane = summary_fixture(owned_id);
+        mark_interactive(&sessions, &operation_pane.id).expect("mark operation pane");
+        state.stamp_runtime_kind(&mut operation_pane);
+        assert_eq!(
+            operation_pane.runtime_kind,
+            Some(ThreadRuntimeKind::InteractivePty)
+        );
+        assert_eq!(operation_pane.restart_recoverable, Some(false));
+
+        // An ordinary Code agent interrupted the same way is still offered to Smart Resume.
+        let mut code_pane = summary_fixture(kalcode_contracts::ids::new_id());
+        mark_interactive(&sessions, &code_pane.id).expect("mark code pane");
+        state.stamp_runtime_kind(&mut code_pane);
+        assert_eq!(code_pane.restart_recoverable, Some(true));
     }
 
     #[test]
