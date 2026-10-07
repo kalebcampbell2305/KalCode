@@ -403,6 +403,15 @@ export async function closeGracefully(app: Running) {
       // The process may have closed between the CDP action and the UI Automation lookup.
     }
   }
+  if (!requested && !ownedChildIsTerminal(app.child)) {
+    // Session 0 (the gate runner) has no UI Automation, so without this the "graceful" close was a
+    // TerminateProcess, and WebView2 state written just before it (localStorage) was not durable.
+    try {
+      requested = postMainWindowClose(app.child.pid ?? -1);
+    } catch {
+      // Same race as above; the kill below still ends the process.
+    }
+  }
   if (!requested && !ownedChildIsTerminal(app.child)) app.child.kill();
   if (!(await waitForOwnedExit(app.child, 10_000))) await stopOwnedProcess(app.child, true);
   await settleOwnedWebview(ownedWebviewProbe(app.dataDir));
@@ -630,6 +639,21 @@ export function inServiceSession(): boolean {
     }
   }
   return serviceSession;
+}
+
+/**
+ * Posts WM_CLOSE to process `pid`'s main window (`Process.CloseMainWindow`), the message the close
+ * button sends. Unlike UI Automation this works in session 0: the app is this process's child and
+ * shares its desktop. Returns whether the message was posted.
+ */
+export function postMainWindowClose(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid < 1) return false;
+  const script = `try { if ((Get-Process -Id ${pid} -ErrorAction Stop).CloseMainWindow()) { 'closed' } else { 'none' } } catch { 'none' }`;
+  const out = execFileSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], {
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  return out.trim().endsWith("closed");
 }
 
 export function closeWindowNamed(pid: number, name: string): boolean {

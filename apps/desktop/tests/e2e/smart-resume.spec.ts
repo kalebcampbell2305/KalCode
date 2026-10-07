@@ -323,13 +323,22 @@ test("Continue where I left off restores one recoverable desk without reviving e
     // starting a provider. The one entry-point click opens the exact desk and starts recovery.
     app = await launch(dataDir, env);
     page = app.page;
+    // The restore preference and pane focus live in WebView2 storage; prove they survived the
+    // restart first, so a lost write is named instead of surfacing as a missing heading or focus.
+    expect(
+      await page.evaluate((key) => window.localStorage.getItem(key), restorePreferenceKey),
+      "the manual restore preference survived the restart",
+    ).toBe("manual");
+    expect(
+      await page.evaluate((key) => window.localStorage.getItem(key), focusStorageKey),
+      "the saved pane focus survived the restart",
+    ).toBe(savedFocus);
     await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
     const recovery = page.getByRole("region", { name: "Desk recovery" });
     await expect(recovery.getByText("saved-desk is where you left it", { exact: true })).toBeVisible();
     expect((await invoke<WorkspaceLayout>(page, "layout_get", { workspaceId: workspace.id })).layout).toEqual(
       savedLayout,
     );
-    expect(await page.evaluate((key) => window.localStorage.getItem(key), restorePreferenceKey)).toBe("manual");
     expect(claudeLaunches(bin)).toHaveLength(2);
     expect(processesMatching(bin)).toEqual([]);
 
@@ -456,6 +465,10 @@ test("Continue where I left off restores one recoverable desk without reviving e
     // Automatic startup paints Code and resumes both saved-open agents exactly once each.
     app = await launch(dataDir, env);
     page = app.page;
+    expect(
+      await page.evaluate((key) => window.localStorage.getItem(key), restorePreferenceKey),
+      "the automatic restore preference survived the restart",
+    ).toBe("automatic");
     await expect(page.getByRole("heading", { level: 1, name: "saved-desk" })).toBeVisible();
     await expect(visiblePanes(page)).toHaveCount(automaticPaneIds.length);
     expect(await paneIds(page)).toEqual(automaticPaneIds);
@@ -463,7 +476,6 @@ test("Continue where I left off restores one recoverable desk without reviving e
     expect((await invoke<WorkspaceLayout>(page, "layout_get", { workspaceId: workspace.id })).layout).toEqual(
       automaticLayout,
     );
-    expect(await page.evaluate((key) => window.localStorage.getItem(key), restorePreferenceKey)).toBe("automatic");
 
     await expect.poll(() => claudeLaunches(bin).length, { timeout: 30_000 }).toBe(6);
     await expect.poll(() => processesMatching(bin).length, { timeout: 30_000 }).toBe(2);
