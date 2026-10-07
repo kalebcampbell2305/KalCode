@@ -61,6 +61,27 @@ struct WelcomeView: View {
                         }
                         .buttonStyle(SecondaryButtonStyle())
                         .accessibilityIdentifier("welcome.paste")
+
+                        Button {
+                            model.enterDemo()
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "play.circle")
+                                    .font(.system(size: 15, weight: .medium))
+                                Text("Explore a demo workstation")
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .opacity(0.6)
+                            }
+                            .font(.kcButtonSmall)
+                            .foregroundStyle(Palette.accentText)
+                            .padding(.vertical, 10)
+                            .padding(.horizontal, 16)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityHint("Try every feature with a simulated workstation. Nothing connects to your network.")
+                        .accessibilityIdentifier("welcome.demo")
                     }
                     .frame(maxWidth: 420)
 
