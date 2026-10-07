@@ -6,4 +6,9 @@ export type OperationRecord = { id: string, spec: OperationSpec,
 /**
  * operations, thread, terminal, or background; observed records cannot be queued twice.
  */
-source: string, status: OperationStatus, workspaceName: string, branch: string | null, version: string | null, accountLabel: string | null, terminalId: string | null, threadId: string | null, createdAt: string, startedAt: string | null, endedAt: string | null, currentAction: string | null, outcome: string | null, position: number, blockers: Array<string>, };
+source: string, status: OperationStatus, workspaceName: string, branch: string | null, version: string | null, accountLabel: string | null, terminalId: string | null, threadId: string | null, createdAt: string, startedAt: string | null, endedAt: string | null, currentAction: string | null,
+/**
+ * Durable, actionable reason this task needs the user's decision. Dependency blockers are
+ * represented separately in `blockers`; ordinary user-paused work leaves this absent.
+ */
+attentionReason?: string, outcome: string | null, position: number, blockers: Array<string>, };

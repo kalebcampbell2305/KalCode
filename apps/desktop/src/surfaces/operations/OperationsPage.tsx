@@ -68,6 +68,7 @@ import {
 import { useOptionalAccount } from "../../account/AccountProvider.tsx";
 import { type AccountTier, planTier, tierName } from "../../ipc/account.ts";
 import type { OperationsApi } from "../../ipc/operations.ts";
+import type { SquadsApi } from "../../ipc/squads.ts";
 import {
   type OperationsVoiceFocusLease,
   type OperationsVoiceTarget,
@@ -82,6 +83,7 @@ import { useOpenInPane } from "../../shell/panes/useOpenInPane.ts";
 import { PERMISSION_MODE_HINTS, PERMISSION_MODE_LABELS } from "../dashboard/data/format.ts";
 import { focusSection } from "../dashboard/useNow.ts";
 import { accountFullLabel, accountName, accountSignIn, sortAccounts } from "../providers/accountIdentity.ts";
+import { SquadsPanel } from "../squads/SquadsPanel.tsx";
 import {
   type ActivityRange,
   activityLevel,
@@ -104,6 +106,7 @@ import { useOperations } from "./useOperations.ts";
 
 export interface OperationsPageProps {
   client: OperationsApi;
+  squads?: SquadsApi;
   threadOptions: () => Promise<ThreadOptions>;
   providerAccounts?: () => Promise<ProviderAccount[]>;
 }
@@ -238,7 +241,7 @@ function Metadata({ record }: { record: OperationRecord }) {
   );
 }
 
-export function OperationsPage({ client, threadOptions, providerAccounts }: OperationsPageProps) {
+export function OperationsPage({ client, squads, threadOptions, providerAccounts }: OperationsPageProps) {
   const state = useOperations(client);
   const toast = useToast();
   const workspaces = useWorkspaces();
@@ -538,6 +541,11 @@ export function OperationsPage({ client, threadOptions, providerAccounts }: Oper
           <TabsTrigger value="queue" data-operations-tab="queue">
             Queue
           </TabsTrigger>
+          {squads ? (
+            <TabsTrigger value="squads" data-operations-tab="squads">
+              Squads
+            </TabsTrigger>
+          ) : null}
           <TabsTrigger value="services" data-operations-tab="services">
             Services
           </TabsTrigger>
@@ -570,9 +578,22 @@ export function OperationsPage({ client, threadOptions, providerAccounts }: Oper
             mutate={mutate}
             threadOptions={threadOptions}
             providerAccounts={providerAccounts}
+            squads={squads}
             onRun={showRun}
           />
         </TabsContent>
+        {squads ? (
+          <TabsContent value="squads">
+            <SquadsPanel
+              client={squads}
+              operations={client}
+              workspaceId={workspaceId || workspaces.active?.id || ""}
+              threadOptions={threadOptions}
+              providerAccounts={providerAccounts}
+              onOperationsChanged={() => void state.refresh()}
+            />
+          </TabsContent>
+        ) : null}
         <TabsContent value="services">
           <ServicesView
             snapshot={snapshot}
@@ -823,6 +844,27 @@ export type OperationsMutationRunner = (
   success?: string,
 ) => Promise<boolean>;
 
+/** Operation ids that belong to a Squad launch. Launch history keeps every member it started. */
+function useSquadMemberIds(squads: SquadsApi | undefined, revision: number): ReadonlySet<string> {
+  const [ids, setIds] = useState<ReadonlySet<string>>(() => new Set());
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new queue revision may add Squad members.
+  useEffect(() => {
+    if (!squads) return;
+    let live = true;
+    squads.snapshot().then(
+      (snapshot) => {
+        if (!live) return;
+        setIds(new Set(snapshot.launches.flatMap((launch) => launch.members.map((member) => member.operationId))));
+      },
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, [squads, revision]);
+  return ids;
+}
+
 function QueueView({
   snapshot,
   client,
@@ -830,6 +872,7 @@ function QueueView({
   mutate,
   threadOptions,
   providerAccounts,
+  squads,
   onRun,
 }: {
   snapshot: OperationsSnapshot;
@@ -838,9 +881,11 @@ function QueueView({
   mutate: OperationsMutationRunner;
   threadOptions: () => Promise<ThreadOptions>;
   providerAccounts?: () => Promise<ProviderAccount[]>;
+  squads?: SquadsApi;
   onRun: (id: string) => void;
 }) {
   const sections = queueSections(snapshot.items);
+  const squadMembers = useSquadMemberIds(squads, snapshot.revision);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const [dragged, setDragged] = useState<string | null>(null);
@@ -997,14 +1042,17 @@ function QueueView({
                 >
                   <Play /> Run now
                 </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={busy !== null}
-                  onClick={() => void mutate(`hold:${item.id}`, () => client.hold(item.id, item.status !== "paused"))}
-                >
-                  {item.status === "paused" ? <Play /> : <Pause />} {item.status === "paused" ? "Resume" : "Hold"}
-                </Button>
+                {/* A paused Squad member restarts only through Run now, which asks again. */}
+                {item.status === "paused" && squadMembers.has(item.id) ? null : (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy !== null}
+                    onClick={() => void mutate(`hold:${item.id}`, () => client.hold(item.id, item.status !== "paused"))}
+                  >
+                    {item.status === "paused" ? <Play /> : <Pause />} {item.status === "paused" ? "Resume" : "Hold"}
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant="danger"

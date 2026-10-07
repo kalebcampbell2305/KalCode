@@ -376,7 +376,9 @@ pub(crate) fn validate_action(
             provider_id.as_ref().is_none_or(valid_provider)
         }
         // Closing agents ends real provider processes: only the deterministic grammar may ask.
-        KalVoiceIntent::CloseIdleAgents { .. } => false,
+        KalVoiceIntent::CloseIdleAgents { .. }
+        | KalVoiceIntent::LaunchSquad { .. }
+        | KalVoiceIntent::LaunchRecipe { .. } => false,
         // Anything that sends or removes prompt text comes only from the deterministic
         // grammar: an interpreted guess must never put words into a provider session.
         KalVoiceIntent::SubmitFocused

@@ -666,6 +666,39 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
         case "open_provider_panes":
           scopedPane(directive.workspaceId, { kind: "open-provider-panes", threadIds: directive.threadIds });
           break;
+        case "launch_squad":
+        case "launch_recipe": {
+          const launch =
+            directive.kind === "launch_squad"
+              ? client.squads.launch(directive.query, directive.workspaceId, scope.requestId, null)
+              : client.squads.launchRecipe(directive.query, directive.workspaceId, scope.requestId, null);
+          void launch.then(
+            async (result) => {
+              if (scope.signal.aborted) return;
+              const count = result.members.length;
+              scope.report({
+                ok: true,
+                message: `Launched ${result.name} with ${count} ${count === 1 ? "agent" : "agents"}.`,
+              });
+              try {
+                const activated = await workspaces.activate(directive.workspaceId);
+                if (!scope.signal.aborted && activated) navigate("code");
+              } catch (error) {
+                if (!scope.signal.aborted) {
+                  toast.show({
+                    tone: "danger",
+                    title: "Squads",
+                    description: `The Squad launched, but KalCode couldn't open its workspace. ${toKalCodeError(error).message}`,
+                  });
+                }
+              }
+            },
+            (error) => {
+              if (!scope.signal.aborted) scope.report({ ok: false, message: toKalCodeError(error).message });
+            },
+          );
+          break;
+        }
         case "control_pane":
           scopedPane(directive.workspaceId, { kind: "control-pane", command: directive.command });
           break;

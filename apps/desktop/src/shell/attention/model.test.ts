@@ -1,7 +1,14 @@
-import type { Notification, ThreadSummary } from "@kalcode/protocol";
+import type { Notification, OperationRecord, ThreadSummary } from "@kalcode/protocol";
 import { describe, expect, it } from "vitest";
 import { waitingAgents } from "../../runtime/actions.ts";
-import { attentionItems, attentionSummary, REVIEW_WINDOW_MS, STALLED_AFTER_MS, sourceOf } from "./model.ts";
+import {
+  type AttentionOperation,
+  attentionItems,
+  attentionSummary,
+  REVIEW_WINDOW_MS,
+  STALLED_AFTER_MS,
+  sourceOf,
+} from "./model.ts";
 
 const NOW = Date.parse("2026-10-05T12:00:00Z");
 const ago = (ms: number) => new Date(NOW - ms).toISOString();
@@ -56,9 +63,57 @@ function signOut(patch: Partial<Notification> = {}): Notification {
   } as Notification;
 }
 
+function operation(patch: Partial<OperationRecord> & { attentionReason?: string | null } = {}): AttentionOperation {
+  return {
+    id: "op-1",
+    spec: {
+      name: "Release desktop",
+      workspaceId: "w1",
+      kind: "release",
+      command: "pnpm release",
+      prompt: null,
+      providerId: null,
+      providerAccountId: null,
+      model: null,
+      effort: null,
+      dependencies: [],
+      priority: 8,
+      lane: "next",
+      environment: "production",
+      urls: [],
+      envKeys: [],
+    },
+    source: "operations",
+    status: "running",
+    workspaceName: "kalcode",
+    branch: "feat/release",
+    version: null,
+    accountLabel: null,
+    terminalId: "term-1",
+    threadId: null,
+    createdAt: ago(60_000),
+    startedAt: ago(50_000),
+    endedAt: null,
+    currentAction: "Packaging",
+    outcome: null,
+    position: 0,
+    blockers: [],
+    ...patch,
+  } as AttentionOperation;
+}
+
 const none = new Set<string>();
 const items = (input: Partial<Parameters<typeof attentionItems>[0]>) =>
-  attentionItems({ agents: [], approvals: [], notifications: [], dismissed: none, now: NOW, ...input });
+  attentionItems({
+    agents: [],
+    approvals: [],
+    notifications: [],
+    operations: [],
+    operationsFailed: false,
+    dismissed: none,
+    now: NOW,
+    ...input,
+  });
 
 describe("attentionItems", () => {
   it("keeps ordinary progress out of the inbox", () => {
@@ -180,12 +235,139 @@ describe("attentionItems", () => {
       expect(item?.source).toBe(`${providerName} · Billing Fix`);
     }
   });
+  it("shows one actionable blocked operation and opens its exact queue row", () => {
+    const [item] = items({
+      operations: [
+        operation({
+          status: "paused",
+          startedAt: null,
+          currentAction: "Choose another Codex account",
+          attentionReason: "The selected Codex account is signed out. Choose another account or sign in.",
+        }),
+      ],
+    });
+    expect(item).toMatchObject({
+      kind: "blocked",
+      source: "Operations",
+      what: "Release desktop is blocked",
+      why: "The selected Codex account is signed out. Choose another account or sign in.",
+      dismissible: false,
+      actions: [
+        {
+          id: "open-operation",
+          operationId: "op-1",
+          workspaceId: "w1",
+          tab: "queue",
+        },
+      ],
+    });
+  });
+
+  it("keeps expected dependency waits and ordinary pauses out, surfacing only the failed dependency", () => {
+    const failed = operation({ id: "test", status: "failed", endedAt: ago(5_000), outcome: "Tests failed." });
+    const waiting = operation({
+      id: "deploy",
+      status: "blocked",
+      startedAt: null,
+      spec: { ...operation().spec, name: "Deploy", dependencies: ["test"] },
+      blockers: ["test"],
+      currentAction: "Waiting for Tests",
+    });
+    const paused = operation({ id: "docs", status: "paused", startedAt: null, currentAction: "Held by user" });
+    const list = items({ operations: [waiting, paused, failed] });
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({ what: "Release desktop failed", actions: [{ tab: "runs" }] });
+  });
+
+  it("does not duplicate an operation for the same agent session", () => {
+    const list = items({
+      agents: [agent({ id: "a1", status: "failed", error: { code: "failed", message: "Agent failed." } })],
+      operations: [operation({ status: "failed", endedAt: ago(1_000), threadId: "a1", outcome: "Run failed." })],
+    });
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({ agentId: "a1" });
+    expect(list[0]?.source).toContain("Billing Fix");
+  });
+
+  it("surfaces interrupted work, then clears it after recovery or when it becomes stale", () => {
+    const interrupted = operation({ status: "interrupted", endedAt: ago(2_000), outcome: "The host restarted." });
+    expect(items({ operations: [interrupted] })[0]).toMatchObject({
+      kind: "failed",
+      what: "Release desktop was interrupted",
+      why: "The host restarted.",
+    });
+    expect(items({ operations: [{ ...interrupted, status: "running", endedAt: null }] })).toEqual([]);
+    expect(items({ operations: [{ ...interrupted, endedAt: ago(REVIEW_WINDOW_MS + 1) }] })).toEqual([]);
+  });
+
+  it("never reports all-clear when the canonical Operations read fails", () => {
+    const [item] = items({ operationsFailed: true });
+    expect(item).toMatchObject({
+      key: "operations:unavailable",
+      kind: "failed",
+      what: "Couldn't check runs and queue",
+      dismissible: false,
+      actions: [{ id: "open-operations" }],
+    });
+  });
+
+  it("shows one ownership warning per overlapping pair with both exact agents", () => {
+    const list = items({
+      agents: [
+        agent({ id: "billing", name: "Billing Fix" }),
+        agent({ id: "pricing", name: "Pricing Update", providerName: "Claude Code" }),
+      ],
+      overlaps: [
+        {
+          agentIds: ["billing", "pricing"],
+          workspaceId: "w1",
+          files: ["README.md", "src/pricing.ts"],
+          incomplete: false,
+        },
+      ],
+    });
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({
+      key: "ownership:billing:pricing",
+      kind: "blocked",
+      source: "Ownership",
+      what: "Billing Fix and Pricing Update overlap",
+      actions: [
+        { id: "open-agent", agentId: "billing", workspaceId: "w1" },
+        { id: "open-agent", agentId: "pricing", workspaceId: "w1" },
+      ],
+    });
+    expect(list[0]?.why).toContain("README.md, src/pricing.ts");
+  });
+
+  it("surfaces failed and incomplete shared reads instead of a false all-clear", () => {
+    const list = items({ agentReadFailed: true, ownershipFailed: true });
+    expect(list.map((item) => item.key)).toEqual(["agents:unavailable", "ownership:unavailable"]);
+    expect(list.map((item) => item.actions[0]?.id)).toEqual(["retry-agents", "retry-ownership"]);
+
+    const [partial] = items({ ownershipIncomplete: true });
+    expect(partial).toMatchObject({
+      key: "ownership:incomplete",
+      kind: "blocked",
+      actions: [{ id: "retry-ownership" }],
+    });
+    expect(partial?.why).toContain("more may exist");
+  });
 });
 
 describe("copy and helpers", () => {
   it("summarises counts provider-neutrally", () => {
     expect(attentionSummary([])).toBe("Nothing needs you");
     expect(attentionSummary(items({ agents: [agent({ status: "failed" })] }))).toBe("1 blocked on you");
+    expect(
+      attentionSummary(
+        items({
+          operations: [
+            operation({ status: "paused", startedAt: null, attentionReason: "Choose a signed-in account." }),
+          ],
+        }),
+      ),
+    ).toBe("1 blocked on you");
     expect(
       attentionSummary(
         items({

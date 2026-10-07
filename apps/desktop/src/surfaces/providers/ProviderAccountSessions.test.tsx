@@ -105,12 +105,24 @@ describe("provider account session restoration", () => {
     );
   });
 
-  it("publishes models for the identity confirmed by the same Cursor response", async () => {
-    const saved = account("cursor-a", "cursor", "Work");
-    const checked = { ...saved, providerReportedIdentity: "verified@example.com" };
+  it("publishes the exact account-scoped model catalog without mutating account identity", async () => {
+    const saved = account("codex-a", "codex", "Work");
     runtime.client = {
       listProviderAccounts: vi.fn(async () => [saved]),
-      refreshCursorAccount: vi.fn(async () => ({ account: checked, models: [], modelsError: null })),
+      refreshCodexAccount: vi.fn(async () => saved),
+      providerAccountModels: vi.fn(async () => ({
+        accountId: saved.id,
+        providerId: saved.providerId,
+        models: [
+          {
+            id: "model-a",
+            displayName: "Model A",
+            isDefault: true,
+            defaultEffort: "high",
+            supportedEfforts: ["high"],
+          },
+        ],
+      })),
     } as unknown as KalCodeClient;
     const view = renderHook(useOptionalProviderAccountSessions, { wrapper });
     await waitFor(() => expect(view.result.current?.accounts).toEqual([saved]));
@@ -118,9 +130,116 @@ describe("provider account session restoration", () => {
       await view.result.current?.discoverModels(saved.id);
     });
     expect(view.result.current?.states.get(saved.id)).toMatchObject({
-      account: checked,
-      models: { status: "available" },
+      account: saved,
+      models: {
+        status: "available",
+        items: [{ id: "model-a", defaultEffort: "high", supportedEfforts: ["high"] }],
+      },
     });
+  });
+
+  it("keeps the previous exact model choices visible while their account refresh is checking", async () => {
+    const saved = account("codex-a", "codex", "Work");
+    const first = {
+      accountId: saved.id,
+      providerId: saved.providerId,
+      models: [
+        {
+          id: "model-a",
+          displayName: "Model A",
+          isDefault: true,
+          defaultEffort: "high",
+          supportedEfforts: ["high"],
+        },
+      ],
+    };
+    const refresh = deferred<typeof first>();
+    runtime.client = {
+      listProviderAccounts: vi.fn(async () => [saved]),
+      refreshCodexAccount: vi.fn(async () => saved),
+      providerAccountModels: vi.fn().mockResolvedValueOnce(first).mockReturnValueOnce(refresh.promise),
+    } as unknown as KalCodeClient;
+    const view = renderHook(useOptionalProviderAccountSessions, { wrapper });
+    await waitFor(() => expect(view.result.current?.accounts).toEqual([saved]));
+    await act(async () => {
+      await view.result.current?.discoverModels(saved.id);
+    });
+    let request: Promise<void> | undefined;
+    act(() => {
+      request = view.result.current?.discoverModels(saved.id);
+    });
+    await waitFor(() =>
+      expect(view.result.current?.states.get(saved.id)?.models).toMatchObject({
+        status: "checking",
+        items: [{ id: "model-a", supportedEfforts: ["high"] }],
+      }),
+    );
+    await act(async () => {
+      refresh.resolve(first);
+      await request;
+    });
+    expect(view.result.current?.states.get(saved.id)?.models?.status).toBe("available");
+  });
+
+  it("rejects a model catalog for a different account or provider", async () => {
+    const saved = account("codex-a", "codex", "Work");
+    runtime.client = {
+      listProviderAccounts: vi.fn(async () => [saved]),
+      refreshCodexAccount: vi.fn(async () => saved),
+      providerAccountModels: vi.fn(async () => ({
+        accountId: "codex-b",
+        providerId: saved.providerId,
+        models: [],
+      })),
+    } as unknown as KalCodeClient;
+    const view = renderHook(useOptionalProviderAccountSessions, { wrapper });
+    await waitFor(() => expect(view.result.current?.accounts).toEqual([saved]));
+    await act(async () => {
+      await view.result.current?.discoverModels(saved.id);
+    });
+    expect(view.result.current?.states.get(saved.id)?.models).toMatchObject({
+      status: "unavailable",
+      items: [],
+      reason: "KalCode couldn't complete that request.",
+    });
+  });
+
+  it("restores only the affected account when discovery confirms its session expired", async () => {
+    const codexA = account("codex-a", "codex", "Codex A");
+    const codexB = { ...account("codex-b", "codex", "Codex B"), isDefault: false };
+    const expiredA = {
+      ...codexA,
+      authenticationState: "not_authenticated" as const,
+      providerReportedIdentity: null,
+      lastErrorCode: "provider_account_not_authenticated",
+    };
+    runtime.client = {
+      listProviderAccounts: vi.fn().mockResolvedValueOnce([codexA, codexB]).mockResolvedValueOnce([expiredA, codexB]),
+      refreshCodexAccount: vi.fn(async (id: string) => (id === codexA.id ? codexA : codexB)),
+      providerAccountModels: vi.fn(async () => {
+        throw {
+          category: "authentication",
+          code: "provider_account_not_authenticated",
+          message: "This account needs to reconnect.",
+          retryable: false,
+        };
+      }),
+    } as unknown as KalCodeClient;
+    const view = renderHook(useOptionalProviderAccountSessions, { wrapper });
+    await waitFor(() => expect(view.result.current?.checking.size).toBe(0));
+    await act(async () => {
+      await view.result.current?.discoverModels(codexA.id);
+    });
+    expect(view.result.current?.states.get(codexA.id)).toMatchObject({
+      account: expiredA,
+      health: { state: "expired", usable: false },
+      models: null,
+    });
+    expect(view.result.current?.states.get(codexB.id)).toMatchObject({
+      account: codexB,
+      health: { state: "connected", usable: true },
+    });
+    expect(runtime.client.listProviderAccounts).toHaveBeenCalledTimes(2);
   });
 
   it.each(["codex", "claude-code", "cursor", "gemini-cli"] as const)(
@@ -131,10 +250,7 @@ describe("provider account session restoration", () => {
         listProviderAccounts: vi.fn(async () => [saved]),
         refreshCodexAccount: vi.fn(async () => saved),
         refreshGeminiAccount: vi.fn(async () => saved),
-        refreshCursorAccount: vi.fn(async () => {
-          throw new Error("Models unavailable");
-        }),
-        threadOptions: vi.fn(async () => {
+        providerAccountModels: vi.fn(async () => {
           throw new Error("Models unavailable");
         }),
         providerAccountUsage: vi.fn(async () => {
@@ -166,39 +282,52 @@ describe("provider account session restoration", () => {
   );
 
   it("coalesces model discovery and discards results after the same account changes identity", async () => {
-    const original = account("cursor-a", "cursor", "Work");
-    const discovered = deferred<Awaited<ReturnType<KalCodeClient["refreshCursorAccount"]>>>();
+    const original = account("codex-a", "codex", "Work");
+    let currentAccount = original;
+    const discovered = deferred<{
+      accountId: string;
+      providerId: ProviderAccount["providerId"];
+      models: [];
+    }>();
     const list = vi.fn(async () => [original]);
     runtime.client = {
       listProviderAccounts: list,
-      refreshCursorAccount: vi.fn(() => discovered.promise),
+      refreshCodexAccount: vi.fn(async () => currentAccount),
+      providerAccountModels: vi.fn(() => discovered.promise),
     } as unknown as KalCodeClient;
     const view = renderHook(useOptionalProviderAccountSessions, { wrapper });
     await waitFor(() => expect(view.result.current?.accounts).toEqual([original]));
+    await waitFor(() => expect(view.result.current?.checking.size).toBe(0));
     let request: Promise<void> | undefined;
     act(() => {
       request = view.result.current?.discoverModels(original.id);
       expect(view.result.current?.discoverModels(original.id)).toBe(request);
     });
-    await waitFor(() => expect(runtime.client.refreshCursorAccount).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(runtime.client.providerAccountModels).toHaveBeenCalledTimes(1));
     const changed = { ...original, providerReportedIdentity: "other@example.com" };
+    currentAccount = changed;
     list.mockResolvedValue([changed]);
     await act(async () => {
       await view.result.current?.reload();
     });
     await act(async () => {
-      discovered.resolve({ account: original, models: [], modelsError: null });
+      discovered.resolve({ accountId: original.id, providerId: original.providerId, models: [] });
       await request;
     });
     expect(view.result.current?.states.get(original.id)).toMatchObject({ account: changed, models: null });
   });
 
   it("clears model state when the runtime changes and ignores the old client's response", async () => {
-    const original = account("cursor-a", "cursor", "Work");
-    const discovered = deferred<Awaited<ReturnType<KalCodeClient["refreshCursorAccount"]>>>();
+    const original = account("codex-a", "codex", "Work");
+    const discovered = deferred<{
+      accountId: string;
+      providerId: ProviderAccount["providerId"];
+      models: [];
+    }>();
     runtime.client = {
       listProviderAccounts: vi.fn(async () => [original]),
-      refreshCursorAccount: vi.fn(() => discovered.promise),
+      refreshCodexAccount: vi.fn(async () => original),
+      providerAccountModels: vi.fn(() => discovered.promise),
     } as unknown as KalCodeClient;
     const view = renderHook(useOptionalProviderAccountSessions, { wrapper });
     await waitFor(() => expect(view.result.current?.accounts).toEqual([original]));
@@ -206,13 +335,13 @@ describe("provider account session restoration", () => {
     act(() => {
       request = view.result.current?.discoverModels(original.id);
     });
-    await waitFor(() => expect(runtime.client.refreshCursorAccount).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(runtime.client.providerAccountModels).toHaveBeenCalledTimes(1));
     const changed = { ...original, providerReportedIdentity: "other@example.com" };
     runtime.client = { listProviderAccounts: vi.fn(async () => [changed]) } as unknown as KalCodeClient;
     view.rerender();
     await waitFor(() => expect(view.result.current?.accounts).toEqual([changed]));
     await act(async () => {
-      discovered.resolve({ account: original, models: [], modelsError: null });
+      discovered.resolve({ accountId: original.id, providerId: original.providerId, models: [] });
       await request;
     });
     expect(view.result.current?.states.get(original.id)).toMatchObject({ account: changed, models: null });

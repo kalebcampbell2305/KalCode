@@ -1195,7 +1195,8 @@ fn migrations_keep_permissions_at_v4() {
             (22, "handoffs"),
             (23, "cursor_accounts"),
             (24, "unified_memory"),
-            (25, "terminal_directory")
+            (25, "terminal_directory"),
+            (26, "squads")
         ]
     );
 }

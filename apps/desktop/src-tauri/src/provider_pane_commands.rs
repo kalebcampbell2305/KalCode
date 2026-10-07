@@ -31,8 +31,9 @@ use kalcode_providers::interactive::provider::{
     InteractiveClaudeProvider, InteractiveConfig, PaneRegistry, RuntimeRouter, mark_interactive,
     marked_interactive, marked_interactive_checked, unmark_interactive,
 };
-use kalcode_providers::interactive::session::PaneVoiceWriteError;
-use kalcode_providers::interactive::session::SessionLimits;
+use kalcode_providers::interactive::session::{
+    PaneVoiceWriteError, SessionLimits, terminal_protocol_reply,
+};
 use kalcode_providers::interactive::{
     ApprovalExpiry, DEFAULT_DECISION_ROUTING, DecisionRouting, HookChannelState, PaneInfo,
     TitleSink,
@@ -899,26 +900,8 @@ pub(crate) fn pane_effort(
     provider_id: &str,
     effort: Option<String>,
 ) -> Result<Option<String>, IpcError> {
-    let Some(effort) = effort
-        .map(|effort| effort.trim().to_ascii_lowercase())
-        .filter(|effort| !effort.is_empty() && effort != "default")
-    else {
-        return Ok(None);
-    };
-    let supported = match provider_id {
-        ProviderId::CLAUDE_CODE => kalcode_providers::claude::argv::valid_effort_name(&effort),
-        ProviderId::CODEX => kalcode_providers::codex::argv::valid_effort_name(&effort),
-        _ => false,
-    };
-    if supported {
-        Ok(Some(effort))
-    } else {
-        Err(KalError::validation(
-            "invalid_effort",
-            "That provider doesn't support this effort level.",
-        )
-        .to_ipc())
-    }
+    kalcode_providers::interactive::normalize_effort(provider_id, effort.as_deref())
+        .map_err(|message| KalError::validation("invalid_effort", message).to_ipc())
 }
 
 /// Streams a pane's output to the calling view (replay first, then live bytes). The view
@@ -1047,6 +1030,16 @@ pub fn provider_pane_write(
     _runtime_access.revalidate()?;
     panes.require()?;
     validate_thread_id(&thread_id)?;
+    // Xterm routes its DSR/DA/focus replies through this same callback. Those bytes answer the
+    // provider's terminal query; they are not a person taking over the dependency-waiting pane.
+    // Voice is always intentional input. Ordinary PTY writes relinquish the pane before the
+    // bytes reach the provider so the scheduler cannot race and inject a withheld Squad task.
+    let user_input = pane_write_is_user_input(data.as_bytes(), voice.unwrap_or(false));
+    if user_input && let Some(runtime) = panes.glue.runtime.get().and_then(Weak::upgrade) {
+        runtime
+            .claim_prepared_pane_by_user(&thread_id)
+            .map_err(|error| error.to_ipc())?;
+    }
     if voice.unwrap_or(false) {
         let instance_id = instance_id
             .as_deref()
@@ -1061,6 +1054,10 @@ pub fn provider_pane_write(
             .write(&thread_id, data.as_bytes())
             .map_err(provider_error)
     }
+}
+
+fn pane_write_is_user_input(data: &[u8], voice: bool) -> bool {
+    voice || !terminal_protocol_reply(data)
 }
 
 fn provider_voice_error(error: PaneVoiceWriteError) -> IpcError {
@@ -1639,5 +1636,22 @@ mod tests {
     #[test]
     fn ordinary_panes_preserve_provider_native_permissions() {
         assert_eq!(DEFAULT_DECISION_ROUTING, DecisionRouting::ProviderPrompt);
+    }
+
+    #[test]
+    fn terminal_protocol_replies_do_not_relinquish_a_prepared_squad_pane() {
+        for reply in [
+            b"\x1b[1;12R".as_slice(),
+            b"\x1b[?1;2c",
+            b"\x1b[I",
+            b"\x1b[O",
+        ] {
+            assert!(!pane_write_is_user_input(reply, false), "{reply:?}");
+        }
+        assert!(pane_write_is_user_input(b"inspect this\r", false));
+        assert!(
+            pane_write_is_user_input(b"\x1b[1;12R", true),
+            "voice delivery is always explicit user input"
+        );
     }
 }

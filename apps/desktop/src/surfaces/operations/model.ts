@@ -7,7 +7,7 @@ import {
   type OperationsSnapshot,
 } from "@kalcode/protocol";
 
-export type OperationsTab = "runs" | "queue" | "services" | "environments" | "activity";
+export type OperationsTab = "runs" | "queue" | "squads" | "services" | "environments" | "activity";
 export type ActivityRange = "1h" | "today" | "7d" | "release";
 
 export const FINISHED_STATUSES = new Set<OperationStatus>(["succeeded", "failed", "cancelled", "interrupted"]);

@@ -5,9 +5,12 @@ use std::time::{Duration, Instant};
 use kalcode_contracts::operations::{
     OperationEnvironmentKind, OperationKind, OperationLane, OperationSpec, OperationStatus,
 };
+use kalcode_contracts::threads::MessageRole;
 use kalcode_core::events::{Correlation, EventPayload, NewEvent};
 use kalcode_core::flags::BuildChannel;
-use kalcode_core::operations::{OperationsStore, normalize_spec, owns_thread};
+use kalcode_core::operations::{
+    OperationsStore, normalize_spec, normalize_squad_member_spec, owns_thread,
+};
 use kalcode_core::plans::{Limited, PlanTier};
 use kalcode_core::workspaces::{TerminalSize, TerminalStatus};
 use kalcode_core::{Core, CoreConfig, Paths};
@@ -541,6 +544,195 @@ fn claims_are_atomic_and_enforce_execution_slots() {
 }
 
 #[test]
+fn agent_claims_are_parallel_and_do_not_consume_the_command_slot() {
+    let data = tempfile::tempdir().expect("data");
+    let project = tempfile::tempdir().expect("project");
+    let core = open(data.path());
+    let workspace_id = workspace(&core, project.path());
+    let account_id = provider_account(&core, "Parallel Codex");
+    let store = Arc::new(OperationsStore::new(core));
+    let agents = (0..8)
+        .map(|index| {
+            store
+                .enqueue(agent_spec(
+                    &workspace_id,
+                    &account_id,
+                    &format!("Agent {index}"),
+                ))
+                .expect("enqueue agent")
+        })
+        .collect::<Vec<_>>();
+    let build = store
+        .enqueue(spec(&workspace_id, "Concurrent build"))
+        .expect("enqueue build");
+    store
+        .claim(Some(&build.id))
+        .expect("build claim")
+        .expect("build available");
+
+    let barrier = Arc::new(Barrier::new(agents.len()));
+    let handles = agents
+        .into_iter()
+        .map(|agent| {
+            let store = store.clone();
+            let barrier = barrier.clone();
+            thread::spawn(move || {
+                barrier.wait();
+                store.claim(Some(&agent.id)).expect("agent claim")
+            })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        handles
+            .into_iter()
+            .filter_map(|handle| handle.join().expect("claim thread"))
+            .count(),
+        8,
+        "Operations never serializes real coding agents"
+    );
+    let another_build = store
+        .enqueue(spec(&workspace_id, "Second build"))
+        .expect("second build");
+    assert_eq!(
+        store
+            .claim(Some(&another_build.id))
+            .expect_err("command pool remains bounded")
+            .code,
+        "operation_slot_unavailable"
+    );
+}
+
+#[test]
+fn a_build_claims_the_foreground_slot_while_agents_run_and_only_builds_contend() {
+    let data = tempfile::tempdir().expect("data");
+    let project = tempfile::tempdir().expect("project");
+    let core = open(data.path());
+    let workspace_id = workspace(&core, project.path());
+    let account_id = provider_account(&core, "Running agents");
+    let store = OperationsStore::new(core);
+    for index in 0..3 {
+        let agent = store
+            .enqueue(agent_spec(
+                &workspace_id,
+                &account_id,
+                &format!("Running agent {index}"),
+            ))
+            .expect("enqueue agent");
+        store
+            .claim(Some(&agent.id))
+            .expect("agent claim")
+            .expect("agent available");
+    }
+
+    let first = store
+        .enqueue(spec(&workspace_id, "First build"))
+        .expect("first build");
+    store
+        .claim(Some(&first.id))
+        .expect("running agents never take the foreground slot")
+        .expect("first build claimed");
+    let second = store
+        .enqueue(spec(&workspace_id, "Second build"))
+        .expect("second build");
+    assert_eq!(
+        store
+            .claim(Some(&second.id))
+            .expect_err("the first build owns the slot")
+            .code,
+        "operation_slot_unavailable"
+    );
+
+    // The refusal came from the first build, not the agents: finishing it frees the slot while
+    // all three agents are still running.
+    store
+        .finish(&first.id, OperationStatus::Succeeded, "Built.")
+        .expect("finish first build");
+    store
+        .claim(Some(&second.id))
+        .expect("second build claim")
+        .expect("second build takes the freed slot");
+}
+
+#[test]
+fn ordinary_agent_tasks_keep_a_selected_non_default_effort() {
+    let data = tempfile::tempdir().expect("data");
+    let project = tempfile::tempdir().expect("project");
+    let core = open(data.path());
+    let workspace_id = workspace(&core, project.path());
+    let account_id = provider_account(&core, "Effort account");
+    let store = OperationsStore::new(core);
+    let mut agent = agent_spec(&workspace_id, &account_id, "High effort review");
+    agent.effort = Some("high".into());
+    let queued = store
+        .enqueue(agent)
+        .expect("non-default effort is accepted");
+    assert_eq!(queued.spec.effort.as_deref(), Some("high"));
+    let mut edited = queued.spec.clone();
+    edited.effort = Some("low".into());
+    let revision = store.snapshot().expect("snapshot").0;
+    let updated = store
+        .update(&queued.id, edited, revision)
+        .expect("effort edit");
+    assert_eq!(updated.spec.effort.as_deref(), Some("low"));
+    assert_eq!(
+        store
+            .get(&queued.id)
+            .expect("persisted")
+            .spec
+            .effort
+            .as_deref(),
+        Some("low")
+    );
+}
+
+#[test]
+fn signed_out_provider_account_is_refused_at_claim_until_reconnected() {
+    let data = tempfile::tempdir().expect("data");
+    let project = tempfile::tempdir().expect("project");
+    let core = open(data.path());
+    let workspace_id = workspace(&core, project.path());
+    let account_id = provider_account(&core, "Signed out later");
+    let store = OperationsStore::new(Arc::clone(&core));
+    let agent = store
+        .enqueue(agent_spec(
+            &workspace_id,
+            &account_id,
+            "Needs a signed-in account",
+        ))
+        .expect("enqueue agent");
+    let set_auth = |state: &str| {
+        core.transact(|tx| {
+            tx.execute(
+                "UPDATE provider_accounts SET authentication_state = ?2 WHERE id = ?1",
+                params![account_id, state],
+            )?;
+            Ok(((), Vec::new()))
+        })
+        .expect("set authentication state");
+    };
+
+    set_auth("not_authenticated");
+    assert_eq!(
+        store
+            .claim(Some(&agent.id))
+            .expect_err("a signed-out account cannot start a provider")
+            .code,
+        "operation_provider_account_missing"
+    );
+    assert_eq!(
+        store.get(&agent.id).expect("agent").status,
+        OperationStatus::Queued,
+        "the task stays queued instead of failing a doomed launch"
+    );
+
+    set_auth("authenticated");
+    store
+        .claim(Some(&agent.id))
+        .expect("claim after reconnect")
+        .expect("reconnected account starts");
+}
+
+#[test]
 fn service_slots_do_not_starve_the_single_foreground_slot() {
     let data = tempfile::tempdir().expect("data");
     let project = tempfile::tempdir().expect("project");
@@ -871,6 +1063,332 @@ fn reserved_agent_thread_recovers_exactly_once_from_the_first_completion() {
         thread_count, 1,
         "recovery never duplicates or relaunches a thread"
     );
+}
+
+#[test]
+fn prepared_agent_stays_pending_and_keeps_exact_identity_through_claim_and_hold() {
+    let data = tempfile::tempdir().expect("data");
+    let project = tempfile::tempdir().expect("project");
+    let core = open(data.path());
+    let workspace_id = workspace(&core, project.path());
+    let account_id = provider_account(&core, "Prepared agent account");
+    let store = OperationsStore::new(core);
+    let operation = store
+        .enqueue(agent_spec(
+            &workspace_id,
+            &account_id,
+            "Prepared dependency member",
+        ))
+        .expect("enqueue agent");
+
+    store
+        .prepare_agent_thread(&operation.id, Some("kal/prepared"), Some("revision-1"))
+        .expect("prepare exact thread");
+    store
+        .prepare_agent_thread(&operation.id, Some("kal/prepared"), Some("revision-1"))
+        .expect("preparation replay");
+    store
+        .prepare_agent_thread(&operation.id, Some("main"), Some("revision-2"))
+        .expect("prepared shared-workspace revision refresh");
+    let prepared = store.get(&operation.id).expect("prepared operation");
+    assert_eq!(prepared.status, OperationStatus::Queued);
+    assert_eq!(prepared.thread_id.as_deref(), Some(operation.id.as_str()));
+    assert_eq!(prepared.branch.as_deref(), Some("main"));
+    assert_eq!(prepared.version.as_deref(), Some("revision-2"));
+    assert_eq!(
+        prepared.current_action.as_deref(),
+        Some("Waiting for dependencies")
+    );
+    assert!(prepared.started_at.is_none());
+
+    store
+        .claim(Some(&operation.id))
+        .expect("claim")
+        .expect("claimable");
+    store
+        .reserve_agent_thread(&operation.id, Some("main"), Some("revision-3"))
+        .expect("prepared identity accepts actual shared-workspace start revision");
+    store
+        .hold_starting_with_reason(&operation.id, "The prepared pane is already working.")
+        .expect("actionable hold");
+    let held = store.get(&operation.id).expect("held operation");
+    assert_eq!(held.status, OperationStatus::Paused);
+    assert_eq!(held.thread_id.as_deref(), Some(operation.id.as_str()));
+    assert_eq!(
+        held.attention_reason.as_deref(),
+        Some("The prepared pane is already working.")
+    );
+    assert!(held.started_at.is_none());
+}
+
+#[test]
+fn cleanup_unproven_overrides_a_terminal_cancel_with_one_actionable_hold() {
+    let data = tempfile::tempdir().expect("data");
+    let project = tempfile::tempdir().expect("project");
+    let core = open(data.path());
+    let workspace_id = workspace(&core, project.path());
+    let store = OperationsStore::new(core);
+    let operation = store
+        .enqueue(spec(&workspace_id, "Late provider cleanup"))
+        .expect("enqueue");
+    store.cancel_pending(&operation.id).expect("cancel pending");
+
+    let reason =
+        "The canceled Squad pane could not be stopped. Inspect the pane before continuing.";
+    store
+        .hold_cleanup_unproven(&operation.id, reason)
+        .expect("actionable cleanup hold");
+    let held = store.get(&operation.id).expect("held operation");
+    assert_eq!(held.status, OperationStatus::Paused);
+    assert_eq!(held.attention_reason.as_deref(), Some(reason));
+    assert!(held.ended_at.is_none());
+
+    let revision = store.snapshot().expect("snapshot").0;
+    store
+        .hold_cleanup_unproven(&operation.id, reason)
+        .expect("idempotent hold replay");
+    assert_eq!(
+        store.snapshot().expect("replayed snapshot").0,
+        revision,
+        "replaying the same cleanup hold is a quiet no-op"
+    );
+}
+
+#[test]
+fn prepared_agent_allows_task_edits_but_rejects_execution_identity_changes() {
+    let data = tempfile::tempdir().expect("data");
+    let project = tempfile::tempdir().expect("project");
+    let core = open(data.path());
+    let workspace_id = workspace(&core, project.path());
+    let account_id = provider_account(&core, "Prepared edit account");
+    let store = OperationsStore::new(core);
+    let operation = store
+        .enqueue(agent_spec(
+            &workspace_id,
+            &account_id,
+            "Prepared edit member",
+        ))
+        .expect("enqueue agent");
+    store
+        .prepare_agent_thread(&operation.id, Some("kal/prepared"), Some("revision-1"))
+        .expect("prepare exact pane identity");
+
+    let mut task_edit = operation.spec.clone();
+    task_edit.name = "Prepared edit member renamed".into();
+    task_edit.prompt = Some("Review only the updated dependency output.".into());
+    let revision = store.snapshot().expect("snapshot").0;
+    let updated = store
+        .update(&operation.id, task_edit.clone(), revision)
+        .expect("identity-preserving task edit");
+    assert_eq!(updated.spec.prompt, task_edit.prompt);
+    assert_eq!(updated.thread_id.as_deref(), Some(operation.id.as_str()));
+
+    let mut identity_edit = task_edit;
+    identity_edit.model = Some("different-model".into());
+    let revision = store.snapshot().expect("updated snapshot").0;
+    let error = store
+        .update(&operation.id, identity_edit, revision)
+        .expect_err("prepared identity change must fail atomically");
+    assert_eq!(error.code, "operation_prepared_identity_immutable");
+    let unchanged = store.get(&operation.id).expect("unchanged prepared member");
+    assert_eq!(
+        unchanged.spec.model.as_deref(),
+        Some("gpt-test"),
+        "the canonical pane and Operation identity remain aligned"
+    );
+}
+
+#[test]
+fn recovery_returns_an_unsettled_cancellation_to_an_actionable_hold() {
+    let data = tempfile::tempdir().expect("data");
+    let project = tempfile::tempdir().expect("project");
+    let core = open(data.path());
+    let workspace_id = workspace(&core, project.path());
+    let store = OperationsStore::new(core);
+    let operation = store
+        .enqueue(spec(&workspace_id, "Cancel never settled"))
+        .expect("enqueue");
+    store
+        .request_dispatch_cancel(&operation.id)
+        .expect("request cancellation");
+    // The process stops before the dispatcher settles the cancellation.
+    store.recover().expect("recover");
+    let recovered = store.get(&operation.id).expect("recovered");
+    assert_eq!(recovered.status, OperationStatus::Paused);
+    assert!(
+        recovered.current_action.is_none(),
+        "no stuck Stopping safely label"
+    );
+    assert_eq!(
+        recovered.attention_reason.as_deref(),
+        Some(kalcode_core::operations::UNSETTLED_CANCELLATION_REASON)
+    );
+}
+
+#[test]
+fn dispatch_cancellation_is_pending_until_cleanup_then_clears_attention() {
+    let data = tempfile::tempdir().expect("data");
+    let project = tempfile::tempdir().expect("project");
+    let core = open(data.path());
+    let workspace_id = workspace(&core, project.path());
+    let store = OperationsStore::new(core);
+    let operation = store
+        .enqueue(spec(&workspace_id, "Cancel delayed member"))
+        .expect("enqueue");
+    store
+        .request_dispatch_cancel(&operation.id)
+        .expect("request cancellation");
+    let stopping = store.get(&operation.id).expect("stopping operation");
+    assert_eq!(stopping.status, OperationStatus::Paused);
+    assert_eq!(stopping.current_action.as_deref(), Some("Stopping safely"));
+    assert!(stopping.ended_at.is_none());
+
+    store
+        .cancel_pending(&operation.id)
+        .expect("cleanup-proven cancellation");
+    let cancelled = store.get(&operation.id).expect("cancelled operation");
+    assert_eq!(cancelled.status, OperationStatus::Cancelled);
+    assert!(cancelled.current_action.is_none());
+    assert!(cancelled.attention_reason.is_none());
+}
+
+#[test]
+fn restart_holds_prepared_agent_only_before_the_durable_task_attempt() {
+    for attempted in [false, true] {
+        let data = tempfile::tempdir().expect("data");
+        let project = tempfile::tempdir().expect("project");
+        let core = open(data.path());
+        let workspace_id = workspace(&core, project.path());
+        let account_id = provider_account(&core, "Prepared recovery account");
+        let store = OperationsStore::new(Arc::clone(&core));
+        let operation = store
+            .enqueue(agent_spec(
+                &workspace_id,
+                &account_id,
+                "Prepared restart boundary",
+            ))
+            .expect("enqueue agent");
+        store
+            .prepare_agent_thread(&operation.id, Some("kal/prepared"), Some("revision-1"))
+            .expect("prepare thread");
+        insert_agent_thread(
+            &core,
+            &operation.id,
+            &workspace_id,
+            Some(&account_id),
+            Some("gpt-test"),
+            "bypass",
+            "waiting_for_dependency",
+        );
+        store
+            .claim(Some(&operation.id))
+            .expect("claim")
+            .expect("available");
+        store
+            .reserve_agent_thread(&operation.id, Some("main"), Some("revision-2"))
+            .expect("reserve prepared thread");
+        if attempted {
+            core.emit(
+                NewEvent::core(EventPayload::AgentMessage {
+                    thread_id: operation.id.clone(),
+                    message_id: uuid::Uuid::now_v7().to_string(),
+                    role: MessageRole::User,
+                })
+                .with_correlation(Correlation {
+                    workspace_id: Some(workspace_id.clone()),
+                    thread_id: Some(operation.id.clone()),
+                    provider_id: Some("codex".into()),
+                    ..Correlation::default()
+                }),
+            )
+            .expect("persist task-attempt boundary before provider write");
+        }
+
+        store.recover().expect("recover");
+        let recovered = store.get(&operation.id).expect("recovered operation");
+        if attempted {
+            assert_eq!(recovered.status, OperationStatus::Interrupted);
+            assert!(recovered.started_at.is_some());
+            assert!(recovered.attention_reason.is_none());
+        } else {
+            assert_eq!(recovered.status, OperationStatus::Paused);
+            assert!(recovered.started_at.is_none());
+            assert!(recovered.ended_at.is_none());
+            assert!(recovered.outcome.is_none());
+            assert!(
+                recovered
+                    .attention_reason
+                    .as_deref()
+                    .is_some_and(|reason| reason.contains("task was sent"))
+            );
+        }
+        assert_eq!(recovered.thread_id.as_deref(), Some(operation.id.as_str()));
+    }
+}
+
+#[test]
+fn restart_recovers_a_completed_bound_agent_with_its_native_permission() {
+    for prepared in [false, true] {
+        let data = tempfile::tempdir().expect("data");
+        let project = tempfile::tempdir().expect("project");
+        let core = open(data.path());
+        let workspace_id = workspace(&core, project.path());
+        let account_id = provider_account(&core, "Bound completed account");
+        let store = OperationsStore::new(Arc::clone(&core));
+        let operation = store
+            .enqueue(agent_spec(
+                &workspace_id,
+                &account_id,
+                "Bound completed turn",
+            ))
+            .expect("enqueue agent");
+        if prepared {
+            store
+                .prepare_agent_thread(&operation.id, Some("kal/prepared"), Some("revision-1"))
+                .expect("prepare thread");
+        }
+        insert_agent_thread(
+            &core,
+            &operation.id,
+            &workspace_id,
+            Some(&account_id),
+            Some("gpt-test"),
+            "bypass",
+            "completed",
+        );
+        store
+            .claim(Some(&operation.id))
+            .expect("claim")
+            .expect("available");
+        store
+            .reserve_agent_thread(&operation.id, Some("kal/prepared"), Some("revision-1"))
+            .expect("reserve exact thread");
+        core.emit(
+            NewEvent::core(EventPayload::AgentMessage {
+                thread_id: operation.id.clone(),
+                message_id: uuid::Uuid::now_v7().to_string(),
+                role: MessageRole::User,
+            })
+            .with_correlation(Correlation {
+                workspace_id: Some(workspace_id.clone()),
+                thread_id: Some(operation.id.clone()),
+                provider_id: Some("codex".into()),
+                ..Correlation::default()
+            }),
+        )
+        .expect("persist first task boundary");
+        emit_agent_completion(&core, &workspace_id, &operation.id, true, false);
+
+        store.recover().expect("recover");
+        let recovered = store.get(&operation.id).expect("recovered operation");
+        assert_eq!(recovered.status, OperationStatus::Succeeded, "{prepared}");
+        assert_eq!(
+            recovered.thread_id.as_deref(),
+            Some(operation.id.as_str()),
+            "{prepared}"
+        );
+        assert!(recovered.attention_reason.is_none());
+    }
 }
 
 #[test]
@@ -1294,8 +1812,8 @@ fn operation_inputs_are_bounded_and_never_persist_secret_values() {
     unnamed.urls = vec!["https://example.test/dashboard".into()];
     unnamed.effort = Some("high".into());
     assert_eq!(
-        store.enqueue(unnamed).expect_err("unsupported effort").code,
-        "unsupported_operation_effort"
+        store.enqueue(unnamed).expect_err("command effort").code,
+        "operation_agent_fields_not_allowed"
     );
 
     let mut public_env = spec(&workspace_id, "Public environment name");
@@ -1383,14 +1901,67 @@ fn execution_shape_is_validated_before_persistence_and_binding() {
     let project = tempfile::tempdir().expect("project");
     let core = open(data.path());
     let workspace_id = workspace(&core, project.path());
+    let core_for_shape = Arc::clone(&core);
     let store = OperationsStore::new(core);
 
     let mut agent = spec(&workspace_id, "Agent task");
     agent.kind = OperationKind::Agent;
     agent.command = None;
+    // Only a Squad member may be a taskless coding terminal. Ordinary agent tasks keep main's
+    // rule: they need a prompt, both when queued and when edited.
     assert_eq!(
         normalize_spec(agent.clone())
             .expect_err("prompt required")
+            .code,
+        "operation_prompt_required"
+    );
+    assert_eq!(
+        normalize_squad_member_spec(agent.clone())
+            .expect("taskless Squad member")
+            .prompt,
+        None
+    );
+    let mut blank = agent.clone();
+    blank.prompt = Some("   ".into());
+    assert_eq!(
+        normalize_spec(blank).expect_err("blank prompt").code,
+        "operation_prompt_required"
+    );
+    assert_eq!(
+        store
+            .enqueue(agent.clone())
+            .expect_err("taskless enqueue")
+            .code,
+        "operation_prompt_required"
+    );
+    let account_id = provider_account(&core_for_shape, "Shape account");
+    let queued = store
+        .enqueue(agent_spec(&workspace_id, &account_id, "Prompted agent"))
+        .expect("prompted agent");
+    let mut taskless_edit = queued.spec.clone();
+    taskless_edit.prompt = None;
+    let revision = store.snapshot().expect("snapshot").0;
+    // As on main, a missing prompt is rejected before the revision is read.
+    assert_eq!(
+        store
+            .update(&queued.id, taskless_edit.clone(), revision - 1)
+            .expect_err("stale taskless edit")
+            .code,
+        "operation_prompt_required"
+    );
+    let mut stale_edit = queued.spec.clone();
+    stale_edit.name = "Renamed".into();
+    assert_eq!(
+        store
+            .update(&queued.id, stale_edit, revision - 1)
+            .expect_err("stale edit")
+            .code,
+        "stale_operations_revision"
+    );
+    assert_eq!(
+        store
+            .update(&queued.id, taskless_edit, revision)
+            .expect_err("taskless edit of an ordinary agent")
             .code,
         "operation_prompt_required"
     );

@@ -1,7 +1,9 @@
 import { useMemo, useSyncExternalStore } from "react";
 import { useCodingAgents } from "../../surfaces/dashboard/data/DashboardData.tsx";
+import { useAgentOverlaps } from "../../surfaces/dashboard/fleet/useAgentOverlaps.ts";
 import { useNow } from "../../surfaces/dashboard/useNow.ts";
 import { useOptionalPermissions } from "../../surfaces/permissions/PermissionsProvider.tsx";
+import { useOptionalDeckData } from "../deck/DeckData.tsx";
 import { useOptionalNotifications } from "../notifications/NotificationsProvider.tsx";
 import { type AttentionItem, attentionItems } from "./model.ts";
 
@@ -62,6 +64,8 @@ export interface Attention {
  */
 export function useAttention(): Attention {
   const { state } = useCodingAgents();
+  const ownership = useAgentOverlaps();
+  const deck = useOptionalDeckData();
   // Both providers wrap the app; a standalone render (tests, a pane) just has nothing from them.
   const pending = useOptionalPermissions()?.pending ?? NONE;
   const notifications = useOptionalNotifications()?.notifications ?? NONE;
@@ -74,10 +78,39 @@ export function useAttention(): Attention {
         agents: agents ?? [],
         approvals: pending,
         notifications,
+        operations: deck?.operations.data?.items ?? NONE,
+        operationsFailed: deck?.operations.failed ?? false,
+        agentReadFailed:
+          state.status === "error" ||
+          state.status === "unavailable" ||
+          (state.status === "ready" && state.error != null),
+        overlaps: ownership.overlaps,
+        ownershipFailed: ownership.failed,
+        ownershipIncomplete: ownership.incomplete,
         dismissed: gone,
         now,
       }),
-    [agents, pending, notifications, gone, now],
+    [
+      agents,
+      pending,
+      notifications,
+      deck?.operations.data?.items,
+      deck?.operations.failed,
+      state,
+      ownership.overlaps,
+      ownership.failed,
+      ownership.incomplete,
+      gone,
+      now,
+    ],
   );
-  return useMemo(() => ({ items, ready: agents !== null }), [items, agents]);
+  // The shell's shared Operations feed must either answer or fail explicitly before an all-clear.
+  // Isolated renders without DeckData preserve the attention model's standalone behavior.
+  const operationsReady = deck === null || deck.operations.data !== null || deck.operations.failed;
+  const agentsReady = state.status !== "loading";
+  const ownershipReady = state.status !== "ready" || ownership.ready;
+  return useMemo(
+    () => ({ items, ready: agentsReady && operationsReady && ownershipReady }),
+    [items, agentsReady, operationsReady, ownershipReady],
+  );
 }

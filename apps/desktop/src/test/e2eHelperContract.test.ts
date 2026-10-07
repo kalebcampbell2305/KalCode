@@ -48,7 +48,7 @@ describe("native E2E helper inventory", () => {
   it("binds every real-app launch spec to the per-test owned-process fixture", () => {
     const specs = readdirSync(e2eDirectory).filter((name) => name.endsWith(".spec.ts"));
     const launchSpecs = specs.filter((name) => readFileSync(resolve(e2eDirectory, name), "utf8").includes("launch"));
-    expect(launchSpecs).toHaveLength(20);
+    expect(launchSpecs).toHaveLength(21);
     expect(launchSpecs).toContain("operations.spec.ts");
     expect(launchSpecs).toContain("live-browser.spec.ts");
     expect(launchSpecs).toContain("provider-session-restart.spec.ts");
@@ -76,7 +76,7 @@ describe("native E2E helper inventory", () => {
     expect(operations).toContain("await closeGracefully(app)");
   });
 
-  it("allows the deterministic resource sample only in the ten explicit provider specs", () => {
+  it("allows the deterministic resource sample only in the eleven explicit provider specs", () => {
     const optedIn = readdirSync(e2eDirectory)
       .filter((name) => name.endsWith(".spec.ts"))
       .filter((name) => readFileSync(resolve(e2eDirectory, name), "utf8").includes("KALCODE_E2E_RESOURCE_FIXTURE"))
@@ -92,6 +92,7 @@ describe("native E2E helper inventory", () => {
       "providers2.spec.ts",
       "remote.spec.ts",
       "smart-resume.spec.ts",
+      "squads.spec.ts",
     ]);
     expect(harnessSource).toContain('upper === "KALCODE_E2E_RESOURCE_FIXTURE"');
     const environment = isolatedWebviewEnvironment(
