@@ -17,7 +17,12 @@ use std::sync::Arc;
 
 use kalcode_providers::DetectEnv;
 use kalcode_providers::account_auth::{CodexAccountAuthError, CodexAccountAuthManager};
+use kalcode_providers::codex::runtime::{
+    ManagedRuntimeSource, prewarm_managed_runtime, select_managed_runtime,
+};
+use kalcode_providers::env::EnvPolicy;
 use kalcode_providers::managed::ManagedProfiles;
+use kalcode_providers::managed_runtime::RuntimeStore;
 
 fn certified_codex() -> Option<PathBuf> {
     let Some(path) = std::env::var_os("KALCODE_CERTIFY_CODEX") else {
@@ -57,6 +62,125 @@ fn source(root: &std::path::Path) -> DetectEnv {
         probe_timeout: None,
         system_root: None,
     }
+}
+
+/// Proves the complete production selection path against real installed package bytes: resolve
+/// the distribution, copy it into immutable KalCode storage, apply its rebased launcher
+/// environment, run capability/help probes, and complete the isolated app-server handshake. It
+/// never signs in, opens an authorization URL, sends a prompt, or reads the user's Codex home.
+#[test]
+#[cfg(any(windows, target_os = "macos"))]
+#[ignore = "needs a real Codex CLI (KALCODE_CERTIFY_CODEX); no sign-in, prompt or quota"]
+fn real_codex_selects_and_probes_an_immutable_managed_runtime() {
+    let Some(codex) = certified_codex() else {
+        return;
+    };
+    let temp = tempfile::tempdir().expect("temp");
+    let root = std::fs::canonicalize(temp.path()).expect("canonical temp");
+    let guardian_root = root.join("guardian");
+    std::fs::create_dir(&guardian_root).expect("guardian directory");
+    let guardian = kalcode_providers::guardian::GuardianRuntime::launch(
+        std::path::Path::new(env!("CARGO_BIN_EXE_kalcode-provider-guardian")),
+        &guardian_root,
+    )
+    .expect("native provider guardian");
+    let probe_guardian = guardian.probe_guardian().expect("probe guardian");
+    let neutral = root.join("neutral");
+    std::fs::create_dir(&neutral).expect("neutral probe directory");
+    let store_root = root.join("managed-runtimes");
+    let store = RuntimeStore::new(&store_root);
+    let env = source(&root).provider_env(&EnvPolicy::BASE);
+
+    let foreground_started = std::time::Instant::now();
+    let foreground = select_managed_runtime(
+        Some(&codex),
+        &env,
+        &neutral,
+        &store,
+        |label| {
+            probe_guardian
+                .prepare_job(label)
+                .map_err(|error| kalcode_contracts::agent::ProviderError::Start(error.to_string()))
+        },
+        None,
+    )
+    .expect("real Codex direct foreground selection");
+    let foreground_elapsed = foreground_started.elapsed();
+    assert_eq!(foreground.source(), ManagedRuntimeSource::InstalledDirect);
+    assert!(foreground.runtime_lease().is_none());
+    assert!(
+        !store_root.exists(),
+        "a foreground prewarm miss must not create or copy runtime storage"
+    );
+    drop(foreground);
+
+    let cold_started = std::time::Instant::now();
+    let selected = prewarm_managed_runtime(
+        Some(&codex),
+        &env,
+        &neutral,
+        &store,
+        |label| {
+            probe_guardian
+                .prepare_job(label)
+                .map_err(|error| kalcode_contracts::agent::ProviderError::Start(error.to_string()))
+        },
+        None,
+    )
+    .expect("real Codex immutable runtime selection");
+    let cold_elapsed = cold_started.elapsed();
+    if let Ok(expected) = std::env::var("KALCODE_CERTIFY_CODEX_VERSION") {
+        assert_eq!(selected.version().to_string(), expected);
+    }
+    assert_eq!(selected.source(), ManagedRuntimeSource::ValidatedSnapshot);
+    assert!(
+        selected.runtime_lease().is_some(),
+        "snapshot must remain pinned"
+    );
+    let selected_path = std::fs::canonicalize(selected.executable()).expect("selected executable");
+    let store_root = std::fs::canonicalize(store_root).expect("runtime store");
+    assert!(
+        selected_path.starts_with(store_root),
+        "the selected executable must be the KalCode-owned immutable copy"
+    );
+    let snapshot_id = selected
+        .runtime_lease()
+        .expect("snapshot lease")
+        .snapshot_id()
+        .to_owned();
+
+    let warm_started = std::time::Instant::now();
+    let warm = select_managed_runtime(
+        Some(&codex),
+        &env,
+        &neutral,
+        &store,
+        |label| {
+            probe_guardian
+                .prepare_job(label)
+                .map_err(|error| kalcode_contracts::agent::ProviderError::Start(error.to_string()))
+        },
+        None,
+    )
+    .expect("warm real Codex immutable runtime selection");
+    let warm_elapsed = warm_started.elapsed();
+    assert_eq!(
+        warm.runtime_lease().expect("warm lease").snapshot_id(),
+        snapshot_id
+    );
+    assert!(
+        warm_elapsed < std::time::Duration::from_secs(1),
+        "warm managed runtime selection took {warm_elapsed:?}"
+    );
+    eprintln!(
+        "Codex managed selection: foreground-direct={foreground_elapsed:?}, \
+         background-prewarm={cold_elapsed:?}, warm-snapshot={warm_elapsed:?}"
+    );
+    drop(warm);
+    drop(selected);
+    guardian
+        .seal_and_drain()
+        .expect("clean compatibility probe drain");
 }
 
 #[test]

@@ -30,6 +30,16 @@ pub enum AdapterState {
     Planned,
 }
 
+/// A managed runtime that passed local capability and policy checks. Machine installation
+/// detection remains separate; account authentication is still checked when selecting an account.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ManagedRuntimeReadiness {
+    pub version: String,
+    pub source: String,
+}
+
 /// Everything the Providers surface shows for one provider. Capability flags describe what
 /// KalCode's adapter does, not only what the provider documents: a flag is `true` only when
 /// KalCode implements it.
@@ -43,6 +53,9 @@ pub struct ProviderStatus {
     pub detection: Option<ProviderDetection>,
     /// Stable machine code when the last detection ended in `error`, e.g. `version_timeout`.
     pub detection_error_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub managed_runtime: Option<ManagedRuntimeReadiness>,
     /// The documented command KalCode runs to read the sign-in state, e.g. `claude auth
     /// status`; `None` when the provider documents no side-effect-free way to check.
     pub auth_check: Option<String>,

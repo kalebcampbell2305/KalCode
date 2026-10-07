@@ -5,14 +5,19 @@
 //! leaves "experimental" in the CLI's own help; the plan is in docs/PROVIDERS.md §8b.
 
 pub mod argv;
+pub mod compatibility;
 pub mod managed_policy;
+pub mod runtime;
 mod stream;
 
-use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+
+#[cfg(test)]
+use std::collections::BTreeMap;
+#[cfg(test)]
+use std::path::PathBuf;
 
 use kalcode_contracts::agent::{
     AgentEventSink, AgentProvider, AgentSession, AuthState, DetectionState, ProviderCapabilities,
@@ -32,51 +37,32 @@ use crate::managed::{
 };
 use crate::turns::{TurnAdapter, TurnLaunch, TurnNormalizer, TurnSession};
 use crate::version::Version;
-use crate::version_window::VersionWindow;
-
-/// Certified Codex CLI compatibility lines for managed profiles (see [`VersionWindow`]). Each
-/// floor was certified on the official npm release with the real-binary isolation and
-/// app-server protocol checks (`managed_policy::certifies_codex_config_isolation`,
-/// `tests/codex_certification_real.rs`); docs/PROVIDERS.md records the evidence. Add a line only
-/// after certifying its first release the same way.
-pub const MANAGED_VERSIONS: VersionWindow = VersionWindow {
-    cli_name: "Codex CLI",
-    profile_name: "Codex",
-    npm_package: "@openai/codex",
-    floors: &[
-        #[cfg(not(windows))]
-        Version::new(0, 155, 1),
-        #[cfg(not(windows))]
-        Version::new(0, 156, 0),
-        #[cfg(not(windows))]
-        Version::new(0, 157, 0),
-        #[cfg(not(windows))]
-        Version::new(0, 158, 0),
-        #[cfg(not(windows))]
-        Version::new(0, 159, 0),
-        Version::new(0, 160, 0),
-    ],
-};
-
 /// Codex release lines whose session-flag hooks KalCode verified end to end: the `-c hooks.*`
 /// overrides, the session-flags trust key and hash, the Claude-shaped payloads and the
-/// observe-only semantics ([`kalcode_hook_bridge::codex`]). Another line keeps `notify` status
-/// until it is verified, so an unverified trust format can never surface Codex's hook review.
+/// observe-only semantics ([`kalcode_hook_bridge::codex`]). Only the 0.160 line has that evidence;
+/// every other line keeps `notify` status until its hook schema is verified, so an unverified
+/// trust format can never surface Codex's hook review.
 pub(crate) fn observing_hooks_verified(version: &Version) -> bool {
-    version.major == 0 && version.minor == 160
+    version.major == 0 && version.minor == 160 && !version.is_prerelease()
 }
 
+#[cfg(test)]
 fn managed_version_supported(version: &Version) -> bool {
-    MANAGED_VERSIONS.supports(version)
+    version >= &argv::MINIMUM_VERSION
 }
 
+#[cfg(test)]
 fn require_managed_version(version: &Version) -> Result<(), ProviderError> {
     if managed_version_supported(version) {
         Ok(())
     } else {
         Err(ProviderError::Refused {
-            code: error_codes::PROVIDER_VERSION_UNSUPPORTED.to_owned(),
-            message: MANAGED_VERSIONS.refusal(version),
+            code: "provider_capability_incompatible".to_owned(),
+            message: format!(
+                "Codex {version} lacks platform runtime fixes required by this KalCode build; \
+                 version {} or later is required.",
+                argv::MINIMUM_VERSION
+            ),
         })
     }
 }
@@ -90,78 +76,17 @@ pub(crate) fn verify_managed_executable_version(
     env: &BTreeMap<OsString, OsString>,
     neutral_cwd: &Path,
 ) -> Result<(), ProviderError> {
-    verify_managed_executable_version_inner(executable, env, neutral_cwd, None)
-}
-
-pub(crate) fn verify_managed_executable_version_guarded(
-    executable: &Path,
-    env: &BTreeMap<OsString, OsString>,
-    neutral_cwd: &Path,
-    admission: crate::guardian::RegisteredJob,
-) -> Result<(), ProviderError> {
-    verify_managed_executable_version_inner(executable, env, neutral_cwd, Some(admission))
-}
-
-pub(crate) fn verify_managed_executable_version_guarded_cancelable(
-    executable: &Path,
-    env: &BTreeMap<OsString, OsString>,
-    neutral_cwd: &Path,
-    admission: crate::guardian::RegisteredJob,
-    canceled: &dyn Fn() -> bool,
-) -> Result<(), ProviderError> {
     let spec = crate::process::ProcessSpec {
         program: PathBuf::from(executable),
         args: vec!["--version".into()],
         cwd: Some(neutral_cwd.to_path_buf()),
         env: env.clone(),
     };
-    let output = crate::process::run_probe_guarded_cancelable(
-        &spec,
-        admission,
-        Duration::from_secs(15),
-        true,
-        16 * 1024,
-        canceled,
-    )
-    .map_err(|_| {
-        ProviderError::Start("Codex did not report a version KalCode can verify".into())
-    })?;
-    if !output.status.success() {
-        return Err(ProviderError::Start(
-            "Codex did not report a version KalCode can verify".into(),
-        ));
-    }
-    let version = Version::find_in(&output.stdout).ok_or_else(|| {
-        ProviderError::Start("Codex did not report a version KalCode can verify".into())
-    })?;
-    require_managed_version(&version)
-}
-
-fn verify_managed_executable_version_inner(
-    executable: &Path,
-    env: &BTreeMap<OsString, OsString>,
-    neutral_cwd: &Path,
-    admission: Option<crate::guardian::RegisteredJob>,
-) -> Result<(), ProviderError> {
-    let spec = crate::process::ProcessSpec {
-        program: PathBuf::from(executable),
-        args: vec!["--version".into()],
-        cwd: Some(neutral_cwd.to_path_buf()),
-        env: env.clone(),
-    };
-    let output = match admission {
-        Some(admission) => crate::process::run_probe_guarded(
-            &spec,
-            admission,
-            Duration::from_secs(15),
-            true,
-            16 * 1024,
-        ),
-        None => crate::process::run_probe(&spec, Duration::from_secs(15), true, 16 * 1024),
-    }
-    .map_err(|_| {
-        ProviderError::Start("Codex did not report a version KalCode can verify".into())
-    })?;
+    let output =
+        crate::process::run_probe(&spec, std::time::Duration::from_secs(15), true, 16 * 1024)
+            .map_err(|_| {
+                ProviderError::Start("Codex did not report a version KalCode can verify".into())
+            })?;
     if !output.status.success() {
         return Err(ProviderError::Start(
             "Codex did not report a version KalCode can verify".into(),
@@ -305,49 +230,30 @@ pub(crate) fn usable_executable_and_version(
     }
 }
 
-/// Resolves Codex only when its version is in a compatibility line certified by the isolation
-/// policy ([`MANAGED_VERSIONS`]). Patch releases within a certified line are accepted; a new line
-/// requires certification first, since a minimum-version check is insufficient for this security
-/// boundary. Sign-in uses the same predicate ([`verify_managed_executable_version_guarded`]).
-pub(crate) fn managed_executable(
-    spec: &DetectionSpec,
-    env: &DetectEnv,
-    guardian: &crate::guardian::ProviderProbeGuardian,
-) -> Result<std::path::PathBuf, ProviderError> {
-    managed_executable_and_version(spec, env, guardian).map(|(executable, _)| executable)
-}
-
-/// [`managed_executable`], plus the verified version.
+/// Resolves a new managed Codex process through capability negotiation, signed compatibility
+/// policy, immutable runtime promotion, and last-known-good recovery. Existing processes retain
+/// the executable and runtime lease they were launched with.
 pub(crate) fn managed_executable_and_version(
     spec: &DetectionSpec,
     env: &DetectEnv,
     guardian: &crate::guardian::ProviderProbeGuardian,
-) -> Result<(std::path::PathBuf, Version), ProviderError> {
+    runtime_store: &crate::managed_runtime::RuntimeStore,
+    neutral_cwd: &Path,
+    prepare_job: impl FnMut(&str) -> Result<crate::guardian::RegisteredJob, ProviderError>,
+) -> Result<runtime::ManagedCodexRuntime, ProviderError> {
     let detected = crate::launch_probe::detect_for_launch(spec, env, Some(guardian));
-    match (detected.detection.state, detected.executable) {
-        (DetectionState::Installed, Some(executable))
-            if detected.detection.auth != AuthState::NotAuthenticated =>
-        {
-            let version = detected
-                .detection
-                .version
-                .as_deref()
-                .and_then(Version::parse)
-                .ok_or_else(|| {
-                    ProviderError::Start("Codex did not report a version KalCode can verify".into())
-                })?;
-            require_managed_version(&version)?;
-            Ok((executable, version))
-        }
-        (DetectionState::Installed, Some(_)) => Err(ProviderError::NotAuthenticated),
-        (DetectionState::NotInstalled, _) => Err(ProviderError::NotInstalled),
-        _ => Err(ProviderError::Start(
-            detected
-                .detection
-                .message
-                .unwrap_or_else(|| "Codex couldn't be checked.".into()),
-        )),
+    if detected.detection.auth == AuthState::NotAuthenticated {
+        return Err(ProviderError::NotAuthenticated);
     }
+    let provider_env = env.provider_env(&spec.env_policy);
+    runtime::select_managed_runtime(
+        detected.executable.as_deref(),
+        &provider_env,
+        neutral_cwd,
+        runtime_store,
+        prepare_job,
+        None,
+    )
 }
 
 impl AgentProvider for CodexProvider {
@@ -393,39 +299,57 @@ impl AgentProvider for CodexProvider {
         let cwd = working_directory(&config.working_directory)
             .map_err(|e| ProviderError::Start(e.to_string()))?;
         let spec = catalog::codex_spec();
-        let (executable, env, policy_overrides, lease): (_, _, _, Option<ProfileLease>) =
-            if let Some(managed) = &self.managed {
-                match config.provider_account_id.as_deref() {
-                    Some(account_id) if account_id == managed.account_id => {}
-                    _ => {
-                        return Err(ProviderError::Start(
-                            "the Codex session account does not match its managed profile".into(),
-                        ));
-                    }
+        let (executable, env, policy_overrides, lease, runtime_lease): (
+            _,
+            _,
+            _,
+            Option<ProfileLease>,
+            Option<crate::managed_runtime::RuntimeLease>,
+        ) = if let Some(managed) = &self.managed {
+            match config.provider_account_id.as_deref() {
+                Some(account_id) if account_id == managed.account_id => {}
+                _ => {
+                    return Err(ProviderError::Start(
+                        "the Codex session account does not match its managed profile".into(),
+                    ));
                 }
-                let prepared = managed_policy::prepare_session(
-                    &managed.profiles,
-                    &self.env,
-                    &managed.account_id,
-                    &cwd,
-                    managed.cloud_config,
-                )?;
-                let probe_guardian = managed.profiles.probe_guardian()?;
-                let executable = managed_executable(&spec, &prepared.detect_env, &probe_guardian)?;
-                (
-                    executable,
-                    prepared.env,
-                    prepared.cli_overrides,
-                    Some(prepared.lease),
-                )
-            } else {
-                (
-                    usable_executable(&spec, &self.env)?,
-                    self.env.provider_env(&spec.env_policy),
-                    Vec::new(),
-                    None,
-                )
-            };
+            }
+            let mut prepared = managed_policy::prepare_session(
+                &managed.profiles,
+                &self.env,
+                &managed.account_id,
+                &cwd,
+                managed.cloud_config,
+            )?;
+            let probe_guardian = managed.profiles.probe_guardian()?;
+            let runtime_store = managed.profiles.runtime_store();
+            let neutral_cwd = managed.profiles.compatibility_probe_dir()?;
+            let selected = managed_executable_and_version(
+                &spec,
+                &prepared.detect_env,
+                &probe_guardian,
+                &runtime_store,
+                &neutral_cwd,
+                |label| prepared.lease.prepare_guarded_job(label),
+            )?;
+            selected.configure_environment(&mut prepared.env);
+            let (executable, _version, _capabilities, runtime_lease) = selected.into_parts();
+            (
+                executable,
+                prepared.env,
+                prepared.cli_overrides,
+                Some(prepared.lease),
+                runtime_lease,
+            )
+        } else {
+            (
+                usable_executable(&spec, &self.env)?,
+                self.env.provider_env(&spec.env_policy),
+                Vec::new(),
+                None,
+                None,
+            )
+        };
         let adapter = CodexTurns {
             mode: config.permission_mode,
             model: config.model,
@@ -445,6 +369,7 @@ impl AgentProvider for CodexProvider {
                 cwd,
                 resume_session_id: config.resume_session_id,
                 guardian_profile: shared_lease.clone(),
+                _runtime_lease: runtime_lease,
             },
             sink,
         ));
@@ -610,11 +535,11 @@ mod tests {
     }
 
     #[test]
-    fn managed_policy_accepts_patch_releases_within_certified_codex_lines() {
+    fn managed_version_floor_accepts_stable_patch_minor_and_future_versions() {
         let version = |value| Version::parse(value).expect("version");
         for supported in [
             "0.155.1", "0.155.2", "0.156.0", "0.156.1", "0.156.7", "0.157.0", "0.157.1", "0.158.0",
-            "0.158.4", "0.159.0", "0.159.3", "0.160.0", "0.160.2",
+            "0.158.4", "0.159.0", "0.159.3", "0.160.0", "0.160.2", "0.161.0", "0.999.0",
         ] {
             if cfg!(windows) && version(supported) < argv::MINIMUM_VERSION {
                 assert!(!managed_version_supported(&version(supported)));
@@ -624,25 +549,20 @@ mod tests {
             }
             assert!(
                 managed_version_supported(&version(supported)),
-                "{supported} is in a certified line at or above its floor"
+                "{supported} is at or above the verified platform floor"
             );
             require_managed_version(&version(supported)).expect("supported version starts");
         }
     }
 
     #[test]
-    fn managed_policy_refuses_codex_versions_outside_certified_lines() {
+    fn managed_version_floor_refuses_only_versions_below_the_platform_floor() {
         let version = |value| Version::parse(value).expect("version");
         for refused in [
             "0.154.9",
             "0.155.0",
-            "0.161.0",
-            "0.158.0-alpha.15",
-            "0.160.0-alpha.1",
-            "0.157.1-alpha.1",
-            "0.158.0+build.1",
-            "1.0.0",
-            "1.155.1",
+            #[cfg(windows)]
+            "0.159.99",
         ] {
             assert!(
                 !managed_version_supported(&version(refused)),
@@ -652,36 +572,26 @@ mod tests {
     }
 
     #[test]
-    fn codex_refusal_names_the_found_version_the_supported_range_and_the_install_command() {
+    fn future_stable_and_compatible_prerelease_versions_are_not_rejected_by_name() {
         let found = Version::parse("0.161.0").expect("version");
-        let ProviderError::Refused { code, message } =
-            require_managed_version(&found).expect_err("0.161.0 must fail closed")
-        else {
-            panic!("unsupported Codex must be a typed refusal");
-        };
-        assert_eq!(code, "provider_version_unsupported");
-        assert!(message.contains("Codex CLI 0.161.0"), "{message}");
-        assert!(
-            message.contains(if cfg!(windows) {
-                "0.160.x"
-            } else {
-                "0.155.x (0.155.1 or later), 0.156.x, 0.157.x, 0.158.x, 0.159.x or 0.160.x"
-            }),
-            "{message}"
-        );
-        assert!(
-            message.contains("npm install -g @openai/codex@0.160.0"),
-            "{message}"
-        );
+        require_managed_version(&found).expect("0.161.0 stable is capability-probed");
 
-        let pre_release = Version::parse("0.158.0-alpha.15").expect("version");
-        let ProviderError::Refused { code, message } =
-            require_managed_version(&pre_release).expect_err("pre-release must fail closed")
-        else {
-            panic!("unsupported Codex must be a typed refusal");
-        };
-        assert_eq!(code, "provider_version_unsupported");
-        assert!(message.contains("0.158.0-alpha.15"), "{message}");
+        let pre_release = Version::parse("0.162.0-alpha.15").expect("version");
+        require_managed_version(&pre_release)
+            .expect("compatible prereleases use the experimental capability path");
+    }
+
+    #[test]
+    fn observing_hooks_require_evidence_for_the_exact_schema_line() {
+        assert!(observing_hooks_verified(
+            &Version::parse("0.160.2").expect("version")
+        ));
+        assert!(!observing_hooks_verified(
+            &Version::parse("0.160.3-rc.1").expect("version")
+        ));
+        assert!(!observing_hooks_verified(
+            &Version::parse("0.161.0").expect("version")
+        ));
     }
 
     /// Writes a fake Codex that records its working directory and reports `version`.
@@ -738,8 +648,8 @@ printf 'codex-cli {version}\n'
             ("0.158.0", !cfg!(windows)),
             ("0.159.0", !cfg!(windows)),
             ("0.160.0", true),
-            ("0.161.0", false),
-            ("0.158.0-alpha.15", false),
+            ("0.161.0", true),
+            ("0.162.0-alpha.15", true),
         ]
         .into_iter()
         .enumerate()

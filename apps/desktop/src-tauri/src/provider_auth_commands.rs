@@ -5,6 +5,7 @@
 //! system browser without crossing the WebView boundary.
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -70,9 +71,6 @@ impl RuntimeAuthError {
             return KalError::new(ErrorCategory::Provider, code, message).log_and_convert(command);
         }
         let unsupported_window = match &self {
-            Self::Provider(CodexAccountAuthError::UnsupportedVersion) => {
-                Some(&kalcode_providers::codex::MANAGED_VERSIONS)
-            }
             Self::Gemini(GeminiAccountAuthError::UnsupportedVersion) => {
                 Some(&kalcode_providers::gemini::MANAGED_VERSIONS)
             }
@@ -106,6 +104,10 @@ impl RuntimeAuthError {
             Self::Provider(CodexAccountAuthError::NotAuthenticated) => (
                 "provider_account_not_authenticated",
                 "Connect this Codex account before loading its available models.",
+            ),
+            Self::Provider(CodexAccountAuthError::IncompatibleCapabilities) => (
+                "provider_capability_unavailable",
+                "Codex could not start this managed account because the installed runtime is missing required capabilities and no compatible runtime is available. Update Codex, then try again.",
             ),
             Self::Provider(_) => (
                 "provider_auth_failed",
@@ -187,8 +189,8 @@ impl RuntimeAuthError {
 }
 
 /// `provider_version_unsupported` copy for a provider whose certified lines live in a
-/// [`VersionWindow`], in the same shape as the Claude refusal. Codex and Gemini account errors do
-/// not carry the found version, so the refusal names the supported window and install command.
+/// [`VersionWindow`]. Codex compatibility is capability based and does not use this version-window
+/// refusal; Gemini still does until its adapter adopts the shared compatibility layer.
 fn window_unsupported_message(window: &VersionWindow) -> String {
     let mut message = format!(
         "Managed {profile} accounts need {cli} {range}; pre-release builds aren't supported.",
@@ -390,16 +392,10 @@ impl ProviderRuntimeAuthority {
                     Arc::clone(&profiles),
                 ))
             });
-        let codex_auth = source_env
-            .resolve_executable_only(&catalog::codex_spec())
-            .map(|executable| {
-                Arc::new(CodexAccountAuthManager::new(
-                    executable,
-                    source_env.clone(),
-                    Arc::clone(&profiles),
-                    env!("KALCODE_PUBLIC_VERSION"),
-                ))
-            });
+        // Keep the manager available even when Codex is installed after KalCode starts. Each
+        // account operation resolves the current binary again, so this fallback is only a
+        // construction placeholder and is never used to launch a missing CLI.
+        let codex_auth = Some(codex_auth_manager(&source_env, &profiles));
         let gemini_auth = source_env
             .resolve_executable_only(&catalog::gemini_spec())
             .map(|executable| {
@@ -1244,12 +1240,11 @@ impl ProviderRuntimeAuthority {
                     Err(error) => Err(error),
                 };
             }
-            // An uncertified Codex CLI is refused before the account check starts: the account
-            // is unchanged, and the refusal names the supported versions instead of reporting a
-            // failed account check.
-            if failure == Some(CodexAccountAuthError::UnsupportedVersion) {
+            // A runtime missing required Codex capabilities is refused before the account check
+            // starts. Keep the account unchanged and report the actual capability failure.
+            if failure == Some(CodexAccountAuthError::IncompatibleCapabilities) {
                 return Err(RuntimeAuthError::Provider(
-                    CodexAccountAuthError::UnsupportedVersion,
+                    CodexAccountAuthError::IncompatibleCapabilities,
                 ));
             }
             let _ = self
@@ -1483,6 +1478,22 @@ impl ProviderRuntimeAuthority {
             .get(account_id)
             .map_err(RuntimeAuthError::Account)
     }
+}
+
+fn codex_auth_manager(
+    source_env: &DetectEnv,
+    profiles: &Arc<ManagedProfiles>,
+) -> Arc<CodexAccountAuthManager> {
+    let spec = catalog::codex_spec();
+    let executable = source_env
+        .resolve_executable_only(&spec)
+        .unwrap_or_else(|| PathBuf::from(spec.executable));
+    Arc::new(CodexAccountAuthManager::new(
+        executable,
+        source_env.clone(),
+        Arc::clone(profiles),
+        env!("KALCODE_PUBLIC_VERSION"),
+    ))
 }
 
 #[derive(Clone)]
@@ -2462,6 +2473,52 @@ mod tests {
     }
 
     #[cfg(any(windows, target_os = "macos"))]
+    fn isolated_codex_env(search_dir: Option<&std::path::Path>) -> DetectEnv {
+        let mut env = DetectEnv::from_process();
+        env.vars.retain(|(key, _)| {
+            !key.to_string_lossy().eq_ignore_ascii_case("PATH")
+                && !key.to_string_lossy().eq_ignore_ascii_case("APPDATA")
+                && !key.to_string_lossy().eq_ignore_ascii_case("LOCALAPPDATA")
+                && !key.to_string_lossy().eq_ignore_ascii_case("HOME")
+                && !key.to_string_lossy().eq_ignore_ascii_case("USERPROFILE")
+        });
+        if let Some(search_dir) = search_dir {
+            let search_dirs = vec![search_dir.to_path_buf()];
+            #[cfg(target_os = "macos")]
+            let search_dirs = search_dirs
+                .into_iter()
+                .chain([PathBuf::from("/usr/bin"), PathBuf::from("/bin")])
+                .collect::<Vec<_>>();
+            env.vars.push((
+                "PATH".into(),
+                std::env::join_paths(search_dirs).expect("isolated provider path"),
+            ));
+        }
+        env.system_root = Some(
+            search_dir
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .to_path_buf(),
+        );
+        env
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn codex_auth_manager_exists_when_codex_is_installed_after_startup() {
+        let temp = tempfile::tempdir().expect("temp");
+        let profiles =
+            Arc::new(ManagedProfiles::new(temp.path().join("profiles")).expect("managed profiles"));
+        let env = isolated_codex_env(None);
+
+        assert!(
+            env.resolve_executable_only(&catalog::codex_spec())
+                .is_none()
+        );
+        let manager = codex_auth_manager(&env, &profiles);
+        assert_eq!(Arc::strong_count(&manager), 1);
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
     fn gemini_credentials(
         runtime: &ProviderRuntimeAuthority,
         account_id: &str,
@@ -2745,42 +2802,59 @@ mod tests {
     }
 
     #[test]
-    fn codex_and_gemini_version_refusals_name_the_certified_window_and_install_command() {
-        for (error, window) in [
-            (
-                RuntimeAuthError::Provider(CodexAccountAuthError::UnsupportedVersion),
-                &kalcode_providers::codex::MANAGED_VERSIONS,
-            ),
-            (
-                RuntimeAuthError::Gemini(GeminiAccountAuthError::UnsupportedVersion),
-                &kalcode_providers::gemini::MANAGED_VERSIONS,
-            ),
-        ] {
-            let ipc = error.into_ipc("provider_login_start");
-            assert_eq!(ipc.code, "provider_version_unsupported");
-            assert!(
-                ipc.message.starts_with(&format!(
-                    "Managed {} accounts need {} {}",
-                    window.profile_name,
-                    window.cli_name,
-                    window.supported_range()
-                )),
-                "{}",
-                ipc.message
-            );
-            let command = window.install_command().expect("install command");
-            assert!(
-                ipc.message.contains(&format!("`{command}`")),
-                "{}",
-                ipc.message
-            );
-            assert!(
-                ipc.message
-                    .ends_with("(reason: provider_version_unsupported)"),
-                "{}",
-                ipc.message
-            );
-        }
+    fn codex_version_drift_is_not_presented_as_a_supported_minor_window() {
+        let ipc = RuntimeAuthError::Provider(CodexAccountAuthError::IncompatibleCapabilities)
+            .into_ipc("provider_codex_login_start");
+
+        assert_eq!(ipc.code, "provider_capability_unavailable");
+        assert!(
+            ipc.message.contains("required capabilities"),
+            "{}",
+            ipc.message
+        );
+        assert!(
+            ipc.message.contains("no compatible runtime"),
+            "{}",
+            ipc.message
+        );
+        assert!(!ipc.message.contains("0.160"), "{}", ipc.message);
+        assert!(
+            !ipc.message.contains("supported version"),
+            "{}",
+            ipc.message
+        );
+        assert!(!ipc.message.contains("npm install"), "{}", ipc.message);
+    }
+
+    #[test]
+    fn gemini_version_refusal_keeps_its_certified_window_and_install_command() {
+        let window = &kalcode_providers::gemini::MANAGED_VERSIONS;
+        let ipc = RuntimeAuthError::Gemini(GeminiAccountAuthError::UnsupportedVersion)
+            .into_ipc("provider_gemini_login_start");
+
+        assert_eq!(ipc.code, "provider_version_unsupported");
+        assert!(
+            ipc.message.starts_with(&format!(
+                "Managed {} accounts need {} {}",
+                window.profile_name,
+                window.cli_name,
+                window.supported_range()
+            )),
+            "{}",
+            ipc.message
+        );
+        let command = window.install_command().expect("install command");
+        assert!(
+            ipc.message.contains(&format!("`{command}`")),
+            "{}",
+            ipc.message
+        );
+        assert!(
+            ipc.message
+                .ends_with("(reason: provider_version_unsupported)"),
+            "{}",
+            ipc.message
+        );
         let gemini = RuntimeAuthError::Gemini(GeminiAccountAuthError::UnsupportedVersion)
             .into_ipc("provider_gemini_login_start");
         assert!(
@@ -2967,14 +3041,14 @@ mod tests {
 
     /// Installs Codex and Claude account managers whose executable doesn't exist. A busy profile
     /// refuses at the exclusive lease before any process could start, and an operation that does
-    /// get the lease fails the version check without running anything.
+    /// get the lease fails without running anything.
     #[cfg(any(windows, target_os = "macos"))]
     fn install_unrunnable_auth_managers(fixture: &mut Fixture) {
         let missing = fixture._temp.path().join("missing-provider-cli");
         let inner = Arc::get_mut(&mut fixture.runtime.inner).expect("sole runtime owner");
         inner.codex_auth = Some(Arc::new(CodexAccountAuthManager::new(
             missing.clone(),
-            inner.source_env.clone(),
+            isolated_codex_env(None),
             Arc::clone(&inner.profiles),
             env!("KALCODE_PUBLIC_VERSION"),
         )));
@@ -3521,7 +3595,7 @@ mod tests {
         let inner = Arc::get_mut(&mut fixture.runtime.inner).expect("sole runtime owner");
         inner.codex_auth = Some(Arc::new(CodexAccountAuthManager::new(
             executable,
-            inner.source_env.clone(),
+            isolated_codex_env(Some(&dir)),
             Arc::clone(&inner.profiles),
             env!("KALCODE_PUBLIC_VERSION"),
         )));
@@ -3647,7 +3721,7 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {{
             let script = dir.join("codex.cmd");
             std::fs::write(
                 &script,
-                "@echo off\r\nif \"%~1\"==\"--version\" (echo codex-cli 0.160.0& exit /b 0)\r\n:scan\r\nif \"%~1\"==\"\" exit /b 2\r\nif \"%~1\"==\"app-server\" goto server\r\nshift /1\r\ngoto scan\r\n:server\r\n\"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"%~dp0codex-app-server.ps1\"\r\nexit /b %ERRORLEVEL%\r\n",
+                "@echo off\r\nif \"%~1\"==\"--version\" (echo codex-cli 0.160.0& exit /b 0)\r\nif \"%~1\"==\"--help\" goto root_help\r\nif \"%~1\"==\"exec\" if \"%~2\"==\"--help\" goto exec_help\r\nif \"%~1\"==\"exec\" if \"%~2\"==\"resume\" if \"%~3\"==\"--help\" goto exec_resume_help\r\nif \"%~1\"==\"resume\" if \"%~2\"==\"--help\" goto resume_help\r\nif \"%~1\"==\"app-server\" if \"%~2\"==\"--help\" goto app_server_help\r\n:scan\r\nif \"%~1\"==\"\" exit /b 2\r\nif \"%~1\"==\"app-server\" goto server\r\nshift /1\r\ngoto scan\r\n:root_help\r\necho Commands:\r\necho   exec Run Codex non-interactively\r\necho   mcp Manage MCP servers\r\necho   app-server Run the app server\r\necho   resume Resume an interactive session\r\necho Options: -c -m -C -s -a --no-daemon\r\nexit /b 0\r\n:exec_help\r\necho Commands:\r\necho   resume Resume a previous session\r\necho Options: -c --model --json --sandbox --output-schema --skip-git-repo-check\r\nexit /b 0\r\n:exec_resume_help\r\necho Usage: codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]\r\necho Options: --json\r\nexit /b 0\r\n:resume_help\r\necho Usage: codex resume [OPTIONS] [SESSION_ID] [PROMPT]\r\nexit /b 0\r\n:app_server_help\r\necho Usage: codex app-server [OPTIONS]\r\nexit /b 0\r\n:server\r\n\"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"%~dp0codex-app-server.ps1\"\r\nexit /b %ERRORLEVEL%\r\n",
             )
             .expect("fake codex");
             script
@@ -3662,6 +3736,13 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {{
                 format!(
                     r#"#!/bin/sh
 if [ "$1" = "--version" ]; then printf '%s\n' 'codex-cli 0.160.0'; exit 0; fi
+case "$*" in
+  "--help") printf '%s\n' 'Commands:' '  exec Run Codex non-interactively' '  mcp Manage MCP servers' '  app-server Run the app server' '  resume Resume an interactive session' 'Options: -c -m -C -s -a --no-daemon'; exit 0 ;;
+  "exec --help") printf '%s\n' 'Commands:' '  resume Resume a previous session' 'Options: -c --model --json --sandbox --output-schema --skip-git-repo-check'; exit 0 ;;
+  "exec resume --help") printf '%s\n' 'Usage: codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]' 'Options: --json'; exit 0 ;;
+  "resume --help") printf '%s\n' 'Usage: codex resume [OPTIONS] [SESSION_ID] [PROMPT]'; exit 0 ;;
+  "app-server --help") printf '%s\n' 'Usage: codex app-server [OPTIONS]'; exit 0 ;;
+esac
 found=false
 for arg in "$@"; do if [ "$arg" = "app-server" ]; then found=true; fi; done
 $found || exit 2
@@ -3697,19 +3778,18 @@ done
         let inner = Arc::get_mut(&mut fixture.runtime.inner).expect("sole runtime owner");
         inner.codex_auth = Some(Arc::new(CodexAccountAuthManager::new(
             executable,
-            inner.source_env.clone(),
+            isolated_codex_env(Some(&dir)),
             Arc::clone(&inner.profiles),
             env!("KALCODE_PUBLIC_VERSION"),
         )));
         first_read_marker
     }
 
-    /// Codex CLI 0.160.0 shipped while 0.1.9 certified only 0.155-0.158: the launch's plan check
-    /// was refused by the version gate before any account check, yet it was reported as
-    /// `provider_account_check_failed` and flagged the account "Needs attention".
+    /// A stable version string alone never proves compatibility. This fake omits the required
+    /// app-server capabilities, so the account stays unchanged and the error names capabilities.
     #[cfg(any(windows, target_os = "macos"))]
     #[test]
-    fn uncertified_codex_cli_is_a_version_refusal_that_leaves_the_account_unchanged() {
+    fn codex_missing_capabilities_leave_the_account_unchanged() {
         let mut fixture = Fixture::new();
         install_codex_reporting(&mut fixture, "0.161.0");
         let store = fixture.runtime.account_store();
@@ -3718,13 +3798,13 @@ done
         assert!(matches!(
             fixture.runtime.refresh_codex_account(&fixture.account.id),
             Err(RuntimeAuthError::Provider(
-                CodexAccountAuthError::UnsupportedVersion
+                CodexAccountAuthError::IncompatibleCapabilities
             ))
         ));
         assert_eq!(
             codex_launch_refusal(&fixture),
             None,
-            "the real provider adapter enforces its version window at launch"
+            "the real provider adapter enforces its required capabilities at launch"
         );
         let after = store.get(&fixture.account.id).expect("account");
         assert_eq!(after.authentication_state, before.authentication_state);

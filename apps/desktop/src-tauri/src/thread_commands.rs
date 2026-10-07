@@ -468,8 +468,9 @@ impl ThreadsState {
         state
     }
 
-    /// Registers the adapter of every provider detection reports usable and unregisters the
-    /// rest. Threads already running keep their sessions. Uses the cached detection.
+    /// Registers every provider that can launch from either the native installation or a
+    /// validated managed runtime, and unregisters the rest. Threads already running keep their
+    /// sessions. Uses cached provider state.
     pub fn sync_providers(&self) {
         let usable = self.detection.usable();
         sync_cached_provider_statuses(&self.providers, self.detection.list(), &usable, |status| {
@@ -2609,6 +2610,38 @@ mod tests {
         );
         assert_eq!(detections.get(), 1, "empty status must run detection once");
         assert_eq!(syncs.get(), 2, "fresh detection must sync before summaries");
+    }
+
+    #[test]
+    fn provider_registry_sync_accepts_managed_runtime_without_faking_native_installation() {
+        let mut status = kalcode_providers::catalog::statuses()
+            .into_iter()
+            .find(|status| status.id.as_str() == ProviderId::CODEX)
+            .expect("Codex status");
+        status.detection = Some(ProviderDetection {
+            provider_id: status.id.clone(),
+            display_name: status.display_name.clone(),
+            state: DetectionState::NotInstalled,
+            display_path: None,
+            version: None,
+            minimum_version: None,
+            auth: AuthState::Unknown,
+            message: None,
+            checked_at: "cached".into(),
+        });
+        let id = status.id.clone();
+        let providers = ProviderRegistry::new();
+
+        sync_cached_provider_statuses(&providers, vec![status.clone()], &[id.clone()], |status| {
+            Some(Arc::new(CapabilitySpy::from_status(status)))
+        });
+
+        assert!(providers.get(&id).is_some());
+        assert_eq!(
+            status.detection.as_ref().expect("detection").state,
+            DetectionState::NotInstalled,
+            "managed readiness must not rewrite machine-installation truth"
+        );
     }
 
     #[test]

@@ -213,6 +213,7 @@ impl InteractiveCliProvider {
         let mut gemini_args = None;
         let mut integration_lifetime = None;
         let mut lease: Option<ProfileLease> = None;
+        let mut runtime_lease = None;
         let mut version = None;
         let (executable, mut env, cwd) = match (self.managed_profiles.as_ref(), account_id) {
             (Some(profiles), Some(account_id)) => match self.cli {
@@ -240,15 +241,25 @@ impl InteractiveCliProvider {
                         .as_ref()
                         .and_then(|resolve| resolve(account_id).ok())
                         .unwrap_or(CloudConfigEligibility::Unknown);
-                    let prepared = crate::codex::managed_policy::prepare_session(
+                    let mut prepared = crate::codex::managed_policy::prepare_session(
                         profiles,
                         &self.env,
                         account_id,
                         &workspace,
                         eligibility,
                     )?;
-                    let (executable, verified) =
-                        managed_codex_executable(&spec, &prepared.detect_env, &probe_guardian)?;
+                    let selected = managed_codex_executable(
+                        &spec,
+                        &prepared.detect_env,
+                        &probe_guardian,
+                        &profiles.runtime_store(),
+                        &profiles.compatibility_probe_dir()?,
+                        |label| prepared.lease.prepare_guarded_job(label),
+                    )?;
+                    selected.configure_environment(&mut prepared.env);
+                    let (executable, verified, _capabilities, selected_runtime_lease) =
+                        selected.into_parts();
+                    runtime_lease = selected_runtime_lease;
                     version = Some(verified);
                     codex_overrides = prepared.cli_overrides;
                     lease = Some(prepared.lease);
@@ -507,6 +518,7 @@ impl InteractiveCliProvider {
             .map(|lease| lease.prepare_guarded_job("provider-pane"))
             .transpose()?;
         let exit_lease = shared_lease.clone();
+        let exit_runtime_lease = runtime_lease;
         let weak: Weak<Shared> = Arc::downgrade(&shared);
         let mut argv: Vec<OsString> = launch.prefix_args.clone();
         argv.extend(args);
@@ -524,6 +536,7 @@ impl InteractiveCliProvider {
                 shared.on_exit(exit.code, exit.killed);
             }
             drop(exit_lease);
+            drop(exit_runtime_lease);
         };
         let spawn_error = |error: kalcode_pty::PtyError| {
             tracing::warn!(event = "pane.spawn_failed", provider_id = self.cli.id(), error = %error);

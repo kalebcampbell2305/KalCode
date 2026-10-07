@@ -18,6 +18,33 @@ export interface Label {
   detail: string | null;
 }
 
+type ManagedRuntimeInfo = NonNullable<ProviderStatus["managedRuntime"]>;
+
+function managedRuntime(status: ProviderStatus): ManagedRuntimeInfo | null {
+  return status.managedRuntime ?? null;
+}
+
+/** A provider can launch through either its native CLI or a validated KalCode-owned runtime. */
+export function providerRuntimeReady(status: ProviderStatus): boolean {
+  const state = status.detection?.state;
+  return state === "installed" || managedRuntime(status) !== null;
+}
+
+/** Subtle diagnostics for a validated isolated runtime; native installation stays a separate row. */
+export function managedRuntimeLabel(status: ProviderStatus): Label | null {
+  const runtime = managedRuntime(status);
+  if (!runtime) return null;
+  const detail =
+    runtime.source === "last_known_good"
+      ? `KalCode is using its last known good ${status.displayName} runtime for managed accounts.`
+      : runtime.source === "validated_snapshot"
+        ? `KalCode validated this isolated ${status.displayName} runtime for managed accounts.`
+        : runtime.source === "installed_direct"
+          ? `KalCode validated the installed ${status.displayName} CLI for managed accounts.`
+          : `KalCode validated this ${status.displayName} runtime for managed accounts.`;
+  return { tone: "success", label: `Ready, version ${runtime.version}`, detail };
+}
+
 /** Installation state as detected. Never claims more than detection reported. */
 export function detectionLabel(detection: ProviderDetection | null, errorCode: string | null = null): Label {
   if (!detection) return { tone: "idle", label: "Not checked yet", detail: null };
@@ -150,7 +177,7 @@ export function sameSignInLabel(
 
 /** Whether to show install guidance. */
 export function needsInstall(status: ProviderStatus): boolean {
-  return status.detection?.state === "not_installed";
+  return status.detection?.state === "not_installed" && !managedRuntime(status);
 }
 
 export function adapterLabel(adapter: AdapterState): { badge: string; description: string } {
@@ -258,9 +285,14 @@ export interface ProvidersSummary {
 
 /** Summary for compact places such as the dashboard. Uses cached detection only. */
 export function summarizeProviders(statuses: readonly ProviderStatus[]): ProvidersSummary {
-  const installed = statuses.filter((s) => s.detection?.state === "installed" || s.detection?.state === "outdated");
+  const installed = statuses.filter(
+    (status) =>
+      status.detection?.state === "installed" ||
+      status.detection?.state === "outdated" ||
+      managedRuntime(status) !== null,
+  );
   return {
-    checked: statuses.some((s) => s.detection !== null),
+    checked: statuses.some((s) => s.detection !== null || managedRuntime(s) !== null),
     installed: installed.length,
     total: statuses.length,
     installedNames: installed.map((s) => s.displayName),

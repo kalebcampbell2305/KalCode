@@ -1,6 +1,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
 use std::sync::atomic::AtomicBool;
+use std::time::SystemTime;
 
 use kalcode_contracts::agent::{ProviderDetection, ProviderId};
 

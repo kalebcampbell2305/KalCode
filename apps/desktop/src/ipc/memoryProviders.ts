@@ -107,6 +107,7 @@ export type ProviderScenario =
   | "providers-none"
   | "providers-outdated"
   | "providers-signed-out"
+  | "providers-managed-runtime"
   | "providers-backoff";
 
 const stricter = (mode: PermissionMapping["mode"], providerSetting: string, notes: string): PermissionMapping => ({
@@ -237,7 +238,7 @@ export function providerCatalog(): ProviderStatus[] {
       integration:
         "Headless mode (codex exec --json) with JSON Lines events, one process per turn resumed by thread id",
       signInCommand: "codex login",
-      installCommand: "npm install -g @openai/codex@0.160.0",
+      installCommand: "npm install -g @openai/codex",
       docsUrl: "https://github.com/openai/codex",
     },
     {
@@ -352,13 +353,16 @@ function fakeMachine(scenario: ProviderScenario): Record<string, Fake> {
       auth: "authenticated",
       message: null,
     },
-    codex: {
-      state: "installed",
-      displayPath: "~\\AppData\\Roaming\\npm\\codex.cmd",
-      version: "0.155.1",
-      auth: signedOut ? "not_authenticated" : "authenticated",
-      message: null,
-    },
+    codex:
+      scenario === "providers-managed-runtime"
+        ? NOT_INSTALLED
+        : {
+            state: "installed",
+            displayPath: "~\\AppData\\Roaming\\npm\\codex.cmd",
+            version: "0.155.1",
+            auth: signedOut ? "not_authenticated" : "authenticated",
+            message: null,
+          },
     "gemini-cli": signedOut
       ? NOT_INSTALLED
       : {
@@ -395,8 +399,17 @@ export function detectFake(
       checkedAt,
       ...found,
     };
-    const updated = { ...status, detection, detectionErrorCode: null };
-    if (status.detection?.state !== detection.state || status.detection?.version !== detection.version) {
+    const managedRuntime =
+      scenario === "providers-managed-runtime" && status.id === "codex"
+        ? { version: "0.160.0", source: "last_known_good" }
+        : undefined;
+    const updated = { ...status, detection, detectionErrorCode: null, managedRuntime };
+    if (
+      status.detection?.state !== detection.state ||
+      status.detection?.version !== detection.version ||
+      status.managedRuntime?.version !== managedRuntime?.version ||
+      status.managedRuntime?.source !== managedRuntime?.source
+    ) {
       changed.push(updated);
     }
     return updated;

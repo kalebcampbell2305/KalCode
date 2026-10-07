@@ -4,7 +4,8 @@
 //! (`claude.exe`, `codex`, ...) next to a `fake-provider.json` that selects its behaviour, then
 //! put that folder on the `PATH` KalCode's detection searches. In session mode it replays the
 //! documented stream-JSON fixtures in `tests/fixtures/claude/` so the whole
-//! spawn → parse → normalize → event pipeline runs without a real provider.
+//! provider event pipeline runs without a real provider. Codex mode additionally exposes the
+//! command/flag surface and isolated app-server handshake used by compatibility negotiation.
 //!
 //! In interactive mode (started with `--settings`, as a provider pane starts `claude`) it shows
 //! a minimal TUI and fires the hooks from KalCode's settings file with the documented payloads
@@ -79,6 +80,130 @@ fn provider_version<'a>(config: &'a Value, kind: &str, default: &'a str) -> &'a 
         .unwrap_or(default)
 }
 
+fn codex_semver(config: &Value) -> &str {
+    provider_version(config, "codex", "codex-cli 0.160.0")
+        .split_ascii_whitespace()
+        .find(|part| {
+            part.chars()
+                .next()
+                .is_some_and(|character| character.is_ascii_digit())
+        })
+        .unwrap_or("0.160.0")
+}
+
+fn codex_capability(config: &Value, name: &str) -> bool {
+    config
+        .get("codexCapabilities")
+        .and_then(|capabilities| capabilities.get(name))
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
+
+fn codex_help(config: &Value, args: &[String]) -> Option<String> {
+    if args == ["--help"] {
+        let mut commands = Vec::new();
+        if codex_capability(config, "exec") {
+            commands.push("  exec        Run Codex non-interactively");
+        }
+        if codex_capability(config, "interactiveResume") {
+            commands.push("  resume      Resume an interactive session");
+        }
+        if codex_capability(config, "mcp") {
+            commands.push("  mcp         Manage MCP servers");
+        }
+        if codex_capability(config, "appServer") {
+            commands.push("  app-server  Run the Codex app server");
+        }
+        let mut options = Vec::new();
+        if codex_capability(config, "configOverride") {
+            options.push("  -c, --config <key=value>          Override a configuration value");
+        }
+        if codex_capability(config, "workingDirectory") {
+            options.push("  -C, --cd <DIR>                    Set the working directory");
+        }
+        if codex_capability(config, "rootSandbox") {
+            options.push("  -s, --sandbox <MODE>              Select the sandbox policy");
+        }
+        if codex_capability(config, "approvalPolicy") {
+            options.push("  -a, --ask-for-approval <POLICY>   Select the approval policy");
+        }
+        if codex_capability(config, "modelSelection") {
+            options.push("  -m, --model <MODEL>                Select the model");
+        }
+        if codex_capability(config, "noDaemon") {
+            options.push("      --no-daemon                    Run without the desktop daemon");
+        }
+        return Some(format!(
+            "Usage: codex [OPTIONS] [PROMPT]\n\nCommands:\n{}\n\nOptions:\n{}\n",
+            commands.join("\n"),
+            options.join("\n")
+        ));
+    }
+    if args == ["exec", "--help"] {
+        let mut commands = Vec::new();
+        if codex_capability(config, "resume") {
+            commands.push("  resume  Resume a previous non-interactive session");
+        }
+        let mut options = Vec::new();
+        if codex_capability(config, "configOverride") {
+            options.push("  -c, --config <key=value>  Override a configuration value");
+        }
+        if codex_capability(config, "modelSelection") {
+            options.push("  -m, --model <MODEL>       Select the model");
+        }
+        if codex_capability(config, "sandbox") {
+            options.push("  -s, --sandbox <MODE>      Select the sandbox policy");
+        }
+        if codex_capability(config, "skipGitRepoCheck") {
+            options.push("  --skip-git-repo-check    Allow execution outside a Git repository");
+        }
+        if codex_capability(config, "execJson") {
+            options.push("  --json                  Emit JSONL events");
+        }
+        if codex_capability(config, "structuredOutput") {
+            options.push("  --output-schema <FILE>  Validate the final response");
+        }
+        return Some(format!(
+            "Usage: codex exec [OPTIONS] [PROMPT]\n\nCommands:\n{}\n\nOptions:\n{}\n",
+            commands.join("\n"),
+            options.join("\n")
+        ));
+    }
+    if args == ["exec", "resume", "--help"] {
+        let mut options = Vec::new();
+        if codex_capability(config, "configOverride") {
+            options.push("  --config <key=value>  Override a configuration value");
+        }
+        if codex_capability(config, "execJson") {
+            options.push("  --json                Emit JSONL events");
+        }
+        return Some(format!(
+            "Usage: codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]\n\nOptions:\n{}\n",
+            options.join("\n")
+        ));
+    }
+    if args == ["resume", "--help"] {
+        return Some(
+            "Usage: codex resume [OPTIONS] [SESSION_ID] [PROMPT]\n\nOptions:\n  --last  Resume the most recent session\n"
+                .into(),
+        );
+    }
+    if args == ["app-server", "--help"] {
+        let mut options = Vec::new();
+        if codex_capability(config, "configOverride") {
+            options.push("  --config <key=value>  Override a configuration value");
+        }
+        if codex_capability(config, "appServerStdio") {
+            options.push("  --stdio              Serve the protocol over stdin/stdout");
+        }
+        return Some(format!(
+            "Usage: codex app-server [OPTIONS]\n\nOptions:\n{}\n",
+            options.join("\n")
+        ));
+    }
+    None
+}
+
 fn get_i64(config: &Value, key: &str, default: i64) -> i64 {
     config.get(key).and_then(Value::as_i64).unwrap_or(default)
 }
@@ -129,6 +254,12 @@ fn codex_app_server(config: &Value) -> ! {
     let Some(codex_home) = std::env::var_os("CODEX_HOME").map(PathBuf::from) else {
         exit(8);
     };
+    let reported_home = config
+        .get("codexReportedHome")
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| codex_home.clone());
+    let user_agent = format!("codex_cli_rs/{}", codex_semver(config));
     let marker = codex_home.join(".kalcode-fake-first-account-read");
     let delay_ms = get_i64(config, "codexFirstAccountReadDelayMs", 0);
     let plan = get_str(config, "codexPlan", "pro").to_owned();
@@ -151,8 +282,8 @@ fn codex_app_server(config: &Value) -> ! {
 
         let result = match method {
             "initialize" => serde_json::json!({
-                "userAgent": "codex_cli_rs/0.160.0",
-                "codexHome": codex_home,
+                "userAgent": &user_agent,
+                "codexHome": &reported_home,
                 "platformFamily": if cfg!(windows) { "windows" } else { "unix" },
                 "platformOs": std::env::consts::OS,
             }),
@@ -310,6 +441,12 @@ fn main() {
         };
         println!("{}", provider_version(&config, kind, default));
         exit(get_i64(&config, "versionExit", 0));
+    }
+    if kind == "codex"
+        && let Some(help) = codex_help(&config, &args)
+    {
+        print!("{help}");
+        exit(get_i64(&config, "helpExit", 0));
     }
     if kind == "cursor" && args.first().is_some_and(|arg| arg == "status") {
         println!(

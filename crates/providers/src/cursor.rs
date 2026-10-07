@@ -15,6 +15,53 @@ use kalcode_contracts::permissions::PermissionMode;
 use crate::detect::DetectEnv;
 use crate::guardian::ProviderProbeGuardian;
 use crate::process::{ProbeOutput, ProcessError, ProcessSpec, run_probe, run_probe_guarded};
+use crate::version::Version;
+
+/// Cursor's native CLI uses a calendar release plus source revision such as
+/// `2026.10.01-e373342`. The zero-padded day is intentionally provider-specific rather than
+/// weakening strict SemVer parsing for Codex and other CLIs. The source revision is build
+/// identity, not a prerelease channel, so normalize it as SemVer build metadata.
+pub(crate) fn parse_cli_version(output: &str) -> Option<Version> {
+    output
+        .split_ascii_whitespace()
+        .find_map(parse_calendar_version)
+        .or_else(|| Version::find_in(output))
+}
+
+fn parse_calendar_version(token: &str) -> Option<Version> {
+    let token = token.trim_matches(|character: char| {
+        !character.is_ascii_alphanumeric() && !matches!(character, '.' | '-' | '_')
+    });
+    let (date, revision) = token.split_once('-')?;
+    if revision.is_empty()
+        || revision
+            .bytes()
+            .any(|byte| !(byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-')))
+    {
+        return None;
+    }
+    let mut parts = date.split('.');
+    let (year, month, day) = (parts.next()?, parts.next()?, parts.next()?);
+    if parts.next().is_some()
+        || year.len() != 4
+        || month.len() != 2
+        || day.len() != 2
+        || !year.bytes().all(|byte| byte.is_ascii_digit())
+        || !month.bytes().all(|byte| byte.is_ascii_digit())
+        || !day.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    let (year, month, day) = (
+        year.parse::<u64>().ok()?,
+        month.parse::<u64>().ok()?,
+        day.parse::<u64>().ok()?,
+    );
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    Version::parse(&format!("{year}.{month}.{day}+{revision}"))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CursorAuthStatus {
@@ -422,6 +469,29 @@ pub fn tools() -> Vec<ToolCapability> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn cursor_calendar_version_is_stable_build_identity_without_weakening_semver() {
+        let found = parse_cli_version("Cursor Agent 2026.10.01-e373342\n").expect("version");
+        assert_eq!(found.to_string(), "2026.10.1+e373342");
+        assert!(!found.is_prerelease());
+        assert!(found >= Version::new(2026, 10, 1));
+        assert!(parse_cli_version("Cursor Agent 2026.13.01-e373342").is_none());
+        assert!(parse_cli_version("Cursor Agent 2026.10.00-e373342").is_none());
+        assert!(parse_cli_version("other2026.10.01-e373342").is_none());
+        let double_digit_day =
+            parse_cli_version("Cursor Agent 2026.10.11-e373342").expect("version");
+        assert_eq!(double_digit_day.to_string(), "2026.10.11+e373342");
+        assert!(!double_digit_day.is_prerelease());
+        assert_eq!(
+            parse_cli_version("cursor-agent 0.61.0")
+                .expect("ordinary SemVer")
+                .to_string(),
+            "0.61.0"
+        );
+    }
+
     #[test]
     fn only_cursor_sign_in_wording_marks_a_session_signed_out() {
         let classify = |stderr| super::classify_probe_failure(stderr, "fallback").0;
@@ -452,9 +522,6 @@ mod tests {
             assert_eq!(classify(stderr), "cursor_session_expired", "{stderr}");
         }
     }
-
-    use super::*;
-
     #[test]
     fn runtime_models_preserve_exact_ids_and_have_no_vendor_allowlist() {
         let models = parse_models("Available models\n\ncustom-deepseek-9 - Custom DeepSeek 9\nclaude-opus-4-8[effort=high] - Claude Opus 4.8 (current, default)\nTip: use --model <id>\n").expect("models");

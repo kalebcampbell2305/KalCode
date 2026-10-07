@@ -356,6 +356,7 @@ impl AgentProvider for GeminiProvider {
                 cwd: launch_cwd,
                 resume_session_id: config.resume_session_id,
                 guardian_profile: shared_lease.clone(),
+                _runtime_lease: None,
             },
             sink,
         ));

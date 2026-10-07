@@ -2,7 +2,6 @@ import type {
   PermissionMode,
   ProviderAccount,
   ProviderAccountBinding,
-  ProviderStatus,
   ThreadOptions,
   ThreadSummary,
 } from "@kalcode/protocol";
@@ -29,7 +28,7 @@ import { usePromptConfirmation } from "../../context/usePromptConfirmation.ts";
 import type { CreateThreadInput } from "../../ipc/client.ts";
 import { type KalCodeError, toKalCodeError } from "../../ipc/errors.ts";
 import { usePersistentDraft } from "../../runtime/drafts.ts";
-import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
+import { useEvents, useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
 import { MOD_LABEL } from "../../shell/shortcuts.ts";
@@ -54,6 +53,7 @@ interface NewThreadProps {
 /** New thread flow: provider, model, workspace, permission mode (the saved default, else Auto), task. */
 export function NewThread({ onCreated, onCancel, prefill }: NewThreadProps) {
   const { client } = useRuntime();
+  const { events } = useEvents();
   const { navigate } = useNavigation();
   const [options, setOptions] = useState<ThreadOptions | null>(null);
   const sessions = useOptionalProviderAccountSessions();
@@ -68,6 +68,44 @@ export function NewThread({ onCreated, onCancel, prefill }: NewThreadProps) {
   const [bindings, setBindings] = useState<ProviderAccountBinding[]>([]);
   const [unavailable, setUnavailable] = useState<UnavailableProvider[]>([]);
   const [loadError, setLoadError] = useState<KalCodeError | null>(null);
+  const optionRequest = useRef(0);
+  const providerEventSource = useRef(client);
+  const lastProviderSeq = useRef<number | null>(null);
+  const providerRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const loadOptions = useCallback(
+    async (reportError: boolean) => {
+      if (providerEventSource.current !== client) {
+        providerEventSource.current = client;
+        lastProviderSeq.current = null;
+        if (providerRefreshTimer.current) clearTimeout(providerRefreshTimer.current);
+        providerRefreshTimer.current = null;
+        optionRequest.current += 1;
+      }
+      const request = ++optionRequest.current;
+      try {
+        const next = await client.threadOptions();
+        const chatOptions = { ...next, providers: next.providers.filter((provider) => provider.id !== "cursor") };
+        if (request !== optionRequest.current) return;
+        setOptions(chatOptions);
+        if (reportError) setLoadError(null);
+        // Availability detail is supplementary. Show the ready provider/model/workspace controls
+        // immediately and fill diagnostics later without holding the form on a slow status read.
+        void client
+          .listProviders()
+          .then((statuses) => {
+            if (request !== optionRequest.current) return;
+            setUnavailable(
+              unavailableProviders(statuses, new Set(chatOptions.providers.map((provider) => provider.id))),
+            );
+          })
+          .catch(() => {});
+      } catch (error) {
+        if (request === optionRequest.current && reportError) setLoadError(toKalCodeError(error));
+      }
+    },
+    [client],
+  );
 
   const load = useCallback(() => {
     setLoadError(null);
@@ -84,21 +122,42 @@ export function NewThread({ onCreated, onCancel, prefill }: NewThreadProps) {
         setBindingsReady(true);
       })
       .catch((error) => setLoadError(toKalCodeError(error)));
-    client
-      .threadOptions()
-      .then((next) => {
-        const chatOptions = { ...next, providers: next.providers.filter((provider) => provider.id !== "cursor") };
-        setOptions(chatOptions);
-        void client
-          .listProviders()
-          .then((statuses: ProviderStatus[]) => {
-            setUnavailable(unavailableProviders(statuses, new Set(chatOptions.providers.map((p) => p.id))));
-          })
-          .catch(() => undefined);
-      })
-      .catch((error) => setLoadError(toKalCodeError(error)));
-  }, [client, sharedSessions]);
+    void loadOptions(true);
+  }, [client, loadOptions, sharedSessions]);
   useEffect(load, [load]);
+
+  useEffect(() => {
+    if (providerEventSource.current !== client) {
+      providerEventSource.current = client;
+      lastProviderSeq.current = null;
+      if (providerRefreshTimer.current) clearTimeout(providerRefreshTimer.current);
+      providerRefreshTimer.current = null;
+      optionRequest.current += 1;
+    }
+    const newest = events[0]?.seq ?? 0;
+    if (lastProviderSeq.current === null) {
+      lastProviderSeq.current = newest;
+      return;
+    }
+    const since = lastProviderSeq.current;
+    lastProviderSeq.current = Math.max(since, newest);
+    const changed = events.some(
+      (event) => event.seq > since && (event.type === "provider.detected" || event.type === "provider.health_changed"),
+    );
+    if (!changed || providerRefreshTimer.current) return;
+    providerRefreshTimer.current = setTimeout(() => {
+      providerRefreshTimer.current = null;
+      void loadOptions(false);
+    }, 80);
+  }, [client, events, loadOptions]);
+
+  useEffect(
+    () => () => {
+      optionRequest.current += 1;
+      if (providerRefreshTimer.current) clearTimeout(providerRefreshTimer.current);
+    },
+    [],
+  );
   const reloadAccounts = async () => {
     if (sessions) await sessions.reload();
     else setAccounts(await client.listProviderAccounts());
