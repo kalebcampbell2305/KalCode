@@ -439,13 +439,26 @@ async function waitForOwnedExit(child: ChildProcess, timeoutMs: number): Promise
   });
 }
 
-async function closeBrowserBounded(browser: Browser): Promise<void> {
+/**
+ * Called only after the owned app and its WebView2 tree (the CDP listener) have provably exited.
+ * The connection is then closed once Playwright reports it disconnected. `browser.close()` itself
+ * also awaits Playwright's own temporary artifacts-folder removal (`fs.rm` with retries), which
+ * took up to 4.7 s under parallel load and is what overran the bound in gates 37529315873 and
+ * 37520284094: by then the browser was already disconnected and no CDP connection remained.
+ */
+export async function closeBrowserBounded(browser: Pick<Browser, "close" | "isConnected" | "once">): Promise<void> {
+  const closing = browser.close();
+  closing.catch(() => undefined);
+  const disconnected = new Promise<void>((resolveDisconnected) => {
+    if (!browser.isConnected()) resolveDisconnected();
+    else browser.once("disconnected", () => resolveDisconnected());
+  });
   let handle: ReturnType<typeof setTimeout> | undefined;
   const timedOut = new Promise<never>((_, reject) => {
     handle = setTimeout(() => reject(new Error("The owned E2E browser did not close within 5 seconds")), 5_000);
   });
   try {
-    await Promise.race([browser.close(), timedOut]);
+    await Promise.race([closing, disconnected, timedOut]);
   } finally {
     if (handle !== undefined) clearTimeout(handle);
   }
