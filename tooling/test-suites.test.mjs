@@ -8,8 +8,8 @@ import test from "node:test";
 import {
   auditRustIntentionalIgnores,
   auditWorkspaceSuiteCoverage,
-  flakyReport,
   detectWindowsSessionZero,
+  flakyReport,
   loadTestSuiteInventory,
   parseCargoTestReport,
   parseNodeTestReport,
