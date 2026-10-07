@@ -70,8 +70,8 @@ pub struct CodexArgs<'a> {
     pub hook_prefix_args: &'a [String],
     pub endpoint: &'a str,
     pub session: &'a str,
-    /// Add KalCode's observing Codex hooks (a Codex line verified for them,
-    /// [`crate::codex::observing_hooks_verified`]). Without them status is `notify` only.
+    /// Add KalCode's observing Codex hooks after the installed binary passes the cached hook
+    /// protocol probe. Without that evidence, status is `notify` only.
     pub observe_hooks: bool,
 }
 
@@ -81,7 +81,7 @@ pub enum CodexArgsError {
     UnsafePath,
     #[error("the model name is not valid")]
     InvalidModel,
-    #[error("the reasoning effort is not supported")]
+    #[error("the reasoning effort name is not valid")]
     InvalidEffort,
     #[error("the session id is not valid")]
     InvalidSessionId,
@@ -612,8 +612,11 @@ mod tests {
         ];
         let args = interactive_args_with_overrides(&base, &overrides).expect("args");
         assert!(args.windows(2).any(|pair| pair == overrides));
+        let mut future = base.clone();
+        future.effort = Some("ultra");
+        assert!(interactive_args_with_overrides(&future, &[]).is_ok());
         let mut invalid = base.clone();
-        invalid.effort = Some("ultra");
+        invalid.effort = Some("high' -c web_search='live");
         assert_eq!(
             interactive_args_with_overrides(&invalid, &[]),
             Err(CodexArgsError::InvalidEffort)
