@@ -6,6 +6,7 @@
 
 pub mod argv;
 pub mod compatibility;
+pub mod hook_compatibility;
 pub mod managed_policy;
 pub mod runtime;
 mod stream;
@@ -37,13 +38,30 @@ use crate::managed::{
 };
 use crate::turns::{TurnAdapter, TurnLaunch, TurnNormalizer, TurnSession};
 use crate::version::Version;
-/// Codex release lines whose session-flag hooks KalCode verified end to end: the `-c hooks.*`
-/// overrides, the session-flags trust key and hash, the Claude-shaped payloads and the
-/// observe-only semantics ([`kalcode_hook_bridge::codex`]). Only the 0.160 line has that evidence;
-/// every other line keeps `notify` status until its hook schema is verified, so an unverified
-/// trust format can never surface Codex's hook review.
-pub(crate) fn observing_hooks_verified(version: &Version) -> bool {
-    version.major == 0 && version.minor == 160 && !version.is_prerelease()
+
+pub(crate) fn require_managed_reasoning_effort(
+    capabilities: &compatibility::CodexCapabilities,
+    effort: Option<&str>,
+) -> Result<(), ProviderError> {
+    let Some(effort) = effort else {
+        return Ok(());
+    };
+    if !argv::valid_effort_name(effort) {
+        return Err(ProviderError::Start(
+            argv::CodexExecError::InvalidEffort.to_string(),
+        ));
+    }
+    if capabilities.supports_reasoning_effort(effort) {
+        return Ok(());
+    }
+
+    Err(ProviderError::Refused {
+        code: "provider_reasoning_effort_unsupported".to_owned(),
+        message: format!(
+            "Codex {} does not support the selected reasoning effort `{effort}`.",
+            capabilities.version
+        ),
+    })
 }
 
 #[cfg(test)]
@@ -67,9 +85,8 @@ fn require_managed_version(version: &Version) -> Result<(), ProviderError> {
     }
 }
 
-/// Verifies an already-resolved Codex executable against the managed-profile version window.
-/// Authentication uses this before app-server startup because an unauthenticated profile cannot
-/// use the ordinary detection path's login-status probe.
+/// Test helper that verifies an already-resolved Codex executable still meets the historical
+/// platform-fix floor. Production managed launches use capability and protocol negotiation.
 #[cfg(test)]
 pub(crate) fn verify_managed_executable_version(
     executable: &Path,
@@ -256,6 +273,29 @@ pub(crate) fn managed_executable_and_version(
     )
 }
 
+fn managed_pinned_executable_and_version(
+    spec: &DetectionSpec,
+    env: &DetectEnv,
+    guardian: &crate::guardian::ProviderProbeGuardian,
+    runtime_store: &crate::managed_runtime::RuntimeStore,
+    neutral_cwd: &Path,
+    prepare_job: impl FnMut(&str) -> Result<crate::guardian::RegisteredJob, ProviderError>,
+) -> Result<runtime::ManagedCodexRuntime, ProviderError> {
+    let detected = crate::launch_probe::detect_for_launch(spec, env, Some(guardian));
+    if detected.detection.auth == AuthState::NotAuthenticated {
+        return Err(ProviderError::NotAuthenticated);
+    }
+    let provider_env = env.provider_env(&spec.env_policy);
+    runtime::select_managed_runtime_pinned(
+        detected.executable.as_deref(),
+        &provider_env,
+        neutral_cwd,
+        runtime_store,
+        prepare_job,
+        None,
+    )
+}
+
 impl AgentProvider for CodexProvider {
     fn id(&self) -> ProviderId {
         ProviderId::new(ProviderId::CODEX)
@@ -324,7 +364,7 @@ impl AgentProvider for CodexProvider {
             let probe_guardian = managed.profiles.probe_guardian()?;
             let runtime_store = managed.profiles.runtime_store();
             let neutral_cwd = managed.profiles.compatibility_probe_dir()?;
-            let selected = managed_executable_and_version(
+            let selected = managed_pinned_executable_and_version(
                 &spec,
                 &prepared.detect_env,
                 &probe_guardian,
@@ -332,6 +372,7 @@ impl AgentProvider for CodexProvider {
                 &neutral_cwd,
                 |label| prepared.lease.prepare_guarded_job(label),
             )?;
+            require_managed_reasoning_effort(selected.capabilities(), config.effort.as_deref())?;
             selected.configure_environment(&mut prepared.env);
             let (executable, _version, _capabilities, runtime_lease) = selected.into_parts();
             (
@@ -446,6 +487,36 @@ pub fn normalize_item(
 mod tests {
     use super::*;
     use kalcode_contracts::permissions::GitOperation;
+
+    fn capabilities_with_efforts(efforts: &[&str]) -> compatibility::CodexCapabilities {
+        compatibility::CodexCapabilities::test_fixture_with_reasoning_efforts(efforts)
+    }
+
+    #[test]
+    fn managed_effort_uses_the_selected_runtime_descriptor() {
+        let current = capabilities_with_efforts(argv::EFFORT_LEVELS);
+        assert!(require_managed_reasoning_effort(&current, None).is_ok());
+        assert!(require_managed_reasoning_effort(&current, Some("high")).is_ok());
+        assert!(matches!(
+            require_managed_reasoning_effort(&current, Some("ultra")),
+            Err(ProviderError::Refused { code, .. })
+                if code == "provider_reasoning_effort_unsupported"
+        ));
+
+        let future = capabilities_with_efforts(&["low", "medium", "high", "ultra"]);
+        assert!(require_managed_reasoning_effort(&future, None).is_ok());
+        assert!(require_managed_reasoning_effort(&future, Some("ultra")).is_ok());
+        assert!(matches!(
+            require_managed_reasoning_effort(&future, Some("xhigh")),
+            Err(ProviderError::Refused { code, .. })
+                if code == "provider_reasoning_effort_unsupported"
+        ));
+        assert!(matches!(
+            require_managed_reasoning_effort(&future, Some("high' -c model='unsafe")),
+            Err(ProviderError::Start(message))
+                if message == "the reasoning effort name is not valid"
+        ));
+    }
 
     /// Codex's trusted-directory refusal, as `codex exec` prints it outside a Git repository.
     const NOT_A_GIT_FOLDER: &str =
@@ -581,32 +652,22 @@ mod tests {
             .expect("compatible prereleases use the experimental capability path");
     }
 
-    #[test]
-    fn observing_hooks_require_evidence_for_the_exact_schema_line() {
-        assert!(observing_hooks_verified(
-            &Version::parse("0.160.2").expect("version")
-        ));
-        assert!(!observing_hooks_verified(
-            &Version::parse("0.160.3-rc.1").expect("version")
-        ));
-        assert!(!observing_hooks_verified(
-            &Version::parse("0.161.0").expect("version")
-        ));
-    }
-
     /// Writes a fake Codex that records its working directory and reports `version`.
     fn fake_codex_reporting(dir: &Path, version: &str) -> PathBuf {
         #[cfg(windows)]
         {
+            let entrypoint = dir.join("codex-version.js");
+            std::fs::write(
+                &entrypoint,
+                format!(
+                    "const fs = require('node:fs');\nfs.writeFileSync(process.env.CWD_MARKER, process.cwd());\nconsole.log('codex-cli {version}');\n"
+                ),
+            )
+            .expect("version entrypoint");
             let script = dir.join("codex-version.cmd");
             std::fs::write(
                 &script,
-                format!(
-                    "@echo off
-cd > \"%CWD_MARKER%\"
-echo codex-cli {version}
-"
-                ),
+                "@echo off\r\nnode \"%dp0%\\codex-version.js\" %*\r\n",
             )
             .expect("version script");
             script
@@ -671,29 +732,7 @@ printf 'codex-cli {version}\n'
         let neutral = temp.path().join("neutral");
         std::fs::create_dir(&neutral).expect("neutral directory");
         let marker = temp.path().join("cwd-marker");
-        #[cfg(windows)]
-        let executable = {
-            let script = temp.path().join("codex-version.cmd");
-            std::fs::write(
-                &script,
-                "@echo off\r\ncd > \"%CWD_MARKER%\"\r\necho codex-cli 0.160.0\r\n",
-            )
-            .expect("version script");
-            script
-        };
-        #[cfg(unix)]
-        let executable = {
-            use std::os::unix::fs::PermissionsExt;
-            let script = temp.path().join("codex-version");
-            std::fs::write(
-                &script,
-                "#!/bin/sh\npwd > \"$CWD_MARKER\"\nprintf 'codex-cli 0.157.0\\n'\n",
-            )
-            .expect("version script");
-            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700))
-                .expect("executable version script");
-            script
-        };
+        let executable = fake_codex_reporting(temp.path(), "0.160.0");
         let source = DetectEnv::from_process();
         let mut env = source.provider_env(&crate::env::EnvPolicy::BASE);
         env.insert("CWD_MARKER".into(), marker.clone().into_os_string());

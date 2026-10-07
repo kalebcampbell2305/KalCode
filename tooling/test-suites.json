@@ -170,8 +170,8 @@
           "platforms": ["win32"],
           "environment": {},
           "minimumExecuted": 1258,
-          "skippedMinimum": 37,
-          "skippedMaximum": 37,
+          "skippedMinimum": 38,
+          "skippedMaximum": 38,
           "allowedSkipReasons": [],
           "maximumFlaky": 0
         },
@@ -179,8 +179,8 @@
           "platforms": ["darwin"],
           "environment": {},
           "minimumExecuted": 1258,
-          "skippedMinimum": 36,
-          "skippedMaximum": 36,
+          "skippedMinimum": 37,
+          "skippedMaximum": 37,
           "allowedSkipReasons": [],
           "maximumFlaky": 0
         },
@@ -188,8 +188,8 @@
           "platforms": ["linux"],
           "environment": {},
           "minimumExecuted": 1258,
-          "skippedMinimum": 33,
-          "skippedMaximum": 33,
+          "skippedMinimum": 34,
+          "skippedMaximum": 34,
           "allowedSkipReasons": [],
           "maximumFlaky": 0
         }
@@ -419,6 +419,10 @@
     {
       "path": "crates/providers/tests/codex_certification_real.rs",
       "reason": "needs a real Codex CLI (KALCODE_CERTIFY_CODEX); no sign-in, prompt or quota"
+    },
+    {
+      "path": "crates/providers/src/codex/hook_compatibility.rs",
+      "reason": "requires KALCODE_CODEX_EXE and KALCODE_CODEX_VERSION"
     },
     {
       "path": "crates/providers/tests/codex_certification_real.rs",

@@ -21,6 +21,8 @@ use crate::guardian::{ProviderProbeGuardian, RegisteredJob};
 use crate::process::{OutputLine, ProcessSpec, SupervisedChild, recv_until};
 use crate::version::Version;
 
+mod config_schema;
+
 const HELP_TIMEOUT: Duration = Duration::from_secs(5);
 const PROTOCOL_TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_HELP_BYTES: usize = 128 * 1024;
@@ -34,6 +36,7 @@ pub const REQUIRED_CAPABILITIES: &[&str] = &[
     "resume",
     "model_selection",
     "skip_git_repo_check",
+    "reasoning_effort",
     "app_server",
     "config_override",
     #[cfg(windows)]
@@ -84,9 +87,9 @@ pub enum CodexCompatibility {
     Incompatible,
 }
 
-/// Capabilities observed from the installed binary and an isolated managed-profile protocol
-/// smoke. `Unknown` is deliberate: KalCode does not infer native tools or model-specific effort
-/// support from a version number or the generic `-c` option.
+/// Capabilities observed from the installed binary and isolated managed-profile probes. Reasoning
+/// effort here proves the CLI config syntax and accepted value shape; a model catalog remains the
+/// authority for model-specific availability. Nothing is inferred from a version number.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodexCapabilities {
     pub version: Version,
@@ -98,6 +101,11 @@ pub struct CodexCapabilities {
     pub model_selection: CapabilitySupport,
     pub skip_git_repo_check: CapabilitySupport,
     pub reasoning_effort: CapabilitySupport,
+    /// KalCode effort names accepted by the CLI's generated
+    /// `Config.model_reasoning_effort` schema. For an open string schema this is a diagnostic
+    /// sample; [`Self::supports_reasoning_effort`] evaluates the retained constraint directly.
+    pub reasoning_effort_values: BTreeSet<String>,
+    reasoning_effort_schema: Option<config_schema::ReasoningEffortSchema>,
     pub mcp: CapabilitySupport,
     pub tools: CapabilitySupport,
     pub structured_output: CapabilitySupport,
@@ -108,6 +116,38 @@ pub struct CodexCapabilities {
 }
 
 impl CodexCapabilities {
+    pub fn supports_reasoning_effort(&self, effort: &str) -> bool {
+        self.reasoning_effort_schema
+            .as_ref()
+            .is_some_and(|schema| schema.supports(effort))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_fixture_with_reasoning_efforts(efforts: &[&str]) -> Self {
+        let reasoning_effort_schema =
+            config_schema::ReasoningEffortSchema::closed_for_test(efforts);
+        Self {
+            version: Version::parse("0.161.0").expect("test version"),
+            channel: CodexReleaseChannel::Stable,
+            managed_profiles: true,
+            interactive: CapabilitySupport::Supported,
+            sessions: CapabilitySupport::Supported,
+            resume: CapabilitySupport::Supported,
+            model_selection: CapabilitySupport::Supported,
+            skip_git_repo_check: CapabilitySupport::Supported,
+            reasoning_effort: CapabilitySupport::Supported,
+            reasoning_effort_values: reasoning_effort_schema.sampled_values().clone(),
+            reasoning_effort_schema: Some(reasoning_effort_schema),
+            mcp: CapabilitySupport::Supported,
+            tools: CapabilitySupport::Supported,
+            structured_output: CapabilitySupport::Supported,
+            app_server: CapabilitySupport::Supported,
+            no_daemon: CapabilitySupport::Supported,
+            config_override: CapabilitySupport::Supported,
+            missing_required: Vec::new(),
+        }
+    }
+
     pub fn compatibility(&self) -> CodexCompatibility {
         if !self.managed_profiles {
             CodexCompatibility::Incompatible
@@ -183,6 +223,10 @@ impl CodexCapabilities {
         result.model_selection = filtered("model_selection", result.model_selection);
         result.skip_git_repo_check = filtered("skip_git_repo_check", result.skip_git_repo_check);
         result.reasoning_effort = filtered("reasoning_effort", result.reasoning_effort);
+        if result.reasoning_effort != CapabilitySupport::Supported {
+            result.reasoning_effort_values.clear();
+            result.reasoning_effort_schema = None;
+        }
         result.mcp = filtered("mcp", result.mcp);
         result.tools = filtered("tools", result.tools);
         result.structured_output = filtered("structured_output", result.structured_output);
@@ -224,7 +268,17 @@ fn capabilities_from_help(
     resume_help: &str,
     interactive_resume_help: &str,
     app_server_help: &str,
+    reasoning_effort_schema: Option<config_schema::ReasoningEffortSchema>,
 ) -> CodexCapabilities {
+    // `ReasoningEffortSchema::read` returns `Some` only for a bounded, structurally understood,
+    // nonempty string contract. The provider owns that contract: removing a historical KalCode
+    // token is not removal of reasoning support, and selection admission below still checks the
+    // exact retained schema before launch.
+    let reasoning_effort_available = reasoning_effort_schema.is_some();
+    let reasoning_effort_values = reasoning_effort_schema
+        .as_ref()
+        .map(|schema| schema.sampled_values().clone())
+        .unwrap_or_default();
     let exec = has_command(root_help, "exec");
     let headless_resume = has_command(exec_help, "resume")
         && resume_help.contains("codex exec resume")
@@ -263,6 +317,7 @@ fn capabilities_from_help(
         (interactive_model, "interactive model selection"),
         (headless_model, "headless model selection"),
         (skip_git_repo_check, "headless non-Git workspace support"),
+        (reasoning_effort_available, "reasoning effort configuration"),
         #[cfg(windows)]
         (no_daemon, "no-daemon"),
     ] {
@@ -285,8 +340,9 @@ fn capabilities_from_help(
         resume: supported(resume),
         model_selection: supported(interactive_model && headless_model),
         skip_git_repo_check: supported(skip_git_repo_check),
-        // Generic TOML overrides do not prove that a particular model supports an effort value.
-        reasoning_effort: CapabilitySupport::Unknown,
+        reasoning_effort: supported(reasoning_effort_available),
+        reasoning_effort_values,
+        reasoning_effort_schema,
         mcp: supported(has_command(root_help, "mcp")),
         // Tool availability is account, model, config, and workspace dependent.
         tools: CapabilitySupport::Unknown,
@@ -539,58 +595,78 @@ pub fn probe_with_admission(
             });
         }
 
-        let (root_help, exec_help, resume_help, interactive_resume_help, app_server_help) =
-            if canceled.is_none() {
-                run_help_probes_parallel(executable, &probe_env, &workspace.cwd, &mut prepare_job)?
-            } else {
-                (
-                    run_probe(
-                        executable,
-                        &probe_env,
-                        &workspace.cwd,
-                        &["--help"],
-                        "codex-compat-root-help",
-                        &mut prepare_job,
-                        canceled,
-                    )?,
-                    run_probe(
-                        executable,
-                        &probe_env,
-                        &workspace.cwd,
-                        &["exec", "--help"],
-                        "codex-compat-exec-help",
-                        &mut prepare_job,
-                        canceled,
-                    )?,
-                    run_probe(
-                        executable,
-                        &probe_env,
-                        &workspace.cwd,
-                        &["exec", "resume", "--help"],
-                        "codex-compat-resume-help",
-                        &mut prepare_job,
-                        canceled,
-                    )?,
-                    run_probe(
-                        executable,
-                        &probe_env,
-                        &workspace.cwd,
-                        &["resume", "--help"],
-                        "codex-compat-interactive-resume-help",
-                        &mut prepare_job,
-                        canceled,
-                    )?,
-                    run_probe(
-                        executable,
-                        &probe_env,
-                        &workspace.cwd,
-                        &["app-server", "--help"],
-                        "codex-compat-app-server-help",
-                        &mut prepare_job,
-                        canceled,
-                    )?,
-                )
-            };
+        let (
+            root_help,
+            exec_help,
+            resume_help,
+            interactive_resume_help,
+            app_server_help,
+            reasoning_effort_schema,
+        ) = if canceled.is_none() {
+            run_help_probes_parallel(
+                executable,
+                &probe_env,
+                &workspace.cwd,
+                &workspace.schema,
+                &mut prepare_job,
+            )?
+        } else {
+            (
+                run_probe(
+                    executable,
+                    &probe_env,
+                    &workspace.cwd,
+                    &["--help"],
+                    "codex-compat-root-help",
+                    &mut prepare_job,
+                    canceled,
+                )?,
+                run_probe(
+                    executable,
+                    &probe_env,
+                    &workspace.cwd,
+                    &["exec", "--help"],
+                    "codex-compat-exec-help",
+                    &mut prepare_job,
+                    canceled,
+                )?,
+                run_probe(
+                    executable,
+                    &probe_env,
+                    &workspace.cwd,
+                    &["exec", "resume", "--help"],
+                    "codex-compat-resume-help",
+                    &mut prepare_job,
+                    canceled,
+                )?,
+                run_probe(
+                    executable,
+                    &probe_env,
+                    &workspace.cwd,
+                    &["resume", "--help"],
+                    "codex-compat-interactive-resume-help",
+                    &mut prepare_job,
+                    canceled,
+                )?,
+                run_probe(
+                    executable,
+                    &probe_env,
+                    &workspace.cwd,
+                    &["app-server", "--help"],
+                    "codex-compat-app-server-help",
+                    &mut prepare_job,
+                    canceled,
+                )?,
+                run_config_schema_probe(
+                    executable,
+                    &probe_env,
+                    &workspace.cwd,
+                    &workspace.schema,
+                    prepare_job("codex-compat-config-schema")?,
+                    canceled,
+                )?,
+            )
+        };
         let mut capabilities = capabilities_from_help(
             version,
             &root_help,
@@ -598,6 +674,7 @@ pub fn probe_with_admission(
             &resume_help,
             &interactive_resume_help,
             &app_server_help,
+            reasoning_effort_schema,
         );
         if capabilities.managed_profiles {
             app_server_smoke(
@@ -648,6 +725,11 @@ struct SmokeWorkspace {
     root: PathBuf,
     home: PathBuf,
     cwd: PathBuf,
+    schema: PathBuf,
+    config: PathBuf,
+    cache: PathBuf,
+    data: PathBuf,
+    temp: PathBuf,
 }
 
 impl SmokeWorkspace {
@@ -670,6 +752,11 @@ impl SmokeWorkspace {
         let workspace = Self {
             home: root.join("home"),
             cwd: root.join("cwd"),
+            schema: root.join("schema"),
+            config: root.join("config"),
+            cache: root.join("cache"),
+            data: root.join("data"),
+            temp: root.join("temp"),
             root,
         };
         #[cfg(unix)]
@@ -684,6 +771,11 @@ impl SmokeWorkspace {
         }
         std::fs::create_dir(&workspace.home)
             .and_then(|()| std::fs::create_dir(&workspace.cwd))
+            .and_then(|()| std::fs::create_dir(&workspace.schema))
+            .and_then(|()| std::fs::create_dir(&workspace.config))
+            .and_then(|()| std::fs::create_dir(&workspace.cache))
+            .and_then(|()| std::fs::create_dir(&workspace.data))
+            .and_then(|()| std::fs::create_dir(&workspace.temp))
             .map_err(|_| {
                 ProviderError::Start(
                     "Codex compatibility probe directories could not be created".into(),
@@ -693,9 +785,45 @@ impl SmokeWorkspace {
     }
 
     fn isolated_env(&self, source: &BTreeMap<OsString, OsString>) -> BTreeMap<OsString, OsString> {
-        let mut env = source.clone();
-        env.retain(|name, _| !name.eq_ignore_ascii_case("CODEX_HOME"));
+        const PASSTHROUGH: &[&str] = &[
+            "PATH",
+            "PATHEXT",
+            "SYSTEMROOT",
+            "WINDIR",
+            "COMSPEC",
+            "LANG",
+            "LC_ALL",
+            "LC_CTYPE",
+            "TERM",
+            "COLORTERM",
+            "NO_COLOR",
+            "CODEX_MANAGED_PACKAGE_ROOT",
+            "CODEX_MANAGED_BY_NPM",
+            "CODEX_MANAGED_BY_PNPM",
+            "CODEX_MANAGED_BY_BUN",
+            "CODEX_MANAGED_BY_VITE_PLUS",
+        ];
+        let mut env = source
+            .iter()
+            .filter(|(name, _)| {
+                PASSTHROUGH
+                    .iter()
+                    .any(|allowed| name.eq_ignore_ascii_case(allowed))
+            })
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect::<BTreeMap<_, _>>();
         env.insert("CODEX_HOME".into(), self.home.clone().into_os_string());
+        env.insert("HOME".into(), self.home.clone().into_os_string());
+        env.insert("USERPROFILE".into(), self.home.clone().into_os_string());
+        env.insert(
+            "XDG_CONFIG_HOME".into(),
+            self.config.clone().into_os_string(),
+        );
+        env.insert("XDG_CACHE_HOME".into(), self.cache.clone().into_os_string());
+        env.insert("XDG_DATA_HOME".into(), self.data.clone().into_os_string());
+        for name in ["TEMP", "TMP", "TMPDIR"] {
+            env.insert(name.into(), self.temp.clone().into_os_string());
+        }
         env
     }
 }
@@ -752,9 +880,29 @@ fn run_prepared_probe(
     admission: RegisteredJob,
     canceled: Option<&dyn Fn() -> bool>,
 ) -> Result<String, ProviderError> {
+    run_prepared_probe_args(
+        executable,
+        env,
+        cwd,
+        args.iter().map(OsString::from).collect(),
+        admission,
+        canceled,
+        HELP_TIMEOUT,
+    )
+}
+
+fn run_prepared_probe_args(
+    executable: &Path,
+    env: &BTreeMap<OsString, OsString>,
+    cwd: &Path,
+    args: Vec<OsString>,
+    admission: RegisteredJob,
+    canceled: Option<&dyn Fn() -> bool>,
+    timeout: Duration,
+) -> Result<String, ProviderError> {
     let spec = ProcessSpec {
         program: executable.to_path_buf(),
-        args: args.iter().map(OsString::from).collect(),
+        args,
         cwd: Some(cwd.to_path_buf()),
         env: env.clone(),
     };
@@ -762,14 +910,12 @@ fn run_prepared_probe(
         Some(canceled) => crate::process::run_probe_guarded_cancelable(
             &spec,
             admission,
-            HELP_TIMEOUT,
+            timeout,
             true,
             MAX_HELP_BYTES,
             canceled,
         ),
-        None => {
-            crate::process::run_probe_guarded(&spec, admission, HELP_TIMEOUT, true, MAX_HELP_BYTES)
-        }
+        None => crate::process::run_probe_guarded(&spec, admission, timeout, true, MAX_HELP_BYTES),
     }
     .map_err(|_| ProviderError::Start("Codex capability probe could not be completed".into()))?;
     if !output.status.success() {
@@ -780,7 +926,42 @@ fn run_prepared_probe(
     Ok(output.stdout)
 }
 
-type HelpProbeOutputs = (String, String, String, String, String);
+fn run_config_schema_probe(
+    executable: &Path,
+    env: &BTreeMap<OsString, OsString>,
+    cwd: &Path,
+    output_dir: &Path,
+    admission: RegisteredJob,
+    canceled: Option<&dyn Fn() -> bool>,
+) -> Result<Option<config_schema::ReasoningEffortSchema>, ProviderError> {
+    run_prepared_probe_args(
+        executable,
+        env,
+        cwd,
+        vec![
+            "app-server".into(),
+            "generate-json-schema".into(),
+            "--out".into(),
+            output_dir.as_os_str().to_owned(),
+        ],
+        admission,
+        canceled,
+        PROTOCOL_TIMEOUT,
+    )?;
+    Ok(config_schema::ReasoningEffortSchema::read(
+        output_dir,
+        crate::codex::argv::EFFORT_LEVELS,
+    ))
+}
+
+type HelpProbeOutputs = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    Option<config_schema::ReasoningEffortSchema>,
+);
 
 /// Runs independent, bounded help probes concurrently after the version floor has been checked.
 /// Guardian admissions are prepared sequentially and each is immediately transferred to its
@@ -790,6 +971,7 @@ fn run_help_probes_parallel(
     executable: &Path,
     env: &BTreeMap<OsString, OsString>,
     cwd: &Path,
+    schema_dir: &Path,
     prepare_job: &mut impl FnMut(&str) -> Result<RegisteredJob, ProviderError>,
 ) -> Result<HelpProbeOutputs, ProviderError> {
     std::thread::scope(|scope| {
@@ -826,19 +1008,27 @@ fn run_help_probes_parallel(
                 None,
             )
         });
-        let join = |result: std::thread::Result<Result<String, ProviderError>>| {
-            result.map_err(|_| {
-                ProviderError::Start("Codex capability probe worker did not complete".into())
-            })?
-        };
+        let admission = prepare_job("codex-compat-config-schema")?;
+        let config_schema = scope.spawn(move || {
+            run_config_schema_probe(executable, env, cwd, schema_dir, admission, None)
+        });
         Ok((
-            join(root.join())?,
-            join(exec.join())?,
-            join(resume.join())?,
-            join(interactive_resume.join())?,
-            join(app_server.join())?,
+            join_probe(root.join())?,
+            join_probe(exec.join())?,
+            join_probe(resume.join())?,
+            join_probe(interactive_resume.join())?,
+            join_probe(app_server.join())?,
+            join_probe(config_schema.join())?,
         ))
     })
+}
+
+fn join_probe<T>(
+    result: std::thread::Result<Result<T, ProviderError>>,
+) -> Result<T, ProviderError> {
+    result.map_err(|_| {
+        ProviderError::Start("Codex capability probe worker did not complete".into())
+    })?
 }
 
 fn app_server_smoke(
@@ -1011,6 +1201,12 @@ Options:
       --stdio
 "#;
 
+    fn all_reasoning_efforts() -> Option<config_schema::ReasoningEffortSchema> {
+        Some(config_schema::ReasoningEffortSchema::open_for_test(
+            crate::codex::argv::EFFORT_LEVELS,
+        ))
+    }
+
     fn capabilities(version: &str) -> CodexCapabilities {
         capabilities_from_help(
             Version::parse(version).expect("version"),
@@ -1019,6 +1215,7 @@ Options:
             RESUME_HELP,
             INTERACTIVE_RESUME_HELP,
             APP_SERVER_HELP,
+            all_reasoning_efforts(),
         )
     }
 
@@ -1062,6 +1259,7 @@ Options:
             RESUME_HELP,
             INTERACTIVE_RESUME_HELP,
             APP_SERVER_HELP,
+            all_reasoning_efforts(),
         );
         assert!(!without_app_server.managed_profiles);
         assert_eq!(without_app_server.missing_required, vec!["app-server"]);
@@ -1073,6 +1271,7 @@ Options:
             RESUME_HELP,
             INTERACTIVE_RESUME_HELP,
             APP_SERVER_HELP,
+            all_reasoning_efforts(),
         );
         assert!(
             without_plan_workspace_flag
@@ -1103,6 +1302,7 @@ Options:
                 RESUME_HELP,
                 INTERACTIVE_RESUME_HELP,
                 APP_SERVER_HELP,
+                all_reasoning_efforts(),
             );
             assert!(found.missing_required.contains(&expected), "{option}");
             assert_eq!(
@@ -1132,8 +1332,108 @@ Options:
             RESUME_HELP,
             INTERACTIVE_RESUME_HELP,
             &app_server,
+            all_reasoning_efforts(),
         );
         assert_eq!(found.compatibility(), CodexCompatibility::Compatible);
+    }
+
+    #[test]
+    fn future_closed_reasoning_schema_is_authoritative_without_historical_tokens() {
+        let future = Some(config_schema::ReasoningEffortSchema::closed_for_test(&[
+            "low", "medium", "high", "ultra",
+        ]));
+        let found = capabilities_from_help(
+            Version::parse("0.999.0").expect("version"),
+            ROOT_HELP,
+            EXEC_HELP,
+            RESUME_HELP,
+            INTERACTIVE_RESUME_HELP,
+            APP_SERVER_HELP,
+            future,
+        );
+        assert_eq!(found.reasoning_effort, CapabilitySupport::Supported);
+        assert!(found.supports_reasoning_effort("high"));
+        assert!(found.supports_reasoning_effort("ultra"));
+        assert!(!found.supports_reasoning_effort("xhigh"));
+        assert!(found.managed_profiles);
+        assert!(
+            !found
+                .missing_required
+                .contains(&"reasoning effort configuration")
+        );
+        assert_eq!(found.compatibility(), CodexCompatibility::Compatible);
+
+        let missing = capabilities_from_help(
+            Version::parse("0.999.0").expect("version"),
+            ROOT_HELP,
+            EXEC_HELP,
+            RESUME_HELP,
+            INTERACTIVE_RESUME_HELP,
+            APP_SERVER_HELP,
+            None,
+        );
+        assert_eq!(missing.reasoning_effort, CapabilitySupport::Unsupported);
+        assert!(!missing.managed_profiles);
+        assert!(
+            missing
+                .missing_required
+                .contains(&"reasoning effort configuration")
+        );
+    }
+
+    #[test]
+    fn descriptor_reports_only_structurally_proven_reasoning_values() {
+        let found = capabilities("0.161.0");
+        for effort in crate::codex::argv::EFFORT_LEVELS {
+            assert!(found.supports_reasoning_effort(effort), "{effort}");
+        }
+        assert!(
+            found.supports_reasoning_effort("ultra"),
+            "0.161's open nonempty-string schema must preserve safe future native values"
+        );
+        assert!(!found.supports_reasoning_effort("bad'value"));
+    }
+
+    #[test]
+    fn compatibility_probe_environment_excludes_credentials_and_user_state() {
+        let neutral = tempfile::tempdir().expect("neutral probe root");
+        let neutral = std::fs::canonicalize(neutral.path()).expect("canonical probe root");
+        let workspace = SmokeWorkspace::create(&neutral).expect("smoke workspace");
+        let source = BTreeMap::from([
+            (OsString::from("PATH"), OsString::from("provider-path")),
+            (
+                OsString::from("CODEX_MANAGED_PACKAGE_ROOT"),
+                OsString::from("package-root"),
+            ),
+            (OsString::from("CODEX_HOME"), OsString::from("real-home")),
+            (OsString::from("HOME"), OsString::from("real-user-home")),
+            (OsString::from("OPENAI_API_KEY"), OsString::from("secret")),
+            (OsString::from("SSH_AUTH_SOCK"), OsString::from("agent")),
+            (
+                OsString::from("NODE_OPTIONS"),
+                OsString::from("--require=hook"),
+            ),
+        ]);
+        let env = workspace.isolated_env(&source);
+        assert_eq!(
+            env.get(OsStr::new("PATH")),
+            Some(&OsString::from("provider-path"))
+        );
+        assert_eq!(
+            env.get(OsStr::new("CODEX_MANAGED_PACKAGE_ROOT")),
+            Some(&OsString::from("package-root"))
+        );
+        assert_eq!(
+            env.get(OsStr::new("CODEX_HOME")),
+            Some(&workspace.home.clone().into_os_string())
+        );
+        assert_eq!(
+            env.get(OsStr::new("HOME")),
+            Some(&workspace.home.clone().into_os_string())
+        );
+        for secret in ["OPENAI_API_KEY", "SSH_AUTH_SOCK", "NODE_OPTIONS"] {
+            assert!(!env.contains_key(OsStr::new(secret)), "{secret}");
+        }
     }
 
     #[test]

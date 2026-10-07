@@ -70,8 +70,8 @@ pub struct CodexArgs<'a> {
     pub hook_prefix_args: &'a [String],
     pub endpoint: &'a str,
     pub session: &'a str,
-    /// Add KalCode's observing Codex hooks (a Codex line verified for them,
-    /// [`crate::codex::observing_hooks_verified`]). Without them status is `notify` only.
+    /// Add KalCode's observing Codex hooks after the installed binary passes the cached hook
+    /// protocol probe. Without that evidence, status is `notify` only.
     pub observe_hooks: bool,
 }
 
@@ -81,7 +81,7 @@ pub enum CodexArgsError {
     UnsafePath,
     #[error("the model name is not valid")]
     InvalidModel,
-    #[error("the reasoning effort is not supported")]
+    #[error("the reasoning effort name is not valid")]
     InvalidEffort,
     #[error("the session id is not valid")]
     InvalidSessionId,
@@ -621,12 +621,14 @@ mod tests {
                 .any(|pair| pair == ["-c", "model_reasoning_effort='ultra'"])
         );
 
-        let mut invalid = base.clone();
-        invalid.effort = Some("ultra' -c web_search='live");
-        assert_eq!(
-            interactive_args_with_overrides(&invalid, &[]),
-            Err(CodexArgsError::InvalidEffort)
-        );
+        for invalid_effort in ["high' -c web_search='live", "ultra' -c web_search='live"] {
+            let mut invalid = base.clone();
+            invalid.effort = Some(invalid_effort);
+            assert_eq!(
+                interactive_args_with_overrides(&invalid, &[]),
+                Err(CodexArgsError::InvalidEffort)
+            );
+        }
 
         let model = "m".repeat(512);
         let mut future_model = base.clone();

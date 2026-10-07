@@ -21,6 +21,7 @@ removed. A verified platform minimum remains distinct from a minor-version allow
 | Current stable, exact 0.161.0, patch/minor/future stable | `version.rs`, `codex/compatibility.rs`; unit classification and `codex_compatibility` guarded process tests |
 | Alpha/beta/rc, build metadata, malformed output | Strict SemVer parsing, explicit release channel, malformed token boundaries and guarded experimental-path tests |
 | Actual required commands, flags, profile/session protocol | Bounded help probes and credential-free initialize/account-read in disposable `CODEX_HOME`; omitted flag and wrong-home regressions |
+| Reasoning configuration survives version changes | Generated native `ConfigReadResponse` schema; required current choices before runtime promotion, schema-driven future values, per-launch descriptor checks and removed-value fallback regression |
 | Missing CLI, changed CLI, old and new agents together | Discovery fingerprints, asynchronous observer, runtime selection, real child-process replacement test, PTY and headless lease regressions |
 | Known-bad release, previous validated fallback | `codex_runtime_fallback` signs a real test policy rejecting current 0.161 and proves selection of previous 0.160 |
 | Offline, corrupt manifest, atomic updates, rollback | `compatibility.rs` signature/schema/revision/cache tests, eight-revision retention and same-revision corrupt-cache recovery |
@@ -28,7 +29,7 @@ removed. A verified platform minimum remains distinct from a minor-version allow
 | Native installation and credential preservation | Global installations are read-only; snapshot layout contains distribution files only; managed profiles and account auth stay canonical |
 | Native npm wrapper parity | Snapshot-local package root and package-manager marker; real auth child environment regression; Windows nested and macOS hoisted npm layouts |
 | Safe binary change detection | File identities plus metadata, nested native/helper fingerprints, equal-size replacement with restored timestamp regression |
-| Fast repeated launch | Metadata/cache-only foreground selection, no foreground distribution copy, single-flight probes and zero extra subprocesses on a cache hit |
+| Fast repeated launch | Metadata/cache-only warm selection, single-flight probes and zero extra subprocesses on a cache hit; PTY/auth may use a validated direct process, while multi-turn headless sessions require an immutable pin |
 | Missing-global managed runtime remains usable | Separate `managedRuntime` readiness; registry, Threads, KalVoice, health and frontend regressions keep native detection truthful |
 | Asynchronous readiness reaches an open form | New Thread refreshes cached choices on provider readiness events while preserving the user's draft and selections |
 | Shared architecture | Generic policy, owned runtime store and registry observation; provider-specific probing and Cursor calendar-version parsing stay in adapters |
@@ -72,8 +73,10 @@ certification was explicitly executed on both supported platforms.
   selectable Codex were visually inspected; slow supplementary diagnostics do not delay choices.
 - Windows real 0.161.0 final selector: direct first-use validation **4.35 s**, background
   isolated snapshot preparation **16.74 s**, warm immutable selection **65 ms**. macOS: **1.04 s**,
-  **17.69 s**, **15 ms**, respectively. Distribution copying never blocks foreground launch;
-  asynchronous startup prewarming absorbs cold validation when possible.
+  **17.69 s**, **15 ms**, respectively. Distribution copying does not block single-process
+  PTY/auth launch; asynchronous startup prewarming absorbs cold validation when possible.
+  Multi-turn headless sessions require a snapshot before admission so later turns cannot switch
+  binaries; a cold snapshot miss performs this work off the UI thread.
 - Distribution signer: **11 passed**. Declarative policy publication tooling: **5 passed**.
 - Real official Codex 0.161.0: isolated initialize/account-read succeeded on Windows and macOS;
   production selector verified owned immutable snapshots on both platforms.
@@ -100,6 +103,62 @@ both pass. The same CI run exceeded the registered desktop-unit time budget twic
 in unchanged website tests. The latter two files passed all eight cases on the exact candidate
 with one worker. These timeout failures remain recorded; final merge evidence must establish a
 green corrected candidate and may not treat the interrupted run as passing.
+
+The subsequent integration review found a remaining observing-hook minor-version predicate,
+unconsumed reasoning support, and two lifecycle gaps: cold headless sessions retaining a mutable
+global executable path between turns, and initial fallback readiness reaching launch consumers
+after native detection. The capability and immutable-session repairs are committed in
+`f74b90af37a4af080b3dd361a87ff8c388f7190a`. The desktop repair shares initial managed readiness
+only at a selected Codex launch boundary, keeps generic reads and unrelated providers nonblocking,
+refreshes adapters after later installation changes, and retries transient failures on the next
+bounded watcher cycle. The earlier signed candidate is retained as evidence and is not eligible
+for publication.
+
+Reasoning-schema reproof passed on actual Windows 0.161 and isolated official macOS 0.161;
+schema-only probes also verified the installed macOS 0.160. Both native versions advertise an
+open non-empty string, not a closed effort enum. The implementation retains those constraints
+instead of turning the current UI choices into a ceiling. Probes use scratch home/config/cache
+directories and exclude credential variables. Parser work, references, dialects, file reads and
+process lifetime are bounded. Windows junction coverage executes without symlink privilege;
+final-file symlink coverage remains conditional on that host privilege.
+
+The immutable-session regression was independently reproduced in a detached worktree by reverting
+only the headless selector call to its former mutable path. The original session's second turn
+reported `new-runtime` instead of `old-runtime`. The corrected Windows and macOS tests both prove
+cold pinning, immediate last-known-good selection during an update race, background adoption of
+0.162, a new session on that runtime, and the original session still on 0.161. Compatibility **6/6**,
+recovery **1/1**, and headless pin **1/1** passed on both platforms; Windows turns **14/14** passed.
+Strict provider all-target Clippy and the **27/27** suite-inventory tests passed. The new opt-in
+credential-free native hook certification is registered explicitly; no existing test was disabled.
+
+The optional hook probe verifies the native six-event session-flag/trust contract without a model
+turn. Windows real 0.161 passed with independently measured warm cache p50 **1.84 ms**, max **2.33 ms**;
+macOS native 0.160 and isolated 0.161 passed with launcher p50 below **0.5 ms**. Timeout/child reaping,
+scratch cleanup and binary replacement regressions pass. A separate bounded loopback fixture drove
+the actual native hook lifecycle on Windows and macOS, including a declined approval and an
+interrupted turn. Those synthetic model responses stayed on localhost; external and paid model
+requests were zero. Existing provider approval decisions remain authoritative.
+
+Nine focused desktop regressions cover readiness fanout, later adapter registration/removal,
+unchanged-installation retry, selected Codex versus unrelated-provider admission, canonical
+KalVoice provider/account/context precedence, and the account/model schema fixture. Independent
+review caught and repaired an overly broad initial wait, a missing later refresh, a retry-starvation
+case, and account-identity ambiguity introduced by transient readiness. The final implementation
+uses one canonical inference routine and never chooses a different account because Codex is still
+warming.
+
+Final desktop all-target Clippy passed with `-D warnings`. The parent independently replayed
+all nine focused regressions against the executable built from the frozen final source: **9/9
+passed**, with individual logs in `target/evidence/provider-compatibility-focused-f74b90af`.
+An intervening shared-target rebuild failed with ENOSPC, and a database-backed replay failed
+with SQLITE_FULL before its product assertions. Those attempts were not counted as passing;
+after disk space became available, the complete focused replay passed without rebuilding or
+changing source. Warm Cargo caches and all active user processes were preserved.
+
+The existing launcher spinner acknowledges immediately. In the missing-global/last-known-good
+startup case, the persisted pane appears after the necessary local readiness check; this repair
+does not introduce a deferred pane-identity system. A normally installed compatible Codex receives
+no added readiness wait, and no user interaction waits on a remote compatibility lookup.
 
 ## Rollback and delivery
 

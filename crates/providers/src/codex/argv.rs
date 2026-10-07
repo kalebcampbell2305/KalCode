@@ -196,22 +196,27 @@ pub fn permission_mappings() -> Vec<PermissionMapping> {
 pub enum CodexExecError {
     #[error("the model name is not valid")]
     InvalidModel,
-    #[error("the reasoning effort is not supported")]
+    #[error("the reasoning effort name is not valid")]
     InvalidEffort,
     #[error("the session id is not valid")]
     InvalidSessionId,
 }
 
 /// Codex reasoning-effort values shown when runtime model metadata is unavailable. Runtime model
-/// catalogs remain authoritative and may advertise newer bounded tokens.
+/// catalogs remain authoritative and may advertise newer bounded tokens that satisfy
+/// [`valid_effort_name`].
 pub const EFFORT_LEVELS: &[&str] = &["minimal", "low", "medium", "high", "xhigh"];
 
+/// Accepts only the bounded token grammar that is safe inside KalCode's quoted TOML override.
+/// Whether a managed Codex runtime supports the token is decided by its probed capability schema.
 pub fn valid_effort_name(effort: &str) -> bool {
+    const MAX_EFFORT_NAME_BYTES: usize = 64;
+
     !effort.is_empty()
-        && effort.len() <= 32
-        && effort.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
-        })
+        && effort.len() <= MAX_EFFORT_NAME_BYTES
+        && effort
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_-".contains(&byte))
 }
 
 /// Whether `model` is a Codex runtime model selector. The supported app-server catalog bounds
@@ -471,21 +476,30 @@ mod tests {
             args.windows(2)
                 .any(|pair| { pair == ["-c", "model_reasoning_effort='high'"] })
         );
-        for effort in
-            EFFORT_LEVELS
-                .iter()
-                .copied()
-                .chain(["max", "ultra", "future-fast", "reasoning_7"])
-        {
+        for effort in EFFORT_LEVELS.iter().copied().chain([
+            "max",
+            "ultra",
+            "future-fast",
+            "reasoning_7",
+            "adaptive_2",
+            "extra-high",
+            "2high",
+        ]) {
             assert!(exec_args(PermissionMode::Approve, None, Some(effort), None).is_ok());
         }
-        for effort in ["", "HIGH", "high' -c web_search='live", "future.effort"] {
+        for effort in [
+            "",
+            "HIGH",
+            "high effort",
+            "high' -c web_search='live",
+            "future.effort",
+        ] {
             assert_eq!(
                 exec_args(PermissionMode::Approve, None, Some(effort), None),
                 Err(CodexExecError::InvalidEffort)
             );
         }
-        let too_long_effort = "e".repeat(33);
+        let too_long_effort = "e".repeat(65);
         assert_eq!(
             exec_args(PermissionMode::Approve, None, Some(&too_long_effort), None),
             Err(CodexExecError::InvalidEffort)

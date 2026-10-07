@@ -14,6 +14,7 @@ use std::time::Instant;
 
 use kalcode_contracts::agent::ProviderError;
 use kalcode_providers::DetectEnv;
+use kalcode_providers::codex::argv::EFFORT_LEVELS;
 use kalcode_providers::codex::compatibility::{
     CodexCompatibility, CodexReleaseChannel, probe_guarded,
 };
@@ -122,6 +123,20 @@ fn stable_0161_and_unknown_newer_stable_use_the_normal_compatibility_path() {
         assert_eq!(capabilities.channel, CodexReleaseChannel::Stable);
         assert_eq!(capabilities.compatibility(), CodexCompatibility::Compatible);
         assert!(capabilities.managed_profiles);
+        assert_eq!(
+            capabilities.reasoning_effort_values,
+            EFFORT_LEVELS
+                .iter()
+                .map(|effort| (*effort).to_owned())
+                .collect(),
+            "stable {version} must preserve every reasoning effort KalCode launches"
+        );
+        for effort in EFFORT_LEVELS {
+            assert!(
+                capabilities.supports_reasoning_effort(effort),
+                "stable {version} did not advertise {effort}"
+            );
+        }
         let warm_started = Instant::now();
         let cached = probe_guarded(&fake.executable, &env, fake.work.path(), &guardian)
             .expect("warm cached compatibility result");
@@ -132,18 +147,37 @@ fn stable_0161_and_unknown_newer_stable_use_the_normal_compatibility_path() {
         let runs = fake.runs();
         let args = |index: usize| &runs[index]["args"];
         assert_eq!(args(0), &json!(["--version"]));
-        let help_args = runs[1..6]
+        let advertised_args = runs[1..7]
             .iter()
             .map(|run| serde_json::to_string(&run["args"]).expect("help argv JSON"))
             .collect::<std::collections::BTreeSet<_>>();
+        let schema_run = runs[1..7]
+            .iter()
+            .find(|run| {
+                run["args"]
+                    .as_array()
+                    .is_some_and(|args| args.get(1) == Some(&json!("generate-json-schema")))
+            })
+            .expect("config schema probe argv");
+        let schema_args = schema_run["args"].as_array().expect("schema argv array");
+        assert_eq!(schema_args.len(), 4);
+        assert_eq!(schema_args[0], json!("app-server"));
+        assert_eq!(schema_args[1], json!("generate-json-schema"));
+        assert_eq!(schema_args[2], json!("--out"));
+        assert!(
+            Path::new(schema_args[3].as_str().expect("schema output path"))
+                .starts_with(fake.work.path()),
+            "schema output must stay inside the isolated compatibility workspace"
+        );
         assert_eq!(
-            help_args,
+            advertised_args,
             [
                 json!(["--help"]),
                 json!(["exec", "--help"]),
                 json!(["exec", "resume", "--help"]),
                 json!(["resume", "--help"]),
                 json!(["app-server", "--help"]),
+                schema_run["args"].clone(),
             ]
             .into_iter()
             .map(|args| serde_json::to_string(&args).expect("expected argv JSON"))
@@ -152,10 +186,10 @@ fn stable_0161_and_unknown_newer_stable_use_the_normal_compatibility_path() {
         );
         assert_eq!(
             runs.len(),
-            7,
+            8,
             "one bounded process per cold compatibility probe"
         );
-        let protocol_args = args(6).as_array().expect("protocol args");
+        let protocol_args = args(7).as_array().expect("protocol args");
         assert_eq!(protocol_args.last(), Some(&json!("app-server")));
         assert_eq!(protocol_args.len() % 2, 1, "config pairs plus app-server");
         assert!(
@@ -212,8 +246,8 @@ fn concurrent_first_use_single_flights_one_bounded_capability_probe() {
     );
     assert_eq!(
         fake.runs().len(),
-        7,
-        "six concurrent callers must execute one seven-child cold probe"
+        8,
+        "six concurrent callers must execute one eight-child cold probe"
     );
 
     runtime.seal_and_drain().expect("clean guardian drain");
@@ -231,7 +265,7 @@ fn replacing_a_binary_at_the_same_path_invalidates_the_capability_cache() {
         first.version,
         Version::parse("0.161.0").expect("initial version")
     );
-    assert_eq!(fake.runs().len(), 7, "initial cold probe child count");
+    assert_eq!(fake.runs().len(), 8, "initial cold probe child count");
 
     fake.replace_version("0.162.0");
     let replacement = probe_guarded(&fake.executable, &env, fake.work.path(), &guardian)
@@ -246,7 +280,7 @@ fn replacing_a_binary_at_the_same_path_invalidates_the_capability_cache() {
     );
     assert_eq!(
         fake.runs().len(),
-        14,
+        16,
         "same-path binary replacement must execute a fresh cold probe"
     );
 
@@ -360,6 +394,27 @@ fn malformed_missing_removed_capability_and_wrong_profile_home_fail_truthfully()
         Err(ProviderError::Refused { code, message })
             if code == "provider_capability_incompatible" && message.contains("protocol")
     ));
+
+    for (mode, expected) in [
+        ("missing-property", "reasoning effort"),
+        ("malformed", "reasoning effort"),
+        ("wrong-path", "reasoning effort"),
+    ] {
+        let broken_schema = FakeCodex::new(json!({
+            "version": "codex-cli 0.999.0",
+            "codexConfigSchemaMode": mode,
+        }));
+        assert!(matches!(
+            probe_guarded(
+                &broken_schema.executable,
+                &env,
+                broken_schema.work.path(),
+                &guardian,
+            ),
+            Err(ProviderError::Refused { code, message })
+                if code == "provider_capability_incompatible" && message.contains(expected)
+        ));
+    }
 
     runtime.seal_and_drain().expect("clean guardian drain");
 }

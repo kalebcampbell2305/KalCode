@@ -3804,7 +3804,8 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {{
             std::fs::create_dir_all(&package_bin).expect("fake npm package bin");
             std::fs::write(
                 package_bin.join("codex.js"),
-                r#"const { spawn } = require("child_process");
+                r##"const { spawn } = require("child_process");
+const fs = require("fs");
 const path = require("path");
 const args = process.argv.slice(2);
 const command = args.join(" ");
@@ -3823,6 +3824,17 @@ if (help.has(command)) {
   process.stdout.write(help.get(command));
   process.exit(0);
 }
+if (args.length === 4 && args[0] === "app-server" && args[1] === "generate-json-schema" && args[2] === "--out") {
+  const versioned = path.join(args[3], "v2");
+  fs.mkdirSync(versioned, { recursive: true });
+  fs.writeFileSync(path.join(versioned, "ConfigReadResponse.json"), JSON.stringify({
+    definitions: {
+      Config: { properties: { model_reasoning_effort: { anyOf: [{ "$ref": "#/definitions/ReasoningEffort" }, { type: "null" }] } } },
+      ReasoningEffort: { type: "string", minLength: 1 },
+    },
+  }));
+  process.exit(0);
+}
 if (!args.includes("app-server")) process.exit(2);
 const root = path.resolve(__dirname, "../../../..");
 const powershell = path.join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
@@ -3832,7 +3844,7 @@ const child = spawn(powershell, ["-NoProfile", "-NonInteractive", "-ExecutionPol
 });
 child.on("error", () => process.exit(9));
 child.on("exit", (code) => process.exit(code ?? 9));
-"#,
+"##,
             )
             .expect("fake npm Codex entrypoint");
 
@@ -3862,7 +3874,7 @@ child.on("exit", (code) => process.exit(code ?? 9));
             std::fs::write(
                 &script,
                 format!(
-                    r#"#!/bin/sh
+                    r##"#!/bin/sh
 if [ "$1" = "--version" ]; then printf '%s\n' 'codex-cli 0.160.0'; exit 0; fi
 case "$*" in
   "--help") printf '%s\n' 'Commands:' '  exec Run Codex non-interactively' '  mcp Manage MCP servers' '  app-server Run the app server' '  resume Resume an interactive session' 'Options: -c -m -C -s -a --no-daemon'; exit 0 ;;
@@ -3870,6 +3882,12 @@ case "$*" in
   "exec resume --help") printf '%s\n' 'Usage: codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]' 'Options: --json'; exit 0 ;;
   "resume --help") printf '%s\n' 'Usage: codex resume [OPTIONS] [SESSION_ID] [PROMPT]'; exit 0 ;;
   "app-server --help") printf '%s\n' 'Usage: codex app-server [OPTIONS]'; exit 0 ;;
+  "app-server generate-json-schema --out "*)
+    [ -n "$4" ] || exit 2
+    mkdir -p "$4/v2" || exit 8
+    printf '%s\n' '{{"definitions":{{"Config":{{"properties":{{"model_reasoning_effort":{{"anyOf":[{{"$ref":"#/definitions/ReasoningEffort"}},{{"type":"null"}}]}}}}}},"ReasoningEffort":{{"type":"string","minLength":1}}}}}}' > "$4/v2/ConfigReadResponse.json" || exit 8
+    exit 0
+    ;;
 esac
 found=false
 for arg in "$@"; do if [ "$arg" = "app-server" ]; then found=true; fi; done
@@ -3887,7 +3905,7 @@ while IFS= read -r line; do
       ;;
   esac
 done
-"#,
+"##,
                     delay_first_read = if delay_first_read { "true" } else { "false" },
                     delay = DELAYED_OBSERVER_READ.as_secs(),
                     marker = first_read_marker.to_string_lossy().replace('\'', "'\\''"),

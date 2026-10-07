@@ -811,7 +811,7 @@ pub fn provider_pane_create(
         .to_ipc());
     }
     let effort = pane_effort(&config.provider_id, config.effort)?;
-    threads.ensure_providers(app.core.as_ref());
+    threads.ensure_provider(app.core.as_ref(), &config.provider_id);
     let runtime = threads.runtime()?;
     let mut thread = create_pane_thread(runtime, &panes.sessions_dir, |thread_id| {
         let request = CreateIdleThread {

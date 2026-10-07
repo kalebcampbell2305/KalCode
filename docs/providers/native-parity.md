@@ -9,7 +9,7 @@ KalCode hosts supported provider CLIs in real terminals. Provider-native authent
 | Account persistence | Native managed profile | Native managed profile | Native managed profile | Native OS-user sign-in |
 | Concurrent isolated accounts | Managed profiles | Managed profiles | Managed profiles | Not verified; one native account |
 | Model choices | Provider model configuration | Exact-account app-server `model/list`, including model-specific effort | Native model configuration | Runtime `agent models`; no static list |
-| Turn status | Authenticated hooks | Authenticated observing hooks (verified 0.160.x; session-scoped, never deciding) plus completion notifications; other lines completion notifications only | Process-only status (no per-session hook mechanism without writing or hiding user settings) | Authenticated plugin hooks, with limited fallback |
+| Turn status | Authenticated hooks | Authenticated observing hooks after an asynchronous local session-flag/trust protocol probe; session-scoped, never deciding; completion notifications while the optional probe is pending or incompatible | Process-only status (no per-session hook mechanism without writing or hiding user settings) | Authenticated plugin hooks, with limited fallback |
 | Usage | Canonical provider-reported source | Canonical provider-reported source | Unavailable | Unavailable |
 | User settings and integrations | Native configuration | Native configuration | Native configuration | Native configuration plus additive observer plugin |
 | CLI update compatibility | Provider-specific current requirement | Capability/protocol probes; unknown newer stable releases accepted when probes pass | Certified managed-profile line pending shared probe adoption | Native Cursor Agent discovery pending shared probe adoption |
@@ -54,6 +54,13 @@ running process and are never restarted to adopt an update. If an updated distri
 incompatible, KalCode can select its immutable last-known-good managed runtime without changing the
 user's global installation, authentication, configuration, MCP servers, models or tools. Only the
 absence of both a compatible installed runtime and a safe fallback becomes a user-visible failure.
+
+Multi-turn managed headless sessions pin an immutable runtime before starting, so replacing the
+global CLI between turns cannot change an existing session's executable. Single-process terminal
+and authentication sessions can use a validated installed executable while background snapshot
+preparation runs. Reasoning configuration is checked against the CLI's generated schema, including
+future safe values where that schema permits them. Optional hook probing never delays core runtime
+readiness or grants permission to answer provider approval prompts.
 
 Signed remote policy may mark tested or known-bad versions and constrain protocol/capability ranges.
 It is integrity checked, schema bounded, atomic, cached with a verified last-known-good fallback and

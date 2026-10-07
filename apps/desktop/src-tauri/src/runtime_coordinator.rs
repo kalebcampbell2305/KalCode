@@ -154,9 +154,10 @@ impl RuntimeBundle {
         ));
         bundle.permissions = Some(permissions.clone());
         check!();
-        let threads = Arc::new(ThreadsState::start(
+        let threads = Arc::new(ThreadsState::start_with_managed_readiness(
             state.core.as_ref(),
             providers.registry(),
+            Some(providers.initial_managed_readiness()),
             permissions.service(),
             &modes,
             authority.clone(),
@@ -164,6 +165,7 @@ impl RuntimeBundle {
             health.monitor(),
             resources.clone(),
         ));
+        providers.bind_threads(&threads);
         if let Some(memory) =
             crate::unified_memory_commands::MemoryService::start(core.clone(), &account)
         {
@@ -227,9 +229,13 @@ impl RuntimeBundle {
                         // Weak: KalVoice must not keep the thread runtime's state alive.
                         let threads = Arc::downgrade(&threads);
                         let core = state.core.clone();
-                        Arc::new(move || {
+                        Arc::new(move |provider_id| {
                             if let Some(threads) = threads.upgrade() {
-                                threads.ensure_providers(core.as_ref());
+                                if let Some(provider_id) = provider_id {
+                                    threads.ensure_provider(core.as_ref(), provider_id.as_str());
+                                } else {
+                                    threads.ensure_providers(core.as_ref());
+                                }
                             }
                         })
                     }),
