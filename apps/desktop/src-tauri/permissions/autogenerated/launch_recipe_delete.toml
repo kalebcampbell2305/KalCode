@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-launch-recipe-delete"
+description = "Enables the launch_recipe_delete command without any pre-configured scope."
+commands.allow = ["launch_recipe_delete"]
+
+[[permission]]
+identifier = "deny-launch-recipe-delete"
+description = "Denies the launch_recipe_delete command without any pre-configured scope."
+commands.deny = ["launch_recipe_delete"]

@@ -1,0 +1,190 @@
+.card {
+  position: fixed;
+  right: var(--space-5);
+  bottom: var(--space-5);
+  z-index: var(--z-toast);
+  display: grid;
+  gap: var(--space-2);
+  width: min(24rem, calc(100vw - 2 * var(--space-5)));
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border-lit-soft);
+  border-radius: var(--radius-floating);
+  background: var(--panel-sheen), var(--glass-bg);
+  box-shadow: var(--shadow-xl);
+  backdrop-filter: blur(var(--blur-glass));
+  animation: rise var(--dur-base) var(--ease-emphasized);
+}
+
+.card[data-tone="failed"] {
+  border-color: var(--status-failed-line);
+}
+
+.card[data-tone="waiting"] {
+  border-color: var(--status-waiting-line);
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2-5);
+}
+
+.icon {
+  flex: none;
+  width: 1.1rem;
+  height: 1.1rem;
+  margin-top: 0.1rem;
+  color: var(--status-working-text);
+}
+
+.card[data-tone="failed"] .icon {
+  color: var(--status-failed-text);
+}
+
+.card[data-tone="waiting"] .icon {
+  color: var(--status-waiting-text);
+}
+
+.headline {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+
+.title {
+  overflow: hidden;
+  color: var(--color-text);
+  font-size: var(--type-ui);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sub {
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+}
+
+.close {
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.close:hover {
+  color: var(--color-text);
+}
+
+.close:focus-visible,
+.link:focus-visible {
+  outline: 2px solid var(--color-accent);
+}
+
+.close svg {
+  width: 0.9rem;
+  height: 0.9rem;
+}
+
+.notice {
+  margin: 0;
+  color: var(--status-waiting-text);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+.list {
+  display: grid;
+  gap: var(--space-1);
+  max-height: 12rem;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-accent-text);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 0.2em;
+  transition: text-decoration-color var(--dur-fast) var(--ease-out);
+}
+
+.link:hover {
+  text-decoration-color: currentcolor;
+}
+
+.plain {
+  color: var(--color-text);
+}
+
+.failedLabel {
+  color: var(--status-failed-text);
+}
+
+.kind {
+  color: var(--color-text-faint);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.reason,
+.note {
+  flex-basis: 100%;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+}
+
+.note {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--status-waiting-text);
+}
+
+.note svg {
+  flex: none;
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+.footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(0.75rem);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card {
+    animation: none;
+  }
+
+  .link {
+    transition: none;
+  }
+}

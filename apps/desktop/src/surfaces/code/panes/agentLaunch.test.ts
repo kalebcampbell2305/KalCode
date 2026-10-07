@@ -10,6 +10,7 @@ import {
   launchAccounts,
   launchLabel,
   MAX_AGENTS_PER_LAUNCH,
+  modelEffortsAreKnown,
   preselectLaunchAccount,
   type RememberedLaunch,
   readLaunchMemory,
@@ -52,9 +53,14 @@ describe("launching coding agents", () => {
 
     const absent = { id: "legacy", displayName: "Legacy", isDefault: false };
     expect(effortsForModel("codex", absent)).toEqual([]);
+    expect(effortForModel("codex", absent, "future")).toBe("future");
     expect(effortsForModel("codex", absent, [])).toEqual([]);
     expect(effortsForModel("codex", absent, ["medium"])).toEqual(["medium"]);
     expect(effortForModel("codex", absent, "medium", ["medium"])).toBe("medium");
+    expect(modelEffortsAreKnown(null)).toBe(false);
+    expect(modelEffortsAreKnown(absent)).toBe(false);
+    expect(modelEffortsAreKnown(absent, [])).toBe(true);
+    expect(modelEffortsAreKnown(none)).toBe(true);
   });
 
   it("offers only this provider's accounts that are still in KalCode", () => {

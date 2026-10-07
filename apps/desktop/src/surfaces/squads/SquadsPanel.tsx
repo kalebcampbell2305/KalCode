@@ -59,6 +59,7 @@ import {
   effortsForModel,
   type ModelEffortInfo,
   modelCatalogCanVerifyCapabilities,
+  modelEffortsAreKnown,
 } from "../code/panes/agentLaunch.ts";
 import type { PaneProviderId } from "../code/panes/paneChannel.ts";
 import { providerIdentity } from "../code/panes/paneLabels.ts";
@@ -205,6 +206,7 @@ function definitionError(
       member.effort &&
       authoritative &&
       model &&
+      modelEffortsAreKnown(model, accountModels?.supportedEfforts) &&
       !effortsForModel(member.providerId as PaneProviderId, model, accountModels?.supportedEfforts).includes(
         member.effort,
       )
@@ -1680,7 +1682,11 @@ function SquadEditor({
                 const authoritative = modelAbsenceIsAuthoritative(member.providerAccountId, accountModelStates);
                 const modelUnavailable = Boolean(member.model && authoritative && !model);
                 const effortUnavailable = Boolean(
-                  member.effort && authoritative && model && !efforts.includes(member.effort),
+                  member.effort &&
+                    authoritative &&
+                    model &&
+                    modelEffortsAreKnown(model, accountModels?.supportedEfforts) &&
+                    !efforts.includes(member.effort),
                 );
                 const modelHint =
                   accountModels?.status === "checking"

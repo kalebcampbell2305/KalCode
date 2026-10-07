@@ -34,6 +34,18 @@ Independent review reproduced delayed-hook identity rollback, subagent completio
 
 The complete thread runtime file passes 75 tests after updating two assertions to the intended contract: a null identity boundary precedes process startup, and provider reports populate `active_model` without rewriting the configured model. Parent-run adapter checks pass 19 argv tests, 67 account-auth tests and 5 catalog tests. Focused Operations/Squads/KalVoice presentation checks pass 114 cases; the final Operations effort-selector extension adds four regressions and its full 56-test file passes. The Squads exact-ID dropdown regression also passes.
 
+## Integration follow-up
+
+Integration with Launch Recipes preserves its migration 0027 and moves runtime
+identity to 0028. The combined migration proves backup, reopen, recovery and
+contiguous registration. Recipes resolves implicit accounts in its target project
+and uses the shared discovered effort metadata. A review regression distinguishes
+missing effort metadata from explicit empty support in Code, Operations, Squads
+and Recipes; the five launcher/Recipe files pass 97 tests. KalVoice preserves exact
+bounded launch intent and delegates unsupported combinations to the authenticated
+provider when no native capability snapshot exists; it does not duplicate live
+discovery during validation and execution.
+
 ## Rollback
 
-Use a forward corrective release through the shared train, retaining migration 0027 and its schema registration. An older schema reader cannot open an upgraded profile. Preserve subsequent work; never reset shared main or rewrite another worker's history. The pre-change source reference is `rollback/full-model-identity-20261007`; it is not a database downgrade instruction. See `docs/providers/full-model-identity.md` for the rollback and recovery contract.
+Use a forward corrective release through the shared train, retaining migration 0028 and its schema registration. An older schema reader cannot open an upgraded profile. Preserve subsequent work; never reset shared main or rewrite another worker's history. The pre-change source reference is `rollback/full-model-identity-20261007`; it is not a database downgrade instruction. See `docs/providers/full-model-identity.md` for the rollback and recovery contract.

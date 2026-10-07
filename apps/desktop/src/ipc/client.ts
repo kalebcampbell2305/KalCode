@@ -79,6 +79,7 @@ import type {
 import type { ContextFileChoice, ContextInput, ContextSendResult, PromptReview } from "./context.ts";
 import { toKalCodeError } from "./errors.ts";
 import { HandoffsClient } from "./handoffs.ts";
+import { LaunchRecipesClient } from "./recipes.ts";
 import type { RemoteStatus } from "./remote.ts";
 import { SquadsClient } from "./squads.ts";
 import type { ImportedTerminalImage, TerminalImageTarget } from "./terminalImages.ts";
@@ -162,6 +163,7 @@ const SHARED_READS: ReadonlySet<CommandName> = new Set<CommandName>([
   "notification_list",
   "operations_snapshot",
   "squads_snapshot",
+  "launch_recipes_snapshot",
   "permission_profiles_list",
   "permission_settings_get",
   "provider_account_bindings_list",
@@ -187,6 +189,7 @@ const SHARED_READS: ReadonlySet<CommandName> = new Set<CommandName>([
 export class KalCodeClient {
   readonly handoffs: HandoffsClient;
   readonly squads: SquadsClient;
+  readonly recipes: LaunchRecipesClient;
   /**
    * Shared reads in flight, by command and arguments. A call joins one only if no other command
    * was sent and no event arrived since it started, so a joined read never predates a change.
@@ -196,6 +199,7 @@ export class KalCodeClient {
   constructor(readonly transport: Transport) {
     this.handoffs = new HandoffsClient((command, args) => this.call(command, args));
     this.squads = new SquadsClient((command, args) => this.call(command, args));
+    this.recipes = new LaunchRecipesClient((command, args) => this.call(command, args));
   }
 
   private async call<T>(command: CommandName, args?: Record<string, unknown>): Promise<T> {

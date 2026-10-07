@@ -87,14 +87,22 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("../migrations/0025_terminal_directory.sql"),
     },
     SQUADS_MIGRATION,
+    LAUNCH_RECIPES_MIGRATION,
     THREAD_RUNTIME_IDENTITY_MIGRATION,
 ];
 
+/// Saved Launch Recipes: reusable working desks that recreate in one action.
+pub const LAUNCH_RECIPES_MIGRATION: Migration = Migration {
+    version: 27,
+    name: "launch_recipes",
+    sql: include_str!("../migrations/0027_launch_recipes.sql"),
+};
+
 /// Provider-confirmed active model/effort, distinct from durable launch intent.
 pub const THREAD_RUNTIME_IDENTITY_MIGRATION: Migration = Migration {
-    version: 27,
+    version: 28,
     name: "thread_runtime_identity",
-    sql: include_str!("../migrations/0027_thread_runtime_identity.sql"),
+    sql: include_str!("../migrations/0028_thread_runtime_identity.sql"),
 };
 
 /// Reusable Squad templates and launch relationships to canonical Operations.
@@ -915,7 +923,7 @@ mod tests {
         let database_path = profile.path().join("kalcode.db");
         let backup_dir = profile.path().join("backups");
         let mut conn = open(&database_path).expect("open");
-        migrate(&mut conn, &MIGRATIONS[..26], None).expect("schema 26");
+        migrate(&mut conn, &MIGRATIONS[..27], None).expect("schema 27");
         conn.execute_batch(
             "INSERT INTO workspaces (
                id, name, root_path, created_at, last_opened_at
@@ -929,11 +937,11 @@ mod tests {
                'Workspace', 'C:/repo', 'approve', 'idle', 'historical-session', 't', 't'
              );",
         )
-        .expect("schema 26 row");
+        .expect("schema 27 row");
 
-        let outcome = migrate(&mut conn, MIGRATIONS, Some(&backup_dir)).expect("upgrade to 27");
-        assert_eq!((outcome.from_version, outcome.to_version), (26, 27));
-        let backup_path = outcome.backup.expect("pre-27 backup");
+        let outcome = migrate(&mut conn, MIGRATIONS, Some(&backup_dir)).expect("upgrade to 28");
+        assert_eq!((outcome.from_version, outcome.to_version), (27, 28));
+        let backup_path = outcome.backup.expect("pre-28 backup");
         assert_eq!(
             conn.query_row(
                 "SELECT COUNT(*) FROM sqlite_master
@@ -1005,7 +1013,7 @@ mod tests {
 
         let mut reopened = open(&database_path).expect("reopen migrated database");
         let reopen = migrate(&mut reopened, MIGRATIONS, Some(&backup_dir))
-            .expect("idempotent schema 27 reopen");
+            .expect("idempotent schema 28 reopen");
         assert!(!reopen.applied_any());
         assert!(reopen.backup.is_none());
         assert_eq!(
@@ -1020,8 +1028,8 @@ mod tests {
         );
         drop(reopened);
 
-        let backup = open_read_only(&backup_path).expect("open pre-27 backup");
-        assert_eq!(schema_version(&backup).expect("backup schema"), 26);
+        let backup = open_read_only(&backup_path).expect("open pre-28 backup");
+        assert_eq!(schema_version(&backup).expect("backup schema"), 27);
         assert_eq!(
             backup
                 .query_row(
@@ -1035,10 +1043,11 @@ mod tests {
         drop(backup);
 
         let recovered_path = profile.path().join("recovered.db");
-        fs::copy(&backup_path, &recovered_path).expect("restore pre-27 backup clone");
+        fs::copy(&backup_path, &recovered_path).expect("restore pre-28 backup clone");
         let mut recovered = open(&recovered_path).expect("open recovered backup");
-        let recovery = migrate(&mut recovered, MIGRATIONS, None).expect("upgrade recovered clone");
-        assert_eq!((recovery.from_version, recovery.to_version), (26, 27));
+        let recovery =
+            migrate(&mut recovered, MIGRATIONS, None).expect("upgrade recovered clone to 28");
+        assert_eq!((recovery.from_version, recovery.to_version), (27, 28));
         assert_eq!(
             recovered
                 .query_row(

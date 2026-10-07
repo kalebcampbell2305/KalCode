@@ -50,6 +50,7 @@ import {
   launchLabel,
   MAX_AGENTS_PER_LAUNCH,
   modelCatalogCanVerifyCapabilities,
+  modelEffortsAreKnown,
   readLaunchMemory,
   rememberedLaunch,
   rememberLaunch,
@@ -432,13 +433,14 @@ export function NewAgentDialog({
   // Provider default remains provider-owned. Catalog arrival must never turn a remembered/default
   // null into a concrete effort; the reported default is applied only after an explicit model pick.
   const effort = configuredEffort !== undefined ? configuredEffort : (remembered?.effort ?? "");
-  const canVerifyEffortCapability = modelCatalogCanVerifyCapabilities(
-    {
-      source: modelSource,
-      status: canonicalStatus as "checking" | "available" | "stale" | "unavailable" | undefined,
-    },
-    !sharedSessions,
-  );
+  const canVerifyEffortCapability =
+    modelCatalogCanVerifyCapabilities(
+      {
+        source: modelSource,
+        status: canonicalStatus as "checking" | "available" | "stale" | "unavailable" | undefined,
+      },
+      !sharedSessions,
+    ) && modelEffortsAreKnown(exactModel, catalogEfforts);
   const unavailableEffort =
     !!effort && canVerifyEffortCapability && !!providerModels && !!exactModel && !efforts.includes(effort);
   const preservedEffort = effort && !canVerifyEffortCapability && !efforts.includes(effort) ? effort : null;
@@ -589,6 +591,7 @@ export function NewAgentDialog({
         !sharedSessions,
       ) &&
       recentExactModel &&
+      modelEffortsAreKnown(recentExactModel, recentCatalog?.supportedEfforts) &&
       !effortsForModel(recent.providerId, recentExactModel, recentCatalog?.supportedEfforts).includes(recent.effort),
   );
   const recentSession = recent ? sessionOf(recent.account) : null;

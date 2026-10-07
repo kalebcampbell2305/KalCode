@@ -86,6 +86,7 @@ import {
   effortsForModel,
   type ModelEffortInfo,
   modelCatalogCanVerifyCapabilities,
+  modelEffortsAreKnown,
 } from "../code/panes/agentLaunch.ts";
 import type { PaneProviderId } from "../code/panes/paneChannel.ts";
 import { useOptionalAllThreads } from "../dashboard/data/DashboardData.tsx";
@@ -1290,7 +1291,12 @@ function TaskEditor({
     selectedModel,
     accountModels?.supportedEfforts,
   );
-  const effortUnavailable = Boolean(spec.effort && runtimeModelAbsence && !effortOptions.includes(spec.effort));
+  const effortUnavailable = Boolean(
+    spec.effort &&
+      runtimeModelAbsence &&
+      modelEffortsAreKnown(selectedModel, accountModels?.supportedEfforts) &&
+      !effortOptions.includes(spec.effort),
+  );
   const modelHint = modelUnavailable
     ? "This exact model is unavailable for the selected account. Choose a compatible model or Provider default."
     : accountModels?.status === "checking"
@@ -1313,7 +1319,9 @@ function TaskEditor({
           ? "Effort discovery is unavailable. Provider default lets the provider choose; a saved exact effort is preserved."
           : accountModels?.source === "documented_aliases"
             ? "Suggested effort metadata may be incomplete; the provider remains authoritative."
-            : runtimeModelAbsence && effortOptions.length === 0
+            : runtimeModelAbsence &&
+                modelEffortsAreKnown(selectedModel, accountModels?.supportedEfforts) &&
+                effortOptions.length === 0
               ? `This account does not advertise effort selection for ${effortTarget}. Provider default lets the provider choose.`
               : undefined;
   const discoverSelectedModels = () => {

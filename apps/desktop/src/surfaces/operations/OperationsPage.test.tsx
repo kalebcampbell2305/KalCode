@@ -1653,6 +1653,64 @@ describe("OperationsPage", () => {
     );
   });
 
+  it("preserves a saved exact effort when fresh runtime metadata omits effort capabilities", async () => {
+    const selected = account("codex-work", "Work");
+    const pending = queued("unknown-effort-capability", 1);
+    pending.spec = {
+      ...pending.spec,
+      kind: "agent",
+      prompt: "Continue",
+      command: null,
+      providerId: "codex",
+      providerAccountId: selected.id,
+      model: "account/model-v2",
+      effort: "future-fast",
+    };
+    seams.snapshot = { ...baseSnapshot(), items: [pending] };
+    seams.accountStates = new Map([
+      [
+        selected.id,
+        {
+          models: {
+            status: "available",
+            source: "runtime",
+            observedAt: Date.now(),
+            reason: null,
+            items: [
+              {
+                id: "account/model-v2",
+                displayName: "Account Model V2",
+                isDefault: true,
+                defaultEffort: null,
+              },
+            ],
+          },
+        },
+      ],
+    ]);
+    const client = operations();
+    vi.mocked(client.update).mockResolvedValue(pending);
+    const user = userEvent.setup();
+    render(
+      <ToastProvider>
+        <OperationsPage client={client} threadOptions={async () => options} providerAccounts={async () => [selected]} />
+      </ToastProvider>,
+    );
+
+    await user.click(screen.getByRole("tab", { name: "Queue" }));
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    const effort = await screen.findByRole("combobox", { name: "Effort" });
+    expect(effort).toHaveValue("future-fast");
+    expect(screen.queryByText(/This effort is unavailable/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save task" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Save task" }));
+
+    await waitFor(() => expect(client.update).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(client.update).mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({ model: "account/model-v2", effort: "future-fast" }),
+    );
+  });
+
   it("blocks only an effort that fresh runtime metadata proves unavailable", async () => {
     const selected = account("codex-work", "Work");
     const pending = queued("missing-effort", 1);

@@ -257,6 +257,23 @@ describe("one-click New agent", () => {
     });
   });
 
+  it("preserves an exact effort when a fresh runtime catalog has no effort metadata", () => {
+    const result = resolveQuickLaunch(
+      context({
+        memory: memoryOf(remembered({ model: "claude-opus-5-5", effort: "future" })),
+        modelCatalogOf: () => ({
+          models: [{ id: "claude-opus-5-5", displayName: "Opus 5.5", isDefault: true }],
+          source: "runtime",
+          status: "available",
+        }),
+      }),
+    );
+    expect(result.kind === "ready" && result.spec).toMatchObject({
+      model: "claude-opus-5-5",
+      effort: "future",
+    });
+  });
+
   it("launches the provider default when the adapter reports models are not discoverable", () => {
     const result = resolveQuickLaunch(
       context({

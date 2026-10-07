@@ -958,6 +958,42 @@ describe("independent authentication and metadata in agent creation", () => {
     expect(onLaunch).toHaveBeenCalledWith(expect.objectContaining({ model: exact, effort: "future" }));
   });
 
+  it("preserves an exact remembered effort when fresh runtime data has no effort metadata", async () => {
+    const account = makeAccount("codex-legacy-effort", "Codex Legacy", true, "codex");
+    rememberLaunch({
+      providerId: "codex",
+      accountId: account.id,
+      model: "model-a",
+      modelName: "Model A",
+      effort: "future",
+      count: 1,
+      workspaceId: "ws",
+      boundAccountId: null,
+      at: "2026-10-07T12:00:00Z",
+    });
+    runtime.client = {
+      ...clientWith([account], async () => threadOptions(["codex"])),
+      providerAccountModels: vi.fn(async () => ({
+        accountId: account.id,
+        providerId: "codex" as const,
+        source: "runtime" as const,
+        models: [{ id: "model-a", displayName: "Model A", isDefault: true, defaultEffort: null }],
+      })),
+    } as unknown as KalCodeClient;
+    const onLaunch = vi.fn(async () => true);
+    render(
+      <ProviderAccountSessionsProvider>
+        {dialog({ offered: ["codex"], initialProvider: "codex", onLaunch })}
+      </ProviderAccountSessionsProvider>,
+    );
+
+    expect(await screen.findByRole("radio", { name: "Future" })).toBeChecked();
+    const launch = screen.getByRole("button", { name: "Launch Codex agent" });
+    await waitFor(() => expect(launch).toBeEnabled());
+    await userEvent.setup().click(launch);
+    expect(onLaunch).toHaveBeenCalledWith(expect.objectContaining({ model: "model-a", effort: "future" }));
+  });
+
   it("routes an incompatible recent provider-default effort into the picker instead of launching it", async () => {
     const account = makeAccount("codex-recent", "Codex Recent", true, "codex");
     const recent = {

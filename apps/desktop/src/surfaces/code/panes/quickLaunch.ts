@@ -9,6 +9,7 @@ import {
   launchAccounts,
   type ModelEffortInfo,
   modelCatalogCanVerifyCapabilities,
+  modelEffortsAreKnown,
   rememberedLaunch,
 } from "./agentLaunch.ts";
 import { isPaneProvider, type PaneProviderId } from "./paneChannel.ts";
@@ -163,6 +164,7 @@ export function resolveQuickLaunch(ctx: QuickLaunchContext, overrides: QuickLaun
   if (
     effort &&
     catalogCanVerifyCapabilities &&
+    modelEffortsAreKnown(capabilityModel, catalog.supportedEfforts) &&
     !effortsForModel(providerId, capabilityModel, catalog.supportedEfforts).includes(effort)
   ) {
     return choose(

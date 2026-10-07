@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-launch-recipes-snapshot"
+description = "Enables the launch_recipes_snapshot command without any pre-configured scope."
+commands.allow = ["launch_recipes_snapshot"]
+
+[[permission]]
+identifier = "deny-launch-recipes-snapshot"
+description = "Denies the launch_recipes_snapshot command without any pre-configured scope."
+commands.deny = ["launch_recipes_snapshot"]

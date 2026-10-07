@@ -35,6 +35,12 @@ export function effortsForModel(
   return catalogEfforts ?? [];
 }
 
+/** Whether an empty effort list is provider evidence rather than absent legacy metadata. */
+export function modelEffortsAreKnown(model: ModelEffortInfo | null, catalogEfforts?: readonly string[]): boolean {
+  if (model?.supportedEfforts !== undefined) return true;
+  return catalogEfforts !== undefined;
+}
+
 /** Keeps an exact supported choice, otherwise uses the account model's reported default when present. */
 export function effortForModel(
   providerId: PaneProviderId,
@@ -44,7 +50,7 @@ export function effortForModel(
 ): string {
   const efforts = effortsForModel(providerId, model, catalogEfforts);
   if (current === "") return "";
-  if (current && efforts.includes(current)) return current;
+  if (current && (!modelEffortsAreKnown(model, catalogEfforts) || efforts.includes(current))) return current;
   return model?.defaultEffort && efforts.includes(model.defaultEffort) ? model.defaultEffort : "";
 }
 

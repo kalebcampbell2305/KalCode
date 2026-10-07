@@ -37,6 +37,8 @@ simulated identity and follows the same weekly-first presentation.
   bound account and reconnect path.
 - Documented aliases and stale caches cannot reject an explicit model or reasoning
   choice as unsupported. A fresh runtime catalog can offer a compatible next choice.
+- Missing effort metadata remains unknown even in a fresh model catalog. Only an
+  explicit model or account effort list can disprove a saved reasoning choice.
 - Provider model switches use authenticated root-session metadata; subagent model
   reports cannot replace the parent session's identity.
 - Exact model selectors are bounded opaque arguments. Windows batch shims must
@@ -47,18 +49,18 @@ simulated identity and follows the same weekly-first presentation.
 
 ## Compatibility and rollback
 
-Migration 0027 adds nullable runtime identity columns. Existing launch columns and
+Migration 0028 adds nullable runtime identity columns. Existing launch columns and
 legacy preference storage remain readable. New protocol fields are additive and
 optional. Tests and release update proof use isolated databases and profiles.
 
 Rollback is a forward corrective release through the shared merge train. Preserve
-migration 0027 and its schema registration when reverting behavior: do not ship an
+migration 0028 and its schema registration when reverting behavior: do not ship an
 older schema reader against a database that has already advanced, remove user data,
 or reset shared main. Keep subsequent commits and signed update ordering intact.
 An older binary fails closed with `schema_too_new`; the updater rollback floor must
-prevent installing it over schema 27. A pre-migration backup is for explicit disaster
+prevent installing it over schema 28. A pre-migration backup is for explicit disaster
 recovery, with acknowledged loss of later local changes, and must be reopened with a
-schema-27-or-newer build. Never edit migration checksums or overwrite the active profile
+schema-28-or-newer build. Never edit migration checksums or overwrite the active profile
 as routine rollback.
 
 ## Validation scope

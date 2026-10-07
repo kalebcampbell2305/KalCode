@@ -23,6 +23,7 @@ import {
   Inbox,
   KeyRound,
   LayoutGrid,
+  LayoutTemplate,
   ListChecks,
   Maximize2,
   MessageSquare,
@@ -49,6 +50,9 @@ import { toKalCodeError } from "../ipc/errors.ts";
 import { useOptionalKalVoice } from "../kalvoice/KalVoiceProvider.tsx";
 import { useKalActions } from "../runtime/actions.ts";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
+import { sortRecipes } from "../runtime/recipes/model.ts";
+import { useOptionalRecipeLibrary, useOptionalRecipeRequest } from "../runtime/recipes/RecipeLaunchProvider.tsx";
+import { requestRecipeCapture } from "../runtime/recipes/useRecipeCapture.ts";
 import { useOptionalUiIntents } from "../runtime/uiIntents.tsx";
 import { useWorkspaces } from "../runtime/WorkspaceProvider.tsx";
 import { useKalTidy } from "../surfaces/code/kaltidy/kalTidyContext.ts";
@@ -139,6 +143,8 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const kalvoice = useOptionalKalVoice();
   const workspaces = useWorkspaces();
   const kalTidy = useKalTidy();
+  const requestRecipe = useOptionalRecipeRequest();
+  const recipeLibrary = useOptionalRecipeLibrary();
   const threadsIntent = useThreadsIntent();
   const launchAgent = useLaunchAgent();
   const startAgents = useStartAgents();
@@ -564,6 +570,38 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
               Open folder…
             </Item>
           </Command.Group>
+
+          {recipeLibrary ? (
+            <Command.Group heading="Recipes" className={styles.group}>
+              {sortRecipes(recipeLibrary.recipes).map((recipe) => (
+                <Item
+                  key={recipe.id}
+                  icon={<LayoutTemplate />}
+                  onSelect={run(() => void requestRecipe?.({ recipeId: recipe.id }))}
+                  keywords={["recipe", "desk", "launch"]}
+                  badge={recipe.pinned ? "Pinned" : undefined}
+                >
+                  {`Launch ${recipe.name}`}
+                </Item>
+              ))}
+              {workspaces.active?.available ? (
+                <Item
+                  icon={<LayoutTemplate />}
+                  onSelect={run(requestRecipeCapture)}
+                  keywords={["recipe", "desk", "save", "capture"]}
+                >
+                  Save desk as Recipe
+                </Item>
+              ) : null}
+              <Item
+                icon={<LayoutTemplate />}
+                onSelect={run(() => recipeLibrary.library.open())}
+                keywords={["recipe", "desk", "manage", "library"]}
+              >
+                Manage Recipes
+              </Item>
+            </Command.Group>
+          ) : null}
 
           {accountMatches.length > 0 && (selectedThread || activeWorkspace) ? (
             <Command.Group heading="Accounts" className={styles.group}>
