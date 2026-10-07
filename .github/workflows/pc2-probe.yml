@@ -42,8 +42,12 @@ jobs:
           & node --version; if ($LASTEXITCODE) { throw 'node is not available to this account' }
           $npmPrefix = Join-Path $env:APPDATA 'npm'
           $env:PATH = "$npmPrefix;$env:PATH"
-          $pnpm = (& pnpm --version 2>$null)
-          if ($pnpm -ne '10.33.2') { & npm install -g pnpm@10.33.2; if ($LASTEXITCODE) { throw 'pnpm install failed' } }
+          $pnpm = if (Get-Command pnpm -ErrorAction SilentlyContinue) { (& pnpm --version | Out-String).Trim() } else { '' }
+          "pnpm before: '$pnpm'"
+          if ($pnpm -ne '10.33.2') {
+            & npm.cmd install -g --prefix $npmPrefix pnpm@10.33.2
+            if ($LASTEXITCODE) { throw 'pnpm install failed' }
+          }
           if (-not $userPath -or ($userPath -split ';') -notcontains $npmPrefix) {
             $now = [Environment]::GetEnvironmentVariable('Path', 'User')
             [Environment]::SetEnvironmentVariable('Path', ((@($npmPrefix) + @($now -split ';' | Where-Object { $_ })) -join ';'), 'User')
