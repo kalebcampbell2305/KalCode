@@ -1,0 +1,45 @@
+name: PC2 capacity probe (throwaway)
+
+on:
+  push:
+    branches: ["ops/pc2-probe"]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: [self-hosted, Windows, kalcode-desktop-qa]
+    timeout-minutes: 20
+    steps:
+      - name: Measure PC2 hardware and sample load while gates run
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $os = Get-CimInstance Win32_OperatingSystem
+          $cpu = @(Get-CimInstance Win32_Processor)
+          $cs = Get-CimInstance Win32_ComputerSystem
+          "Host: $($cs.Name) model $($cs.Manufacturer) $($cs.Model)"
+          "CPU: $($cpu[0].Name.Trim()); $(($cpu | Measure-Object NumberOfCores -Sum).Sum) cores / $(($cpu | Measure-Object NumberOfLogicalProcessors -Sum).Sum) logical; max $($cpu[0].MaxClockSpeed) MHz"
+          "RAM: {0:N1} GiB total" -f ($os.TotalVisibleMemorySize / 1MB)
+          Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | ForEach-Object { "Disk {0} {1:N0} GiB free of {2:N0} GiB" -f $_.DeviceID, ($_.FreeSpace / 1GB), ($_.Size / 1GB) }
+          Get-PhysicalDisk -ErrorAction SilentlyContinue | ForEach-Object { "PhysicalDisk: $($_.FriendlyName) $($_.MediaType) $($_.BusType) {0:N0} GiB" -f ($_.Size / 1GB) }
+          foreach ($root in 'C:\kalcode-ci', 'C:\kalcode-ci-2b') {
+            if (Test-Path -LiteralPath $root) {
+              $targets = Get-ChildItem -LiteralPath $root -Directory -Recurse -Depth 4 -Filter target -ErrorAction SilentlyContinue | Select-Object -First 4
+              foreach ($t in $targets) {
+                $bytes = (Get-ChildItem -LiteralPath $t.FullName -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
+                "Cargo target {0}: {1:N1} GiB" -f $t.FullName, ($bytes / 1GB)
+              }
+            } else { "No $root" }
+          }
+          "--- sampling every 15 s for 10 min (CPU %, free RAM GiB, gate processes) ---"
+          for ($i = 0; $i -lt 40; $i++) {
+            $load = [math]::Round((Get-CimInstance Win32_Processor | Measure-Object LoadPercentage -Average).Average)
+            $free = (Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1MB
+            $procs = Get-Process -ErrorAction SilentlyContinue
+            $rustc = @($procs | Where-Object { $_.ProcessName -eq 'rustc' }).Count
+            $node = @($procs | Where-Object { $_.ProcessName -eq 'node' }).Count
+            $chrome = @($procs | Where-Object { $_.ProcessName -match 'chrome|msedgewebview2' }).Count
+            "{0:HH:mm:ss} cpu {1,3}% freeRAM {2,5:N1} GiB rustc {3} node {4} browser {5}" -f (Get-Date).ToUniversalTime(), $load, $free, $rustc, $node, $chrome
+            Start-Sleep -Seconds 15
+          }
