@@ -25,6 +25,7 @@ import {
   FolderGit2,
   GitBranch,
   GitMerge,
+  Link2,
   MoreHorizontal,
   X,
 } from "lucide-react";
@@ -198,7 +199,7 @@ export const AgentCard = memo(function AgentCard({
   const clock = useClock((at) => (givenNow === undefined ? clockTexts({ thread, now: at, archived }) : null));
   const now = givenNow ?? clock;
   const display = displayStatusOf(thread.status);
-  // A step of a handoff chain says so, in the same words as its pane header: "Chain · Review 2/4".
+  // A handoff chain step shows its place compactly ("2/4"); its pane header says "Chain · Review 2/4".
   const chainStep = useOptionalChains()?.chainForOperation(thread.id) ?? null;
   const resourceWait = isWaitingForResources(thread) ? presentThread(thread) : null;
   const ready = !archived && readiness?.ready === true;
@@ -325,13 +326,16 @@ export const AgentCard = memo(function AgentCard({
           {label}
         </span>
         {chainStep ? (
+          // Compact so the state chip keeps its words; the full place is in the label and tooltip.
           <span
             className={styles.chain}
             data-kind="chain"
-            title={`${chainStep.chain.name}, step ${chainStep.step.position + 1} of ${chainStep.chain.steps.length}`}
+            role="img"
+            aria-label={`Chain step ${chainStep.step.position + 1} of ${chainStep.chain.steps.length}: ${chainStep.step.name}, ${chainStep.chain.name}`}
+            title={`${chainStep.chain.name} · ${chainStep.step.name}, step ${chainStep.step.position + 1} of ${chainStep.chain.steps.length}`}
           >
-            Chain · {chainStep.step.intent.charAt(0).toUpperCase()}
-            {chainStep.step.intent.slice(1)} {chainStep.step.position + 1}/{chainStep.chain.steps.length}
+            <Link2 aria-hidden="true" className={styles.stateGlyph} />
+            {chainStep.step.position + 1}/{chainStep.chain.steps.length}
           </span>
         ) : null}
         {elapsedMs !== null && !archived ? (

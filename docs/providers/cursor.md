@@ -21,7 +21,7 @@ Cursor uses the shared provider registry, account bindings, pane lifecycle, reso
 
 Cursor participates in [Unified Memory](../UNIFIED-MEMORY.md), the shared workspace storage and retrieval service used across providers. Fresh terminals receive selected context through Cursor's native `sessionStart` hook without submitting an extra model turn. Accepted native user prompts and final responses can contribute explicit durable knowledge with provenance; retrieved task and handoff text is not recaptured as a new user decision. Memory remains inspectable and editable in KalCode, and account bindings and saved notes survive reopening.
 
-Workspace instructions, files and shared context/handoff packages remain provider-neutral. Squads, Launch Recipes, Handoff Chains, Agent File Ownership and Stuck Agent Detector are roadmap entries, not services implemented by this adapter. Cursor uses their shared identity foundation; this change does not claim those products are shipped.
+Workspace instructions, files and shared context/handoff packages remain provider-neutral. Cursor can run [Agent Handoff Chain](../HANDOFF_CHAINS.md) steps, because its hooks report when a turn ends. Squads, Launch Recipes, Agent File Ownership and Stuck Agent Detector are roadmap entries, not services implemented by this adapter. Cursor uses their shared identity foundation; this change does not claim those products are shipped.
 
 ## Official references
 

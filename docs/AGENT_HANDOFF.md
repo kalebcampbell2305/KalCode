@@ -1,6 +1,6 @@
 # Agent terminal Hand Off
 
-Hand Off passes a focused task between real coding-agent terminals in the same project. It is available on Pro and above through the existing `provider_handoff` entitlement. Threads and multi-step Handoff Chains remain separate features.
+Hand Off passes a focused task between real coding-agent terminals in the same project. It is available on MAX and above through the existing `provider_handoff` entitlement. Ordered multi-step work (implement → review → fix → test) uses [Agent Handoff Chains](HANDOFF_CHAINS.md), started from the same dialog's **Chain** tab. Threads remain a separate feature.
 
 ## Use
 

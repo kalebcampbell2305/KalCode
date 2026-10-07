@@ -78,24 +78,34 @@ control characters. Then:
 - A Fix step whose review predecessors all **passed** is skipped automatically ("Review passed;
   nothing to fix"), recorded as a skip, never as a pass.
 - No report when the turn ends → the step is **Needs report**: the agent may have asked a
-  question. It surfaces in Needs You with **Open agent** and **Record outcome**. A report written
-  later, after the person answers, still settles it.
-- The provider process failing, the terminal closing, or an interrupted turn settle the step
-  through the ordinary Operations path (failed or interrupted).
+  question. It surfaces in Needs You with **Open agent** and **Record outcome** (Retry and Skip are
+  also offered). A report written later, after the person answers, still settles it.
+- A session that ends, or a pane that closes, without a report is **interrupted**, never a pass.
+  A provider failure settles as failed through the ordinary Operations path.
+- A review that asked for changes that no later writing step made keeps the chain in **Needs you**
+  instead of Ready to merge; retry the review once the changes exist.
 
 ## Worktrees
 
-- **Shared** (default): the first step creates one KalCode-managed worktree and branch; every
-  later step attaches to the same tree, so review, fix and test see exactly the implementation,
-  including uncommitted changes. Parallel steps in a shared tree may not both write: at most one
-  of Implement, Fix and Continue can run at a time, so `chains_start` rejects parallel writers.
+- **Shared** (default): the first step creates one KalCode-managed worktree and branch, owned by
+  the chain itself (not by any pane, so closing a step's pane never removes it); every later step
+  attaches to the same tree, so review, fix and test see exactly the earlier work, including
+  uncommitted changes. Such a chain starts with one step (the one that creates the tree), and two
+  writing steps (Implement, Fix, Continue) may never run in parallel.
 - **Project**: every step runs in the project checkout.
+- **Continuing an agent** (started from its Hand off dialog, `sourceThreadId`): the chain runs where
+  that agent's work is, in its own KalCode worktree or in the project checkout. The person does not
+  pick a mode that would separate the chain from the work it continues.
+- If a shared tree disappears after earlier steps ran, the next step refuses to start with an
+  actionable message instead of recreating the tree from its branch, which would silently drop
+  uncommitted work.
 
 ## Providers and capabilities
 
-Chains are provider-agnostic: a step can use any provider that can run as an Operations agent
-with task delivery (today Claude Code, Codex and Cursor; Gemini cannot yet prove readiness for
-delivery). The check is capability-based, never a provider-name branch in chain logic. If a route
+Chains are provider-agnostic: a step can use any provider whose adapter declares a structured
+status channel (hooks or notify), so KalCode observes the turn ending instead of guessing. Today
+that is Claude Code, Codex and Cursor; Gemini CLI reports process state only, so it is refused
+with an actionable message. The check reads declared capabilities, never a provider name. If a route
 is unavailable (signed out, missing account, unsupported delivery), `chains_start` and reroute
 fail with an actionable message that names compatible alternatives; KalCode never silently
 switches provider or account. A step whose account signs out later is held with **Reconnect**,
@@ -124,13 +134,18 @@ different facts.
   outcome. The running step carries the electric-blue energy trace; waiting = amber; failed = red;
   passed = green; skipped and superseded are muted. One line under the rail states the next action.
 - **Where it appears:** Activity (a *Chains* section above the Agent Fleet), each step's provider
-  pane header (a compact `Chain · Review 2/4` chip that opens the rail), and the Fleet card of a step
-  agent.
+  pane header (a `Chain · Review 2/4` chip that opens the compact rail), and the Fleet card of a step
+  agent (a compact `2/4` marker whose label names the step and chain).
 - **Needs You:** a step in *Needs report*, a failed step and a held (signed-out) step each produce
   one item with what happened, why it needs you and what to do next. A step that is only waiting
   for its predecessor is never an item.
 - Controls: Pause/Resume and Cancel per chain; Retry, Skip, Reroute, Record outcome and Open agent
-  per step, offered only when safe for that phase.
+  per step, offered only when native accepts them for that phase. Retry starts a new attempt and
+  rewires the steps that waited for the old one; a step blocked by an earlier failure is resolved
+  by retrying or skipping that earlier step.
+- Consent is exact: whenever a chain action changes which Operations a step waits for, KalCode
+  renews that step's consent (same provider, account, model, effort and task) or re-runs the
+  launch authorization, so no step is left authorized for a stale spec.
 
 ## Restart and recovery
 

@@ -96,12 +96,13 @@ export function ChainComposer({
   // A start still finishes natively if the composer closes meanwhile, but a closed composer
   // never navigates or updates state afterwards.
   const mounted = useRef(true);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    // Set on every mount: StrictMode runs cleanup and setup again in development.
+    mounted.current = true;
+    return () => {
       mounted.current = false;
-    },
-    [],
-  );
+    };
+  }, []);
 
   const chainName = nameTouched ? name : suggestName(goal);
   const seed = useMemo<Partial<DraftRoute> | null>(

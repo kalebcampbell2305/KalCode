@@ -69,9 +69,11 @@ can answer questions such as “Why did we use this architecture?” or “Which
 usage?” from matching current notes, and can forward a saved rule to an agent. Missing matches
 are reported honestly.
 
-Brainstorm, Squads, and Handoff Chains are roadmap surfaces in this source revision. The shared
-native service and typed source vocabulary support these workflows without a second memory
-store; no unavailable workflow is claimed to be implemented by this feature.
+Agent Handoff Chains use this service directly: each step's delivery-time package includes the
+canonical retrieval for the chain's goal and the step's intent, and each step report's summary is
+captured with `Handoff` provenance (see `docs/HANDOFF_CHAINS.md`). Brainstorm and Squads are
+roadmap surfaces in this source revision; the shared native service and typed source vocabulary
+support them without a second memory store.
 
 ## Truth and staleness
 
