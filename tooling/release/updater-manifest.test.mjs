@@ -652,6 +652,30 @@ test("Windows Beta and Dev publication retain exact channel-bound final QA", asy
   }
 });
 
+test("release notes are bounded in UTF-8 bytes, the unit installed clients enforce", async () => {
+  const input = fixture();
+  input.signaturePath = `${input.artifactPath}.windows-x86_64.sig`;
+  writeFileSync(
+    input.signaturePath,
+    signature("1.2.3", artifactBytes, releaseSigner, ["target:windows-x86_64", "channel:stable"]),
+  );
+  const publish = (notes) =>
+    createPlatformUpdaterManifest({
+      artifacts: [{ ...input, target: "windows-x86_64" }],
+      requestedChannel: "stable",
+      publishedAt: "2026-09-25T12:00:00.000Z",
+      notes,
+    });
+  // 10,000 bytes is the client's limit and still publishes.
+  assert.equal((await publish("x".repeat(10_000))).notes.length, 10_000);
+  // 3,334 characters but 10,002 bytes: `parse_feed` would reject the whole feed on every client.
+  await assert.rejects(publish("—".repeat(3_334)), /release notes are required and must be concise/);
+  await assert.rejects(
+    createUpdaterManifest({ ...fixture(), publishedAt: "2026-09-25T12:00:00.000Z", notes: "—".repeat(3_334) }),
+    /release notes are required and must be concise/,
+  );
+});
+
 test("v2 rejects missing, duplicate and unsupported platform artifacts", async () => {
   const options = { requestedChannel: "stable", publishedAt: "2026-09-25T12:00:00.000Z", notes: "Update." };
   for (const artifacts of [

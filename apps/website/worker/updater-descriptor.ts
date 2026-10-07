@@ -87,6 +87,11 @@ const TARGET_EXTENSION: Readonly<Record<UpdaterTarget, string>> = {
   "darwin-aarch64": ".dmg",
 };
 
+/** Installed clients reject notes over 10,000 UTF-8 bytes (`parse_feed` counts `str::len`). */
+function notesFitClients(notes: string): boolean {
+  return new TextEncoder().encode(notes).byteLength <= 10_000;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -199,7 +204,7 @@ export function parseUpdaterDescriptor(
   if (version !== expectedVersion || typeof version !== "string" || !VERSION.test(version) || version.length > 256) {
     return null;
   }
-  if (typeof notes !== "string" || notes.trim().length === 0 || notes.trim() !== notes || notes.length > 10_000) {
+  if (typeof notes !== "string" || notes.trim().length === 0 || notes.trim() !== notes || !notesFitClients(notes)) {
     return null;
   }
   if (!canonicalPublishedAt(publishedAt)) return null;

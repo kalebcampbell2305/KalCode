@@ -213,9 +213,36 @@ describe("downloads against local R2", { timeout: 60_000 }, () => {
     expect(await response?.text()).toBe(body);
     await proxy.env.RELEASES.put(key, "tampered");
     expect((await handleDownload(request, authoritative))?.status).toBe(503);
+    // A preview channel with nothing published answers "no update" (204), which the desktop
+    // client shows as up to date, never a 404 that it reports as a connection failure.
+    for (const channel of ["beta", "dev"]) {
+      for (const method of ["GET", "HEAD"]) {
+        const empty = await handleDownload(
+          new Request(`https://kalcoded.com/releases/updater/${channel}.json`, { method }),
+          authoritative,
+        );
+        expect(empty?.status).toBe(204);
+        expect(empty?.headers.get("cache-control")).toBe("public, max-age=60, must-revalidate");
+        expect(empty?.headers.get("X-KalCode-Release-Authority")).toBe("d1-v1");
+        expect(await empty?.text()).toBe("");
+      }
+    }
+    // Exact versions on an empty channel are still not found.
     expect(
-      (await handleDownload(new Request("https://kalcoded.com/releases/updater/beta.json"), authoritative))?.status,
+      (await handleDownload(new Request(`https://kalcoded.com/releases/updater/beta/${VERSION}.json`), authoritative))
+        ?.status,
     ).toBe(404);
+  });
+
+  it("keeps a missing Stable publication loud instead of reporting no update", async () => {
+    const nothingPublished = { ...deps, catalog: { get: async () => null } };
+    expect(
+      (await handleDownload(new Request("https://kalcoded.com/releases/updater/stable.json"), nothingPublished))
+        ?.status,
+    ).toBe(404);
+    expect(
+      (await handleDownload(new Request("https://kalcoded.com/releases/updater/beta.json"), nothingPublished))?.status,
+    ).toBe(204);
   });
 
   it("refuses INSERT OR REPLACE changes to an immutable publication version", async () => {

@@ -141,6 +141,8 @@ describe("updater descriptor validation", () => {
       ["notes", "  padded notes  "],
       ["notes", ""],
       ["notes", "x".repeat(10_001)],
+      // 3,334 characters but 10,002 UTF-8 bytes: installed clients reject it, so it never serves.
+      ["notes", "—".repeat(3_334)],
       ["pub_date", "2026-09-25"],
       ["pub_date", "2026-09-25T12:00:00Z"],
     ] as const) {
