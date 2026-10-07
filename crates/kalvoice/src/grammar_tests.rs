@@ -26,6 +26,53 @@ fn current_product_surfaces_route_without_local_reasoning() {
     }
 }
 
+#[test]
+fn named_squads_and_recipes_use_deterministic_canonical_launch_intents() {
+    for (spoken, expected) in [
+        (
+            "Launch Release Train squad",
+            KalVoiceIntent::LaunchSquad {
+                query: "release train".into(),
+            },
+        ),
+        (
+            "start squad Cross Provider Review",
+            KalVoiceIntent::LaunchSquad {
+                query: "cross provider review".into(),
+            },
+        ),
+        (
+            "Run Release Verification recipe",
+            KalVoiceIntent::LaunchRecipe {
+                query: "release verification".into(),
+            },
+        ),
+        (
+            "launch recipe Ship Current Build",
+            KalVoiceIntent::LaunchRecipe {
+                query: "ship current build".into(),
+            },
+        ),
+    ] {
+        assert_eq!(intent(spoken), expected, "{spoken}");
+        let (_, confidence) = understand_with_confidence(spoken);
+        assert_eq!(confidence, Confidence::High, "{spoken}");
+    }
+}
+
+#[test]
+fn squad_launch_grammar_never_guesses_or_executes_compound_requests() {
+    assert_eq!(rejected("launch squad"), "squad_name_missing");
+    assert_eq!(rejected("launch recipe"), "recipe_name_missing");
+    for spoken in [
+        "don't launch Release Train squad",
+        "launch Release Train squad and delete the branch",
+        "launch Release Train recipe then stop every agent",
+    ] {
+        assert!(is_reasoning(spoken), "{spoken}");
+    }
+}
+
 fn target(text: &str) -> Option<NamedTarget> {
     match understand(text) {
         Understood::Intent { target, .. } => target,

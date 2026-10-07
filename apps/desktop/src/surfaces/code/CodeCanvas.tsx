@@ -39,6 +39,7 @@ import {
 } from "lucide-react";
 import { memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toKalCodeError } from "../../ipc/errors.ts";
+import { focusOperationsTarget } from "../../kalvoice/sceneOperations.ts";
 import type { VoiceSceneTarget } from "../../kalvoice/sceneTargets.ts";
 import {
   registerVoicePaneScene,
@@ -1835,6 +1836,14 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
                     ...(launcher.paneId ? { paneId: launcher.paneId } : { placement: "split" as const }),
                     focus: true,
                   })
+          }
+          onOpenSquads={
+            launcher.returnToHandoff
+              ? undefined
+              : () => {
+                  navigate("operations");
+                  void focusOperationsTarget({ kind: "tab", tab: "squads" });
+                }
           }
           onClose={() => setLauncher(null)}
         />

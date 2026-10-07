@@ -526,6 +526,7 @@ mod tests {
             started_at: Some(String::new()),
             ended_at: None,
             current_action: None,
+            attention_reason: None,
             outcome: None,
             position: 0,
             blockers: vec![],

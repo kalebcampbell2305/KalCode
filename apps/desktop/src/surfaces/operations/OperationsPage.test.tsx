@@ -12,6 +12,7 @@ import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AccountPhase, AccountTier } from "../../ipc/account.ts";
 import type { OperationsApi } from "../../ipc/operations.ts";
+import type { SquadsApi } from "../../ipc/squads.ts";
 import { focusOperationsTarget } from "../../kalvoice/sceneOperations.ts";
 import { FAVORITES_STORAGE_KEY } from "../../shell/favorites/store.ts";
 import { OperationsPage } from "./OperationsPage.tsx";
@@ -54,6 +55,9 @@ vi.mock("../../shell/navigation.tsx", () => ({
   useNavigation: () => ({ current: "operations", navigate: seams.navigate }),
 }));
 vi.mock("../../account/AccountProvider.tsx", () => ({ useOptionalAccount: () => seams.account }));
+vi.mock("../squads/SquadsPanel.tsx", () => ({
+  SquadsPanel: ({ workspaceId }: { workspaceId: string }) => <div>Squads for {workspaceId}</div>,
+}));
 
 function queued(id: string, position: number): OperationRecord {
   return {
@@ -162,15 +166,24 @@ function account(id: string, displayName: string, extra: Partial<ProviderAccount
   };
 }
 
-function page(client: OperationsApi) {
+function page(client: OperationsApi, squads?: SquadsApi) {
   return (
     <ToastProvider>
-      <OperationsPage client={client} threadOptions={async () => options} />
+      <OperationsPage client={client} squads={squads} threadOptions={async () => options} />
     </ToastProvider>
   );
 }
 
 describe("OperationsPage", () => {
+  it("opens the unified Squads view against the active workspace", async () => {
+    seams.snapshot = baseSnapshot();
+    const squads = {} as SquadsApi;
+    render(page(operations(), squads));
+
+    await userEvent.setup().click(screen.getByRole("tab", { name: "Squads" }));
+    expect(screen.getByText("Squads for workspace-1")).toBeVisible();
+  });
+
   it("favorites a run from its row and context menu without opening or running it", async () => {
     localStorage.removeItem(FAVORITES_STORAGE_KEY);
     const client = operations();
@@ -610,6 +623,42 @@ describe("OperationsPage", () => {
     await user.click(screen.getByRole("tab", { name: "Queue" }));
     await user.click(screen.getByRole("button", { name: "Move Task one down" }));
     await waitFor(() => expect(client.reorder).toHaveBeenCalledWith(["two", "one"], 7));
+  });
+
+  it("offers Run now, not Resume, for a paused Squad member", async () => {
+    const member = { ...queued("member", 0), status: "paused" as const };
+    member.spec = { ...member.spec, name: "Squad reviewer" };
+    const ordinary = { ...queued("ordinary", 1), status: "paused" as const };
+    ordinary.spec = { ...ordinary.spec, name: "Held build" };
+    seams.snapshot = { ...baseSnapshot(), items: [member, ordinary] };
+    const squads = {
+      snapshot: vi.fn(async () => ({
+        squads: [],
+        recipes: [],
+        operations: [],
+        launches: [
+          {
+            id: "launch-1",
+            squadId: "squad-1",
+            name: "Crew",
+            goal: "Review",
+            workspaceId: "workspace-1",
+            createdAt: "2026-10-06T12:00:00Z",
+            members: [{ key: "reviewer", role: "review", managerKey: null, operationId: member.id, ownedPaths: [] }],
+          },
+        ],
+      })),
+    } as unknown as SquadsApi;
+    const client = operations();
+    const user = userEvent.setup();
+    render(page(client, squads));
+    await user.click(screen.getByRole("tab", { name: "Queue" }));
+
+    const row = (id: string) => document.querySelector(`[data-operations-queue-id="${id}"]`) as HTMLElement;
+    await waitFor(() => expect(within(row(member.id)).queryByRole("button", { name: "Resume" })).toBeNull());
+    await user.click(within(row(member.id)).getByRole("button", { name: "Run now" }));
+    expect(client.runNow).toHaveBeenCalledExactlyOnceWith(member.id);
+    expect(within(row(ordinary.id)).getByRole("button", { name: "Resume" })).toBeVisible();
   });
 
   it("names dependency blockers without changing an explicitly Later dependency", async () => {

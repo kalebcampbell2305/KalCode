@@ -98,6 +98,11 @@ pub struct OperationRecord {
     pub started_at: Option<String>,
     pub ended_at: Option<String>,
     pub current_action: Option<String>,
+    /// Durable, actionable reason this task needs the user's decision. Dependency blockers are
+    /// represented separately in `blockers`; ordinary user-paused work leaves this absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub attention_reason: Option<String>,
     pub outcome: Option<String>,
     pub position: i64,
     pub blockers: Vec<String>,

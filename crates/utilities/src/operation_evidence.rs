@@ -1529,6 +1529,7 @@ mod tests {
             started_at: None,
             ended_at: None,
             current_action: None,
+            attention_reason: None,
             outcome: None,
             position: 0,
             blockers: Vec::new(),

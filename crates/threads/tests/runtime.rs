@@ -2146,6 +2146,85 @@ fn crash_recovery_interrupts_threads_left_running() {
 }
 
 #[test]
+fn recovered_prepared_pane_resumes_same_identity_without_sending_its_task() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("repo");
+    std::fs::create_dir_all(&root).expect("workspace root");
+    let (workspaces, workspace_id) = FakeWorkspaces::with(root);
+    let provider = FakeProvider::new("fake", "Fake Provider");
+    let operation_id = new_id();
+
+    {
+        let core = Arc::new(Core::open(config(dir.path())).expect("core"));
+        let registry = Arc::new(ProviderRegistry::new());
+        registry.register(provider.clone());
+        let runtime = ThreadRuntime::new(
+            core,
+            registry,
+            workspaces.clone(),
+            TestGate::new(PolicyEffect::Ask),
+        )
+        .expect("runtime");
+        runtime
+            .create_idle_with_id_for_origin(
+                &operation_id,
+                kalcode_threads::CreateIdleThread {
+                    provider_id: "fake".into(),
+                    provider_account_id: None,
+                    account_label: None,
+                    workspace_id: workspace_id.clone(),
+                    model: None,
+                    effort: None,
+                    permission_mode: PermissionMode::Approve,
+                    name: Some("Dependent member".into()),
+                },
+                LaunchOrigin::User,
+            )
+            .expect("prepared pane");
+        runtime
+            .wait_for_dependency(&operation_id, "Waiting for dependencies")
+            .expect("dependency wait");
+        assert!(
+            runtime
+                .messages(&operation_id, 10, None)
+                .unwrap()
+                .is_empty()
+        );
+        // Simulate process loss: the runtime is dropped without a graceful thread stop.
+    }
+
+    let core = Arc::new(Core::open(config(dir.path())).expect("reopen core"));
+    let registry = Arc::new(ProviderRegistry::new());
+    registry.register(provider.clone());
+    let runtime = ThreadRuntime::new(core, registry, workspaces, TestGate::new(PolicyEffect::Ask))
+        .expect("reopened runtime");
+    assert_eq!(
+        runtime.get(&operation_id).expect("recovered pane").status,
+        ThreadStatus::Interrupted
+    );
+    let resumed = runtime
+        .resume(&operation_id, None)
+        .expect("resume exact prepared pane");
+    assert_eq!(resumed.id, operation_id);
+    assert_eq!(resumed.status, ThreadStatus::Idle);
+    let waiting = runtime
+        .wait_for_dependency(&operation_id, "Waiting for dependencies")
+        .expect("restore dependency wait");
+    assert_eq!(waiting.id, operation_id);
+    assert_eq!(waiting.status, ThreadStatus::WaitingForDependency);
+    assert!(
+        runtime
+            .messages(&operation_id, 10, None)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        provider.last_session().calls().is_empty(),
+        "recovery starts the provider prompt but never replays the withheld Squad task"
+    );
+}
+
+#[test]
 fn idle_threads_start_without_a_task() {
     let h = Harness::new();
     let request = kalcode_threads::CreateIdleThread {
@@ -2189,6 +2268,91 @@ fn idle_threads_start_without_a_task() {
     assert_eq!(named.name, "Reviewer");
     h.runtime.send(&named.id, "review the diff").expect("send");
     assert_eq!(status(&h, &named.id), ThreadStatus::Active);
+}
+
+#[test]
+fn a_refused_prepared_task_keeps_its_pane_and_never_resumes_implicitly() {
+    for (case, provider_error) in [
+        (
+            "refused",
+            ProviderError::Refused {
+                code: "provider_input_not_ready".into(),
+                message: "provider prompt is open".into(),
+            },
+        ),
+        ("unsupported", ProviderError::Unsupported),
+    ] {
+        let h = Harness::new();
+        let operation_id = new_id();
+        let prepared = h
+            .runtime
+            .create_idle_with_id_for_origin(
+                &operation_id,
+                idle_request(&h),
+                LaunchOrigin::Background,
+            )
+            .expect("prepared pane");
+        h.runtime
+            .wait_for_dependency(&prepared.id, "Waiting for dependencies")
+            .expect("dependency wait");
+        let first_session = h.provider.last_session();
+        first_session.fail_sends_with(1, provider_error);
+
+        let error = h
+            .runtime
+            .send_prepared_operation(&prepared.id, "implement the dependent task")
+            .expect_err("the refused task returns to an explicit Operations hold");
+        assert_eq!(
+            error.code, "operation_prepared_provider_not_ready",
+            "{case}"
+        );
+        assert_eq!(
+            status(&h, &prepared.id),
+            ThreadStatus::WaitingForDependency,
+            "{case}"
+        );
+        assert!(
+            !first_session.is_ended(),
+            "the native terminal must remain available to resolve its prompt: {case}"
+        );
+        assert!(
+            first_session
+                .calls()
+                .iter()
+                .all(|call| !matches!(call, Call::Send(_))),
+            "the provider refused before receiving bytes: {case}"
+        );
+        assert_eq!(
+            h.runtime
+                .messages(&prepared.id, 10, None)
+                .expect("history")
+                .into_iter()
+                .filter(|message| message.role == MessageRole::User)
+                .map(|message| message.content)
+                .collect::<Vec<_>>(),
+            ["implement the dependent task"],
+            "{case}"
+        );
+
+        assert_code(
+            h.runtime.resume(&prepared.id, None),
+            "thread_already_running",
+        );
+        assert!(
+            first_session.calls().is_empty(),
+            "Resume without a new task must not replay a failed Squad prompt: {case}"
+        );
+
+        first_session.admit_sends();
+        h.runtime
+            .send_prepared_operation(&prepared.id, "implement the dependent task")
+            .expect("an explicit Operations retry may deliver the task");
+        assert_eq!(
+            first_session.calls(),
+            [Call::Send("implement the dependent task".into())],
+            "{case}"
+        );
+    }
 }
 
 fn idle_request(h: &Harness) -> kalcode_threads::CreateIdleThread {

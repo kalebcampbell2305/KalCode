@@ -18,6 +18,14 @@ const mocks = vi.hoisted(() => ({
     kalvoiceLatencyRecord: vi.fn().mockResolvedValue(undefined),
     kalvoiceTypeInstead: vi.fn().mockResolvedValue(false),
     kalvoiceListenCancel: vi.fn().mockResolvedValue(undefined),
+    squads: {
+      launch: vi.fn(),
+      launchRecipe: vi.fn(),
+    },
+  },
+  workspaces: {
+    active: { id: "workspace" },
+    activate: vi.fn().mockResolvedValue(true),
   },
   toast: { show: vi.fn() },
 }));
@@ -25,7 +33,7 @@ vi.mock("../runtime/RuntimeProvider.tsx", () => {
   const client = { ...mocks.client, kalvoiceRequest: mocks.request, kalvoiceTalk: mocks.talk };
   return { useRuntime: () => ({ client }) };
 });
-vi.mock("../runtime/WorkspaceProvider.tsx", () => ({ useWorkspaces: () => ({ active: { id: "workspace" } }) }));
+vi.mock("../runtime/WorkspaceProvider.tsx", () => ({ useWorkspaces: () => mocks.workspaces }));
 vi.mock("../runtime/uiIntents.tsx", () => ({ useUiIntents: () => ({ focus: mocks.focus }) }));
 vi.mock("../shell/navigation.tsx", () => ({ useNavigation: () => ({ current: "code", navigate: mocks.navigate }) }));
 vi.mock("../shell/rail/search/SearchProvider.tsx", () => ({ useOptionalSearch: () => null }));
@@ -220,6 +228,66 @@ it.each(["dashboard", "browser"])(
     }
   },
 );
+
+it.each([
+  ["launch_squad", "launch", "Release Train", "release train"],
+  ["launch_recipe", "launchRecipe", "Release Verification", "release verification"],
+] as const)("runs %s through the canonical native Squad client", async (kind, method, name, query) => {
+  const launch = {
+    id: "launch-id",
+    squadId: "squad-id",
+    name,
+    goal: "Ship it",
+    workspaceId: "workspace",
+    createdAt: "2026-10-05T20:00:00Z",
+    members: [{ key: "lead", role: "implementation", managerKey: null, operationId: "operation", ownedPaths: [] }],
+  };
+  mocks.client.squads[method].mockResolvedValue(launch);
+  mocks.request.mockImplementation(async (request) => ({
+    requestId: request.requestId,
+    intent: kind,
+    outcome: { kind: "completed", summary: `Launching ${name}.` },
+    usage: { used: 0, allowance: null, periodStart: "", resetsAt: "" },
+    counted: false,
+    directive: { kind, query, workspaceId: "workspace" },
+  }));
+
+  const view = await start();
+  fireEvent.click(view.getByRole("button", { name: "Ask native" }));
+
+  await waitFor(() => expect(mocks.client.squads[method]).toHaveBeenCalledOnce());
+  const nativeRequest = mocks.request.mock.calls[0]?.[0];
+  expect(mocks.client.squads[method]).toHaveBeenCalledWith(query, "workspace", nativeRequest.requestId, null);
+  await waitFor(() => expect(view.getByTestId("kalvoice-state")).toHaveTextContent(`Launched ${name} with 1 agent.`));
+  expect(mocks.workspaces.activate).toHaveBeenCalledWith("workspace");
+  expect(mocks.navigate).toHaveBeenCalledWith("code");
+});
+
+it.each([
+  ["squad_name_ambiguous", "More than one Squad matches that name. Choose the Squad by its exact identifier."],
+  ["squad_not_found", "That Squad no longer exists. Refresh and choose another Squad."],
+])("surfaces the native %s decision instead of guessing a target", async (code, message) => {
+  mocks.client.squads.launch.mockRejectedValue({
+    category: "validation",
+    code,
+    message,
+    retryable: false,
+  });
+  mocks.request.mockImplementation(async (request) => ({
+    requestId: request.requestId,
+    intent: "launch_squad",
+    outcome: { kind: "completed", summary: "Launching Release." },
+    usage: { used: 0, allowance: null, periodStart: "", resetsAt: "" },
+    counted: false,
+    directive: { kind: "launch_squad", query: "release", workspaceId: "workspace" },
+  }));
+
+  const view = await start();
+  fireEvent.click(view.getByRole("button", { name: "Ask native" }));
+
+  await waitFor(() => expect(view.getByTestId("kalvoice-state")).toHaveTextContent(message));
+  expect(mocks.workspaces.activate).not.toHaveBeenCalled();
+});
 
 it.each(["compose_in_thread", "submit_composer"] as const)(
   "cancels a queued provider %s directive before its native send",

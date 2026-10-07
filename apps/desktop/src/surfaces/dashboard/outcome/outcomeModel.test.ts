@@ -7,7 +7,7 @@ import type {
 } from "@kalcode/protocol";
 import { describe, expect, it } from "vitest";
 import { thread } from "../data/testing.ts";
-import { agentOutcome, hasOutcome, type OutcomeRow, type OutcomeStage } from "./outcomeModel.ts";
+import { agentOutcome, hasOutcome, linkedRuns, type OutcomeRow, type OutcomeStage } from "./outcomeModel.ts";
 
 function facts(overrides: Partial<ThreadWorktreeState> = {}): ThreadWorktreeState {
   return {
@@ -73,6 +73,59 @@ const results = (passed: number, failed = 0): OperationTestResult[] => [
 ];
 
 const stage = (rows: OutcomeRow[], name: OutcomeStage) => rows.find((r) => r.stage === name);
+
+describe("Squad downstream outcome evidence", () => {
+  it("follows exact dependency links into parallel test and release operations", () => {
+    const agent = thread({ id: "member" });
+    const member = run(agent, { id: "member", kind: "agent" });
+    const testRun = run(agent, { id: "test", kind: "test", threadId: null });
+    testRun.spec.dependencies = [member.id];
+    const release = run(agent, { id: "release", kind: "release", threadId: null });
+    release.spec.dependencies = [testRun.id];
+    const unrelated = run(agent, { id: "other-release", kind: "release", threadId: null });
+    expect(linkedRuns(agent.id, [release, unrelated, testRun, member], ["release"])).toEqual([release]);
+    expect(linkedRuns(agent.id, [release, testRun, member], ["test"])).toEqual([testRun]);
+  });
+
+  it("does not attribute outcomes by project, task name, or an unavailable dependency", () => {
+    const agent = thread({ id: "member" });
+    const unrelated = run(agent, { id: "release", kind: "release", threadId: null });
+    unrelated.spec.dependencies = ["missing"];
+    expect(linkedRuns(agent.id, [unrelated], ["release"])).toEqual([]);
+  });
+
+  it("does not cross another coding agent's ownership boundary", () => {
+    const first = thread({ id: "first" });
+    const second = thread({ id: "second" });
+    const member = run(first, { id: "first", kind: "agent" });
+    const next = run(second, { id: "second", kind: "agent" });
+    next.spec.dependencies = [member.id];
+    const testRun = run(second, { id: "test", kind: "test", threadId: null });
+    testRun.spec.dependencies = [next.id];
+    expect(linkedRuns(first.id, [member, next, testRun], ["test"])).toEqual([]);
+    expect(linkedRuns(second.id, [member, next, testRun], ["test"])).toEqual([testRun]);
+  });
+
+  it("bounds malformed historical dependency cycles", () => {
+    const agent = thread({ id: "member" });
+    const member = run(agent, { id: "member", kind: "agent" });
+    const check = run(agent, { id: "test", kind: "test", threadId: null });
+    const release = run(agent, { id: "release", kind: "release", threadId: null });
+    check.spec.dependencies = [member.id, release.id];
+    release.spec.dependencies = [check.id];
+    expect(linkedRuns(agent.id, [member, check, release], ["release"])).toEqual([release]);
+  });
+
+  it("never claims delivery from a successful command without environment proof", () => {
+    const agent = thread({ id: "member" });
+    const release = run(agent, { kind: "release", version: "0.1.9+1900" });
+    expect(stage(agentOutcome(agent, undefined, { runs: [release] }), "release")).toMatchObject({
+      value: "Command succeeded",
+      detail: "Delivery has not been verified",
+      tone: "muted",
+    });
+  });
+});
 
 describe("agentOutcome", () => {
   it("a working agent says only what is observed", () => {
@@ -186,7 +239,9 @@ describe("agentOutcome", () => {
       notes: [],
     });
     expect(stage(agentOutcome(agent, undefined, { runs: [release] }), "release")).toMatchObject({
-      value: "Released 0.1.9+1801",
+      value: "Command succeeded",
+      detail: "Delivery has not been verified",
+      tone: "muted",
     });
     expect(
       stage(agentOutcome(agent, undefined, { runs: [release], environments: [env("unknown")] }), "release"),

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-squads-delete"
+description = "Enables the squads_delete command without any pre-configured scope."
+commands.allow = ["squads_delete"]
+
+[[permission]]
+identifier = "deny-squads-delete"
+description = "Denies the squads_delete command without any pre-configured scope."
+commands.deny = ["squads_delete"]
