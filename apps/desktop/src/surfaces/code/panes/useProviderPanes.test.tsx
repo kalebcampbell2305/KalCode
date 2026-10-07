@@ -5,6 +5,12 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useProviderPanes } from "./useProviderPanes.ts";
 
 const state = vi.hoisted(() => {
+  let events: Array<{
+    seq: number;
+    type: string;
+    correlation: { threadId: string | null; workspaceId: string | null };
+  }> = [];
+  const listeners = new Set<() => void>();
   const client = {
     getPermissionSettings: vi.fn(),
     listThreads: vi.fn(),
@@ -13,7 +19,21 @@ const state = vi.hoisted(() => {
   };
   return {
     client,
-    feed: { getSnapshot: () => ({ events: [] }), subscribe: () => () => undefined },
+    feed: {
+      getSnapshot: () => ({ events }),
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    },
+    emit(event: (typeof events)[number]) {
+      events = [event, ...events];
+      for (const listener of listeners) listener();
+    },
+    resetFeed() {
+      events = [];
+      listeners.clear();
+    },
   };
 });
 vi.mock("../../../runtime/RuntimeProvider.tsx", () => ({
@@ -36,12 +56,34 @@ afterEach(() => {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  state.resetFeed();
   state.client.getPermissionSettings.mockResolvedValue({ defaultMode: "auto" });
   state.client.listThreads.mockResolvedValue([]);
   state.client.threadOptions.mockResolvedValue({ providers: [] });
   state.client.transport.invoke.mockImplementation(async (command: string) =>
     command === "provider_pane_create" ? agent : info,
   );
+});
+
+it("refreshes pane summaries when an uncorrelated provider event changes capabilities", async () => {
+  const unavailable = { ...agent, status: "interrupted", restartRecoverable: true, resumable: false } as ThreadSummary;
+  const available = { ...unavailable, resumable: true };
+  state.client.listThreads.mockResolvedValue([unavailable]);
+  state.client.transport.invoke.mockResolvedValue(null);
+  const view = renderHook(() => useProviderPanes(workspace));
+  await waitFor(() => expect(view.result.current.panes[0]?.thread.resumable).toBe(false));
+
+  state.client.listThreads.mockResolvedValue([available]);
+  act(() => {
+    state.emit({
+      seq: 1,
+      type: "provider.detected",
+      correlation: { threadId: null, workspaceId: null },
+    });
+  });
+
+  await waitFor(() => expect(state.client.listThreads).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(view.result.current.panes[0]?.thread.resumable).toBe(true));
 });
 
 it("registers the created terminal directly even when the list snapshot lags behind creation", async () => {
@@ -89,6 +131,96 @@ it("retains restored terminal identity when pane metadata is initially unavailab
   await waitFor(() => expect(view.result.current.loaded).toBe(true));
   expect(view.result.current.panes).toEqual([{ thread: agent, info: null }]);
   expect(view.result.current.chatIds).toEqual([]);
+});
+
+it("publishes restored terminal identities before hydrating pane info with bounded concurrency", async () => {
+  const agents = Array.from({ length: 9 }, (_, index) => ({
+    ...agent,
+    id: `agent-${index}`,
+    createdAt: `2026-10-03T00:00:0${index}Z`,
+  }));
+  state.client.listThreads.mockResolvedValue(agents);
+  let release: () => void = () => {
+    throw new Error("The pane-info barrier was not initialized.");
+  };
+  const barrier = new Promise<void>((resolve) => {
+    release = () => resolve();
+  });
+  let inFlight = 0;
+  let maximumInFlight = 0;
+  state.client.transport.invoke.mockImplementation(async (command: string, args: { threadId: string }) => {
+    if (command !== "provider_pane_info") return null;
+    inFlight += 1;
+    maximumInFlight = Math.max(maximumInFlight, inFlight);
+    await barrier;
+    inFlight -= 1;
+    return { ...info, threadId: args.threadId };
+  });
+
+  const view = renderHook(() => useProviderPanes(workspace));
+  await waitFor(() => expect(state.client.listThreads).toHaveBeenCalledOnce());
+  await act(async () => Promise.resolve());
+  const identitiesBeforeInfo = view.result.current.panes.map((pane) => pane.thread.id);
+  const initialMaximum = maximumInFlight;
+
+  await act(async () => release());
+  await waitFor(() => expect(view.result.current.loaded).toBe(true));
+
+  expect(identitiesBeforeInfo).toEqual(agents.map(({ id }) => id));
+  expect(initialMaximum).toBe(4);
+  expect(maximumInFlight).toBe(4);
+  expect(view.result.current.panes.every((pane) => pane.info?.running === true)).toBe(true);
+});
+
+it("a superseded refresh stops its bounded queue after the four reads already in flight", async () => {
+  const agents = Array.from({ length: 9 }, (_, index) => ({
+    ...agent,
+    id: `agent-${index}`,
+    createdAt: `2026-10-03T00:00:0${index}Z`,
+  }));
+  state.client.listThreads.mockResolvedValue(agents);
+  const releases: Array<() => void> = [];
+  let infoCalls = 0;
+  let inFlight = 0;
+  let maximumInFlight = 0;
+  state.client.transport.invoke.mockImplementation(async (command: string, args: { threadId: string }) => {
+    if (command !== "provider_pane_info") return null;
+    const call = infoCalls++;
+    inFlight += 1;
+    maximumInFlight = Math.max(maximumInFlight, inFlight);
+    if (call < 8)
+      await new Promise<void>((resolve) => {
+        releases[call] = resolve;
+      });
+    inFlight -= 1;
+    return { ...info, threadId: args.threadId };
+  });
+  const infoReadCount = () =>
+    state.client.transport.invoke.mock.calls.filter(([command]) => command === "provider_pane_info").length;
+
+  const view = renderHook(() => useProviderPanes(workspace));
+  await waitFor(() => expect(infoReadCount()).toBe(4));
+  let supersedingRefresh: Promise<void> | undefined;
+  act(() => {
+    supersedingRefresh = view.result.current.refresh();
+  });
+  await waitFor(() => expect(infoReadCount()).toBe(8));
+
+  await act(async () => {
+    for (const release of releases.slice(0, 4)) release?.();
+    for (let turn = 0; turn < 10; turn += 1) await Promise.resolve();
+  });
+  expect(infoReadCount()).toBe(8);
+
+  await act(async () => {
+    for (const release of releases.slice(4, 8)) release?.();
+    await supersedingRefresh;
+  });
+  expect(infoReadCount()).toBe(13);
+  expect(maximumInFlight).toBe(8);
+  expect(view.result.current.loaded).toBe(true);
+  expect(view.result.current.error).toBeNull();
+  expect(view.result.current.panes.every((pane) => pane.info?.running === true)).toBe(true);
 });
 
 it("identifies legacy chat references without treating a failed metadata read as a chat", async () => {

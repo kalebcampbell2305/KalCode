@@ -6,7 +6,7 @@ import { NotificationsProvider, useNotifications } from "./NotificationsProvider
 
 const runtime = vi.hoisted(() => ({
   client: {} as ReturnType<typeof makeClient>,
-  events: [] as { type: string; seq: number }[],
+  events: [] as { type: string; seq: number; payload?: { from: string; to: string } }[],
 }));
 const toast = vi.hoisted(() => ({ show: vi.fn() }));
 const intents = vi.hoisted(() => ({ focus: vi.fn(async () => {}) }));
@@ -311,6 +311,24 @@ describe("notification runtime lifetime", () => {
     expect(old.listNotifications).toHaveBeenCalledTimes(oldReads);
     expect(result.current.notifications[0]?.id).toBe("event-0");
     expect(result.current.latest?.id).toBe("event-0");
+  });
+
+  it("re-reads when a thread stops waiting for permission (its notice is settled then)", async () => {
+    const { result, rerender } = renderHook(useNotifications, { wrapper });
+    await waitFor(() => expect(result.current.state).toBe("ready"));
+    vi.useFakeTimers();
+    const reads = runtime.client.listNotifications.mock.calls.length;
+    runtime.events = [{ type: "thread.status_changed", seq: 7, payload: { from: "thinking", to: "active" } }];
+    rerender();
+    await act(() => vi.advanceTimersByTimeAsync(301));
+    expect(runtime.client.listNotifications).toHaveBeenCalledTimes(reads);
+    runtime.events = [
+      { type: "thread.status_changed", seq: 8, payload: { from: "waiting_for_permission", to: "active" } },
+      { type: "thread.status_changed", seq: 7, payload: { from: "thinking", to: "active" } },
+    ];
+    rerender();
+    await act(() => vi.advanceTimersByTimeAsync(301));
+    expect(runtime.client.listNotifications).toHaveBeenCalledTimes(reads + 1);
   });
 
   it("ignores failed mark completion after unmount", async () => {

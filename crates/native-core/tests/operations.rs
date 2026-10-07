@@ -7,7 +7,7 @@ use kalcode_contracts::operations::{
 };
 use kalcode_core::events::{Correlation, EventPayload, NewEvent};
 use kalcode_core::flags::BuildChannel;
-use kalcode_core::operations::{OperationsStore, normalize_spec};
+use kalcode_core::operations::{OperationsStore, normalize_spec, owns_thread};
 use kalcode_core::plans::{Limited, PlanTier};
 use kalcode_core::workspaces::{TerminalSize, TerminalStatus};
 use kalcode_core::{Core, CoreConfig, Paths};
@@ -776,6 +776,11 @@ fn reserved_agent_thread_recovers_exactly_once_from_the_first_completion() {
         store
             .reserve_agent_thread(&operation_id, Some("feature/recovery"), Some("revision-1"))
             .expect("reservation replay is idempotent");
+        // The reserved thread belongs to Operations; an unrelated thread does not.
+        assert!(owns_thread(&core.reader(), &operation_id).expect("owned"));
+        assert!(
+            !owns_thread(&core.reader(), &kalcode_contracts::ids::new_id()).expect("not owned")
+        );
         assert_eq!(
             store
                 .reserve_agent_thread(

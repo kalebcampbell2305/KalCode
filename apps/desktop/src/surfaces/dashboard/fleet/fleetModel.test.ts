@@ -45,6 +45,18 @@ describe("mergeReadiness", () => {
     });
     expect(mergeReadiness(isolated("completed"), facts({ conflicts: null }))).toMatchObject({ ready: false });
   });
+
+  it("follows the shared agent state, so a card never says Ready to merge for a failed or waiting agent", () => {
+    // Idle after a failed turn: FAILED on the Fleet, the rail and Needs You.
+    const failedTurn = thread({ status: "idle", currentActivity: "Last turn failed", worktreeId: "w" });
+    expect(mergeReadiness(failedTurn, facts())).toEqual({ ready: false, reason: "The run failed" });
+    // A pending approval on an otherwise quiet agent: NEEDS YOU everywhere.
+    const approval = thread({ status: "idle", pendingApprovals: 1, worktreeId: "w" });
+    expect(mergeReadiness(approval, facts())).toEqual({ ready: false, reason: "Waiting for you" });
+    // Recovering is STARTING, not done.
+    expect(mergeReadiness(isolated("recovering"), facts())).toMatchObject({ reason: "Still working" });
+    expect(mergeReadiness(isolated("waiting_for_dependency"), facts())).toMatchObject({ reason: "Blocked" });
+  });
 });
 
 describe("fleetStage and summary", () => {

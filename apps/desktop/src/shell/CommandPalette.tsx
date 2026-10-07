@@ -280,8 +280,18 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const uiIntents = useOptionalUiIntents();
   const openQuickTarget = async (target: QuickTarget) => {
     switch (target.kind) {
-      case "thread":
       case "agent":
+        // A coding agent is its real terminal in Code: the same canonical focus as Agent Fleet,
+        // widgets and KalVoice, never a Threads fallback when its metadata read fails.
+        if (uiIntents)
+          return uiIntents.focus({
+            kind: "agent",
+            agentId: target.thread.id,
+            workspaceId: target.thread.workspaceId,
+          });
+        navigate("code");
+        return;
+      case "thread":
         if (uiIntents)
           return uiIntents.focus({
             kind: "thread",

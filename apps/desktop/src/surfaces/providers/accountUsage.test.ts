@@ -6,8 +6,12 @@ import {
   primaryUsageLabel,
   resetsIn,
   type UsageWindow,
+  usageAbsenceLabel,
+  usageFill,
+  usagePercent,
   usageSummary,
   weeklyWindow,
+  windowAppliesToModel,
 } from "./accountUsage.ts";
 
 const NOW = Date.parse("2026-10-03T17:00:00.000Z");
@@ -37,9 +41,9 @@ function withWindows(accountId: string, windows: UsageWindow[], status: AccountU
 
 describe("account usage helpers", () => {
   it("picks the most constrained window as the limiting one", () => {
-    expect(limitingWindow(state("fresh", [64, 42]))?.id).toBe("weekly");
-    expect(limitingWindow(state("fresh", [8, 42]))?.id).toBe("five_hour");
-    expect(limitingWindow(notChecked("claude-a"))).toBeNull();
+    expect(limitingWindow(state("fresh", [64, 42]), null)?.id).toBe("weekly");
+    expect(limitingWindow(state("fresh", [8, 42]), null)?.id).toBe("five_hour");
+    expect(limitingWindow(notChecked("claude-a"), null)).toBeNull();
   });
 
   it("selects the account's own all-model weekly window, never a rolling or model-scoped one", () => {
@@ -117,7 +121,7 @@ describe("account usage helpers", () => {
         low: false,
         tone: "muted",
       });
-      expect(limitingWindow(state("fresh", [value as number, 62]))?.remainingPercent).toBe(62);
+      expect(limitingWindow(state("fresh", [value as number, 62]), null)?.remainingPercent).toBe(62);
     },
   );
 
@@ -129,5 +133,42 @@ describe("account usage helpers", () => {
     expect(resetsIn(at(-5), NOW)).toBe("Resets now");
     expect(resetsIn(null, NOW)).toBeNull();
     expect(resetsIn("not a time", NOW)).toBeNull();
+  });
+
+  it("never renders a positive fraction under 1% as 0% or an empty bar (#284)", () => {
+    expect(usagePercent(0.4)).toBe("<1");
+    expect(usagePercent(0)).toBe("0");
+    expect(usagePercent(99.6)).toBe("100");
+    expect(usageFill(0.4)).toBeGreaterThan(0);
+    expect(usageFill(0)).toBe(0);
+    expect(usageFill(42.5)).toBe(42.5);
+    expect(usageFill(Number.NaN)).toBe(0);
+    expect(usageSummary(withWindows("a", [win("weekly", "Weekly", 0.4)])).short).toBe("<1% left");
+  });
+
+  it("applies a model-scoped weekly window only to the model it names (#284)", () => {
+    const fable = win("weekly_fable", "Weekly Fable", 3);
+    const usage = withWindows("a", [win("weekly", "Weekly", 70), win("five_hour", "5-hour", 60), fable]);
+    for (const model of ["claude-opus-4-6", "claude-sonnet-4-6", null, ""]) {
+      expect(windowAppliesToModel(fable, model)).toBe(false);
+      expect(limitingWindow(usage, model)?.id).toBe("five_hour");
+    }
+    expect(windowAppliesToModel(fable, "claude-fable-1")).toBe(true);
+    expect(limitingWindow(usage, "claude-fable-1")?.id).toBe("weekly_fable");
+    // Slugs from multi-word display names ("Opus 4.1" → weekly_opus_4_1) match dotted/dashed ids.
+    expect(windowAppliesToModel(win("weekly_opus_4_1", "Weekly Opus 4.1", 5), "claude-opus-4-1")).toBe(true);
+    expect(windowAppliesToModel(win("weekly_opus_4_1", "Weekly Opus 4.1", 5), "claude-opus-4-6")).toBe(false);
+    // Non-model-scoped windows always apply, whatever the model.
+    for (const id of ["weekly", "five_hour", "primary", "secondary"])
+      expect(windowAppliesToModel(win(id, id, 5), "claude-fable-1")).toBe(true);
+  });
+
+  it("says Usage unavailable for unreadable readings and not checked only before any read (#284)", () => {
+    expect(usageAbsenceLabel(notChecked("a", "Provider usage is unavailable"))).toBe("Usage unavailable");
+    expect(usageAbsenceLabel(notChecked("a", "Signed out"))).toBe("Usage unavailable");
+    expect(usageAbsenceLabel({ ...notChecked("a", "Unreadable"), status: "unavailable" })).toBe("Usage unavailable");
+    expect(usageAbsenceLabel(withWindows("a", [win("weekly", "Weekly", Number.NaN)]))).toBe("Usage unavailable");
+    expect(usageAbsenceLabel(state("checking"))).toBe("Checking usage…");
+    expect(usageAbsenceLabel(notChecked("a"))).toBe("Usage not checked yet");
   });
 });

@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { normalizeGeneratedBindings } from "../../../tooling/gen-protocol-index.mjs";
+import { lowerLocalPriority } from "../../../tooling/local-priority.mjs";
 
 const GUARDIAN_BUILD = ["build", "-p", "kalcode-providers", "--bin", "kalcode-provider-guardian"];
 
@@ -87,5 +88,7 @@ export function runCargo(args, environment = process.env, spawn = spawnSync, nor
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = process.argv.slice(2);
+  // Builds, checks and tests yield to the gate; `cargo run` is the owner's interactive app.
+  if (args[0] !== "run") lowerLocalPriority();
   process.exit(runCargo(args));
 }

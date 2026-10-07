@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import type { DoctorApi, DoctorRun } from "../../ipc/doctor.ts";
+import type { DoctorApi, DoctorFinding, DoctorRun } from "../../ipc/doctor.ts";
 import { DoctorPage } from "./DoctorPage.tsx";
 
 function run(status: DoctorRun["status"] = "completed"): DoctorRun {
@@ -37,6 +37,23 @@ function run(status: DoctorRun["status"] = "completed"): DoctorRun {
       skipped: 0,
     },
     persistent: true,
+  };
+}
+
+function toolFinding(): DoctorFinding {
+  return {
+    code: "tools.node.missing",
+    version: "v1",
+    checkId: "tools.node",
+    area: "dev_tools",
+    severity: "warning",
+    title: "Node.js isn't installed",
+    explanation: "Install Node.js.",
+    details: [],
+    subjects: [],
+    fixes: [],
+    ignored: null,
+    workspaceId: null,
   };
 }
 
@@ -117,5 +134,37 @@ describe("DoctorPage", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+  it("ignores a finding outside the project globally even while a workspace is open", async () => {
+    const user = userEvent.setup();
+    const finished = { ...run("completed"), findings: [toolFinding()] };
+    const doctor = api({ last: vi.fn().mockResolvedValue(finished), ignore: vi.fn().mockResolvedValue(finished) });
+    render(<DoctorPage api={doctor} workspaceId="workspace-1" />);
+
+    await user.click(await screen.findByRole("button", { name: "Ignore" }));
+
+    await waitFor(() =>
+      expect(doctor.ignore).toHaveBeenCalledWith({
+        findingCode: "tools.node.missing",
+        scope: { kind: "global" },
+        ignored: true,
+      }),
+    );
+  });
+
+  it("keeps reading a cancelled run until it finishes, then shows the findings of completed checks", async () => {
+    const user = userEvent.setup();
+    let current: DoctorRun = run("running");
+    const doctor = api({
+      last: vi.fn(async () => current),
+      // Native cancel answers with the still-active run: cancelled, but not finished yet.
+      cancel: vi.fn(async () => ({ ...run("cancelled"), finishedAt: null })),
+    });
+    render(<DoctorPage api={doctor} workspaceId="workspace-1" />);
+
+    await user.click(await screen.findByRole("button", { name: "Cancel" }));
+    current = { ...run("cancelled"), findings: [toolFinding()] };
+
+    expect(await screen.findByText("Node.js isn't installed", undefined, { timeout: 4_000 })).toBeVisible();
   });
 });

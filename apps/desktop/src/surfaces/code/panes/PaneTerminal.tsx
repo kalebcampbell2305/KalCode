@@ -19,6 +19,7 @@ import { ContentContextMenu } from "../../../shell/context/ContentContextMenu.ts
 import { terminalContext } from "../../../shell/context/terminalContext.ts";
 import { afterLiveResize, isLiveResizing } from "../../../shell/panes/liveResize.ts";
 import { OutputScheduler } from "../../../shell/panes/outputScheduler.ts";
+import { useTextScale } from "../../../shell/useTextScale.ts";
 import codeStyles from "../Code.module.css";
 import { useCodeShown } from "../codeShown.ts";
 import { suppressReplayQueries } from "../replayQueries.ts";
@@ -30,12 +31,12 @@ import {
   MINIMUM_CONTRAST,
   monoFontFamily,
   TERMINAL_THEMES,
+  terminalFontSize,
 } from "../terminalTheme.ts";
 import styles from "./Panes.module.css";
 import type { PaneChannel } from "./paneChannel.ts";
 import { lastPersonInputAt } from "./personInput.ts";
 
-const FONT_SIZE = 13;
 const RESIZE_DEBOUNCE_MS = 80;
 /** Rendered output is acknowledged to native in steps of this many bytes. */
 const ACK_EVERY_BYTES = 64 * 1024;
@@ -97,7 +98,15 @@ export const PaneTerminal = memo(function PaneTerminal({
   const reconnectRef = useRef<(() => void) | null>(null);
   const runningRef = useRef(running);
   runningRef.current = running;
-  const initialTheme = useRef(theme);
+  // A resumed agent's new instance recreates the terminal: it starts with the current theme, text
+  // size and name, not the ones the pane first opened with.
+  const themeRef = useRef(theme);
+  themeRef.current = theme;
+  // Terminal text follows the interface text size (Settings → Appearance → Text size).
+  const fontSize = terminalFontSize(useTextScale());
+  const fontSizeRef = useRef(fontSize);
+  fontSizeRef.current = fontSize;
+  const fitRef = useRef<(() => void) | null>(null);
   const throttledRef = useRef(throttled);
   throttledRef.current = throttled;
   const writerRef = useRef<OutputScheduler | null>(null);
@@ -142,7 +151,7 @@ export const PaneTerminal = memo(function PaneTerminal({
     let disposed = false;
     const term = new Terminal({
       fontFamily: monoFontFamily(),
-      fontSize: FONT_SIZE,
+      fontSize: fontSizeRef.current,
       lineHeight: 1.25,
       cursorBlink: true,
       cursorStyle: "bar",
@@ -151,7 +160,7 @@ export const PaneTerminal = memo(function PaneTerminal({
       minimumContrastRatio: MINIMUM_CONTRAST,
       drawBoldTextInBrightColors: false,
       fontWeightBold: "600",
-      theme: TERMINAL_THEMES[initialTheme.current],
+      theme: TERMINAL_THEMES[themeRef.current],
       macOptionIsMeta: true,
       disableStdin: !runningRef.current,
     });
@@ -159,6 +168,7 @@ export const PaneTerminal = memo(function PaneTerminal({
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(host);
+    term.textarea?.setAttribute("aria-label", labelRef.current);
 
     term.attachCustomKeyEventHandler((event) => {
       if (event.type !== "keydown") return true;
@@ -283,6 +293,7 @@ export const PaneTerminal = memo(function PaneTerminal({
         // Not measurable yet; the next resize fits it.
       }
     };
+    fitRef.current = fitNow;
     const observer = new ResizeObserver(() => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(fitNow);
@@ -372,6 +383,7 @@ export const PaneTerminal = memo(function PaneTerminal({
     return () => {
       disposed = true;
       reconnectRef.current = null;
+      if (fitRef.current === fitNow) fitRef.current = null;
       unregisterImageTarget();
       observer.disconnect();
       cancelAnimationFrame(frame);
@@ -516,6 +528,14 @@ export const PaneTerminal = memo(function PaneTerminal({
     const term = termRef.current;
     if (term) term.options.theme = TERMINAL_THEMES[theme];
   }, [theme]);
+
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term || term.options.fontSize === fontSize) return;
+    // A new cell size changes how many rows and columns fit; refit so the PTY is resized to match.
+    term.options.fontSize = fontSize;
+    fitRef.current?.();
+  }, [fontSize]);
 
   useEffect(() => {
     writerRef.current?.setThrottled(throttled);

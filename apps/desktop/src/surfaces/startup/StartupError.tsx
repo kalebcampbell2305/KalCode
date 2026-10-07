@@ -45,6 +45,8 @@ export function StartupError({ client, info, error }: StartupErrorProps) {
   return (
     <main className={styles.screen}>
       <div className={styles.panel}>
+        {/* The lit top edge on an inert element, not ::before (see Startup.module.css). */}
+        <span className={styles.panelEdge} aria-hidden="true" />
         <Lockup className={styles.lockup} />
         <ErrorState
           headingLevel={1}

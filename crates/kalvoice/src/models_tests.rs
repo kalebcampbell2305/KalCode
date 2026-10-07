@@ -339,8 +339,10 @@ fn bounded_cancel_wait_releases_registry_lock_while_downloads_settle() {
         .insert("active".into(), cancelled.clone());
 
     let waiting = store.clone();
-    let waiter = std::thread::spawn(move || waiting.cancel_all_and_wait(Duration::from_secs(1)));
-    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    // Both waits only guard a hang: the test proves the registry lock is free while waiting.
+    let hang_guard = Duration::from_secs(30);
+    let waiter = std::thread::spawn(move || waiting.cancel_all_and_wait(hang_guard));
+    let deadline = std::time::Instant::now() + hang_guard;
     while !cancelled.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
         std::thread::yield_now();
     }

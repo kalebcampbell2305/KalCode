@@ -153,8 +153,10 @@
   font-size: var(--type-ui);
 }
 
-.notice::before {
-  content: "";
+/* The tone rail: an aria-hidden element (first in the notice, ThreadDetail.tsx), not ::before:
+   axe's colour-contrast check reports "incomplete" for any text under an absolute pseudo-element
+   with a background. It stays out of the grid's columns, like the pseudo-element did. */
+.noticeRail {
   position: absolute;
   left: 0;
   top: 0;
@@ -163,7 +165,7 @@
   background: var(--_c);
 }
 
-.notice > :not(.noticeIcon) {
+.notice > :not(.noticeIcon, .noticeRail) {
   grid-column: 2;
 }
 

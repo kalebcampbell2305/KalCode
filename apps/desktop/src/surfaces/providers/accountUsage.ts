@@ -50,14 +50,43 @@ export function notChecked(accountId: string, reason: string | null = null): Acc
 }
 
 /**
- * The window that limits the account right now (lowest remaining), if any. For deciding whether
- * work is blocked (suggestions); primary displays show weeklyWindow() instead.
+ * Whether a usage window limits work on `model`. A model-scoped weekly window (`weekly_<slug>`,
+ * e.g. `weekly_opus`, `weekly_fable`) applies only when the selected model id contains that slug;
+ * every other window (`weekly`, `five_hour`, Codex `primary`/`secondary`…) always applies. With no
+ * explicit model (provider default) no model-scoped window applies. The one rule every low-usage
+ * warning and account suggestion uses, so an unrelated model's limit never triggers them.
  */
-export function limitingWindow(state: AccountUsageState): UsageWindow | null {
+export function windowAppliesToModel(window: Pick<UsageWindow, "id">, model: string | null | undefined): boolean {
+  const scope = modelScope(window.id);
+  if (scope === null) return true;
+  return model ? normalizeModel(model).includes(scope) : false;
+}
+
+/** The model slug of a model-scoped weekly window id, or null for windows that apply to every model. */
+function modelScope(id: string): string | null {
+  if (!id.startsWith(MODEL_SCOPED_PREFIX)) return null;
+  const slug = normalizeModel(id.slice(MODEL_SCOPED_PREFIX.length)).replace(/^_+|_+$/g, "");
+  return slug.length > 0 ? slug : null;
+}
+
+/** Same shape as the provider's slug ("Opus 4.1" → "opus_4_1"), so "claude-opus-4-1" matches. */
+function normalizeModel(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "_");
+}
+
+const MODEL_SCOPED_PREFIX = "weekly_";
+
+/**
+ * The window that limits the account right now for `model` (lowest remaining), if any. For
+ * deciding whether work is blocked (suggestions); primary displays show weeklyWindow() instead.
+ * Model-scoped windows for other models are ignored (see windowAppliesToModel).
+ */
+export function limitingWindow(state: AccountUsageState, model: string | null | undefined): UsageWindow | null {
   if (state.status !== "fresh" && state.status !== "stale") return null;
   let best: UsageWindow | null = null;
   for (const window of state.windows) {
     if (!isReportedPercent(window.remainingPercent)) continue;
+    if (!windowAppliesToModel(window, model)) continue;
     if (!best || window.remainingPercent < best.remainingPercent) best = window;
   }
   return best;
@@ -68,8 +97,32 @@ export function isReportedPercent(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100;
 }
 
+/**
+ * The remaining percentage as text: "<1" for a positive fraction under 1% (never "0", which
+ * means exhausted), otherwise the rounded value. Every remaining-usage label uses this.
+ */
 export function usagePercent(value: number): string {
   return value > 0 && value < 1 ? "<1" : String(Math.round(value));
+}
+
+/**
+ * Bar fill (0–100) for a remaining percentage. A positive fraction under 1% keeps a visible 1%
+ * sliver so it never reads as an empty (exhausted) bar; only a real 0 is empty.
+ */
+export function usageFill(value: number): number {
+  if (!isReportedPercent(value)) return 0;
+  return value > 0 && value < 1 ? 1 : value;
+}
+
+/**
+ * Why an account shows no usage number. "Checking usage…" while a read is in flight; "Usage not
+ * checked yet" only before any read was attempted (not_checked with no reason); everything else
+ * (unsupported, failed, malformed or reset-since-read readings) is "Usage unavailable".
+ */
+export function usageAbsenceLabel(state: AccountUsageState): string {
+  if (state.status === "checking") return "Checking usage…";
+  if (state.status === "not_checked" && state.reason === null) return "Usage not checked yet";
+  return "Usage unavailable";
 }
 
 /**

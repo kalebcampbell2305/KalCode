@@ -475,7 +475,7 @@ function ItemsPanel({
                 {item.status ? (
                   <StatusChip
                     status={displayStatusOf(item.status).status}
-                    qualifier={displayStatusOf(item.status).qualifier}
+                    qualifier={displayStatusOf(item.status, { resumable: item.resumable === true }).qualifierLabel}
                     variant="inline"
                     size="sm"
                   />
@@ -677,7 +677,14 @@ function RecentWork() {
                           </span>
                         </span>
                         {item.status ? (
-                          <StatusChip status={displayStatusOf(item.status).status} variant="dot" size="sm" />
+                          <StatusChip
+                            status={displayStatusOf(item.status).status}
+                            qualifier={
+                              displayStatusOf(item.status, { resumable: item.resumable === true }).qualifierLabel
+                            }
+                            variant="dot"
+                            size="sm"
+                          />
                         ) : null}
                         <span className={styles.time}>{relativeTime(item.lastActivityAt, now)}</span>
                       </button>

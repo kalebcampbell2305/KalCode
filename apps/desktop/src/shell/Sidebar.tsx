@@ -135,6 +135,8 @@ function MoreItem({
         aria-label={showing ? `More places, showing ${showing}` : "More places"}
         aria-current={showing ? "page" : undefined}
       >
+        {/* The current page's bar on an inert element, not ::before (see Sidebar.module.css). */}
+        {showing ? <span className={styles.currentBar} aria-hidden="true" /> : null}
         <span className={styles.icon} aria-hidden="true">
           <LayoutGrid />
         </span>
@@ -289,6 +291,7 @@ function SidebarButton({
       aria-describedby={description ? descriptionId : undefined}
       {...aria}
     >
+      {aria["aria-current"] === "page" ? <span className={styles.currentBar} aria-hidden="true" /> : null}
       <span className={styles.icon} aria-hidden="true">
         {icon}
       </span>

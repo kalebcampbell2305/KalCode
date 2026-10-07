@@ -240,4 +240,36 @@ describe("HandOffDialog", () => {
     expect(screen.queryByRole("button", { name: "Return findings to Claude B" })).not.toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Open receiver Review Dashboard" })).toHaveLength(2);
   });
+
+  it("holds Return findings while a send is in flight, so neither replaces the other", async () => {
+    const incoming: HandoffRecord = {
+      ...record("completed"),
+      id: "incoming",
+      sourceThreadId: TARGET.id,
+      targetThreadId: SOURCE.id,
+      sourceName: "Claude C",
+      targetName: SOURCE.name,
+      result: "Findings",
+    };
+    let finishSend: () => void = () => {};
+    const send = vi.fn(
+      () =>
+        new Promise<never>((_, reject) => {
+          finishSend = () => reject({ category: "internal", code: "x", message: "Send failed.", retryable: false });
+        }),
+    );
+    const api = client({ list: vi.fn(async () => [incoming]), send });
+    dialog();
+    const user = userEvent.setup();
+    const returnFindings = await screen.findByRole("button", { name: "Return findings to Claude C" });
+    await user.click(screen.getByRole("button", { name: "Prepare handoff" }));
+    await user.click(await screen.findByRole("button", { name: "Send handoff" }));
+
+    expect(returnFindings).toBeDisabled();
+    await user.click(returnFindings);
+    expect(api.returnFindings).not.toHaveBeenCalled();
+
+    await act(async () => finishSend());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Return findings to Claude C" })).toBeEnabled());
+  });
 });

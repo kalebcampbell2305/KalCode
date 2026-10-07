@@ -128,7 +128,8 @@ impl Rig {
         DetectEnv {
             vars,
             windows: cfg!(windows),
-            probe_timeout: Some(Duration::from_secs(5)),
+            // The fixture answers at once; the probe budget only guards a hang on a loaded machine.
+            probe_timeout: Some(WAIT),
             system_root: None,
         }
     }

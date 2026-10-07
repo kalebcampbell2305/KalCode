@@ -47,6 +47,9 @@ impl PermissionState {
                 })
                 .ok()
         });
+        if let Some(service) = &service {
+            spawn_lapse_sweeper(Arc::downgrade(service));
+        }
         Self { service }
     }
 
@@ -70,6 +73,34 @@ impl PermissionState {
             )
             .to_ipc()
         })
+    }
+}
+
+/// How often lapsed Environment Doctor and Utility Dock requests are expired while KalCode runs.
+const LAPSE_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Expires short-lived approval requests once their lifetime passes, so they leave the Approvals
+/// panel and Needs You without a restart. Weak: the sweeper never keeps the service alive and
+/// stops once it is dropped.
+fn spawn_lapse_sweeper(service: std::sync::Weak<PermissionService>) {
+    let spawned = std::thread::Builder::new()
+        .name("kalcode-approval-lapse".into())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(LAPSE_SWEEP_INTERVAL);
+                let Some(service) = service.upgrade() else {
+                    return;
+                };
+                if let Err(error) = service.expire_lapsed_requests() {
+                    tracing::warn!(
+                        event = "permissions.expire_lapsed_failed",
+                        error = %error.diagnostic()
+                    );
+                }
+            }
+        });
+    if let Err(error) = spawned {
+        tracing::error!(event = "permissions.lapse_sweeper_start_failed", error = %error);
     }
 }
 

@@ -188,4 +188,31 @@ describe("palette threads (Stable)", () => {
     expect(palette.getByRole("option", { name: /Parser Agent.*Coding agent/ })).toBeInTheDocument();
     expect(palette.queryByRole("option", { name: /Parser Agent.*Thread/ })).toBeNull();
   }, 15_000);
+
+  it("opens a coding agent result in Code through the canonical agent focus, even when its thread read fails", async () => {
+    const { user, client } = await mountStable();
+    const listThreads = client.listThreads.bind(client);
+    vi.spyOn(client, "listThreads").mockImplementation(async (args) => {
+      const listed = await listThreads(args);
+      const base = listed.find((t) => t.archivedAt === null);
+      if (!base) return listed;
+      return [
+        ...listed,
+        { ...base, id: "agent-parser", name: "Parser Agent", runtimeKind: "interactive_pty" as const },
+      ];
+    });
+    const getThread = client.getThread.bind(client);
+    vi.spyOn(client, "getThread").mockImplementation(async (id) => {
+      if (id === "agent-parser") throw new Error("transient metadata failure");
+      return getThread(id);
+    });
+    const palette = await openPalette(user);
+    await user.type(palette.getByRole("combobox"), "parser agent");
+    await user.click(await palette.findByRole("option", { name: /Parser Agent.*Coding agent/ }));
+    const primary = screen.getByRole("navigation", { name: "Primary" });
+    await waitFor(() =>
+      expect(within(primary).getByRole("button", { name: "Code" })).toHaveAttribute("aria-current", "page"),
+    );
+    expect(screen.queryByRole("region", { name: "Thread" })).toBeNull();
+  }, 15_000);
 });

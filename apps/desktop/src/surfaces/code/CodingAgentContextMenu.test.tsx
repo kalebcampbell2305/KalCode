@@ -105,7 +105,7 @@ it("duplicates a real coding pane with the clicked agent's exact launch settings
       }),
     ),
   );
-  expect(state.focus).toHaveBeenCalledWith({ kind: "thread", threadId: "duplicate", workspaceId: "clicked-workspace" });
+  expect(state.focus).toHaveBeenCalledWith({ kind: "agent", agentId: "duplicate", workspaceId: "clicked-workspace" });
 });
 
 it("opens Browser beside the exact clicked agent, scoped to its workspace", async () => {
@@ -118,8 +118,20 @@ it("opens Browser beside the exact clicked agent, scoped to its workspace", asyn
     ),
   );
   expect(state.focus).toHaveBeenCalledWith({
-    kind: "thread",
-    threadId: "clicked-agent",
+    kind: "agent",
+    agentId: "clicked-agent",
     workspaceId: "clicked-workspace",
   });
+});
+
+it("focuses the clicked agent's own terminal through the agent intent, never the Threads fallback", async () => {
+  await open();
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Focus" }));
+  await waitFor(() =>
+    expect(state.focus).toHaveBeenCalledExactlyOnceWith({
+      kind: "agent",
+      agentId: "clicked-agent",
+      workspaceId: "clicked-workspace",
+    }),
+  );
 });

@@ -792,6 +792,9 @@ impl AccountRuntime {
     }
 
     pub fn cancel_auth(&self) -> Result<AccountSnapshot, AccountRuntimeError> {
+        if self.snapshot().phase == AccountPhase::ConfirmingPlan {
+            return self.abandon_checkout();
+        }
         let state = self.lock_state();
         if state.pending.is_none()
             && matches!(
@@ -808,6 +811,37 @@ impl AccountRuntime {
         }
         self.session_store()?.clear().map_err(store_error)?;
         Ok(self.publish_signed_out(generation))
+    }
+
+    /// Leaves a checkout the person never finished (the browser tab was closed): forgets the
+    /// pending checkout so the account is back at plan choice, on this launch and the next.
+    /// Authority stays authenticated-unactivated; a payment that did complete still activates
+    /// the account on the next refresh, and a new paid checkout gets a new request id.
+    fn abandon_checkout(&self) -> Result<AccountSnapshot, AccountRuntimeError> {
+        let generation = self.generation.load(Ordering::SeqCst);
+        // Waits for a checkout request still in flight, so it cannot restore the pending state.
+        let _lane = self.lock_lane()?;
+        if !self.is_current(generation) {
+            return Ok(self.snapshot());
+        }
+        let mut state = self.lock_state();
+        if state.snapshot.phase != AccountPhase::ConfirmingPlan {
+            return Ok(state.snapshot.clone());
+        }
+        let account = state
+            .snapshot
+            .account
+            .clone()
+            .ok_or_else(authentication_required)?;
+        state.checkout = None;
+        self.persist_locked(&state)?;
+        state.snapshot = authenticated_snapshot(
+            AccountPhase::AuthenticatedUnactivated,
+            account,
+            state.session.as_ref(),
+        );
+        self.notify_authority_locked(&mut state, generation);
+        Ok(state.snapshot.clone())
     }
 
     pub fn activate_free(&self) -> Result<AccountSnapshot, AccountRuntimeError> {

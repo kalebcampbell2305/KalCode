@@ -437,11 +437,17 @@ export function NewAgentDialog({
       ? launchAccounts(restoredAccounts ?? [], last.providerId).find((a) => a.id === last.accountId)
       : undefined;
   const recent = last && recentAccount ? { ...last, account: recentAccount } : null;
+  // Cursor's models come from the account itself: the shared sessions when the shell has them.
+  const recentCursorModels = recent ? sessions?.states.get(recent.accountId)?.models : undefined;
   const recentModels =
     recent?.providerId === "cursor"
-      ? cursorModels?.accountId === recent.accountId
-        ? cursorModels.models
-        : undefined
+      ? sharedSessions
+        ? recentCursorModels?.status === "available"
+          ? recentCursorModels.items
+          : undefined
+        : cursorModels?.accountId === recent.accountId
+          ? cursorModels.models
+          : undefined
       : recent
         ? models?.get(recent.providerId)
         : undefined;
@@ -476,13 +482,18 @@ export function NewAgentDialog({
   // Low quota: suggest (never switch to) a same-provider account with more left. This judges the
   // window that actually limits work (the 5-hour one can block before the weekly does) and names
   // it, since the rows' headline percentage is the weekly one.
-  const lowWindow = account ? limitingLowWindow(usageOf(account.id)) : null;
+  // Model-scoped windows count only for the selected model (an Opus limit never warns a Sonnet launch).
+  const lowWindow = account ? limitingLowWindow(usageOf(account.id), model || null) : null;
   const alternative =
     account && lowWindow
       ? candidates.find((a) => {
           if (a.id === account.id || !sessionOf(a).usable) return false;
           const usage = usageOf(a.id);
-          return usage.status === "fresh" && limitingWindow(usage) !== null && limitingLowWindow(usage) === null;
+          return (
+            usage.status === "fresh" &&
+            limitingWindow(usage, model || null) !== null &&
+            limitingLowWindow(usage, model || null) === null
+          );
         })
       : undefined;
 
@@ -571,10 +582,16 @@ export function NewAgentDialog({
           className={styles.dialog}
           aria-describedby={`${id}-desc`}
           onOpenAutoFocus={(event) => {
+            // While accounts restore (or failed to) there is no list yet: keep the dialog's own
+            // focus so the keyboard never stays on the page behind it.
+            if (!listRef.current) return;
             event.preventDefault();
-            listRef.current?.focus({ preventScroll: true });
+            listRef.current.focus({ preventScroll: true });
           }}
         >
+          {/* The lit edge and the starfield on inert elements, not pseudo-elements (see
+              NewAgentDialog.module.css). */}
+          <span className={styles.dialogEdge} aria-hidden="true" />
           <form ref={formRef} className={styles.form} onSubmit={submit} onKeyDown={onFormKey} aria-label="New agent">
             <div className={styles.body}>
               <header className={styles.head}>
@@ -968,6 +985,7 @@ export function NewAgentDialog({
               </div>
             </footer>
           </form>
+          <span className={styles.starfield} aria-hidden="true" />
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
@@ -1098,7 +1116,7 @@ function ChipGroup({
 }
 
 /** The fresh window that limits this account when it is under LOW_USAGE_PERCENT, else null. */
-function limitingLowWindow(usage: AccountUsageState): UsageWindow | null {
-  const window = usage.status === "fresh" ? limitingWindow(usage) : null;
+function limitingLowWindow(usage: AccountUsageState, model: string | null): UsageWindow | null {
+  const window = usage.status === "fresh" ? limitingWindow(usage, model) : null;
   return window && window.remainingPercent < LOW_USAGE_PERCENT ? window : null;
 }

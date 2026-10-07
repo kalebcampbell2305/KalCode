@@ -296,9 +296,9 @@ fn make_authority(
     ComponentFloorAuthority::new(store, trusted_root(temp), track()).expect("authority")
 }
 
-/// A hang guard for lock waits that must succeed, not a latency budget: on the loaded gate machine a
-/// 2 s bound failed an activation with `LockTimeout` (gate 37534349257). Tests that assert a timeout
-/// pass their own short deadline.
+/// A hang guard for lock waits that must succeed, including concurrent authorities that serialize
+/// behind the lock; not a latency budget (a 2 s bound failed an activation with `LockTimeout` on the
+/// loaded gate machine, gate 37534349257). Tests that assert a timeout pass their own short deadline.
 fn deadline() -> Instant {
     Instant::now() + Duration::from_secs(30)
 }

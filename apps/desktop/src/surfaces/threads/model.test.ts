@@ -202,6 +202,11 @@ describe("thread problems", () => {
     expect(presentProblem(thread)).toEqual({ title: "Not started: system resources were too low", tone: "waiting" });
   });
 
+  it("distinguishes a historical stopped thread from one its provider can resume", () => {
+    expect(presentThread(summary({ status: "interrupted", resumable: false })).label).toBe("Stopped · historical");
+    expect(presentThread(summary({ status: "interrupted", resumable: true })).label).toBe("Stopped · resumable");
+  });
+
   it("an idle thread whose last turn failed says so next to the error", () => {
     const thread = {
       status: "idle" as const,

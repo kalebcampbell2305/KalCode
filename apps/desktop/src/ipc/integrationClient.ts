@@ -65,7 +65,7 @@ export async function integrationDispatch<T>(operation: string, fields: Record<s
   const result = await invoke<T>("integration_dispatch", { request: { op: operation, ...fields } });
   if (operation === "approve" && typeof fields.approval_id === "string")
     window.dispatchEvent(new CustomEvent(INTEGRATION_APPROVAL_GRANTED, { detail: fields.approval_id }));
-  if (["save", "disconnect", "rename", "grants", "refresh"].includes(operation))
+  if (["save", "disconnect", "rename", "grants", "refresh", "oauth"].includes(operation))
     window.dispatchEvent(new Event(INTEGRATIONS_CHANGED));
   return result;
 }

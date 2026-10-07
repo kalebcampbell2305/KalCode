@@ -1091,7 +1091,8 @@ fn cursor_connect_reuses_valid_native_sign_in_and_only_reauthenticates_real_expi
                 .any(|allowed| name.to_string_lossy().eq_ignore_ascii_case(allowed))
         });
         env.vars.push(("PATH".into(), rig.dir.path().into()));
-        env.probe_timeout = Some(Duration::from_secs(5));
+        // The fixture answers at once; the per-probe budget only guards a hang on a loaded machine.
+        env.probe_timeout = Some(WAIT);
         let result = kalcode_providers::cursor::login(&env);
         if succeeds {
             assert_eq!(
@@ -1129,7 +1130,8 @@ fn cursor_native_environment_auth_does_not_force_browser_oauth() {
     env.vars.push(("PATH".into(), rig.dir.path().into()));
     env.vars
         .push(("CURSOR_API_KEY".into(), "fixture-native-key".into()));
-    env.probe_timeout = Some(Duration::from_secs(5));
+    // The fixture answers at once; the per-probe budget only guards a hang on a loaded machine.
+    env.probe_timeout = Some(WAIT);
     let status = kalcode_providers::cursor::login(&env).expect("native environment authentication");
     assert_eq!(
         status.auth,

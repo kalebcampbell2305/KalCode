@@ -145,6 +145,7 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
               {api ? <Toolbar api={api} available={workspace.available} /> : <ToolbarPlaceholder />}
             </div>
           </header>
+          {api?.continuity}
           {integrationsOpen ? <CodeIntegrationPanel workspaceId={workspace.id} /> : null}
           <div className={styles.canvasArea}>
             {api ? (

@@ -83,7 +83,7 @@ test("Smart Close replaces the provider stop confirmation with one concise choic
   const close = page.getByRole("alertdialog", { name: "Close active work?" });
   await expect(close).toBeVisible();
   await expect(page.locator('[role="alertdialog"]')).toHaveCount(1);
-  await expect(close.getByRole("button")).toHaveText(["Cancel", "Keep Running", "Stop and Close"]);
+  await expect(close.getByRole("button")).toHaveText(["Cancel", "Stop and Close"]);
   const screenshot = testInfo.outputPath("single-smart-close.png");
   await page.screenshot({ path: screenshot });
   await testInfo.attach("Single Smart Close confirmation", { path: screenshot, contentType: "image/png" });

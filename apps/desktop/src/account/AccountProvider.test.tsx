@@ -36,10 +36,12 @@ function snapshot(phase: AccountSnapshot["phase"]): AccountSnapshot {
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((done, fail) => {
     resolve = done;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function operations(overrides: Partial<AccountOperations> = {}): AccountOperations {
@@ -385,6 +387,49 @@ describe("AccountProvider display name", () => {
     await act(async () => pending.resolve(named("Kaleb")));
     await waitFor(() => expect(screen.getByLabelText("result")).toHaveTextContent("account_service_unavailable"));
     expect(screen.getByLabelText("name")).toHaveTextContent("Kaleb Campbell");
+  });
+
+  it("rolls overlapping failed saves back to the confirmed name, never another save's unsaved name", async () => {
+    const first = deferred<AccountSnapshot>();
+    const second = deferred<AccountSnapshot>();
+    const setDisplayName = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const unavailable = { code: "account_service_unavailable", message: "Unavailable.", retryable: true };
+    function TwoSaves() {
+      const account = useAccount();
+      return (
+        <div>
+          <output aria-label="name">{account.snapshot.account?.displayName ?? "(none)"}</output>
+          <button type="button" onClick={() => void account.actions.setDisplayName("First")}>
+            save first
+          </button>
+          <button type="button" onClick={() => void account.actions.setDisplayName("Second")}>
+            save second
+          </button>
+        </div>
+      );
+    }
+    render(
+      <AccountProvider client={readyClient(setDisplayName)}>
+        <TwoSaves />
+      </AccountProvider>,
+    );
+    await waitFor(() => expect(screen.getByLabelText("name")).toHaveTextContent("Kaleb Campbell"));
+    await userEvent.click(screen.getByRole("button", { name: "save first" }));
+    await userEvent.click(screen.getByRole("button", { name: "save second" }));
+    expect(screen.getByLabelText("name")).toHaveTextContent(/^Second$/);
+    await act(async () => first.reject(unavailable));
+    await act(async () => second.reject(unavailable));
+    expect(screen.getByLabelText("name")).toHaveTextContent("Kaleb Campbell");
+
+    // Once a save is confirmed, a later failure rolls back to it.
+    const third = deferred<AccountSnapshot>();
+    const fourth = deferred<AccountSnapshot>();
+    setDisplayName.mockReturnValueOnce(third.promise).mockReturnValueOnce(fourth.promise);
+    await userEvent.click(screen.getByRole("button", { name: "save first" }));
+    await userEvent.click(screen.getByRole("button", { name: "save second" }));
+    await act(async () => third.resolve(named("First")));
+    await act(async () => fourth.reject(unavailable));
+    expect(screen.getByLabelText("name")).toHaveTextContent(/^First$/);
   });
 
   it("clears the name with a blank value", async () => {

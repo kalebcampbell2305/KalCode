@@ -1,5 +1,5 @@
 import type { ContrastPreference, Density, MotionPreference, TextSize, ThemePreference } from "@kalcode/protocol";
-import { Button, ErrorState, KeyValueList, Panel, SegmentedControl, Skeleton } from "@kalcode/ui/components";
+import { Button, ErrorState, KeyValueList, Panel, SegmentedControl, Skeleton, useToast } from "@kalcode/ui/components";
 import { Activity, ClipboardCopy, FolderOpen, Info, KeyRound, Monitor, Moon, Palette, Sun } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import kalcodeMascot362 from "../../assets/brand/kalcode-mascot-362.webp";
@@ -7,6 +7,7 @@ import kalcodeMascot724 from "../../assets/brand/kalcode-mascot-724.webp";
 import { KalVoiceSettings } from "../../kalvoice/KalVoiceSettings.tsx";
 import { formatVersion } from "../../platform/version.ts";
 import { formatAbsolute } from "../../runtime/describeEvent.ts";
+import { useDeskRestore } from "../../runtime/deskRestore.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useDiagnostics } from "../../runtime/useDiagnostics.ts";
 import { KalCodeTagline, Wordmark } from "../../shell/Brand.tsx";
@@ -49,6 +50,7 @@ export function SettingsPage() {
             {homeVisible ? <ProfileSettings /> : null}
             <SettingsAccount />
             <Appearance />
+            <DeskRestoreSettings />
             <KalVoiceSettings />
             <RemoteSettingsGate />
             <div id="resources" data-settings-section>
@@ -209,6 +211,40 @@ function Appearance() {
                 { value: "default", label: "Default" },
                 { value: "large", label: "Large" },
                 { value: "larger", label: "Larger" },
+              ]}
+            />
+          }
+        />
+      </div>
+    </Panel>
+  );
+}
+
+function DeskRestoreSettings() {
+  const { automatic, setAutomatic } = useDeskRestore();
+  const toast = useToast();
+  return (
+    <Panel id="continuity" title="Continue where I left off" icon={<Monitor />} padding="none">
+      <div className={styles.rows}>
+        <SettingRow
+          id="desk-restore"
+          label="Restore my desk on startup"
+          help="Reopen your saved layout and resume eligible coding agents in the background. Finished commands and intentionally closed agents stay ended."
+          control={
+            <SegmentedControl
+              aria-labelledby="desk-restore-label"
+              value={automatic ? "automatic" : "manual"}
+              onValueChange={(value) => {
+                if (!setAutomatic(value === "automatic"))
+                  toast.show({
+                    tone: "danger",
+                    title: "Startup preference couldn't be saved",
+                    description: "Device storage is unavailable. Try again.",
+                  });
+              }}
+              options={[
+                { value: "automatic", label: "Automatically" },
+                { value: "manual", label: "When I choose" },
               ]}
             />
           }

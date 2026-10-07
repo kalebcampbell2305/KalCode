@@ -29,7 +29,7 @@ import {
   UserRound,
   Wrench,
 } from "lucide-react";
-import { type FormEvent, type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { type FormEvent, type KeyboardEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useAccount } from "../../account/AccountProvider.tsx";
 import { ContextTray } from "../../context/ContextTray.tsx";
 import { PromptWarningDialog } from "../../context/PromptWarningDialog.tsx";
@@ -43,6 +43,7 @@ import {
 } from "../../kalvoice/composerRegistry.ts";
 import { forgetVoiceText } from "../../kalvoice/voiceSpans.ts";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
+import { usePersistentDraft } from "../../runtime/drafts.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { ContentContextMenu } from "../../shell/context/ContentContextMenu.tsx";
 import { MOD_LABEL } from "../../shell/shortcuts.ts";
@@ -304,6 +305,8 @@ export function ThreadDetail({ threadId, archived, onArchived, onUnarchived, onR
           context={{ kind: "error", label: problem.title, text: `${thread.error.code}: ${thread.error.message}` }}
         >
           <div className={styles.notice} data-tone={problem.tone} role={problem.tone === "danger" ? "alert" : "status"}>
+            {/* The tone rail on an inert element, not ::before (see ThreadDetail.module.css). */}
+            <span className={styles.noticeRail} aria-hidden="true" />
             {problem.tone === "danger" ? (
               <CircleX className={styles.noticeIcon} aria-hidden="true" />
             ) : (
@@ -326,6 +329,7 @@ export function ThreadDetail({ threadId, archived, onArchived, onUnarchived, onR
       ) : null}
       {thread.status === "waiting_for_permission" ? (
         <div className={styles.notice} data-tone="waiting">
+          <span className={styles.noticeRail} aria-hidden="true" />
           <ShieldAlert className={styles.noticeIcon} aria-hidden="true" />
           <p className={styles.noticeTitle}>
             {thread.pendingApprovals === 1
@@ -645,14 +649,22 @@ function Composer({
   const { client } = useRuntime();
   const account = useAccount();
   const toast = useToast();
-  const [text, setTextState] = useState("");
+  const viewerId = account.snapshot.account?.id ?? null;
+  const draftScope = useMemo(
+    () =>
+      viewerId ? ({ kind: "thread", viewerId, workspaceId: thread.workspaceId, threadId: thread.id } as const) : null,
+    [thread.id, thread.workspaceId, viewerId],
+  );
+  const persisted = usePersistentDraft(draftScope);
+  const text = persisted.text;
   // The latest text, readable synchronously by a voice send right after a dictated insert.
-  const draft = useRef("");
+  const draft = useRef(text);
+  draft.current = text;
   const setText = (next: string) => {
     draft.current = next;
     // Sent or emptied: nothing KalVoice typed is left for "clear that" to remove.
     if (next === "") forgetVoiceText(thread.id);
-    setTextState(next);
+    persisted.setText(next);
   };
   const boxRef = useRef<HTMLTextAreaElement>(null);
   const blocked = mode === "blocked";
@@ -676,6 +688,20 @@ function Composer({
     if (sending) return "busy";
     if (!submittedText.trim()) return "empty";
     const hasContext = context.preview !== null;
+    const clearSentDraft = () => {
+      const result = persisted.clearSubmitted(submittedText);
+      if (result.problem) {
+        toast.show({
+          tone: "danger",
+          title: "Message sent, but its saved draft wasn't cleared",
+          description: "It may reappear after restart. Delete it before sending again.",
+        });
+      }
+      if (result.cleared) {
+        draft.current = "";
+        forgetVoiceText(thread.id);
+      }
+    };
     // Settled by the callbacks below; still "confirm" afterwards means the warning dialog is open.
     let outcome: ComposerSubmitOutcome = "confirm";
     await confirmation.request({
@@ -687,13 +713,13 @@ function Composer({
       onComplete: (result) => {
         if (result.kind === "plain") {
           outcome = result.sent ? "sent" : "not_sent";
-          if (result.sent) setText("");
+          if (result.sent) clearSentDraft();
           return;
         }
         if (result.result?.kind === "sent") {
           outcome = "sent";
           onContextSent(result.result.thread);
-          setText("");
+          clearSentDraft();
         } else {
           outcome = "not_sent";
           if (result.result?.kind === "stale") {
@@ -819,8 +845,8 @@ function Composer({
             onDiscard={context.discard}
           />
           <div className={styles.composerFooter}>
-            <p id="thread-composer-hint" className={styles.composerHint}>
-              {hint}
+            <p id="thread-composer-hint" className={styles.composerHint} role={persisted.problem ? "alert" : undefined}>
+              {persisted.problem?.message ?? hint}
             </p>
             <Button type="submit" variant="primary" size="sm" busy={sending} disabled={blocked || !text.trim()}>
               {mode === "resume" ? "Resume and send" : "Send"}

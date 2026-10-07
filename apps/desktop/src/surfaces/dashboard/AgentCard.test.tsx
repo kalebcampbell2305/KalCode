@@ -112,6 +112,16 @@ describe("AgentCard start time", () => {
   });
 });
 
+describe("AgentCard stopped activity", () => {
+  it("distinguishes historical and provider-resumable stopped agents", () => {
+    const { unmount } = mount({ ...thread(null), status: "interrupted", resumable: false });
+    expect(screen.getByText("Stopped · historical")).toBeTruthy();
+    unmount();
+    mount({ ...thread(null), status: "interrupted", resumable: true });
+    expect(screen.getByText("Stopped · resumable")).toBeTruthy();
+  });
+});
+
 describe("AgentCard archived (read-only)", () => {
   it("offers only Unarchive: no focus, menu or follow-ups", async () => {
     const onAction = vi.fn();

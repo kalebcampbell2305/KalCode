@@ -7,6 +7,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use super::*;
 use crate::types::HttpQueryParam;
 
+/// Resolver budget for scripted backends that answer at once on a worker thread: it guards a hang on
+/// a loaded machine, never decides an outcome.
+const RESOLVE_GUARD: Duration = Duration::from_secs(30);
+
 /// A scripted gate: a fixed verdict and confirmation answer, recording every call.
 struct Gate {
     verdict: GateVerdict,
@@ -130,7 +134,7 @@ fn validation_and_sealing_do_not_resolve_before_dns_authority() {
     let calls = Arc::new(AtomicUsize::new(0));
     let resolver = destination::TrackedResolver::with_backend(
         Arc::new(CountingResolver(Arc::clone(&calls))),
-        Duration::from_secs(1),
+        RESOLVE_GUARD,
         1,
     );
     let session = HttpSession::with_resolver(resolver);
@@ -152,7 +156,7 @@ fn validation_and_sealing_do_not_resolve_before_dns_authority() {
 fn approved_resolution_classifies_private_destination_for_fresh_send_authority() {
     let session = HttpSession::with_resolver(destination::TrackedResolver::with_backend(
         Arc::new(PrivateResolver),
-        Duration::from_secs(1),
+        RESOLVE_GUARD,
         1,
     ));
     let unresolved = session
@@ -323,7 +327,7 @@ fn approved_effect_contacts_only_one_pinned_hop_before_fresh_authority() {
     let dns_calls = Arc::new(AtomicUsize::new(0));
     let session = HttpSession::with_resolver(destination::TrackedResolver::with_backend(
         Arc::new(CountingResolver(Arc::clone(&dns_calls))),
-        Duration::from_secs(1),
+        RESOLVE_GUARD,
         1,
     ));
     let mut request = spec(HttpMethod::Get, format!("http://127.0.0.1:{first}/start"));

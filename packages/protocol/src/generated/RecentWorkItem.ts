@@ -11,4 +11,8 @@ id: string, title: string, workspaceId: string | null, workspaceName: string | n
 /**
  * Threads only.
  */
-status: ThreadStatus | null, lastActivityAt: string, };
+status: ThreadStatus | null,
+/**
+ * Threads only; `None` for file and workspace items.
+ */
+resumable?: boolean, lastActivityAt: string, };

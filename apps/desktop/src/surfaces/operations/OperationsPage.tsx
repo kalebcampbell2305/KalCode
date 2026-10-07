@@ -485,17 +485,27 @@ export function OperationsPage({ client, threadOptions, providerAccounts }: Oper
       </header>
 
       <section className={styles.pulseBar} aria-label="Operations summary">
+        {/* Tone bars, lights, seams and rails on inert elements, not pseudo-elements (see
+            OperationsPage.module.css). */}
         <span className={styles.metric} data-tone="working" data-live={active > 0 || undefined}>
+          <span className={styles.metricBar} aria-hidden="true" />
           <strong>{active}</strong> running
+          <span className={styles.metricLight} aria-hidden="true" />
         </span>
         <span className={styles.metric} data-tone="queued" data-live={queued > 0 || undefined}>
+          <span className={styles.metricBar} aria-hidden="true" />
           <strong>{queued}</strong> queued
+          <span className={styles.metricLight} aria-hidden="true" />
         </span>
         <span className={styles.metric} data-tone="service">
+          <span className={styles.metricBar} aria-hidden="true" />
           <strong>{snapshot.services.filter((service) => service.status === "running").length}</strong> services
+          <span className={styles.metricLight} aria-hidden="true" />
         </span>
         <span className={cx(styles.metric, failed > 0 && styles.failedMetric)} data-tone="failed">
+          <span className={styles.metricBar} aria-hidden="true" />
           <strong>{failed}</strong> failed
+          <span className={styles.metricLight} aria-hidden="true" />
         </span>
         <span className={styles.observed}>Observed {timeLabel(state.observedAt ?? snapshot.observedAt)}</span>
       </section>
@@ -2063,6 +2073,7 @@ export function OperationsRunDetail({
         <Button size="sm" variant="ghost" aria-label="Close run details" onClick={onClose}>
           <X />
         </Button>
+        <span className={styles.detailSeam} aria-hidden="true" />
       </header>
       {!value && !errorMessage ? (
         <div className={styles.detailLoading} aria-busy="true">
@@ -2104,6 +2115,7 @@ export function OperationsRunDetail({
                 <ol className={styles.timeline}>
                   {value.timeline.map((moment) => (
                     <li key={moment.id} data-tone={momentTone(moment.kind)}>
+                      <div className={styles.timelineRail} aria-hidden="true" />
                       <span />
                       <div>
                         <strong>{moment.message}</strong>
