@@ -1,66 +1,4 @@
-/* The Command Deck's agents rail (right) and its collapsed strip. */
-/* The rail's frame: eases between the strip and the full rail (no re-flow of what's beside it). */
-.dock {
-  position: relative;
-  width: var(--sidebar-w-collapsed);
-  height: 100%;
-  overflow: hidden;
-  border-left: 1px solid var(--color-border);
-  background: linear-gradient(180deg, var(--color-surface-1), var(--color-bg-sunken) 60%);
-  outline: none;
-  transition: width var(--dur-base) var(--ease-out);
-}
-
-/* Open, its left edge carries the mirrored lit hairline: the deck's right edge glows like the sidebar's. */
-.dock[data-open] {
-  width: var(--deck-agents-w, 18rem);
-  border-image: linear-gradient(180deg, var(--color-border-lit), var(--color-border) 14rem) 1;
-}
-
-.rail {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  width: var(--deck-agents-w, 18rem);
-  min-width: 0;
-  height: 100%;
-  background:
-    radial-gradient(18rem 14rem at 100% 0%, var(--color-accent-soft), transparent 70%),
-    linear-gradient(180deg, var(--color-surface-1), var(--color-bg-sunken) 60%);
-  outline: none;
-}
-
-.header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  height: var(--panel-header-h);
-  padding: 0 var(--space-2) 0 var(--space-4);
-  border-bottom: 1px solid var(--color-border);
-}
-
-.heading {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin: 0;
-  color: var(--color-text);
-  font-size: var(--type-title);
-  font-weight: var(--type-title-weight);
-  letter-spacing: var(--type-title-tracking);
-}
-
-.headingCount {
-  min-width: 1.25rem;
-  padding: 0 var(--space-1-5);
-  border-radius: var(--radius-full);
-  background: var(--color-accent-soft);
-  color: var(--color-accent-text);
-  font-size: var(--type-small);
-  font-variant-numeric: tabular-nums;
-  text-align: center;
-}
+/* The Workspace Dock's Agents view: the grouped list of coding agents (the dock owns the frame). */
 
 .body {
   flex: 1;
@@ -394,7 +332,6 @@
     animation: none;
   }
 
-  :root:not([data-motion="full"]) .dock,
   :root:not([data-motion="full"]) .rowDismiss {
     transition: none;
   }
@@ -409,7 +346,6 @@
   animation: none;
 }
 
-:root[data-motion="reduced"] .dock,
 :root[data-motion="reduced"] .rowDismiss {
   transition: none;
 }
@@ -525,52 +461,4 @@
   color: var(--color-text-muted);
   font-size: var(--type-small);
   line-height: var(--leading-normal);
-}
-
-/* ---- Collapsed strip ---- */
-
-.strip {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-3);
-  width: var(--sidebar-w-collapsed);
-  height: 100%;
-  padding: var(--space-2) 0;
-}
-
-.stripCounts {
-  display: grid;
-  gap: var(--space-1-5);
-}
-
-.stripCount {
-  --_c: var(--status-muted);
-  min-width: 1.75rem;
-  height: 1.5rem;
-  padding: 0 var(--space-1-5);
-  border: 1px solid color-mix(in srgb, var(--_c) 40%, transparent);
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--_c) 14%, transparent);
-  color: var(--color-text);
-  font-size: var(--type-small);
-  font-weight: var(--weight-semibold);
-  font-variant-numeric: tabular-nums;
-}
-
-.stripCount[data-tone="waiting"] {
-  --_c: var(--status-waiting);
-}
-
-.stripCount[data-tone="working"] {
-  --_c: var(--status-working);
-}
-
-.stripCount[data-tone="failed"] {
-  --_c: var(--status-failed);
-}
-
-.stripCount:focus-visible {
-  outline: 2px solid var(--color-border-focus);
-  outline-offset: 1px;
 }

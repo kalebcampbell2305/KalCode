@@ -73,7 +73,7 @@
 .shell {
   display: grid;
   /* Sidebar (projects) · workspace rail (Z7-W2; `auto`: its own width, 0 when the build has
-     none) · page · agents rail (`auto`: open or its strip). */
+     none) · page · Workspace Dock (`auto`: open at its width, or its rail). */
   grid-template-columns: var(--sidebar-w) auto minmax(0, 1fr) auto;
   min-height: 0;
   transition: grid-template-columns var(--dur-base) var(--ease-out);
@@ -83,7 +83,7 @@
   grid-template-columns: var(--sidebar-w-collapsed) auto minmax(0, 1fr) auto;
 }
 
-/* The agents rail is the last column, full height like the sidebar. */
+/* The Workspace Dock is the last column, full height like the sidebar. */
 .shell > [data-deck-agents] {
   grid-column: 4;
   grid-row: 1 / -1;
