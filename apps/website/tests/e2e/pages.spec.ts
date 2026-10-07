@@ -9,13 +9,17 @@ const STABLE_017 = SIGNED_STABLE && MANIFEST.latest?.version === "0.1.7";
 const STABLE_018 = SIGNED_STABLE && MANIFEST.latest?.version === "0.1.8";
 // A signed Stable 0.1.9+N build, presented the same way.
 const STABLE_019 = SIGNED_STABLE && MANIFEST.latest?.version === "0.1.9";
-const GEMINI_UNAVAILABLE_TAG = STABLE_019
-  ? /Gemini CLI unavailable in (KalCode )?0\.1\.9/
-  : STABLE_018
-    ? /Gemini CLI unavailable in (KalCode )?0\.1\.8/
-    : STABLE_017
-      ? /Gemini CLI unavailable in (KalCode )?0\.1\.7/
-      : /Gemini CLI unavailable in (KalCode )?0.1.6/;
+// A signed Stable 0.1.10+N build, presented the same way.
+const STABLE_0110 = SIGNED_STABLE && MANIFEST.latest?.version === "0.1.10";
+const GEMINI_UNAVAILABLE_TAG = STABLE_0110
+  ? /Gemini CLI unavailable in (KalCode )?0\.1\.10/
+  : STABLE_019
+    ? /Gemini CLI unavailable in (KalCode )?0\.1\.9/
+    : STABLE_018
+      ? /Gemini CLI unavailable in (KalCode )?0\.1\.8/
+      : STABLE_017
+        ? /Gemini CLI unavailable in (KalCode )?0\.1\.7/
+        : /Gemini CLI unavailable in (KalCode )?0.1.6/;
 
 test.describe("every page", () => {
   for (const page of PAGES) {
@@ -83,7 +87,7 @@ test.describe("every page", () => {
         if (path !== "/kalvoice") continue;
         if (/In Stable \d|Dashboard in Stable \d/.test(text)) expect(text, path).not.toMatch(/Gemini CLI/);
         // Any other stage that still shows Gemini CLI says it is unavailable.
-        // (The stage tags name the served Stable version: 0.1.6, 0.1.7, 0.1.8 or 0.1.9, whichever is selected.)
+        // (The stage tags name the served Stable version: 0.1.6 to 0.1.10, whichever is selected.)
         if (/Gemini CLI/.test(text)) expect(text, path).toMatch(GEMINI_UNAVAILABLE_TAG);
       }
     }
@@ -167,13 +171,27 @@ test.describe("every page", () => {
   test("Updates is a concise product-news page with meaningful release sections", async ({ page }) => {
     await page.goto("/updates");
     await expect(page.getByRole("heading", { level: 1, name: "Updates" })).toBeVisible();
-    // The 0.1.6 notes render only from a complete signed Stable 0.1.6 to 0.1.9 manifest, the 0.1.7 notes
-    // only from a signed Stable 0.1.7 to 0.1.9 one, the 0.1.8 notes only from a signed Stable 0.1.8 or
-    // 0.1.9 build, and the 0.1.9 notes only from a signed Stable 0.1.9 build (the page's own rule).
+    // The 0.1.6 notes render only from a complete signed Stable 0.1.6 to 0.1.10 manifest, the 0.1.7 notes
+    // only from a signed Stable 0.1.7 to 0.1.10 one, the 0.1.8 notes only from a signed Stable 0.1.8 to
+    // 0.1.10 build, the 0.1.9 notes only from a signed Stable 0.1.9 or 0.1.10 build, and the 0.1.10 notes
+    // only from a signed Stable 0.1.10 build (the page's own rule).
     await expect(page.locator("article")).toHaveCount(
-      STABLE_019 ? 8 : STABLE_018 ? 7 : STABLE_017 ? 6 : STABLE_016 ? 5 : 4,
+      STABLE_0110 ? 9 : STABLE_019 ? 8 : STABLE_018 ? 7 : STABLE_017 ? 6 : STABLE_016 ? 5 : 4,
     );
-    if (STABLE_019) {
+    if (STABLE_0110) {
+      await expect(page.locator("#release-0-1-10")).toBeVisible();
+      await expect(page.locator("#release-0-1-10")).toHaveClass(/update--featured/);
+      await expect(page.locator("#release-0-1-9")).not.toHaveClass(/update--featured/);
+      await expect(page.locator("#release-0-1-10")).toContainText(
+        "Windows: 0.1.6 can't update itself. Download the 0.1.10 installer from the download page and run it once — your data is kept.",
+      );
+      await expect(page.locator("#release-0-1-10")).toContainText("macOS: update from 0.1.6 in the app.");
+      await expect(page.locator("#release-0-1-10").getByRole("link", { name: "download page" })).toHaveAttribute(
+        "href",
+        "/download",
+      );
+    } else await expect(page.locator("#release-0-1-10")).toHaveCount(0);
+    if (STABLE_019 || STABLE_0110) {
       await expect(page.locator("#release-0-1-9")).toBeVisible();
       await expect(page.locator("#release-0-1-9")).toContainText(
         "Windows: 0.1.6 can't update itself. Download the 0.1.9 installer from the download page and run it once — your data is kept.",
@@ -184,7 +202,7 @@ test.describe("every page", () => {
         "/download",
       );
     } else await expect(page.locator("#release-0-1-9")).toHaveCount(0);
-    if (STABLE_018 || STABLE_019) {
+    if (STABLE_018 || STABLE_019 || STABLE_0110) {
       await expect(page.locator("#release-0-1-8")).toBeVisible();
       await expect(page.locator("#release-0-1-8")).toContainText(
         "Windows: 0.1.6 can't update itself. Download the 0.1.8 installer from the download page and run it once — your data is kept.",
@@ -195,7 +213,7 @@ test.describe("every page", () => {
         "/download",
       );
     } else await expect(page.locator("#release-0-1-8")).toHaveCount(0);
-    if (STABLE_017 || STABLE_018 || STABLE_019) {
+    if (STABLE_017 || STABLE_018 || STABLE_019 || STABLE_0110) {
       await expect(page.locator("#release-0-1-7")).toBeVisible();
       await expect(page.locator("#release-0-1-7")).toContainText(
         "Windows: 0.1.6 can't update itself. Download the 0.1.7 installer from the download page and run it once — your data is kept.",
@@ -206,7 +224,7 @@ test.describe("every page", () => {
         "/download",
       );
     } else await expect(page.locator("#release-0-1-7")).toHaveCount(0);
-    if (STABLE_016 || STABLE_017 || STABLE_018 || STABLE_019) {
+    if (STABLE_016 || STABLE_017 || STABLE_018 || STABLE_019 || STABLE_0110) {
       await expect(page.locator("#release-0-1-6")).toBeVisible();
       await expect(page.locator("#release-0-1-6")).toContainText(
         "Windows: in-app Update and Restore previous version don't work in 0.1.6.",

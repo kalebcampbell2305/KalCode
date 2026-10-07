@@ -3,7 +3,7 @@ name = "kalcode-desktop"
 description = "KalCode desktop application shell (Tauri)."
 # Keep equal to tauri.conf.json's public version (the updater User-Agent reads CARGO_PKG_VERSION).
 # Only this crate carries it; the workspace crates stay at the fixed internal 0.0.0.
-version = "0.1.9"
+version = "0.1.10"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

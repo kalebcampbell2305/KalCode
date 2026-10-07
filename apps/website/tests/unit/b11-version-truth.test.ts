@@ -75,8 +75,8 @@ function signedStable(version: string): ReleaseManifest {
 
 /**
  * The only states releases.json may hold: the committed Stable 0.1.6 manifest exactly, a valid signed
- * Stable 0.1.7 manifest offering only the two 0.1.7 files, or a valid signed Stable 0.1.8+N or 0.1.9+N
- * build manifest offering only the two files of that build. Returns why a state is refused.
+ * Stable 0.1.7 manifest offering only the two 0.1.7 files, or a valid signed Stable 0.1.8+N, 0.1.9+N or
+ * 0.1.10+N build manifest offering only the two files of that build. Returns why a state is refused.
  */
 function refusal(candidate: ReleaseManifest): string | null {
   let manifest: ReleaseManifest;
@@ -102,10 +102,10 @@ function refusal(candidate: ReleaseManifest): string | null {
     }
     return null;
   }
-  // A signed Stable build of the public 0.1.8 or 0.1.9 (`0.1.8+N`, PR #34; `0.1.9+N`): build artifacts are
+  // A signed Stable build of the public 0.1.8, 0.1.9 or 0.1.10 (`0.1.8+N`, PR #34; `0.1.9+N`; `0.1.10+N`): build artifacts are
   // named `KalCode_X.Y.Z_buildN_*`, are pinned under the full release version, and link to that public
   // version's Updates entry.
-  const build = /^(0\.1\.[89])\+([1-9]\d*)$/.exec(latest.version);
+  const build = /^(0\.1\.(?:[89]|10))\+([1-9]\d*)$/.exec(latest.version);
   if (build) {
     const [, publicVersion, number] = build;
     const expected = [
@@ -171,7 +171,7 @@ describe("the 0.1.7 release data", () => {
     expect(files.sort()).toEqual(FILES_017);
   });
 
-  it("holds the committed Stable 0.1.6 manifest, a signed Stable 0.1.7 one or a signed Stable 0.1.8+N or 0.1.9+N build, never 0.1.2-0.1.5", async () => {
+  it("holds the committed Stable 0.1.6 manifest, a signed Stable 0.1.7 one or a signed Stable 0.1.8+N, 0.1.9+N or 0.1.10+N build, never 0.1.2-0.1.5", async () => {
     const committed = (await import("../../src/data/releases.json")).default as ReleaseManifest;
     expect(refusal(committed)).toBeNull();
   });
@@ -192,6 +192,25 @@ describe("the 0.1.7 release data", () => {
     expect(refusal(staleNotes)).not.toBeNull();
     const staleFiles = syntheticBuild(committed, "0.1.8", 1050);
     if (staleFiles.latest) staleFiles.latest.version = "0.1.9+1050";
+    expect(refusal(staleFiles)).not.toBeNull();
+  });
+
+  it("accepts a signed Stable 0.1.10+N build shaped exactly like the committed releases.json", async () => {
+    const committed = (await import("../../src/data/releases.json")).default as ReleaseManifest;
+    const build0110 = syntheticBuild(committed, "0.1.10", 2200);
+    expect(build0110.latest?.platforms.map((p) => [p.file, p.pinnedUrl])).toEqual([
+      ["KalCode_0.1.10_build2200_x64-setup.exe", "/download/0.1.10+2200/KalCode_0.1.10_build2200_x64-setup.exe"],
+      ["KalCode_0.1.10_build2200_arm64.dmg", "/download/0.1.10+2200/KalCode_0.1.10_build2200_arm64.dmg"],
+    ]);
+    expect(build0110.latest?.notesUrl).toBe("/updates#release-0-1-10");
+    expect(refusal(build0110)).toBeNull();
+    expect(signedStableRelease(assertManifest(build0110))?.version).toBe("0.1.10+2200");
+    // The same shape with the 0.1.9 Updates entry, or 0.1.9 file names, is refused.
+    const staleNotes = structuredClone(build0110);
+    if (staleNotes.latest) staleNotes.latest.notesUrl = "/updates#release-0-1-9";
+    expect(refusal(staleNotes)).not.toBeNull();
+    const staleFiles = syntheticBuild(committed, "0.1.9", 2200);
+    if (staleFiles.latest) staleFiles.latest.version = "0.1.10+2200";
     expect(refusal(staleFiles)).not.toBeNull();
   });
 
@@ -235,25 +254,38 @@ describe("the 0.1.7 release data", () => {
     const wrongNotes019 = signedStableBuild("0.1.9", 1050);
     if (wrongNotes019.latest) wrongNotes019.latest.notesUrl = "/updates#release-0-1-8";
     expect(refusal(wrongNotes019)).not.toBeNull();
-    // The public 0.1.8 and 0.1.9 ship only as builds; another public version is refused with a build, and
-    // so is the private 0.1.2+K QA baseline.
+    // A signed Stable build of the public 0.1.10, with the same checks.
+    expect(refusal(signedStableBuild("0.1.10", 2200))).toBeNull();
+    const wrongPin0110 = signedStableBuild("0.1.10", 2200);
+    for (const p of wrongPin0110.latest?.platforms ?? []) p.pinnedUrl = `/download/0.1.10/${p.file}`;
+    expect(refusal(wrongPin0110)).not.toBeNull();
+    const wrongNotes0110 = signedStableBuild("0.1.10", 2200);
+    if (wrongNotes0110.latest) wrongNotes0110.latest.notesUrl = "/updates#release-0-1-1";
+    expect(refusal(wrongNotes0110)).not.toBeNull();
+    // The public 0.1.8, 0.1.9 and 0.1.10 ship only as builds; another public version is refused with a
+    // build, and so is the private 0.1.2+K QA baseline.
     expect(refusal(signedStable("0.1.8"))).not.toBeNull();
     expect(refusal(signedStable("0.1.9"))).not.toBeNull();
+    expect(refusal(signedStable("0.1.10"))).not.toBeNull();
     for (const [publicVersion, build] of [
       ["0.1.7", 813],
       ["0.1.7", 1],
-      ["0.1.10", 813],
+      ["0.1.11", 813],
+      ["0.1.1", 813],
       ["0.1.2", 814],
     ] as const) {
       expect(refusal(signedStableBuild(publicVersion, build))).not.toBeNull();
     }
-    // Relabelling a valid 0.1.8+N or 0.1.9+N manifest as another version is refused too.
+    // Relabelling a valid 0.1.8+N, 0.1.9+N or 0.1.10+N manifest as another version is refused too.
     for (const [from, other] of [
       ["0.1.8", "0.1.7+813"],
       ["0.1.8", "0.1.9+813"],
       ["0.1.8", "0.1.2+814"],
       ["0.1.9", "0.1.8+813"],
       ["0.1.9", "0.1.10+813"],
+      ["0.1.10", "0.1.9+813"],
+      ["0.1.10", "0.1.1+813"],
+      ["0.1.10", "0.1.11+813"],
     ] as const) {
       const relabelled = signedStableBuild(from, 813);
       if (!relabelled.latest) throw new Error("fixture has no release");
@@ -292,8 +324,9 @@ describe("the download page for 0.1.7", () => {
 
   it("keeps the 0.1.7 note off every other release", async () => {
     const container = await AstroContainer.create();
-    // 0.1.8 and 0.1.9 carry the same note (release-018-updates.test.ts, release-019-updates.test.ts).
-    for (const version of ["0.1.6", "0.1.10"]) {
+    // 0.1.8, 0.1.9 and 0.1.10 carry the same note (release-018-updates.test.ts, release-019-updates.test.ts,
+    // release-0110-updates.test.ts).
+    for (const version of ["0.1.6", "0.1.11"]) {
       const html = await container.renderToString(DownloadPlatforms, { props: { manifest: signedStable(version) } });
       expect(text(html)).not.toContain("0.1.6 can't update itself");
     }
