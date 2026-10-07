@@ -864,11 +864,7 @@ fn rfc3339(at: OffsetDateTime) -> String {
 }
 
 fn platform() -> &'static str {
-    match std::env::consts::OS {
-        "macos" => "macos",
-        "windows" => "windows",
-        other => other,
-    }
+    std::env::consts::OS
 }
 
 /// `0.1.9` of `0.1.9+2007`.
