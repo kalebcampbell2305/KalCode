@@ -88,6 +88,7 @@ pub const MIGRATIONS: &[Migration] = &[
     },
     SQUADS_MIGRATION,
     LAUNCH_RECIPES_MIGRATION,
+    CHAINS_MIGRATION,
 ];
 
 /// Saved Launch Recipes: reusable working desks that recreate in one action.
@@ -95,6 +96,13 @@ pub const LAUNCH_RECIPES_MIGRATION: Migration = Migration {
     version: 27,
     name: "launch_recipes",
     sql: include_str!("../migrations/0027_launch_recipes.sql"),
+};
+
+/// Agent Handoff Chains: chain-only facts over an ad-hoc Squad launch and its Operations.
+pub const CHAINS_MIGRATION: Migration = Migration {
+    version: 28,
+    name: "chains",
+    sql: include_str!("../migrations/0028_chains.sql"),
 };
 
 /// Reusable Squad templates and launch relationships to canonical Operations.
