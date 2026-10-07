@@ -148,6 +148,22 @@ export function gateStateFrom(runs, jobs, sha, branch) {
  * merge commit (`+<sha>:refs/remotes/pull/<n>/merge`) and reports `Merge <head> into <base>`; the gate prints
  * how many changed files it checked (`gate: lanes ...; N changed file(s)`), which exposes a vacuous pass.
  */
+/**
+ * A queued PR's own branch gate (pull_request event, its head branch, gate.yml, still active). The train gates
+ * the PR inside its exact candidate, so that run only holds the gate runners the candidates need (2026-10-07:
+ * PR-branch gates kept a train candidate queued behind them on the second PC's two runners).
+ */
+export function isQueuedPrGateRun(run, item) {
+  return (
+    run.event === "pull_request" &&
+    run.path === ".github/workflows/gate.yml" &&
+    typeof item?.headRef === "string" &&
+    item.headRef.length > 0 &&
+    run.head_branch === item.headRef &&
+    ["queued", "in_progress", "waiting", "pending", "requested"].includes(run.status)
+  );
+}
+
 export function parseGateLog(text, number) {
   const merge = new RegExp(`\\+([0-9a-f]{40}):refs/remotes/pull/${Number(number)}/merge\\b`).exec(text);
   // The runner reuses its workspace, so the log first shows the previous run's HEAD before the fetch;
@@ -220,7 +236,7 @@ export async function createGitHubProvider({ repo, slug = null, gh = makeGh({ cw
           "-R",
           slug,
           "--json",
-          "number,title,state,isDraft,isCrossRepository,baseRefName,headRefOid,labels",
+          "number,title,state,isDraft,isCrossRepository,baseRefName,headRefName,headRefOid,labels",
         ],
         { allowFail: true },
       );
@@ -234,6 +250,7 @@ export async function createGitHubProvider({ repo, slug = null, gh = makeGh({ cw
         crossRepository: p.isCrossRepository,
         baseRef: p.baseRefName,
         head: p.headRefOid,
+        headRef: p.headRefName,
         queued: p.labels.some((l) => l.name === QUEUE_LABEL),
         fetchRef: `refs/pull/${p.number}/head`,
         mergeRef: `refs/pull/${p.number}/merge`,
@@ -272,6 +289,30 @@ export async function createGitHubProvider({ repo, slug = null, gh = makeGh({ cw
       if (!runs.length) return { state: "missing" };
       const jobs = (await json(["api", `repos/${slug}/actions/runs/${runs[0].id}/jobs?per_page=50`])).jobs;
       return gateStateFrom(runs, jobs, sha, branch);
+    },
+    /** Cancels the active PR-branch gate runs of queued PRs (`items`: queue entries with `headRef`). */
+    async cancelPrGates(items) {
+      const cancelled = [];
+      for (const item of items ?? []) {
+        if (!item?.headRef) continue;
+        const branch = encodeURIComponent(item.headRef);
+        const runs = (
+          await json([
+            "api",
+            `repos/${slug}/actions/workflows/${GATE_WORKFLOW}/runs?event=pull_request&branch=${branch}&per_page=20`,
+          ])
+        ).workflow_runs;
+        for (const run of runs.filter((r) => isQueuedPrGateRun(r, item))) {
+          // Re-read immediately before cancelling: never touch a finished run or another branch's.
+          const current = await json(["api", `repos/${slug}/actions/runs/${run.id}`]);
+          if (current.id !== run.id || !isQueuedPrGateRun(current, item)) continue;
+          const result = await gh(["api", "--method", "POST", `repos/${slug}/actions/runs/${run.id}/cancel`], {
+            allowFail: true,
+          });
+          if (result.code === 0) cancelled.push(run.id);
+        }
+      }
+      return cancelled;
     },
     async cancelGates(sha, branch) {
       const runs = (

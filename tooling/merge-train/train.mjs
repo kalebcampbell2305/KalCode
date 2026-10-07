@@ -1011,6 +1011,7 @@ export function createTrain({
       const snap = await snapshot(ns);
       const main = snap.base;
       const planned = await planIn(ns, snap);
+      await freeGateRunners(planned.queue);
       const state = loadState();
       const bisect = state.bisect ?? {};
       // Recently-red lanes stack on top: clean lanes below them gate and land without waiting on them.
@@ -1701,6 +1702,20 @@ export function createTrain({
     });
   }
 
+  /**
+   * Queued PRs land only through their exact candidate, so their own branch gates only hold the gate runners
+   * the candidates need: cancel them (the PR's gate.yml also skips new pushes while it is queued).
+   */
+  async function freeGateRunners(items) {
+    try {
+      const freed = (await provider.cancelPrGates?.(items)) ?? [];
+      if (freed.length)
+        log(`freed the gate runners: cancelled PR-branch gate run(s) ${freed.join(", ")} of queued PRs`);
+    } catch (error) {
+      log(`warning: could not cancel queued PRs' branch gates: ${error.message}`);
+    }
+  }
+
   async function submit(number) {
     await provider.ensureLabel();
     const pr = await provider.getPr(number);
@@ -1719,6 +1734,7 @@ export function createTrain({
       );
     }
     log(`#${number} ${pr.queued ? "was already" : "is now"} queued (position ${position || "?"} of ${queue.length})`);
+    await freeGateRunners([{ number, headRef: pr.headRef }]);
     return { number, position, head: pr.head };
   }
 
