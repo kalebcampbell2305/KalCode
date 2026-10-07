@@ -927,7 +927,9 @@ describe("merge train pieces", () => {
       "success",
       "its second runner is trusted",
     );
-    assert.equal(state(main, { ...pc2, runner_name: "kalcode-win-gate-2c" }), "stale", "no other name is");
+    for (const name of ["kalcode-win-gate-2c", "kalcode-win-gate-2d"])
+      assert.equal(state(main, { ...pc2, runner_name: name }), "success", `${name} is trusted`);
+    assert.equal(state(main, { ...pc2, runner_name: "kalcode-win-gate-2e" }), "stale", "no other name is");
     assert.equal(
       state(main, { ...pc2, labels: ["self-hosted", "Windows", "kalcode-gate-pc2", "kalcode-main-pc"] }),
       "stale",
@@ -947,7 +949,7 @@ describe("merge train pieces", () => {
       "all three jobs on the second PC",
     );
     assert.equal(
-      state({ ...pc2, name: "Gate (Windows)", runner_name: "kalcode-win-gate-2c" }, pc2Native, pc2),
+      state({ ...pc2, name: "Gate (Windows)", runner_name: "kalcode-win-gate-2e" }, pc2Native, pc2),
       "stale",
       "only the second PC's own runners",
     );
