@@ -164,6 +164,30 @@ jobs:
             }
           }
           exit 0
+      # The gate PC must not throttle or sleep mid-gate (owner, 2026-10-07: PC2 stays plugged in and idle for
+      # gates). Evidence only: it warns and never fails the job.
+      - name: Record the gate PC's power state
+        if: steps.reuse.outputs.reused != 'true' && matrix.half == 'main'
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $scheme = (powercfg /getactivescheme | Out-String).Trim()
+          Write-Output "Power plan: $scheme"
+          if ($scheme -notmatch '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c|High performance|Ultimate') { Write-Output '::warning::The gate PC is not on the High Performance power plan.' }
+          foreach ($setting in @('STANDBYIDLE', 'HIBERNATEIDLE')) {
+            $q = (powercfg /q SCHEME_CURRENT SUB_SLEEP $setting | Out-String)
+            $ac = [regex]::Match($q, 'Current AC Power Setting Index:\s+0x([0-9a-f]+)').Groups[1].Value
+            $seconds = if ($ac) { [Convert]::ToInt64($ac, 16) } else { -1 }
+            Write-Output "$setting on AC: $(if ($seconds -eq 0) { 'never' } elseif ($seconds -lt 0) { 'unknown' } else { "$seconds s" })"
+            if ($seconds -gt 0) { Write-Output "::warning::The gate PC $setting on AC is $seconds s; set it to never." }
+          }
+          try {
+            $battery = Get-CimInstance Win32_Battery -ErrorAction Stop | Select-Object -First 1
+            if ($battery) { Write-Output "Battery: $($battery.EstimatedChargeRemaining)% status $($battery.BatteryStatus) (2 = on AC)" }
+          } catch { }
+          $receipt = Get-ChildItem -Path 'C:\kalcode-ci\pc2-tuning-*.json' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1
+          if ($receipt) { Write-Output "Tuning receipt $($receipt.Name):"; Get-Content -LiteralPath $receipt.FullName -ErrorAction SilentlyContinue | Select-Object -First 40 }
+          else { Write-Output 'No tune-gate-pc2 receipt is readable from this runner account.' }
+          exit 0
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         if: steps.reuse.outputs.reused != 'true'
         with:
