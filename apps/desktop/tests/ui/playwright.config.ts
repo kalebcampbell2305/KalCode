@@ -19,7 +19,7 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   // The self-hosted gate runs this suite fully parallel on a slower machine, where a full-page
   // axe scan takes 15-30 s and some UI waits exceed 5 s. Give CI a realistic budget instead of
-  // failing on time (the gate also fails on flaky retries). No assertion changes.
+  // failing on time. A test that passes only on its retry is reported as flaky, not failed. No assertion changes.
   ...(process.env.CI ? { timeout: 60_000, expect: { timeout: 10_000 } } : {}),
   reporter: process.env.CI ? [["github"], ["list"]] : "list",
   use: {

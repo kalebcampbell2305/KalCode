@@ -211,7 +211,16 @@ export function prepareCheckEvidence(
         }
       }
       const result = await execute();
-      if (!stillExact()) return { id: gate.id, state: "fail", why: `source changed during check: ${drift()}` };
+      if (!stillExact())
+        // The check ran (a rerun candidate once its rewritten source is restored); keep its own verdict too.
+        return {
+          id: gate.id,
+          state: "fail",
+          why: `source changed during check: ${drift()}${result.state === "pass" ? "" : ` (after ${result.why ?? "a failure"})`}`,
+          ran: true,
+          ...(result.timedOut ? { timedOut: true } : {}),
+          ...(Number.isInteger(result.exitCode) && result.exitCode !== 0 ? { exitCode: result.exitCode } : {}),
+        };
       if (result.state === "pass" && path)
         writeJsonAtomic(path, {
           schema: GATE_EVIDENCE_SCHEMA,
@@ -225,5 +234,22 @@ export function prepareCheckEvidence(
       return { ...result, fingerprint: key, reboundTo: g.head };
     },
     stillExact,
+    /**
+     * Before a failed check's rerun: checks out from the candidate only the tracked source that now differs from it
+     * (what the failed attempt rewrote, such as regenerated bindings). Evidence exists only for a gate that started
+     * clean, so no such difference is ever the user's; untracked files and check outputs are left alone.
+     */
+    restore() {
+      if (git.rev("HEAD") !== g.head) return { ok: false, paths: [], why: "HEAD moved" };
+      const paths = changedSource();
+      if (paths.length) {
+        const restored = git.run(["checkout", g.head, "--pathspec-from-file=-", "--pathspec-file-nul"], {
+          allowFail: true,
+          input: paths.map((path) => `:(literal)${path}\0`).join(""),
+        });
+        if (restored === null) return { ok: false, paths, why: `git checkout failed for ${drift()}` };
+      }
+      return stillExact() ? { ok: true, paths } : { ok: false, paths, why: `still differs: ${drift()}` };
+    },
   };
 }

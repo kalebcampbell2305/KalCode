@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { classifyChanges } from "./classify.mjs";
 import { isCheckOutput } from "./gate-evidence.mjs";
-import { runGatePool } from "./gate-pool.mjs";
+import { gateScheduling, runGatePool } from "./gate-pool.mjs";
 import { acquireMachineLock, MACHINE_LOCKED_GATES } from "./machine-lock.mjs";
 import { matchAny } from "./policy.mjs";
 import { stateDir, writeJsonAtomic } from "./status.mjs";
@@ -226,11 +226,71 @@ async function runSerialGate(
           ? `${failedCommand} timed out: the ${g.id} gate exceeded its ${g.timeoutMs >= 60000 ? `${+(g.timeoutMs / 60000).toFixed(1)} min` : `${g.timeoutMs / 1000} s`} limit; its process tree was killed`
           : `${failedCommand} exited ${code}`;
       log(`FAIL ${g.id}: ${why}`);
-      results.push({ id: g.id, state: "fail", why, exitCode: typeof code === "number" ? code : null });
+      // `ran`: the check's own commands executed and one of them failed (a rerun candidate, unlike a refusal).
+      results.push({
+        id: g.id,
+        state: "fail",
+        why,
+        exitCode: typeof code === "number" ? code : null,
+        ran: true,
+        ...(code === TIMED_OUT ? { timedOut: true } : {}),
+      });
       failed = true;
     }
   }
   return { status: failed ? "FAIL" : "PASS", results };
+}
+
+/**
+ * Whether a failed check gets its one rerun. Only a check whose own commands ran and failed: never a cancelled
+ * gate, a refusal before running (changed source, missing tool, machine lock) or a check that overran its whole
+ * `timeoutMs` (a hang would only spend the same budget again). A real failure fails the rerun too.
+ */
+export function shouldRerun(result, { aborted = false } = {}) {
+  return !aborted && result?.state === "fail" && result.ran === true && !result.timedOut;
+}
+
+const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*[A-Za-z]`, "g");
+// The first line that names what failed: cargo, Playwright, Vitest, node:test and test-suites.mjs verdicts.
+const FAILURE_LINE =
+  /(\.\.\. FAILED$|panicked at|^(?:✘|×|✖)\s|^not ok \d|^FAIL\s|^\[test-suites\] .*(?:did not complete|reported|executed zero|below)|\b[A-Z][A-Za-z]*Error:)/u;
+
+/** One line naming a failed attempt: its verdict, plus the first failure line of its output when there is one. */
+export function failureSignature(result, output = "") {
+  const line = String(output)
+    .replace(ANSI, "")
+    .split(/\r?\n/)
+    .map((text) => text.trim())
+    .find((text) => FAILURE_LINE.test(text));
+  const why = result?.why ?? "failed";
+  return line && !why.includes(line) ? `${why}; first failure: ${line.slice(0, 240)}` : why;
+}
+
+/** A GitHub Actions `::notice::` workflow command, escaped so check output cannot inject another command. */
+export function githubNotice(title, message) {
+  const data = (text) => String(text).replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+  const property = (text) => data(text).replace(/:/g, "%3A").replace(/,/g, "%2C");
+  return `::notice title=${property(title)}::${data(message)}`;
+}
+
+/**
+ * Puts the tree back to the state a check's first attempt started from, before its rerun. Without evidence (an
+ * uncommitted tree) nothing is touched: those changes are the user's. With evidence the tree must be the exact
+ * candidate again; only a workspace-exclusive check (nothing else runs beside it) may have the tracked source its
+ * failed attempt rewrote (regenerated bindings) restored, so a rerun never resets another check's files.
+ */
+export function rerunFromCandidate(gate, evidence) {
+  if (!evidence || gate.state !== "selected" || evidence.stillExact?.() !== false) return { ok: true, how: "" };
+  const { resources } = { ...gateScheduling(gate.id), ...gate.scheduling };
+  if (resources?.workspace !== "write" || typeof evidence.restore !== "function")
+    return { ok: false, why: "the tree no longer matches the candidate and other checks share it" };
+  const restored = evidence.restore();
+  return restored.ok
+    ? {
+        ok: true,
+        how: ` from the candidate (restored ${restored.paths.length} tracked file(s) the failed attempt rewrote)`,
+      }
+    : { ok: false, why: `could not restore the candidate: ${restored.why}` };
 }
 
 /** Independent checks continue after another check fails; dependent checks wait. */
@@ -259,8 +319,15 @@ export async function runGates(plan, options) {
         const startedAt = new Date().toISOString();
         report?.start(gate.id);
         let buffer = "";
+        // This attempt's own command output (not gate log lines), for the first-failure signature.
+        let attemptOutput = "";
         const buffered = jobs > 1;
         const log = execution.log ?? (() => {});
+        const note = buffered
+          ? (line) => {
+              buffer += `${line}\n`;
+            }
+          : log;
         if (buffered) log(`..   ${gate.id}: started`);
         const lockName = machineLock?.dir && gate.state === "selected" ? MACHINE_LOCKED_GATES[gate.id] : undefined;
         const execute = async () => {
@@ -283,11 +350,10 @@ export async function runGates(plan, options) {
                 signal: controller.signal,
                 ...(buffered
                   ? {
-                      log: (line) => {
-                        buffer += `${line}\n`;
-                      },
+                      log: note,
                       output: (chunk) => {
                         buffer += chunk;
+                        attemptOutput += chunk;
                       },
                     }
                   : {}),
@@ -297,10 +363,34 @@ export async function runGates(plan, options) {
             release?.();
           }
         };
-        const result = evidence && gate.state === "selected" ? await evidence.run(gate, execute) : await execute();
+        const attempt = () => {
+          attemptOutput = "";
+          return evidence && gate.state === "selected" ? evidence.run(gate, execute) : execute();
+        };
+        let result = await attempt();
+        // One rerun of only this check, so a load-sensitive flake does not cost a whole gate cycle.
+        if (shouldRerun(result, { aborted: controller.signal.aborted })) {
+          const firstFailure = failureSignature(result, attemptOutput);
+          const ready = rerunFromCandidate(gate, evidence);
+          if (ready.ok) {
+            note(`RERUN ${gate.id}: failed once (${firstFailure}); running only this check once more${ready.how}`);
+            const rerun = await attempt();
+            if (rerun.state === "pass") {
+              result = { ...rerun, flaky: true, firstFailure };
+              note(`FLAKY ${gate.id}: passed on its rerun after failing once (${firstFailure})`);
+            } else result = { ...rerun, rerun: true, firstFailure };
+          } else note(`NO RERUN ${gate.id}: ${ready.why}`);
+        }
         if (buffered)
           log(
             `---- ${gate.id} (${Math.round((Date.now() - Date.parse(startedAt)) / 1000)} s) ----\n${buffer.trimEnd()}`,
+          );
+        if (result.flaky && (execution.baseEnv ?? process.env).GITHUB_ACTIONS === "true")
+          log(
+            githubNotice(
+              `Flaky gate check: ${gate.id}`,
+              `${gate.id} failed once, then passed on its automatic rerun. First failure: ${result.firstFailure}`,
+            ),
           );
         if (result.reusedFrom)
           log(`PASS ${gate.id}: verified inputs reused from ${result.reusedFrom}, bound to ${result.reboundTo}`);
