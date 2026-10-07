@@ -1330,7 +1330,7 @@ pub(crate) fn healthy_governor() -> Arc<ResourceGovernorState> {
 }
 
 /// The owner's PC with a build pinning every core (98 % CPU) and plenty of memory.
-fn cpu_saturated_governor() -> Arc<ResourceGovernorState> {
+pub(crate) fn cpu_saturated_governor() -> Arc<ResourceGovernorState> {
     let state = Arc::new(ResourceGovernorState::start_with_probe(Box::new(
         SteadyProbe {
             cpu_percent: 98.0,
@@ -1987,14 +1987,17 @@ fn critically_low_memory_holds_with_the_real_reason_and_start_anyway_starts_it()
 /// The real governor's admission on one machine that a build pins later: until `pin_cpu`, a
 /// quiet moment (12 % CPU); after it, every core busy (98 % CPU). Two real governors, so neither
 /// waits for its smoothed CPU reading to climb.
-struct MachineAdmission {
+pub(crate) struct MachineAdmission {
     quiet: GovernorAdmission,
     busy: GovernorAdmission,
     pinned: AtomicBool,
 }
 
 impl MachineAdmission {
-    fn new(quiet: &Arc<ResourceGovernorState>, busy: &Arc<ResourceGovernorState>) -> Arc<Self> {
+    pub(crate) fn new(
+        quiet: &Arc<ResourceGovernorState>,
+        busy: &Arc<ResourceGovernorState>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             quiet: GovernorAdmission::new(Arc::clone(quiet)),
             busy: GovernorAdmission::new(Arc::clone(busy)),
@@ -2002,7 +2005,7 @@ impl MachineAdmission {
         })
     }
 
-    fn pin_cpu(&self) {
+    pub(crate) fn pin_cpu(&self) {
         self.pinned.store(true, Ordering::SeqCst);
     }
 
@@ -2030,7 +2033,10 @@ impl ProviderAdmission for MachineAdmission {
 }
 
 /// A provider adapter of any kind behind the admission wrapper, on `machine`.
-fn on_machine(machine: &Arc<MachineAdmission>, provider: &'static str) -> Arc<dyn AgentProvider> {
+pub(crate) fn on_machine(
+    machine: &Arc<MachineAdmission>,
+    provider: &'static str,
+) -> Arc<dyn AgentProvider> {
     let inner: Arc<dyn AgentProvider> = Arc::new(FakeProvider {
         id: provider,
         start: FakeStart::Live {

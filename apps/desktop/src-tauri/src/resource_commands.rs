@@ -911,7 +911,7 @@ impl ResourceGovernorState {
     }
 
     #[cfg(test)]
-    fn running_work_for_test(&self) -> RunningWork {
+    pub(crate) fn running_work_for_test(&self) -> RunningWork {
         self.lock().activity.running()
     }
 

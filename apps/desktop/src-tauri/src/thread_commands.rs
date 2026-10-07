@@ -694,6 +694,13 @@ impl ThreadsState {
         self.runtime.clone()
     }
 
+    /// Registers a fixture provider adapter in this runtime, for tests that drive the real
+    /// Operations -> thread admission path.
+    #[cfg(test)]
+    pub(crate) fn register_provider_for_test(&self, provider: Arc<dyn AgentProvider>) {
+        self.providers.register(provider);
+    }
+
     pub fn bind_memory(&self, memory: Arc<crate::unified_memory_commands::MemoryService>) {
         let _ = self.memory.set(memory);
     }

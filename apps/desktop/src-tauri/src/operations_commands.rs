@@ -1181,7 +1181,7 @@ impl OperationsState {
         }
 
         let prepared = row.thread_id.as_deref() == Some(row.id.as_str());
-        self.launch_with_cancellation(row, lease, Some(canceled))?;
+        self.launch_with_cancellation(row, lease, Some(canceled), None)?;
         Ok(!prepared)
     }
 
@@ -1380,7 +1380,7 @@ impl OperationsState {
             lease.revalidate_core()?;
             match self.store.claim(Some(&row.id)) {
                 Ok(Some(claimed)) => {
-                    self.launch(claimed, lease)?;
+                    self.launch(claimed, lease, None)?;
                     launched = true;
                 }
                 Ok(None) => {}
@@ -1787,8 +1787,17 @@ impl OperationsState {
         }
     }
 
-    fn launch(&self, row: OperationRecord, lease: &dyn OperationsLease) -> Result<()> {
-        self.launch_with_cancellation(row, lease, None)
+    /// `pane_origin` is who asked for this one start, when that differs from the stored consent:
+    /// an ordinary task's Run now is the person's own request (`LaunchOrigin::User`) and is never
+    /// held for CPU load, while its consent stays Background. `None` admits the pane with the
+    /// consent's origin (the scheduler's starts, which yield to CPU load).
+    fn launch(
+        &self,
+        row: OperationRecord,
+        lease: &dyn OperationsLease,
+        pane_origin: Option<LaunchOrigin>,
+    ) -> Result<()> {
+        self.launch_with_cancellation(row, lease, None, pane_origin)
     }
 
     fn launch_with_cancellation(
@@ -1796,6 +1805,7 @@ impl OperationsState {
         row: OperationRecord,
         lease: &dyn OperationsLease,
         canceled: Option<&AtomicU8>,
+        pane_origin: Option<LaunchOrigin>,
     ) -> Result<()> {
         if canceled.is_some_and(dispatch_canceled) {
             self.authorized
@@ -1874,7 +1884,7 @@ impl OperationsState {
                             git: &self.git,
                             operation_id: &row.id,
                             spec: &row.spec,
-                            origin: consent.origin,
+                            origin: pane_origin.unwrap_or(consent.origin),
                             isolate,
                             start_revision: execution_version.as_deref(),
                         },
@@ -3617,8 +3627,9 @@ impl OperationsState {
             SquadsStore::new(self.core.clone()).get_member(id)?
         };
         let Some(member) = squad_member else {
-            // Ordinary tasks keep main's Run now exactly: Background consent, and one gate epoch
-            // from the native confirmation through claim and launch.
+            // Ordinary tasks keep Background consent, and one gate epoch from the native
+            // confirmation through claim and launch. The click itself is the person's request,
+            // so this one start is admitted as User work: never held because CPU is high.
             let _gate = self.gate.lock().map_err(|_| poisoned())?;
             let row = self.store.detail(id)?.run;
             let consent = self.authorize(confirmer, &row.spec)?;
@@ -3637,7 +3648,7 @@ impl OperationsState {
                     "Resume the queue and resolve this task's blockers before running it.",
                 )
             })?;
-            return self.launch(claimed, lease);
+            return self.launch(claimed, lease, Some(LaunchOrigin::User));
         };
 
         // A Squad member's Run now is User work its scoped dispatcher may start while the queue
@@ -3749,7 +3760,7 @@ pub async fn operations_service_action(
                 return Err(error);
             }
             s.authorized.lock().map_err(|_| poisoned())?.insert(row.id.clone(), consent);
-            if let Some(row) = s.store.claim(Some(&row.id))? { s.launch(row, s)?; }
+            if let Some(row) = s.store.claim(Some(&row.id))? { s.launch(row, s, None)?; }
         } else if matches!(old.status, OperationStatus::Running | OperationStatus::Starting) {
             s.cancel(&run_id)?;
         }
@@ -5146,6 +5157,160 @@ mod tests {
             OperationStatus::Queued
         );
         squad.shutdown();
+    }
+
+    /// Admits an Operations pane on the real thread runtime exactly as
+    /// `ThreadsState::start_operation` does for a shared-workspace task with a prompt: one
+    /// `create_reviewed_for_operation_with_origin` with the request's origin. The provider and
+    /// account resolution in front of it needs installed CLIs, so it is left out.
+    struct RuntimePanes;
+
+    impl OperationPanes for RuntimePanes {
+        fn canonicalize(
+            &self,
+            _threads: &ThreadsState,
+            _core: &Arc<Core>,
+            spec: &OperationSpec,
+        ) -> Result<OperationSpec> {
+            Ok(spec.clone())
+        }
+
+        fn prepare(
+            &self,
+            _threads: &ThreadsState,
+            _request: OperationPaneRequest<'_>,
+        ) -> Result<ThreadSummary> {
+            unreachable!("ordinary tasks never prepare a pane")
+        }
+
+        fn start(
+            &self,
+            threads: &ThreadsState,
+            request: OperationPaneRequest<'_>,
+        ) -> Result<ThreadSummary> {
+            let spec = request.spec;
+            threads
+                .runtime_handle()
+                .ok_or_else(unavailable)?
+                .create_reviewed_for_operation_with_origin(
+                    request.operation_id,
+                    kalcode_threads::CreateThread {
+                        provider_id: spec.provider_id.clone().expect("agent provider"),
+                        provider_account_id: spec.provider_account_id.clone(),
+                        account_label: None,
+                        workspace_id: spec.workspace_id.clone(),
+                        model: spec.model.clone(),
+                        effort: spec.effort.clone(),
+                        permission_mode: PermissionMode::Auto,
+                        prompt: spec.prompt.clone().expect("agent prompt"),
+                        name: Some(spec.name.clone()),
+                    },
+                    None,
+                    request.origin,
+                )
+        }
+
+        fn deliver(
+            &self,
+            _threads: &ThreadsState,
+            _operation_id: &str,
+            _prompt: Option<&str>,
+        ) -> Result<ThreadSummary> {
+            unreachable!("ordinary tasks never deliver to a prepared pane")
+        }
+
+        fn rearm(&self, _threads: &ThreadsState, _operation_id: &str) -> Result<bool> {
+            Ok(false)
+        }
+    }
+
+    /// Owner rule (AGENTS.md, Resource Governor): user-requested work is never held because CPU
+    /// is high. An ordinary queued agent task's Run now is the person's own request, so through
+    /// Operations and the real thread admission it starts at once while a build pins every core;
+    /// the scheduler's start of the same kind of task still yields to that load.
+    #[test]
+    fn run_now_on_a_queued_operation_is_not_held_for_cpu_load() {
+        use crate::resource_commands::tests::{
+            MachineAdmission, cpu_saturated_governor, healthy_governor, on_machine,
+        };
+
+        let (quiet, busy) = (healthy_governor(), cpu_saturated_governor());
+        let machine = MachineAdmission::new(&quiet, &busy);
+        let mut squad = SquadHarness::new(&[]);
+        Arc::get_mut(&mut squad.state)
+            .expect("the harness owns its state")
+            .panes = Arc::new(RuntimePanes);
+        squad.state.threads.register_provider_for_test(on_machine(
+            &machine,
+            kalcode_contracts::agent::ProviderId::CODEX,
+        ));
+        let task = |name: &str| {
+            let mut spec = observed_spec(
+                name.into(),
+                squad.workspace_id.clone(),
+                OperationKind::Agent,
+            );
+            spec.provider_id = Some("codex".into());
+            spec.prompt = Some(format!("Implement {name}."));
+            spec
+        };
+        machine.pin_cpu();
+
+        // The scheduler's own start, on the consent given when the task was queued, yields.
+        let consent = squad
+            .state
+            .authorize(&AllowAll, &task("Scheduled"))
+            .expect("queue consent");
+        assert_eq!(consent.origin, LaunchOrigin::Background);
+        let scheduled = squad
+            .state
+            .store
+            .enqueue(consent.spec.clone())
+            .expect("enqueue scheduled task");
+        squad
+            .state
+            .authorized
+            .lock()
+            .expect("consent")
+            .insert(scheduled.id.clone(), consent);
+        squad.state.tick(&TestLease).expect("tick");
+        let runtime = squad.state.threads.runtime_handle().expect("runtime");
+        assert_eq!(
+            runtime.get(&scheduled.id).expect("scheduled thread").status,
+            ThreadStatus::WaitingForDependency,
+            "the scheduler's start yields to CPU load"
+        );
+        assert_eq!(busy.running_work_for_test().agents, 0);
+
+        // The person clicks Run now on another queued task: it runs now.
+        let clicked = squad
+            .state
+            .store
+            .enqueue(task("Clicked"))
+            .expect("enqueue clicked task");
+        let started = Instant::now();
+        squad
+            .state
+            .run_now_command(&AllowAll, &TestLease, &clicked.id)
+            .expect("Run now starts");
+        let thread = runtime.get(&clicked.id).expect("Run now thread");
+        assert_eq!(
+            thread.status,
+            ThreadStatus::Active,
+            "Run now was held for CPU load: {:?}",
+            thread.current_activity
+        );
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(busy.running_work_for_test().agents, 1, "only Run now runs");
+        assert_eq!(
+            squad.state.store.get(&clicked.id).expect("row").status,
+            OperationStatus::Running
+        );
+
+        runtime.stop(&scheduled.id).expect("stop the waiting task");
+        runtime.stop(&clicked.id).expect("stop the Run now task");
+        squad.shutdown();
+        assert!(quiet.shutdown_checked() && busy.shutdown_checked());
     }
 
     #[test]
