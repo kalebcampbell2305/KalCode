@@ -18,6 +18,8 @@ export const ACCOUNT_READY_FIXTURE_OPT_IN = "ready-v1";
 export const ACCOUNT_KALVOICE_FIXTURE_OPT_IN = "kalvoice-under-limit-v1";
 /** A signed MAX account: features placed on MAX, such as agent handoff. */
 export const ACCOUNT_MAX_FIXTURE_OPT_IN = "max-v1";
+/** A signed OWNER account: features narrowed to OWNER, such as KalCode Remote for now. */
+export const ACCOUNT_OWNER_FIXTURE_OPT_IN = "owner-v1";
 export const RESOURCE_PROVIDER_FIXTURE_OPT_IN = "provider-capacity-v1";
 const ACCOUNT_FIXTURE_PREFIX = "kalcode-e2e-account-";
 const ACCOUNT_FIXTURE_MARKER = ".kalcode-account-e2e-v1";

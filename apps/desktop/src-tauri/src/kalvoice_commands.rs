@@ -39,7 +39,7 @@ use kalcode_kalvoice::latency::{LatencyLog, LatencySnapshot};
 use kalcode_kalvoice::models::{self, SpeechModelInfo, SpeechModelState};
 use kalcode_kalvoice::orchestrator::{
     CommandRequest, KalVoiceResponse, Orchestrator, ProviderChoice, ProviderDirectory,
-    RequestStage, TalkRequest, TalkResponse, UiCommandRequest, provider_display_name,
+    RequestStage, TalkRequest, TalkResponse, UiCommandRequest, UiDirective, provider_display_name,
 };
 use kalcode_kalvoice::prefs::{KalVoicePreferences, KalVoicePreferencesPatch};
 use kalcode_kalvoice::shortcuts;
@@ -226,6 +226,48 @@ impl KalVoiceState {
         self.0
             .as_ref()
             .is_none_or(|runtime| runtime.shutdown(app, Duration::from_secs(5)))
+    }
+
+    /// KalCode Remote: runs a typed agent action through the orchestrator (claim and replay by
+    /// request id, the executor's safety check, then the executor). Blocking; never metered.
+    pub(crate) fn remote_intent(
+        &self,
+        request: CommandRequest,
+        intent: kalcode_contracts::kalvoice::KalVoiceIntent,
+    ) -> Result<KalVoiceResponse, IpcError> {
+        self.runtime()?
+            .orchestrator
+            .handle_intent(request, intent)
+            .map_err(to_ipc("remote_intent"))
+    }
+
+    /// KalCode Remote's `voice.command`: the device's transcript through the same pipeline as a
+    /// typed command bar request. Blocking.
+    pub(crate) fn remote_command(
+        &self,
+        request: CommandRequest,
+    ) -> Result<KalVoiceResponse, IpcError> {
+        let runtime = self.runtime()?;
+        let response = runtime
+            .orchestrator
+            .handle(request)
+            .map_err(to_ipc("remote_command"))?;
+        synchronize_usage(runtime);
+        Ok(response)
+    }
+
+    /// Tells the window what a Remote action changed, so it reconciles at once.
+    pub(crate) fn remote_acted(
+        &self,
+        directive: Option<UiDirective>,
+        closed_agent_ids: Vec<String>,
+    ) {
+        if let Some(runtime) = &self.0 {
+            runtime.signal(&KalVoiceSignal::RemoteActed {
+                directive,
+                closed_agent_ids,
+            });
+        }
     }
 
     /// Live-only Operations callback sink. Durable completion details stay in Operations; this
@@ -2447,6 +2489,7 @@ fn signal_kind(signal: &KalVoiceSignal) -> &'static str {
         KalVoiceSignal::Provisioning { .. } => "provisioning",
         KalVoiceSignal::RequestStage { .. } => "request_stage",
         KalVoiceSignal::RequestResolved { .. } => "request_resolved",
+        KalVoiceSignal::RemoteActed { .. } => "remote_acted",
         KalVoiceSignal::Speaking { .. } => "speaking",
         KalVoiceSignal::LifecycleCallback { .. } => "lifecycle_callback",
         KalVoiceSignal::TalkKey { .. } => "talk_key",

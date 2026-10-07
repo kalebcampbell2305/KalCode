@@ -768,7 +768,10 @@ fn pane_creation_error(
 
 /// The provider-native effort a new pane starts with (`None`: the provider default). Gemini CLI
 /// has no effort setting.
-fn pane_effort(provider_id: &str, effort: Option<String>) -> Result<Option<String>, IpcError> {
+pub(crate) fn pane_effort(
+    provider_id: &str,
+    effort: Option<String>,
+) -> Result<Option<String>, IpcError> {
     kalcode_providers::interactive::normalize_effort(provider_id, effort.as_deref())
         .map_err(|message| KalError::validation("invalid_effort", message).to_ipc())
 }

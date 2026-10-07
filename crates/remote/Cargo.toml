@@ -1,0 +1,33 @@
+[package]
+name = "kalcode-remote"
+description = "KalCode Remote protocol: Noise IK transport, pairing, device registry and the host-agnostic connection driver (docs/REMOTE_PROTOCOL.md)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "kalcode_remote"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+time.workspace = true
+snow = { version = "0.10", default-features = false, features = ["std", "default-resolver", "use-curve25519", "use-chacha20poly1305", "use-sha2", "use-getrandom"] }
+tokio = { version = "1", default-features = false, features = ["rt", "net", "io-util", "time", "sync", "macros"] }
+base64 = "0.22"
+getrandom = "0.4"
+subtle = "2.6"
+zeroize = "1"
+
+[dev-dependencies]
+tempfile.workspace = true
+hex = "0.4"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util", "io-std"] }
+qrcode = { version = "0.14", default-features = false }
+
+[lints]
+workspace = true
