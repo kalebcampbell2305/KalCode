@@ -170,8 +170,8 @@
           "platforms": ["win32"],
           "environment": {},
           "minimumExecuted": 1258,
-          "skippedMinimum": 36,
-          "skippedMaximum": 36,
+          "skippedMinimum": 37,
+          "skippedMaximum": 37,
           "allowedSkipReasons": [],
           "maximumFlaky": 0
         },
@@ -179,8 +179,8 @@
           "platforms": ["darwin"],
           "environment": {},
           "minimumExecuted": 1258,
-          "skippedMinimum": 35,
-          "skippedMaximum": 35,
+          "skippedMinimum": 36,
+          "skippedMaximum": 36,
           "allowedSkipReasons": [],
           "maximumFlaky": 0
         },
@@ -188,8 +188,8 @@
           "platforms": ["linux"],
           "environment": {},
           "minimumExecuted": 1258,
-          "skippedMinimum": 32,
-          "skippedMaximum": 32,
+          "skippedMinimum": 33,
+          "skippedMaximum": 33,
           "allowedSkipReasons": [],
           "maximumFlaky": 0
         }
@@ -415,6 +415,10 @@
     {
       "path": "crates/providers/tests/claude_sign_in_real.rs",
       "reason": "needs KALCODE_REAL_CLAUDE and KALCODE_REAL_CLAUDE_LOGIN_PROBE=1; opens the browser once"
+    },
+    {
+      "path": "crates/providers/tests/codex_certification_real.rs",
+      "reason": "needs a real Codex CLI (KALCODE_CERTIFY_CODEX); no sign-in, prompt or quota"
     },
     {
       "path": "crates/providers/tests/codex_certification_real.rs",

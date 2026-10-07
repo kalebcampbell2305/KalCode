@@ -58,7 +58,8 @@ certification was explicitly executed on both supported platforms.
 ## Observed verification
 
 - Windows provider library and all registered integration targets: **619 passed, 0 failed**;
-  23 opt-in native/provider tests ignored in that default invocation.
+  23 opt-in native/provider tests ignored in that default invocation (22 existing plus the
+  new real-runtime certification, executed separately on both supported platforms).
 - Windows desktop affected provider filter: **93 passed, 0 failed**; additional exact KalVoice
   managed-runtime readiness test: **1 passed**.
 - macOS provider library and all registered integration targets: **604 passed, 0 failed**;
@@ -80,6 +81,10 @@ certification was explicitly executed on both supported platforms.
   requests. Global Windows Codex remained 0.161.0; global macOS Codex remained 0.160.0 while its
   0.161.0 proof used an isolated official npm prefix.
 - The owner KalCode process and both Codex processes observed at preflight remained running.
+
+The shared train identified a missing inventory registration for the new opt-in native
+certification. Its reviewed entry and exact cross-platform ignore counts were added; no existing
+test was disabled. The inventory audit reproduced the omission before the correction.
 
 ## Rollback and delivery
 
