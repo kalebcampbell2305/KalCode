@@ -998,6 +998,31 @@ export function createTrain({
   const headsKey = (items) => items.map((i) => `${i.number}:${i.head}`).join(",");
 
   /**
+   * The deepest candidate on main's chain that is still exact (every PR still queued at the same head) and
+   * whose gate is running or green, with the existing levels that are its prefixes, shallowest first. A failed,
+   * cancelled or never-started stack is not pinned: it re-plans as before (attribution, bisect, re-trigger).
+   */
+  async function pinnedStack(valid, byNumber, landedLength) {
+    const deepestFirst = [...valid.values()]
+      .filter((c) => c.included.length > landedLength)
+      .sort((a, b) => b.included.length - a.included.length);
+    for (const stack of deepestFirst) {
+      if (!stack.included.every((i) => byNumber.get(i.number)?.head === i.head)) continue;
+      const gate = (await provider.gateStatus(stack.sha, stack.branch)).state;
+      // A push's gate run takes a few seconds to register: a stack this train just built counts as gating.
+      const builtAt = loadState().candidates?.[stack.branch]?.builtAt;
+      const starting = gate === "missing" && builtAt !== undefined && now() - builtAt < abandonAfterMs;
+      if (gate !== "pending" && gate !== "success" && !starting) continue;
+      const prefixes = [...valid.values()]
+        .filter((c) => c.included.length <= stack.included.length)
+        .filter((c) => headsKey(stack.included.slice(0, c.included.length)) === headsKey(c.included))
+        .sort((a, b) => a.included.length - b.included.length);
+      return { stack, gate, prefixes };
+    }
+    return null;
+  }
+
+  /**
    * One round for every lane at once, as speculative stacked levels on ONE captured main SHA:
    *   level 1 = main + lane 1,  level 2 = level 1 + lane 2,  ...
    * Every level is an exact candidate pushed in this round, so the gate pool validates all of them
@@ -1055,6 +1080,39 @@ export function createTrain({
       const levels = [];
       const skipped = [];
       const deltaCache = new Map();
+
+      // Append-only while gating: the deepest still-exact stack whose gate is running (or green) keeps its
+      // levels as they are, and newly queued PRs stack ABOVE it. A PR joining the queue, or a re-plan that
+      // would order the lanes differently, never rebuilds or cancels a gate in flight (2026-10-07: the deep
+      // candidate was rebuilt six times in 2.5 h and #370 never finished a gate). A stack is released only
+      // when one of its own PRs changed or left the queue, main moved off its chain, or its gate failed.
+      const pinned = await pinnedStack(valid, planned.byNumber, included.length);
+      if (pinned) {
+        let previous = included.length; // the anchor's levels that main already contains
+        for (const c of pinned.prefixes) {
+          if (c.included.length <= previous) continue;
+          const added = c.included.slice(previous).map((i) => i.number);
+          levels.push({
+            branch: c.branch,
+            sha: c.sha,
+            base: c.base,
+            included: c.included.map(({ number, head }) => ({
+              number,
+              head,
+              title: planned.byNumber.get(number)?.title ?? "",
+            })),
+            lane: "pinned",
+            laneNumbers: state.candidates?.[c.branch]?.lane ?? added,
+            added,
+            action: "reused",
+          });
+          valid.delete(c.branch);
+          previous = c.included.length;
+        }
+        included = levels.at(-1).included;
+        tip = pinned.stack.sha;
+        log(`keeping gating stack ${pinned.stack.branch} (${pinned.gate}); new PRs stack above it`);
+      }
       for (const lane of planned.lanes) {
         const lanePrs = planned.prs.filter((p) => lane.numbers.includes(p.number));
         const ordered = [];
