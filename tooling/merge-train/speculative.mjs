@@ -9,16 +9,18 @@
 //   - one lookahead release at a time, machine-wide (<lanes>/release-lookahead/active.json);
 //   - never for a SHA that already has a front half (kit state dir candidate-<sha12>, a front-half log, or a
 //     record of an earlier lookahead launch, which also means a failed launch is never retried automatically);
-//   - detached at BelowNormal (or Idle) priority, so it only takes CPU the gates leave; the kit itself drops its
-//     Windows build to Idle in speculative mode;
+//   - started so it outlives the train (Start-Process, as by hand; see startDetached) at BelowNormal (or Idle)
+//     priority, so it only takes CPU the gates leave; the kit itself drops its Windows build to Idle;
+//   - a candidate that changes data/updater paths gets the kit's prepare-release.ps1 -AllowDataOrUpdaterChanges
+//     first (logged); -MacFromCommit is the Mac warm tree's commit, and the Mac step is skipped (logged) when that
+//     is not an ancestor of the candidate;
 //   - every failure is logged and swallowed: the train never breaks because of the lookahead.
 //
 // Paths (env, with defaults): KALCODE_RELEASE_KIT (kit folder), KALCODE_RELEASE_WINDOWS_SEED (warm target dir;
 // default: newest KALCODE_RELEASE_SEED_ROOT\kc-release-code-primary-*\target by mtime, root default C:\),
 // KALCODE_RELEASE_LOOKAHEAD_PRIORITY (below-normal | idle, default below-normal).
-import { spawn as nodeSpawn } from "node:child_process";
+import { spawnSync as nodeSpawnSync } from "node:child_process";
 import * as nodeFs from "node:fs";
-import { constants as osConstants, setPriority as osSetPriority } from "node:os";
 import { join } from "node:path";
 
 import { classifyRange } from "../release/lifecycle/classify.mjs";
@@ -28,6 +30,7 @@ import { loadPolicy } from "../release/lifecycle/policy.mjs";
 export const LOOKAHEAD_ENV = "KALCODE_RELEASE_LOOKAHEAD";
 export const DEFAULT_RELEASE_KIT = "C:\\kc-code-primary\\target\\code-primary-release";
 export const FRONT_HALF_SCRIPT = "release-front-half.ps1";
+export const PREPARE_SCRIPT = "prepare-release.ps1";
 export const SEED_PREFIX = "kc-release-code-primary-";
 const CANDIDATE = /^merge-train\/[0-9a-f]{12}-[0-9a-f]{8}$/;
 const SHA = /^[0-9a-f]{40}$/;
@@ -154,7 +157,8 @@ export function placeholderNotes({ branch, sha }) {
   return `Speculative build of merge-train candidate ${branch} at ${sha}.\nPlaceholder only: release notes are written when the front half is rerun after landing.\n`;
 }
 
-export function frontHalfArgs({ kit, sha, branch, notesDraft, windowsSeed, repo }) {
+/** powershell.exe arguments for the kit's front half, always speculative (-SpeculativeRef). */
+export function frontHalfArgs({ kit, sha, branch, notesDraft, windowsSeed, repo, macFromCommit = null }) {
   return [
     "-NoProfile",
     "-NonInteractive",
@@ -174,23 +178,222 @@ export function frontHalfArgs({ kit, sha, branch, notesDraft, windowsSeed, repo 
     repo,
     "-Kit",
     kit,
+    ...(macFromCommit ? ["-MacFromCommit", macFromCommit] : []),
   ];
 }
 
+/** One Windows command line from argv (CommandLineToArgvW quoting), for Start-Process -ArgumentList. */
+export function windowsCommandLine(args) {
+  return args
+    .map((arg) => {
+      const s = String(arg);
+      if (s && !/[\s"]/.test(s)) return s;
+      return `"${s.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, "$1$1")}"`;
+    })
+    .join(" ");
+}
+
+// Why not child_process.spawn({ detached: true })? On Windows that is DETACHED_PROCESS: powershell.exe gets no
+// console and exits 0 at once without running the script (seen live 2026-10-06: pid gone in seconds, empty logs).
+// Without `detached`, libuv puts the child in a kill-on-close job, so it dies with the train process. So a
+// short-lived powershell (in that job, with a hidden console) does what works by hand: Start-Process with
+// redirected output. libuv's job allows silent breakaway, so the started process outlives the train. The launcher
+// lowers its own priority first, so the front half and everything it starts inherit BelowNormal/Idle. Its stdio is
+// NUL and it reports through a result file: Start-Process children inherit handles, and an inherited stdout pipe
+// would keep spawnSync waiting until the whole front half exits.
+const LAUNCHER = `$ErrorActionPreference = 'Stop'
+$a = $env:KALCODE_LOOKAHEAD_LAUNCH | ConvertFrom-Json
+try {
+  try { (Get-Process -Id $PID).PriorityClass = $a.priority } catch { }
+  $p = Start-Process -FilePath $a.file -ArgumentList $a.argumentList -WindowStyle Hidden -PassThru -RedirectStandardOutput $a.out -RedirectStandardError $a.err
+  try { $p.PriorityClass = $a.priority } catch { }
+  [IO.File]::WriteAllText($a.result, "PID=$($p.Id)")
+} catch {
+  [IO.File]::WriteAllText($a.result, "ERROR=$($_.Exception.Message)")
+  exit 1
+}`;
+
+/** Starts `file args` so it outlives this process, with stdout/stderr redirected; returns its pid. */
+export function startDetached({
+  file = "powershell.exe",
+  args,
+  out,
+  err,
+  priority = "below-normal",
+  spawnSync = nodeSpawnSync,
+  env = process.env,
+  fs = nodeFs,
+}) {
+  const result = `${out}.launch`;
+  try {
+    fs.unlinkSync(result);
+  } catch {}
+  const payload = JSON.stringify({
+    file,
+    argumentList: windowsCommandLine(args),
+    out,
+    err,
+    result,
+    priority: priority === "idle" ? "Idle" : "BelowNormal",
+  });
+  const r = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-EncodedCommand",
+      Buffer.from(LAUNCHER, "utf16le").toString("base64"),
+    ],
+    { env: { ...env, KALCODE_LOOKAHEAD_LAUNCH: payload }, stdio: "ignore", windowsHide: true, timeout: 120_000 },
+  );
+  let said = "";
+  try {
+    said = fs.readFileSync(result, "utf8").trim();
+    fs.unlinkSync(result);
+  } catch {}
+  const pid = Number(/^PID=(\d+)$/.exec(said)?.[1]);
+  if (r.error || r.status !== 0 || !(pid > 0)) {
+    const why = r.error?.message || said.replace(/^ERROR=/, "") || `exit ${r.status}`;
+    throw new Error(`could not start ${file}: ${why}`);
+  }
+  return pid;
+}
+
+// The kit's own data/updater rules (prepare-release.ps1): such candidates need -AllowDataOrUpdaterChanges.
+const DATA_PATH = /^crates\/(native-core|timeline)\/migrations\//;
+const UPDATER_PATH = /^(crates\/updater\/|apps\/desktop\/src-tauri\/src\/updater)/;
+export function dataOrUpdaterChanges(paths) {
+  const data = paths.some((p) => DATA_PATH.test(p));
+  const updater = paths.some((p) => UPDATER_PATH.test(p));
+  return { data, updater, any: data || updater };
+}
+
+const readJson = (fs, path) => {
+  try {
+    return JSON.parse(fs.readFileSync(path, "utf8"));
+  } catch {
+    return null;
+  }
+};
+/** Kit candidates with an identity: [{ dir, identity, macStartedAt }] (macStartedAt: its Mac package ran). */
+function kitCandidates({ kit, fs }) {
+  let entries = [];
+  try {
+    entries = fs.readdirSync(kit, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !/^candidate-[0-9a-f]{12}$/.test(entry.name)) continue;
+    const dir = join(kit, entry.name);
+    const identity = readJson(fs, join(dir, "identity.json"));
+    if (!SHA.test(identity?.commit ?? "")) continue;
+    let macStartedAt = null;
+    try {
+      for (const name of fs.readdirSync(dir)) {
+        if (!/^start-mac-\d+\.log$/.test(name)) continue;
+        const path = join(dir, name);
+        if (!/STARTED/.test(fs.readFileSync(path, "utf8"))) continue;
+        const t = fs.statSync(path).mtimeMs;
+        if (macStartedAt === null || t > macStartedAt) macStartedAt = t;
+      }
+    } catch {}
+    out.push({ dir, identity, macStartedAt });
+  }
+  return out;
+}
+
 /**
- * Takes the machine-wide lookahead lock, writes the placeholder draft, starts the kit's front half detached in
- * speculative mode, lowers its priority, records the launch and appends one merge-log line. Throws on failure
- * (and leaves no lock behind); releaseLookahead() logs and swallows it.
+ * -MacFromCommit: the Mac warm tree's HEAD, i.e. the commit of the kit candidate whose Mac package ran most
+ * recently (else the train base). The warm tree also requires it to be an ancestor of the candidate; when it is
+ * not, the Mac step is skipped with a reason (the Windows half still runs).
+ */
+export function macFromCommit({ kit, sha, base, isAncestor, fs = nodeFs }) {
+  const ran = kitCandidates({ kit, fs })
+    .filter((c) => c.macStartedAt !== null)
+    .sort((a, b) => b.macStartedAt - a.macStartedAt)[0];
+  const from = ran?.identity.commit ?? base ?? null;
+  const source = ran ? `Mac package of ${ran.identity.release ?? ran.identity.commit.slice(0, 12)}` : "train base";
+  if (!SHA.test(from ?? "")) return { from: null, skip: "no Mac warm-tree commit known" };
+  if (!isAncestor(from, sha)) {
+    return {
+      from: null,
+      source,
+      skip: `Mac warm-tree commit ${from.slice(0, 12)} (${source}) is not an ancestor of ${sha.slice(0, 12)}`,
+    };
+  }
+  return { from, source };
+}
+
+/**
+ * Paths the kit's data/updater check will see: prepare-release diffs the live Stable commit .. candidate. The
+ * newest kit identity's liveCommit stands in for it (no network); the train base when that is unknown.
+ */
+export function pathsSinceLive({ kit, sha, base, isAncestor, diffNames, fs = nodeFs }) {
+  const newest = kitCandidates({ kit, fs }).sort((a, b) => (b.identity.build ?? 0) - (a.identity.build ?? 0))[0];
+  const live = newest?.identity.liveCommit;
+  const from = SHA.test(live ?? "") && isAncestor(live, sha) ? live : base;
+  return { from, paths: diffNames(from, sha) };
+}
+
+const kitPowerShell = (kit, script, args) => [
+  "-NoProfile",
+  "-NonInteractive",
+  "-ExecutionPolicy",
+  "Bypass",
+  "-File",
+  join(kit, script),
+  ...args,
+];
+
+/** Runs the kit's prepare-release.ps1 -AllowDataOrUpdaterChanges for the candidate (speculative ref env set). */
+export function prepareWithDataOrUpdater({ kit, sha, branch, repo, spawnSync = nodeSpawnSync, env = process.env }) {
+  const r = spawnSync(
+    "powershell.exe",
+    kitPowerShell(kit, PREPARE_SCRIPT, [
+      "-Commit",
+      sha,
+      "-Repo",
+      repo,
+      "-StateRoot",
+      kit,
+      "-AllowDataOrUpdaterChanges",
+    ]),
+    {
+      env: { ...env, KALCODE_SPECULATIVE_REF: `refs/heads/${branch}`, KALCODE_SPECULATIVE_PR: "" },
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 300_000,
+    },
+  );
+  if (r.error || r.status !== 0) {
+    throw new Error(
+      `prepare-release -AllowDataOrUpdaterChanges failed: ${r.error?.message || String(r.stderr ?? "").trim() || `exit ${r.status}`}`,
+    );
+  }
+}
+
+/**
+ * Takes the machine-wide lookahead lock, writes the placeholder draft, runs prepare-release first when the
+ * candidate changes data/updater paths, starts the kit's front half in speculative mode so it outlives the train,
+ * records the launch and appends one merge-log line. Throws on failure (and leaves no lock behind; a record stays,
+ * so the SHA is not retried every round); releaseLookahead() logs and swallows it.
  */
 export function launchSpeculativeFrontHalf({
   level,
   repo,
   config,
   windowsSeed,
+  mac = { from: null },
+  dataOrUpdater = { any: false },
   mergeLog = null,
+  log = () => {},
   now = Date.now,
-  spawn = nodeSpawn,
-  setPriority = osSetPriority,
+  spawnSync = nodeSpawnSync,
+  env = process.env,
   fs = nodeFs,
 }) {
   const { dir, kit, priority } = config;
@@ -203,47 +406,62 @@ export function launchSpeculativeFrontHalf({
   fs.writeFileSync(lock, `${JSON.stringify({ pid: null, sha, branch, startedAt: now(), launching: process.pid })}\n`, {
     flag: "wx",
   });
-  let out = null;
-  let err = null;
+  const record = { pid: null, sha, branch, startedAt: now(), windowsSeed, kit, priority, mac, dataOrUpdater };
   try {
-    const notesDraft = join(dir, `notes-${c12}.draft.md`);
-    fs.writeFileSync(notesDraft, placeholderNotes({ branch, sha }));
-    const logPath = join(dir, `front-half-spec-${c12}.log`);
-    out = fs.openSync(logPath, "a");
-    err = fs.openSync(join(dir, `front-half-spec-${c12}.err.log`), "a");
-    const args = frontHalfArgs({ kit, sha, branch, notesDraft, windowsSeed, repo });
-    const child = spawn("powershell.exe", args, { detached: true, stdio: ["ignore", out, err], windowsHide: true });
-    if (!child?.pid) throw new Error("the release kit front half did not start");
-    child.on?.("error", () => {});
-    child.unref?.();
-    try {
-      setPriority(
-        child.pid,
-        priority === "idle" ? osConstants.priority.PRIORITY_LOW : osConstants.priority.PRIORITY_BELOW_NORMAL,
+    record.notesDraft = join(dir, `notes-${c12}.draft.md`);
+    fs.writeFileSync(record.notesDraft, placeholderNotes({ branch, sha }));
+    if (dataOrUpdater.any) {
+      log(
+        `release lookahead: ${branch} @${c12} changes data/updater paths (data=${dataOrUpdater.data} updater=${dataOrUpdater.updater}); running prepare-release.ps1 -AllowDataOrUpdaterChanges first`,
       );
-    } catch {}
-    const startedAt = now();
-    const record = { pid: child.pid, sha, branch, startedAt, notesDraft, windowsSeed, kit, log: logPath, priority };
+      prepareWithDataOrUpdater({ kit, sha, branch, repo, spawnSync, env });
+    }
+    if (mac.skip) log(`release lookahead: SKIP Mac for ${branch} @${c12}: ${mac.skip}; the Windows half still runs`);
+    record.log = join(dir, `front-half-spec-${c12}.log`);
+    record.pid = startDetached({
+      args: frontHalfArgs({
+        kit,
+        sha,
+        branch,
+        notesDraft: record.notesDraft,
+        windowsSeed,
+        repo,
+        macFromCommit: mac.from,
+      }),
+      out: record.log,
+      err: join(dir, `front-half-spec-${c12}.err.log`),
+      priority,
+      spawnSync,
+      env,
+    });
+    record.startedAt = now();
     fs.writeFileSync(lock, `${JSON.stringify(record)}\n`);
     fs.writeFileSync(recordPath(dir, sha), `${JSON.stringify(record, null, 2)}\n`);
     if (mergeLog) {
       try {
         fs.appendFileSync(
           mergeLog,
-          `${new Date(startedAt).toISOString()} | merge-train | SPECULATIVE RELEASE STARTED ${branch} @${c12} (pid ${child.pid})\n`,
+          `${new Date(record.startedAt).toISOString()} | merge-train | SPECULATIVE RELEASE STARTED ${branch} @${c12} (pid ${record.pid})\n`,
         );
       } catch {}
     }
     return record;
   } catch (error) {
     try {
+      fs.writeFileSync(
+        recordPath(dir, sha),
+        `${JSON.stringify({ ...record, failed: error.message, failedAt: now() }, null, 2)}\n`,
+      );
+    } catch {}
+    try {
       fs.unlinkSync(lock);
     } catch {}
     throw error;
-  } finally {
-    for (const fd of [out, err]) if (fd !== null) fs.closeSync(fd);
   }
 }
+
+const gitIn = (repo, spawnSync) => (args) =>
+  spawnSync("git", ["-C", repo, ...args], { encoding: "utf8", windowsHide: true, timeout: 60_000 });
 
 /** The train's after-build hook. Never throws. */
 export async function releaseLookahead({
@@ -258,8 +476,8 @@ export async function releaseLookahead({
   isDesktop = null,
   isAlive = defaultIsAlive,
   now = Date.now,
-  spawn = nodeSpawn,
-  setPriority = osSetPriority,
+  spawnSync = nodeSpawnSync,
+  git = null,
   fs = nodeFs,
 }) {
   if (!lookaheadEnabled(env)) return { launch: false, reason: "disabled" };
@@ -294,18 +512,34 @@ export async function releaseLookahead({
       log(`release lookahead: no warm Windows seed under ${config.seedRoot}; set KALCODE_RELEASE_WINDOWS_SEED`);
       return { launch: false, reason: "no-windows-seed", level: decision.level };
     }
+    const run = git ?? gitIn(repo, spawnSync);
+    const isAncestor = (a, b) => run(["merge-base", "--is-ancestor", a, b]).status === 0;
+    const diffNames = (a, b) => {
+      const r = run(["diff", "--name-only", "-z", a, b]);
+      if (r.status !== 0) throw new Error(`git diff ${a.slice(0, 12)} ${b.slice(0, 12)} failed`);
+      return String(r.stdout).split("\0").filter(Boolean);
+    };
+    const { sha } = decision.level;
+    const base = decision.level.base ?? manifest.base;
+    const mac = macFromCommit({ kit: config.kit, sha, base, isAncestor, fs });
+    const since = pathsSinceLive({ kit: config.kit, sha, base, isAncestor, diffNames, fs });
+    const dataOrUpdater = { ...dataOrUpdaterChanges(since.paths), since: since.from };
     const record = launchSpeculativeFrontHalf({
       level: decision.level,
       repo: mainCheckout ?? repo,
       config,
       windowsSeed,
+      mac,
+      dataOrUpdater,
       mergeLog,
+      log,
       now,
-      spawn,
-      setPriority,
+      spawnSync,
+      env,
       fs,
     });
-    log(`release lookahead: SPECULATIVE RELEASE STARTED${what} (pid ${record.pid}, log ${record.log})`);
+    const macNote = mac.from ? `, Mac from ${mac.from.slice(0, 12)}` : ", Mac skipped";
+    log(`release lookahead: SPECULATIVE RELEASE STARTED${what} (pid ${record.pid}${macNote}, log ${record.log})`);
     return { launch: true, level: decision.level, record };
   } catch (error) {
     log(`warning: release lookahead failed (the train continues): ${error.message}`);

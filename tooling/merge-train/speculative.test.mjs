@@ -1,23 +1,27 @@
-// Release lookahead: the decision, the launcher (spawn is always a stub; the real kit never runs here) and the
-// on-landed message.
+// Release lookahead: the decision, the launcher and the on-landed message. The real release kit never runs here:
+// powershell/git are stubs, and the one real launch starts a stub .ps1.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
-import { constants as osConstants, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, test } from "node:test";
 
 import onLanded from "./on-landed.mjs";
 import {
+  dataOrUpdaterChanges,
   decideLookahead,
   frontHalfArgs,
   frontHalfDone,
+  macFromCommit,
   makeDesktopClassifier,
   newestWindowsSeed,
+  pathsSinceLive,
   placeholderNotes,
   readActive,
   releaseLookahead,
   speculativeFrontHalfFor,
+  windowsCommandLine,
 } from "./speculative.mjs";
 
 const temps = [];
@@ -189,6 +193,60 @@ describe("makeDesktopClassifier (ship.mjs classify policy)", () => {
   });
 });
 
+/** CommandLineToArgvW, enough to read back what windowsCommandLine() produced. */
+function parseCommandLine(line) {
+  const out = [];
+  let cur = "";
+  let quoted = false;
+  let any = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === "\\") {
+      let n = 0;
+      while (line[i] === "\\") {
+        n++;
+        i++;
+      }
+      if (line[i] === '"') {
+        cur += "\\".repeat(Math.floor(n / 2));
+        if (n % 2) cur += '"';
+        else quoted = !quoted;
+      } else {
+        cur += "\\".repeat(n);
+        i--;
+      }
+      any = true;
+    } else if (ch === '"') {
+      quoted = !quoted;
+      any = true;
+    } else if (/\s/.test(ch) && !quoted) {
+      if (any) out.push(cur);
+      cur = "";
+      any = false;
+    } else {
+      cur += ch;
+      any = true;
+    }
+  }
+  if (any) out.push(cur);
+  return out;
+}
+
+const writeIdentity = (kit, sha, extra = {}, macAgeSec = null) => {
+  const dir = join(kit, `candidate-${sha.slice(0, 12)}`);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "identity.json"),
+    JSON.stringify({ commit: sha, release: `0.1.9+${extra.build ?? 1}`, ...extra }),
+  );
+  if (macAgeSec !== null) {
+    const log = join(dir, `start-mac-${extra.build ?? 1}.log`);
+    writeFileSync(log, "STARTED mac job\n");
+    const t = new Date(Date.now() - macAgeSec * 1000);
+    utimesSync(log, t, t);
+  }
+};
+
 function fixture() {
   const root = tempDir();
   const lanesDir = join(root, "lanes");
@@ -206,13 +264,34 @@ function fixture() {
     utimesSync(target, t, t);
   }
   const env = { KALCODE_RELEASE_LOOKAHEAD: "1", KALCODE_RELEASE_KIT: kit, KALCODE_RELEASE_SEED_ROOT: seedRoot };
-  const spawned = [];
-  const priorities = [];
+  const launched = []; // front halves started through the Start-Process launcher
+  const prepared = []; // prepare-release.ps1 runs
+  const calls = []; // every spawnSync, in order
   let nextPid = 4242;
-  const spawn = (command, args, options) => {
-    const pid = nextPid++;
-    spawned.push({ command, args, options, pid });
-    return { pid, unref() {}, on() {} };
+  const state = { prepareStatus: 0, launcherFails: false };
+  // Stands in for powershell.exe: never runs anything.
+  const spawnSync = (command, args, options) => {
+    calls.push(args.includes("-EncodedCommand") ? "launcher" : "prepare");
+    if (args.includes("-EncodedCommand")) {
+      const payload = JSON.parse(options.env.KALCODE_LOOKAHEAD_LAUNCH);
+      if (state.launcherFails) {
+        writeFileSync(payload.result, "ERROR=Access is denied");
+        return { status: 1 };
+      }
+      const pid = nextPid++;
+      launched.push({ command, options, payload, args: parseCommandLine(payload.argumentList), pid });
+      writeFileSync(payload.result, `PID=${pid}`);
+      return { status: 0 };
+    }
+    prepared.push({ command, args, options });
+    return { status: state.prepareStatus, stderr: state.prepareStatus ? "data/updater proof missing" : "" };
+  };
+  // Stands in for git in the main checkout.
+  const gitState = { notAncestors: new Set(), diff: ["apps/desktop/src/a.ts"] };
+  const git = (args) => {
+    if (args[0] === "merge-base") return { status: gitState.notAncestors.has(args[2]) ? 1 : 0, stdout: "" };
+    if (args[0] === "diff") return { status: 0, stdout: gitState.diff.join("\0") };
+    throw new Error(`unexpected git ${args.join(" ")}`);
   };
   const lines = [];
   return {
@@ -221,8 +300,11 @@ function fixture() {
     kit,
     seedRoot,
     env,
-    spawned,
-    priorities,
+    launched,
+    prepared,
+    calls,
+    state,
+    gitState,
     lines,
     mergeLog: join(lanesDir, "merge-log.md"),
     // default stack: desktop, desktop, website on top -> the website level is the deepest, with desktop below it
@@ -231,39 +313,48 @@ function fixture() {
         manifest: { base: "0".repeat(40), levels: [L1, L2, L3] },
         isDesktop: stackDesktop(overrides.manifest?.levels ?? [L1, L2, L3]),
         repo: root,
-        mainCheckout: "C:\\main-checkout",
+        mainCheckout: "C:\\main checkout",
         lanesDir,
         mergeLog: join(lanesDir, "merge-log.md"),
         env,
         platform: "win32",
         log: (line) => lines.push(line),
         isAlive: () => true,
-        spawn,
-        setPriority: (pid, p) => priorities.push([pid, p]),
+        spawnSync,
+        git,
         ...overrides,
       }),
   };
 }
 
-describe("releaseLookahead (launcher with an injected spawn stub)", () => {
-  test("starts only the speculative front half for the chosen candidate, detached and low priority", async () => {
+describe("releaseLookahead (launcher with injected powershell/git stubs)", () => {
+  test("starts only the speculative front half for the chosen candidate, via Start-Process, at low priority", async () => {
     const f = fixture();
     const r = await f.run();
     assert.equal(r.launch, true, f.lines.join("\n"));
     assert.equal(r.level, L3);
-    assert.equal(f.spawned.length, 1);
-    const [{ command, args, options, pid }] = f.spawned;
+    assert.equal(f.launched.length, 1);
+    const [{ command, options, payload, args, pid }] = f.launched;
     assert.equal(command, "powershell.exe");
-    assert.equal(options.detached, true);
+    // regression (2026-10-06): never a detached spawn (DETACHED_PROCESS powershell exits at once), and the
+    // launcher's stdio is NUL so an inherited pipe cannot block the train until the front half ends
+    assert.equal(options.detached, undefined);
+    assert.equal(options.stdio, "ignore");
     assert.equal(options.windowsHide, true);
+    assert.equal(payload.file, "powershell.exe");
+    assert.equal(payload.priority, "BelowNormal");
+    assert.equal(payload.out, join(f.lanesDir, "release-lookahead", `front-half-spec-${L3.sha.slice(0, 12)}.log`));
+    assert.equal(payload.err, join(f.lanesDir, "release-lookahead", `front-half-spec-${L3.sha.slice(0, 12)}.err.log`));
     const arg = (name) => args[args.indexOf(name) + 1];
     assert.equal(arg("-File"), join(f.kit, "release-front-half.ps1"));
     assert.equal(arg("-Commit"), L3.sha);
     assert.equal(arg("-SpeculativeRef"), `refs/heads/${L3.branch}`);
     assert.equal(arg("-WindowsSeed"), join(f.seedRoot, "kc-release-code-primary-new000000000", "target"));
-    assert.equal(arg("-Repo"), "C:\\main-checkout");
+    assert.equal(arg("-Repo"), "C:\\main checkout", "a path with a space survives the command line");
     assert.equal(arg("-Kit"), f.kit);
+    assert.equal(arg("-MacFromCommit"), "0".repeat(40), "no Mac package ran yet: the train base");
     assert.ok(!args.some((a) => /back-half|publish/i.test(a)), "never the back half or a publish step");
+    assert.equal(f.prepared.length, 0, "no data/updater change: the front half writes the identity itself");
     // the kit requires clean ASCII/LF notes without to-do markers, even though speculative mode never uses them
     const notes = readFileSync(arg("-NotesDraft"), "utf8");
     assert.equal(notes, placeholderNotes({ branch: L3.branch, sha: L3.sha }));
@@ -272,7 +363,6 @@ describe("releaseLookahead (launcher with an injected spawn stub)", () => {
       "ASCII only",
     );
     assert.ok(!notes.includes("\r") && !/\b(todo|tbd)\b/i.test(notes));
-    assert.deepEqual(f.priorities, [[pid, osConstants.priority.PRIORITY_BELOW_NORMAL]]);
     const log = readFileSync(f.mergeLog, "utf8");
     assert.match(
       log,
@@ -297,11 +387,11 @@ describe("releaseLookahead (launcher with an injected spawn stub)", () => {
     assert.equal(busy.reason, "busy");
     // the first finished (pid gone): the same SHA is done, not relaunched
     assert.equal((await f.run({ isAlive: () => false })).reason, "already-done");
-    assert.equal(f.spawned.length, 1);
+    assert.equal(f.launched.length, 1);
     // and the deeper one may start now
     const next = await f.run({ isAlive: () => false, manifest: { base: "0".repeat(40), levels: [L1, L2, L5] } });
     assert.equal(next.launch, true);
-    assert.equal(f.spawned.length, 2);
+    assert.equal(f.launched.length, 2);
   });
 
   test("skips a SHA whose kit state dir or front-half log already exists", async () => {
@@ -310,33 +400,35 @@ describe("releaseLookahead (launcher with an injected spawn stub)", () => {
     const r = await f.run();
     assert.equal(r.reason, "already-done");
     assert.match(r.detail, /candidate-333333333333/);
-    assert.equal(f.spawned.length, 0);
+    assert.equal(f.launched.length, 0);
     rmSync(join(f.kit, `candidate-${L3.sha.slice(0, 12)}`), { recursive: true });
     writeFileSync(join(f.kit, `front-half-${L3.sha.slice(0, 12)}.log`), "");
     assert.match(frontHalfDone({ dir: join(f.lanesDir, "release-lookahead"), kit: f.kit, sha: L3.sha }), /front-half/);
   });
 
-  test("flag unset: nothing is classified or spawned", async () => {
+  test("flag unset: nothing is classified or started", async () => {
     const f = fixture();
     const r = await f.run({ env: { ...f.env, KALCODE_RELEASE_LOOKAHEAD: "" }, isDesktop: () => assert.fail() });
     assert.equal(r.reason, "disabled");
-    assert.equal(f.spawned.length, 0);
+    assert.equal(f.calls.length, 0);
     assert.equal(f.lines.length, 0);
     assert.ok(!existsSync(join(f.lanesDir, "release-lookahead")));
   });
 
-  test("a failed launch is logged, never thrown, and leaves no lock behind", async () => {
+  test("a failed launch is logged, never thrown, leaves no lock, and is not retried for that SHA", async () => {
     const f = fixture();
-    const r = await f.run({
-      spawn: () => {
-        throw new Error("spawn EPERM");
-      },
-    });
+    f.state.launcherFails = true;
+    const r = await f.run();
     assert.equal(r.launch, false);
     assert.equal(r.reason, "error");
-    assert.match(f.lines.at(-1), /warning: release lookahead failed .*spawn EPERM/);
+    assert.match(f.lines.at(-1), /warning: release lookahead failed .*Access is denied/);
     assert.ok(!existsSync(join(f.lanesDir, "release-lookahead", "active.json")));
     assert.ok(!existsSync(f.mergeLog));
+    const record = JSON.parse(
+      readFileSync(join(f.lanesDir, "release-lookahead", `${L3.sha.slice(0, 12)}.json`), "utf8"),
+    );
+    assert.match(record.failed, /Access is denied/);
+    assert.equal((await f.run()).reason, "already-done");
   });
 
   test("a classifier error is logged and swallowed", async () => {
@@ -347,22 +439,191 @@ describe("releaseLookahead (launcher with an injected spawn stub)", () => {
       },
     });
     assert.equal(r.reason, "error");
-    assert.equal(f.spawned.length, 0);
+    assert.equal(f.calls.length, 0);
   });
 
   test("Idle priority and an explicit seed come from env", async () => {
     const f = fixture();
-    const seed = join(f.root, "explicit-seed");
+    const seed = join(f.root, "explicit seed");
     await f.run({ env: { ...f.env, KALCODE_RELEASE_LOOKAHEAD_PRIORITY: "idle", KALCODE_RELEASE_WINDOWS_SEED: seed } });
-    const { args, pid } = f.spawned[0];
+    const { args, payload } = f.launched[0];
     assert.equal(args[args.indexOf("-WindowsSeed") + 1], seed);
-    assert.deepEqual(f.priorities, [[pid, osConstants.priority.PRIORITY_LOW]]);
+    assert.equal(payload.priority, "Idle");
   });
 
   test("not Windows -> skipped", async () => {
     const f = fixture();
     assert.equal((await f.run({ platform: "darwin" })).reason, "unsupported-platform");
-    assert.equal(f.spawned.length, 0);
+    assert.equal(f.calls.length, 0);
+  });
+});
+
+describe("data/updater candidates", () => {
+  test("run prepare-release -AllowDataOrUpdaterChanges first, logged, then the front half", async () => {
+    const f = fixture();
+    f.gitState.diff = ["apps/desktop/src/a.ts", "crates/updater/src/lib.rs"];
+    const r = await f.run();
+    assert.equal(r.launch, true, f.lines.join("\n"));
+    assert.deepEqual(f.calls, ["prepare", "launcher"]);
+    const [{ args, options }] = f.prepared;
+    const arg = (name) => args[args.indexOf(name) + 1];
+    assert.equal(arg("-File"), join(f.kit, "prepare-release.ps1"));
+    assert.equal(arg("-Commit"), L3.sha);
+    assert.equal(arg("-StateRoot"), f.kit);
+    assert.equal(arg("-Repo"), "C:\\main checkout");
+    assert.ok(args.includes("-AllowDataOrUpdaterChanges"));
+    // prepare-release's exact-SHA guard accepts the not-yet-landed candidate only through this env
+    assert.equal(options.env.KALCODE_SPECULATIVE_REF, `refs/heads/${L3.branch}`);
+    assert.ok(
+      f.lines.some((l) => /changes data\/updater paths \(data=false updater=true\); running prepare-release/.test(l)),
+    );
+  });
+
+  test("a data migration counts too, and a prepare failure stops the launch", async () => {
+    const f = fixture();
+    f.gitState.diff = ["crates/native-core/migrations/0042_x.sql"];
+    f.state.prepareStatus = 1;
+    const r = await f.run();
+    assert.equal(r.reason, "error");
+    assert.match(f.lines.at(-1), /prepare-release -AllowDataOrUpdaterChanges failed: data\/updater proof missing/);
+    assert.equal(f.launched.length, 0);
+    assert.ok(!existsSync(join(f.lanesDir, "release-lookahead", "active.json")));
+  });
+
+  test("the kit's own path rules", () => {
+    assert.deepEqual(dataOrUpdaterChanges(["apps/desktop/src-tauri/src/updater.rs"]), {
+      data: false,
+      updater: true,
+      any: true,
+    });
+    assert.deepEqual(dataOrUpdaterChanges(["crates/timeline/migrations/1.sql"]).data, true);
+    assert.equal(dataOrUpdaterChanges(["crates/timeline/src/lib.rs", "apps/website/x.ts"]).any, false);
+  });
+
+  test("paths are diffed from the newest kit identity's live Stable commit when it is an ancestor", async () => {
+    const f = fixture();
+    const live = "c".repeat(40);
+    writeIdentity(f.kit, "a".repeat(40), { build: 7, liveCommit: live });
+    writeIdentity(f.kit, "b".repeat(40), { build: 9, liveCommit: live });
+    const seen = [];
+    const since = pathsSinceLive({
+      kit: f.kit,
+      sha: L3.sha,
+      base: "0".repeat(40),
+      isAncestor: () => true,
+      diffNames: (a, b) => {
+        seen.push([a, b]);
+        return [];
+      },
+    });
+    assert.equal(since.from, live);
+    assert.deepEqual(seen, [[live, L3.sha]]);
+    const fallback = pathsSinceLive({
+      kit: f.kit,
+      sha: L3.sha,
+      base: "0".repeat(40),
+      isAncestor: () => false,
+      diffNames: () => [],
+    });
+    assert.equal(fallback.from, "0".repeat(40));
+  });
+});
+
+describe("-MacFromCommit", () => {
+  test("the kit candidate whose Mac package ran most recently", async () => {
+    const f = fixture();
+    writeIdentity(f.kit, "a".repeat(40), { build: 5 }, 600); // Mac ran 10 min ago
+    writeIdentity(f.kit, "b".repeat(40), { build: 6 }, 60); // Mac ran 1 min ago -> warm tree HEAD
+    writeIdentity(f.kit, "c".repeat(40), { build: 7 }); // newer, but its Mac package never ran
+    const r = await f.run();
+    assert.equal(r.launch, true, f.lines.join("\n"));
+    const { args } = f.launched[0];
+    assert.equal(args[args.indexOf("-MacFromCommit") + 1], "b".repeat(40));
+    assert.equal(r.record.mac.from, "b".repeat(40));
+  });
+
+  test("not an ancestor of the candidate -> a clear Mac skip; the Windows half still starts", async () => {
+    const f = fixture();
+    writeIdentity(f.kit, "b".repeat(40), { build: 6 }, 60);
+    f.gitState.notAncestors.add("b".repeat(40));
+    const r = await f.run();
+    assert.equal(r.launch, true);
+    const { args } = f.launched[0];
+    assert.ok(!args.includes("-MacFromCommit"));
+    assert.ok(
+      f.lines.some((l) =>
+        /SKIP Mac for merge-train\/\S+ @333333333333: Mac warm-tree commit bbbbbbbbbbbb \(Mac package of 0\.1\.9\+6\) is not an ancestor of 333333333333; the Windows half still runs/.test(
+          l,
+        ),
+      ),
+      f.lines.join("\n"),
+    );
+    assert.match(
+      macFromCommit({ kit: f.kit, sha: L3.sha, base: null, isAncestor: () => false }).skip,
+      /not an ancestor/,
+    );
+  });
+});
+
+describe("startDetached (regression: the live 2026-10-06 dead launch)", () => {
+  test("windowsCommandLine round-trips spaces, quotes and trailing backslashes", () => {
+    const args = ["-File", "C:\\a b\\x.ps1", 'say "hi"', "C:\\dir with space\\", "", "plain"];
+    assert.deepEqual(parseCommandLine(windowsCommandLine(args)), args);
+  });
+
+  test("a stub .ps1 started from a node process that exits at once keeps running, with its args and output", {
+    skip: process.platform !== "win32" && "Start-Process launcher is Windows-only",
+  }, async () => {
+    const dir = tempDir();
+    const marker = join(dir, "stub args.txt");
+    const stub = join(dir, "stub front half.ps1");
+    // A stand-in for release-front-half.ps1 (the real kit never runs in tests): records its args, outlives
+    // its starter, and writes to stdout/stderr.
+    writeFileSync(
+      stub,
+      [
+        "param([string]$Commit, [string]$SpeculativeRef, [string]$Repo)",
+        `$m = '${marker.replaceAll("'", "''")}'`,
+        '"commit=$Commit ref=$SpeculativeRef repo=$Repo priority=$((Get-Process -Id $PID).PriorityClass)" | Set-Content -LiteralPath $m -Encoding ascii',
+        "Write-Host '[stub] step 1'",
+        "[Console]::Error.WriteLine('[stub] stderr line')",
+        "Start-Sleep -Seconds 4",
+        "'finished' | Add-Content -LiteralPath $m -Encoding ascii",
+        "",
+      ].join("\n"),
+    );
+    const out = join(dir, "front half.log");
+    const err = join(dir, "front half.err.log");
+    const starter = join(dir, "starter.mjs");
+    writeFileSync(
+      starter,
+      `import { startDetached } from ${JSON.stringify(new URL("./speculative.mjs", import.meta.url).href)};
+const pid = startDetached({
+  args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", ${JSON.stringify(stub)},
+    "-Commit", "${"d".repeat(40)}", "-SpeculativeRef", "refs/heads/merge-train/${BASE12}-12345678", "-Repo", "C:\\\\main checkout"],
+  out: ${JSON.stringify(out)}, err: ${JSON.stringify(err)}, priority: "below-normal",
+});
+process.stdout.write(String(pid));
+`,
+    );
+    const started = spawnSync(process.execPath, [starter], { encoding: "utf8", timeout: 120_000 });
+    assert.equal(started.status, 0, started.stderr);
+    const finishedBeforeStarterExit = existsSync(marker) && readFileSync(marker, "utf8").includes("finished");
+    assert.match(started.stdout, /^\d+$/);
+    // the starter returned before the stub finished: nothing waits on the front half
+    const deadline = Date.now() + 90_000;
+    while (!(existsSync(marker) && readFileSync(marker, "utf8").includes("finished")) && Date.now() < deadline)
+      await new Promise((r) => setTimeout(r, 250));
+    const text = readFileSync(marker, "utf8");
+    assert.match(
+      text,
+      new RegExp(
+        `^commit=${"d".repeat(40)} ref=refs/heads/merge-train/${BASE12}-12345678 repo=C:\\\\main checkout priority=BelowNormal\\r?\\nfinished`,
+      ),
+    );
+    assert.equal(finishedBeforeStarterExit, false, "the starter returned at once and the stub outlived it");
+    assert.match(readFileSync(out, "utf8"), /\[stub\] step 1/);
+    assert.match(readFileSync(err, "utf8"), /\[stub\] stderr line/);
   });
 });
 
