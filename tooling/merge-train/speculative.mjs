@@ -1,6 +1,7 @@
 // Release lookahead (opt-in, KALCODE_RELEASE_LOOKAHEAD=1): after a train build round, start the release kit's
-// FRONT HALF for the deepest stacked level that changes desktop paths, in speculative mode (-SpeculativeRef), so
-// the signed Windows build and the Mac package are already under way while that exact candidate SHA gates.
+// FRONT HALF for the deepest stacked level (what lands when all are green) when its full stack changes desktop
+// paths, in speculative mode (-SpeculativeRef), so the signed Windows build and the Mac package are already under
+// way while that exact candidate SHA gates.
 //
 // Safety limits (AGENTS.md "Speculative builds"):
 //   - front half only, always with -SpeculativeRef: the kit then skips notes and never publishes; this module
@@ -49,20 +50,19 @@ const recordPath = (dir, sha) => join(dir, `${sha.slice(0, 12)}.json`);
 const activePath = (dir) => join(dir, "active.json");
 
 /**
- * The pure decision. `levels` are the train's stacked levels, bottom first. `isDesktop(level, below)` says
- * whether that level's own PRs (below.sha, or the train base, .. level.sha) change desktop paths. `isDone(level)`
- * returns a reason string when a speculative or real front half already ran or runs for that exact SHA.
- * `active` is the live lookahead launch, if any (one at a time, machine-wide).
+ * The pure decision. `levels` are the train's stacked levels, bottom first. The target is the DEEPEST level
+ * overall: it is what lands when everything is green, so its SHA is the one users get. It is launched only when its
+ * full stack (it or any level below it, i.e. train base .. level.sha) changes desktop paths, which
+ * `isDesktop(level)` says. If that level later goes red and is superseded, the next round targets the new deepest
+ * level (still once per exact SHA, and one at a time, so it starts after the previous lookahead finishes).
+ * `isDone(level)` returns a reason string when a speculative or real front half already ran or runs for that exact
+ * SHA. `active` is the live lookahead launch, if any (one at a time, machine-wide).
  */
 export function decideLookahead({ enabled, levels, isDesktop, isDone, active = null }) {
   if (!enabled) return { launch: false, reason: "disabled" };
-  let level = null;
-  for (let k = levels.length - 1; k >= 0 && !level; k--) {
-    const candidate = levels[k];
-    if (!CANDIDATE.test(candidate.branch ?? "") || !SHA.test(candidate.sha ?? "")) continue;
-    if (isDesktop(candidate, levels[k - 1] ?? null)) level = candidate;
-  }
-  if (!level) return { launch: false, reason: "no-desktop-level" };
+  const level = levels.findLast((l) => CANDIDATE.test(l.branch ?? "") && SHA.test(l.sha ?? ""));
+  if (!level) return { launch: false, reason: "no-candidate" };
+  if (!isDesktop(level)) return { launch: false, reason: "no-desktop-change", level };
   if (active) {
     return { launch: false, reason: active.sha === level.sha ? "already-running" : "busy", level, active };
   }
@@ -71,10 +71,9 @@ export function decideLookahead({ enabled, levels, isDesktop, isDone, active = n
   return { launch: true, level };
 }
 
-/** isDesktop for decideLookahead, using the same policy and logic as `ship.mjs classify --base --head`. */
+/** isDesktop for decideLookahead: `ship.mjs classify --base <train base> --head <level>` lists desktop. */
 export function makeDesktopClassifier({ repo, base, policy = loadPolicy(), git = makeLifecycleGit(repo) }) {
-  return (level, below) =>
-    classifyRange(policy, git, { base: below?.sha ?? base, head: level.sha }).lanes.includes("desktop");
+  return (level) => classifyRange(policy, git, { base, head: level.sha }).lanes.includes("desktop");
 }
 
 /** Why `sha` must not get another front half, or null. */

@@ -40,33 +40,56 @@ const L1 = level(1, { kind: "desktop" });
 const L2 = level(2, { kind: "desktop" });
 const L3 = level(3, { kind: "website" });
 const L4 = level(4, { kind: "tooling" });
-const byKind = (l) => l.kind === "desktop";
+// isDesktop stub with the real semantics: a level's FULL stack (it or any level below it) changes desktop paths.
+const stackDesktop = (levels) => (l) => levels.slice(0, levels.indexOf(l) + 1).some((x) => x.kind === "desktop");
+const byKind = stackDesktop([L1, L2, L3, L4]);
 
 describe("decideLookahead", () => {
-  test("picks only the deepest level whose own PRs change desktop paths, skipping website/tooling levels", () => {
+  test("targets the deepest level overall when a desktop change is anywhere in its stack", () => {
     const seen = [];
+    const isDesktop = stackDesktop([L1, L2, L3, L4]);
     const d = decideLookahead({
       enabled: true,
       levels: [L1, L2, L3, L4],
-      isDesktop: (l, below) => {
-        seen.push([l.sha[0], below?.sha[0] ?? null]);
-        return byKind(l);
+      isDesktop: (l) => {
+        seen.push(l.sha[0]);
+        return isDesktop(l);
       },
       isDone: () => null,
     });
     assert.equal(d.launch, true);
-    assert.equal(d.level, L2);
-    // classified top-down, each against the level below it, stopping at the first desktop level
-    assert.deepEqual(seen, [
-      ["4", "3"],
-      ["3", "2"],
-      ["2", "1"],
-    ]);
+    // the tooling-only top level is what lands when all are green, and desktop L1/L2 are below it
+    assert.equal(d.level, L4);
+    assert.deepEqual(seen, ["4"], "only the deepest level's full stack is classified");
   });
 
-  test("no desktop level (website/tooling only) -> nothing to launch", () => {
-    const d = decideLookahead({ enabled: true, levels: [L3, L4], isDesktop: byKind, isDone: () => null });
-    assert.deepEqual(d, { launch: false, reason: "no-desktop-level" });
+  test("a desktop change only at the top counts too", () => {
+    const top = level(6, { kind: "desktop" });
+    const levels = [L3, L4, top];
+    const d = decideLookahead({ enabled: true, levels, isDesktop: stackDesktop(levels), isDone: () => null });
+    assert.equal(d.level, top);
+  });
+
+  test("a website/tooling-only stack -> nothing to launch", () => {
+    const levels = [L3, L4];
+    const d = decideLookahead({ enabled: true, levels, isDesktop: stackDesktop(levels), isDone: () => null });
+    assert.deepEqual(d, { launch: false, reason: "no-desktop-change", level: L4 });
+  });
+
+  test("never the lower desktop level once a deeper level exists (superseded deepest -> new deepest next round)", () => {
+    const first = decideLookahead({ enabled: true, levels: [L1, L2], isDesktop: byKind, isDone: () => null });
+    assert.equal(first.level, L2);
+    // next round, L2 went red and was superseded; the new deepest level is a fresh SHA, still once per exact SHA
+    const L7 = level(7, { kind: "website" });
+    const levels = [L1, L7];
+    const next = decideLookahead({
+      enabled: true,
+      levels,
+      isDesktop: stackDesktop(levels),
+      isDone: (l) => (l === L2 ? "lookahead already launched" : null),
+    });
+    assert.equal(next.launch, true);
+    assert.equal(next.level, L7);
   });
 
   test("flag unset -> disabled, without classifying anything", () => {
@@ -119,11 +142,15 @@ describe("decideLookahead", () => {
       isDone: () => null,
     });
     assert.equal(d.level, L1);
+    assert.deepEqual(decideLookahead({ enabled: true, levels: [], isDesktop: byKind, isDone: () => null }), {
+      launch: false,
+      reason: "no-candidate",
+    });
   });
 });
 
 describe("makeDesktopClassifier (ship.mjs classify policy)", () => {
-  test("classifies each level by its own delta on a real git stack", () => {
+  test("classifies each level's full stack against the train base on a real git stack", () => {
     const repo = tempDir();
     const git = (...args) => {
       const r = spawnSync("git", ["-C", repo, "-c", "core.autocrlf=false", ...args], { encoding: "utf8" });
@@ -141,15 +168,24 @@ describe("makeDesktopClassifier (ship.mjs classify policy)", () => {
       return git("rev-parse", "HEAD");
     };
     const base = commit("README.md", "base");
-    const desktop = { branch: `merge-train/${BASE12}-11111111`, sha: commit("apps/desktop/src/a.ts", "desktop") };
-    const website = { branch: `merge-train/${BASE12}-22222222`, sha: commit("apps/website/b.ts", "website") };
-    const tooling = { branch: `merge-train/${BASE12}-33333333`, sha: commit("tooling/c.mjs", "tooling") };
+    const website = { branch: `merge-train/${BASE12}-11111111`, sha: commit("apps/website/b.ts", "website") };
+    const tooling = { branch: `merge-train/${BASE12}-22222222`, sha: commit("tooling/c.mjs", "tooling") };
+    const desktop = { branch: `merge-train/${BASE12}-33333333`, sha: commit("apps/desktop/src/a.ts", "desktop") };
+    const docs = { branch: `merge-train/${BASE12}-44444444`, sha: commit("docs/d.md", "docs") };
     const isDesktop = makeDesktopClassifier({ repo, base });
-    assert.equal(isDesktop(desktop, null), true);
-    assert.equal(isDesktop(website, desktop), false);
-    assert.equal(isDesktop(tooling, website), false);
-    const d = decideLookahead({ enabled: true, levels: [desktop, website, tooling], isDesktop, isDone: () => null });
-    assert.equal(d.level, desktop);
+    assert.equal(isDesktop(website), false);
+    assert.equal(isDesktop(tooling), false, "website + tooling stack");
+    assert.equal(isDesktop(desktop), true);
+    assert.equal(isDesktop(docs), true, "docs on top of a desktop level: the stack still changes desktop");
+    const d = decideLookahead({
+      enabled: true,
+      levels: [website, tooling, desktop, docs],
+      isDesktop,
+      isDone: () => null,
+    });
+    assert.equal(d.level, docs);
+    const none = decideLookahead({ enabled: true, levels: [website, tooling], isDesktop, isDone: () => null });
+    assert.equal(none.reason, "no-desktop-change");
   });
 });
 
@@ -189,9 +225,11 @@ function fixture() {
     priorities,
     lines,
     mergeLog: join(lanesDir, "merge-log.md"),
+    // default stack: desktop, desktop, website on top -> the website level is the deepest, with desktop below it
     run: (overrides = {}) =>
       releaseLookahead({
         manifest: { base: "0".repeat(40), levels: [L1, L2, L3] },
+        isDesktop: stackDesktop(overrides.manifest?.levels ?? [L1, L2, L3]),
         repo: root,
         mainCheckout: "C:\\main-checkout",
         lanesDir,
@@ -199,7 +237,6 @@ function fixture() {
         env,
         platform: "win32",
         log: (line) => lines.push(line),
-        isDesktop: byKind,
         isAlive: () => true,
         spawn,
         setPriority: (pid, p) => priorities.push([pid, p]),
@@ -213,7 +250,7 @@ describe("releaseLookahead (launcher with an injected spawn stub)", () => {
     const f = fixture();
     const r = await f.run();
     assert.equal(r.launch, true, f.lines.join("\n"));
-    assert.equal(r.level, L2);
+    assert.equal(r.level, L3);
     assert.equal(f.spawned.length, 1);
     const [{ command, args, options, pid }] = f.spawned;
     assert.equal(command, "powershell.exe");
@@ -221,15 +258,15 @@ describe("releaseLookahead (launcher with an injected spawn stub)", () => {
     assert.equal(options.windowsHide, true);
     const arg = (name) => args[args.indexOf(name) + 1];
     assert.equal(arg("-File"), join(f.kit, "release-front-half.ps1"));
-    assert.equal(arg("-Commit"), L2.sha);
-    assert.equal(arg("-SpeculativeRef"), `refs/heads/${L2.branch}`);
+    assert.equal(arg("-Commit"), L3.sha);
+    assert.equal(arg("-SpeculativeRef"), `refs/heads/${L3.branch}`);
     assert.equal(arg("-WindowsSeed"), join(f.seedRoot, "kc-release-code-primary-new000000000", "target"));
     assert.equal(arg("-Repo"), "C:\\main-checkout");
     assert.equal(arg("-Kit"), f.kit);
     assert.ok(!args.some((a) => /back-half|publish/i.test(a)), "never the back half or a publish step");
     // the kit requires clean ASCII/LF notes without to-do markers, even though speculative mode never uses them
     const notes = readFileSync(arg("-NotesDraft"), "utf8");
-    assert.equal(notes, placeholderNotes({ branch: L2.branch, sha: L2.sha }));
+    assert.equal(notes, placeholderNotes({ branch: L3.branch, sha: L3.sha }));
     assert.ok(
       [...notes].every((ch) => ch.charCodeAt(0) < 0x80),
       "ASCII only",
@@ -240,13 +277,13 @@ describe("releaseLookahead (launcher with an injected spawn stub)", () => {
     assert.match(
       log,
       new RegExp(
-        `^\\d{4}-\\d\\d-\\d\\dT[\\d:.]+Z \\| merge-train \\| SPECULATIVE RELEASE STARTED ${L2.branch} @${L2.sha.slice(0, 12)} \\(pid ${pid}\\)\\n$`,
+        `^\\d{4}-\\d\\d-\\d\\dT[\\d:.]+Z \\| merge-train \\| SPECULATIVE RELEASE STARTED ${L3.branch} @${L3.sha.slice(0, 12)} \\(pid ${pid}\\)\\n$`,
       ),
     );
     const active = JSON.parse(readFileSync(join(f.lanesDir, "release-lookahead", "active.json"), "utf8"));
     assert.equal(active.pid, pid);
-    assert.equal(active.sha, L2.sha);
-    assert.ok(existsSync(join(f.lanesDir, "release-lookahead", `${L2.sha.slice(0, 12)}.json`)));
+    assert.equal(active.sha, L3.sha);
+    assert.ok(existsSync(join(f.lanesDir, "release-lookahead", `${L3.sha.slice(0, 12)}.json`)));
   });
 
   test("one at a time machine-wide, and never twice for one SHA", async () => {
@@ -269,14 +306,14 @@ describe("releaseLookahead (launcher with an injected spawn stub)", () => {
 
   test("skips a SHA whose kit state dir or front-half log already exists", async () => {
     const f = fixture();
-    mkdirSync(join(f.kit, `candidate-${L2.sha.slice(0, 12)}`));
+    mkdirSync(join(f.kit, `candidate-${L3.sha.slice(0, 12)}`));
     const r = await f.run();
     assert.equal(r.reason, "already-done");
-    assert.match(r.detail, /candidate-222222222222/);
+    assert.match(r.detail, /candidate-333333333333/);
     assert.equal(f.spawned.length, 0);
-    rmSync(join(f.kit, `candidate-${L2.sha.slice(0, 12)}`), { recursive: true });
-    writeFileSync(join(f.kit, `front-half-${L2.sha.slice(0, 12)}.log`), "");
-    assert.match(frontHalfDone({ dir: join(f.lanesDir, "release-lookahead"), kit: f.kit, sha: L2.sha }), /front-half/);
+    rmSync(join(f.kit, `candidate-${L3.sha.slice(0, 12)}`), { recursive: true });
+    writeFileSync(join(f.kit, `front-half-${L3.sha.slice(0, 12)}.log`), "");
+    assert.match(frontHalfDone({ dir: join(f.lanesDir, "release-lookahead"), kit: f.kit, sha: L3.sha }), /front-half/);
   });
 
   test("flag unset: nothing is classified or spawned", async () => {
