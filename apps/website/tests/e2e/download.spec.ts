@@ -36,9 +36,7 @@ test.describe("download page", () => {
     await expect(page.locator("#early-access form[data-api-form='signup']")).toHaveCount(1);
   });
 
-  test("0.1.6, 0.1.7, 0.1.8 and 0.1.9 tell Windows users to install from here, and no other build does", async ({
-    page,
-  }) => {
+  test("0.1.6 to 0.1.10 tell Windows users to install from here, and no other build does", async ({ page }) => {
     await page.goto("/download");
     const note = page.locator("[data-windows-update-note]");
     if (WINDOWS_BUILD && RELEASES.latest?.version === "0.1.6") {
@@ -50,9 +48,11 @@ test.describe("download page", () => {
       WINDOWS_BUILD &&
       (RELEASES.latest?.version === "0.1.7" ||
         RELEASES.latest?.version === "0.1.8" ||
-        RELEASES.latest?.version === "0.1.9")
+        RELEASES.latest?.version === "0.1.9" ||
+        RELEASES.latest?.version === "0.1.10")
     ) {
-      // 0.1.8 and 0.1.9 are presented by their public version (helpers.ts presentedManifest) and keep the 0.1.7 note.
+      // 0.1.8, 0.1.9 and 0.1.10 are presented by their public version (helpers.ts presentedManifest) and keep
+      // the 0.1.7 note.
       await expect(note).toHaveCount(1);
       await expect(page.locator("#windows [data-windows-update-note]")).toHaveText(
         "Windows: 0.1.6 can't update itself. If you have 0.1.6, download this installer and run it once — your data is kept. On macOS, 0.1.6 updates in the app.",

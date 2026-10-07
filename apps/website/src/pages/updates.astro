@@ -3,7 +3,7 @@ import { PLANS, formatKalVoiceAllowance } from "@kalcode/protocol/plans";
 import PageHead from "../components/PageHead.astro";
 import XLink from "../components/XLink.astro";
 import Base from "../layouts/Base.astro";
-import { NOTES_019 } from "../lib/release-notes";
+import { NOTES_019, NOTES_0110 } from "../lib/release-notes";
 import { RELEASES, channelLabel, formatReleaseDate, signedStableRelease } from "../lib/releases";
 import { getPage } from "../lib/site";
 
@@ -13,12 +13,18 @@ const stable016 = signedStable?.version === "0.1.6" ? signedStable : null;
 const stable017 = signedStable?.version === "0.1.7" ? signedStable : null;
 const stable018 = signedStable?.version === "0.1.8" ? signedStable : null;
 const stable019 = signedStable?.version === "0.1.9" ? signedStable : null;
-// 0.1.8 stays in the archive, un-featured, once a signed Stable 0.1.9 replaces it in the manifest.
-const shows018 = Boolean(stable018 || stable019);
+const stable0110 = signedStable?.version === "0.1.10" ? signedStable : null;
+// 0.1.9 stays in the archive, un-featured, once a signed Stable 0.1.10 replaces it in the manifest.
+const shows019 = Boolean(stable019 || stable0110);
+// 0.1.8 stays in the archive, un-featured, once a signed Stable 0.1.9 or later replaces it in the manifest.
+const shows018 = Boolean(stable018 || shows019);
 // 0.1.7 stays in the archive, un-featured, once a signed Stable 0.1.8 or later replaces it in the manifest.
 const shows017 = Boolean(stable017 || shows018);
 // 0.1.6 stays in the archive, un-featured, once a signed Stable 0.1.7 or later replaces it in the manifest.
 const shows016 = Boolean(stable016 || shows017);
+// 0.1.9's last Stable build (0.1.9+2184, releases.json at be0cba10), for when 0.1.10 is selected.
+const LAST_019 = { build: 2184, publishedAt: "2026-10-07T12:11:47.550Z" };
+const published019 = stable019?.publishedAt ?? LAST_019.publishedAt;
 // 0.1.8's Stable publication time (0.1.8+901, releases.json at 9e3b4e1d), for when 0.1.9 is selected.
 const published018 = stable018?.publishedAt ?? "2026-10-01T14:23:12.937Z";
 // 0.1.7's Stable publication time (releases.json as deployed for 03eeabf6), for when 0.1.8 is selected.
@@ -81,20 +87,29 @@ const BUILDS_019 = [
   },
 ] as const;
 // The build /download serves, from its pinned file path (".../0.1.9+1738/...").
-const servedBuild = Number(
-  stable019?.platforms.map((platform) => platform.pinnedUrl.match(/\+(\d+)\//)?.[1]).find(Boolean) ?? 0,
-);
+const pinnedBuild = (release: typeof signedStable) =>
+  Number(release?.platforms.map((platform) => platform.pinnedUrl.match(/\+(\d+)\//)?.[1]).find(Boolean) ?? 0);
+// The newest 0.1.9 build listed: the one /download serves, or 0.1.9's last build once 0.1.10 is selected
+// (then no 0.1.9 build is marked Latest).
+const servedBuild = stable019 ? pinnedBuild(stable019) : shows019 ? LAST_019.build : 0;
 // Builds newer than the condensed entries above come straight from their published release notes
 // (docs/releases/0.1.9+<build>.md, written by the release tooling), so a shipped build is never
 // missing here. The build /download serves carries its publication date.
 const newestCondensed = Math.max(...BUILDS_019.map((entry) => entry.build));
 const fromNotes = NOTES_019.filter((notes) => notes.build > newestCondensed).map((notes) => ({
   ...notes,
-  publishedAt: notes.build === servedBuild ? stable019?.publishedAt : undefined,
+  publishedAt: notes.build === servedBuild ? published019 : undefined,
 }));
 const builds019 = [...fromNotes, ...BUILDS_019]
   .filter((entry) => entry.build <= servedBuild)
   .sort((a, b) => b.build - a.build);
+// Builds of 0.1.10, from their published release notes (docs/releases/0.1.10+<build>.md), up to the
+// build /download serves, which carries its publication date.
+const servedBuild0110 = pinnedBuild(stable0110);
+const builds0110 = NOTES_0110.filter((notes) => notes.build <= servedBuild0110).map((notes) => ({
+  ...notes,
+  publishedAt: notes.build === servedBuild0110 ? stable0110?.publishedAt : undefined,
+}));
 ---
 <Base title={page.title} description={page.description} path={page.path} world>
   <PageHead
@@ -104,7 +119,7 @@ const builds019 = [...fromNotes, ...BUILDS_019]
     backdrop="orbital"
   >
     <nav class="updates-index" aria-label="Update archive">
-      {stable019 && <a href="#release-0-1-9">0.1.9 Stable</a>}{shows018 && <a href="#release-0-1-8">0.1.8 Stable</a>}{shows017 && <a href="#release-0-1-7">0.1.7 Stable</a>}{shows016 && <a href="#release-0-1-6">0.1.6 Stable</a>}
+      {stable0110 && <a href="#release-0-1-10">0.1.10 Stable</a>}{shows019 && <a href="#release-0-1-9">0.1.9 Stable</a>}{shows018 && <a href="#release-0-1-8">0.1.8 Stable</a>}{shows017 && <a href="#release-0-1-7">0.1.7 Stable</a>}{shows016 && <a href="#release-0-1-6">0.1.6 Stable</a>}
       <a href="#release-0-1-1">Windows preview</a>
       <a href="#release-website-2026-09-24">New website</a>
       <a href="#release-kalvoice">KalVoice</a>
@@ -116,12 +131,74 @@ const builds019 = [...fromNotes, ...BUILDS_019]
     <div class="container">
       <h2 class="visually-hidden" id="updates-heading">KalCode product updates</h2>
       <div class="updates-feed">
-        {stable019 && (
-          <article class="update update--featured" id="release-0-1-9" aria-labelledby="release-0-1-9-title">
+        {stable0110 && (
+          <article class="update update--featured" id="release-0-1-10" aria-labelledby="release-0-1-10-title">
+            <div class="update__signal" aria-hidden="true"><span></span></div>
+            <header class="update__meta">
+              <p class="update__edition">KalCode 0.1.10</p>
+              <p><time datetime={stable0110.publishedAt}>{formatReleaseDate(stable0110.publishedAt)}</time></p>
+              <p class="chip chip--built">Stable · Windows and macOS</p>
+              {builds0110[0] && <p class="update__build">Build {builds0110[0].build}</p>}
+            </header>
+            <div class="update__story">
+              <p class="update__kicker">The current release</p>
+              <h2 id="release-0-1-10-title">KalCode 0.1.10 is here.</h2>
+              <p class="update__lead">
+                Everything in 0.1.9, now as KalCode 0.1.10 on Windows and macOS. It installs when you close
+                KalCode, and every build after it installs the same way.
+              </p>
+              {
+                builds0110.length > 0 && (
+                  <section class="builds" aria-labelledby="builds-0-1-10-title">
+                    <h3 id="builds-0-1-10-title" class="builds__title">New in 0.1.10 builds</h3>
+                    <ol class="builds__list" role="list">
+                      {builds0110.map((entry, index) => (
+                        <li class:list={["build", { "build--latest": index === 0 }]} id={`build-${entry.build}`}>
+                          <div class="build__meta">
+                            <span class="build__number">Build {entry.build}</span>
+                            {entry.publishedAt && (
+                              <time datetime={entry.publishedAt}>{formatReleaseDate(entry.publishedAt)}</time>
+                            )}
+                            {index === 0 && <span class="build__latest">Latest</span>}
+                          </div>
+                          <div class="build__body">
+                            <p class="build__title">{entry.title}</p>
+                            <ul class="build__points">
+                              {entry.points.map((point) => (
+                                <li>{point}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        </li>
+                      ))}
+                    </ol>
+                  </section>
+                )
+              }
+              <div class="update__groups update__groups--compact">
+                <section>
+                  <h3>Moving to 0.1.10</h3>
+                  <ul>
+                    <li>From 0.1.9: nothing to do. Close KalCode and it installs 0.1.10 by itself.</li>
+                    <li>From 0.1.8 or 0.1.7: update in the app with Restart to update or Settings &gt; Updates.</li>
+                    <li>Windows: 0.1.6 can't update itself. Download the 0.1.10 installer from the <a class="text-link" href="/download">download page</a> and run it once — your data is kept.</li>
+                    <li>macOS: update from 0.1.6 in the app.</li>
+                  </ul>
+                </section>
+              </div>
+              <p class="update__action"><a class="button button--primary" href="/download">Download KalCode</a></p>
+            </div>
+          </article>
+        )}{shows019 && (
+          <article
+            class:list={["update", { "update--featured": Boolean(stable019) }]}
+            id="release-0-1-9"
+            aria-labelledby="release-0-1-9-title"
+          >
             <div class="update__signal" aria-hidden="true"><span></span></div>
             <header class="update__meta">
               <p class="update__edition">KalCode 0.1.9</p>
-              <p><time datetime={stable019.publishedAt}>{formatReleaseDate(stable019.publishedAt)}</time></p>
+              <p><time datetime={published019}>{formatReleaseDate(published019)}</time></p>
               <p class="chip chip--built">Stable · Windows and macOS</p>
               {builds019[0] && <p class="update__build">Build {builds019[0].build}</p>}
             </header>
@@ -138,13 +215,13 @@ const builds019 = [...fromNotes, ...BUILDS_019]
                     <h3 id="builds-0-1-9-title" class="builds__title">New in 0.1.9 builds</h3>
                     <ol class="builds__list" role="list">
                       {builds019.map((entry, index) => (
-                        <li class:list={["build", { "build--latest": index === 0 }]} id={`build-${entry.build}`}>
+                        <li class:list={["build", { "build--latest": index === 0 && Boolean(stable019) }]} id={`build-${entry.build}`}>
                           <div class="build__meta">
                             <span class="build__number">Build {entry.build}</span>
                             {entry.publishedAt && (
                               <time datetime={entry.publishedAt}>{formatReleaseDate(entry.publishedAt)}</time>
                             )}
-                            {index === 0 && <span class="build__latest">Latest</span>}
+                            {index === 0 && stable019 && <span class="build__latest">Latest</span>}
                           </div>
                           <div class="build__body">
                             <p class="build__title">{entry.title}</p>

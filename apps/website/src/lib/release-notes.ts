@@ -69,3 +69,9 @@ export const NOTES_019 = buildsFromNotes(
   "0.1.9",
   import.meta.glob("../../../../docs/releases/0.1.9+*.md", { query: "?raw", import: "default", eager: true }),
 );
+
+/** The repository's published 0.1.10 release notes, read at build time. */
+export const NOTES_0110 = buildsFromNotes(
+  "0.1.10",
+  import.meta.glob("../../../../docs/releases/0.1.10+*.md", { query: "?raw", import: "default", eager: true }),
+);
