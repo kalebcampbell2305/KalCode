@@ -1,5 +1,6 @@
 import type { AccountStore } from "./account-store";
 import { readJsonBody } from "./body";
+import { clientNetwork } from "./client-network";
 import { hmacSha256Base64Url, randomBase64Url, sha256Base64Url } from "./crypto";
 import {
   buildGitHubAuthorizeUrl,
@@ -44,7 +45,7 @@ function noBrowserWrite(request: Request): Response | null {
 }
 
 function clientBucket(request: Request): string {
-  return request.headers.get("cf-connecting-ip")?.trim() || "unknown";
+  return clientNetwork(request);
 }
 
 function object(value: unknown): Record<string, unknown> | null {

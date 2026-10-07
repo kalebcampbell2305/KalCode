@@ -2,6 +2,7 @@ import type { AccountMailer } from "./account-mailer";
 import type { AccountStore, EmailAttempt } from "./account-store";
 import { clearSessionCookie, sessionCookie, sessionToken } from "./auth";
 import { readJsonBody } from "./body";
+import { clientNetwork } from "./client-network";
 import { hmacSha256Base64Url, randomBase64Url, sha256Base64Url } from "./crypto";
 import { isPkceChallenge, isPkceVerifier, verifyPkce } from "./github-oauth";
 import { apiError, json } from "./http";
@@ -106,7 +107,7 @@ export function emailAuthService({ store, mailer, rateLimitKey, now }: Options):
       ) {
         return apiError(400, "invalid_request", "Enter a valid email address.");
       }
-      const ip = request.headers.get("cf-connecting-ip")?.trim() || "unknown";
+      const ip = clientNetwork(request);
       if (
         !(await allowed(request, "email_start", `ip:${ip}`, 10)) ||
         !(await allowed(request, "email_start", `email:${email}`, 5))
@@ -148,7 +149,7 @@ export function emailAuthService({ store, mailer, rateLimitKey, now }: Options):
       if (request.headers.get("origin") !== WEBSITE_ORIGIN) {
         return apiError(403, "forbidden", "Open account deletion from kalcoded.com.");
       }
-      const ip = request.headers.get("cf-connecting-ip")?.trim() || "unknown";
+      const ip = clientNetwork(request);
       if (
         !(await allowed(request, "account_delete", `ip:${ip}`, 5)) ||
         !(await allowed(request, "account_delete", `account:${accountId}`, 3))
@@ -184,7 +185,7 @@ export function emailAuthService({ store, mailer, rateLimitKey, now }: Options):
       if (!body || Object.keys(body).length !== 1 || typeof token !== "string" || !TOKEN.test(token)) {
         return apiError(400, "sign_in_failed", GENERIC);
       }
-      const ip = request.headers.get("cf-connecting-ip")?.trim() || "unknown";
+      const ip = clientNetwork(request);
       if (!(await allowed(request, "email_verify", `ip:${ip}`, 30))) {
         return apiError(429, "rate_limited", "Please wait before trying again.", { "retry-after": "600" });
       }
@@ -241,7 +242,7 @@ export function emailAuthService({ store, mailer, rateLimitKey, now }: Options):
       ) {
         return apiError(400, "sign_in_failed", GENERIC);
       }
-      const ip = request.headers.get("cf-connecting-ip")?.trim() || "unknown";
+      const ip = clientNetwork(request);
       if (!(await allowed(request, "email_poll", `ip:${ip}`, 60))) {
         return apiError(429, "rate_limited", "Please wait before trying again.", { "retry-after": "600" });
       }
@@ -272,7 +273,7 @@ export function emailAuthService({ store, mailer, rateLimitKey, now }: Options):
       if (!writeAllowed(request)) return apiError(403, "forbidden", "This request origin is not allowed.");
       const current = sessionToken(request);
       if (!current) return apiError(401, "unauthenticated", "Sign in to continue.");
-      const ip = request.headers.get("cf-connecting-ip")?.trim() || "unknown";
+      const ip = clientNetwork(request);
       if (!(await allowed(request, "session_refresh", `ip:${ip}`, 30))) {
         return apiError(429, "rate_limited", "Please wait before trying again.", { "retry-after": "600" });
       }

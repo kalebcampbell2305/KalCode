@@ -473,7 +473,8 @@ const ENV_TEMPLATES: &[&str] = &[".env.example", ".env.sample", ".env.template",
 pub fn looks_like_credentials(path: &str) -> bool {
     let components: Vec<String> = split_components(path)
         .into_iter()
-        .map(str::to_ascii_lowercase)
+        .map(|c| win32_name(c).to_ascii_lowercase())
+        .filter(|c| !c.is_empty())
         .collect();
     let Some(name) = components.last() else {
         return false;
@@ -488,6 +489,22 @@ pub fn looks_like_credentials(path: &str) -> bool {
             .any(|c| CREDENTIAL_DIRS.contains(&c.as_str()))
         || CREDENTIAL_FILES.contains(&name.as_str())
         || CREDENTIAL_EXTENSIONS.iter().any(|ext| name.ends_with(ext))
+}
+
+/// The file a name opens on Windows: a stream suffix (`.env::$DATA`, `id_rsa:x`) names a stream of
+/// the file before the colon, and trailing dots and spaces are dropped (`id_rsa.` opens
+/// `id_rsa`). Applied on every OS: such a name is never an ordinary file, so judging it by the
+/// file it can reach only ever adds a credential prompt.
+fn win32_name(component: &str) -> &str {
+    let name = match component.split_once(':') {
+        // `C:` is a drive, not a stream.
+        Some((name, _)) if !is_drive_spec(component) => name,
+        _ => component,
+    };
+    if name == "." || name == ".." {
+        return name;
+    }
+    name.trim_end_matches(['.', ' '])
 }
 
 /// One element of a shell wildcard pattern.
@@ -848,6 +865,31 @@ mod tests {
         assert!(resolve(&workspace, None, ".git/hooks/pre-commit").git_internal);
         assert!(resolve(&workspace, None, "sub/.GIT/config").git_internal);
         assert!(!resolve(&workspace, None, "src/a.txt").git_internal);
+    }
+
+    #[test]
+    fn credential_names_survive_win32_stream_and_trailing_dot_rewrites() {
+        for path in [
+            ".env::$DATA",
+            ".env:$DATA",
+            "id_rsa.",
+            "id_rsa::$DATA",
+            "certs/server.pem.",
+            ".docker./config.json",
+            ".kube. /config",
+            "secrets.json:stream",
+            "C:/Users/x/.aws./config",
+        ] {
+            assert!(looks_like_credentials(path), "{path}");
+        }
+        for path in [
+            "src/a.txt:x",
+            ".env.example.",
+            "C:/src/main.rs",
+            "notes..txt",
+        ] {
+            assert!(!looks_like_credentials(path), "{path}");
+        }
     }
 
     #[test]
