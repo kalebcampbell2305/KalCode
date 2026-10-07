@@ -3721,7 +3721,7 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {{
             let script = dir.join("codex.cmd");
             std::fs::write(
                 &script,
-                "@echo off\r\nif \"%~1\"==\"--version\" (echo codex-cli 0.160.0& exit /b 0)\r\nif \"%~1\"==\"--help\" goto root_help\r\nif \"%~1\"==\"exec\" if \"%~2\"==\"--help\" goto exec_help\r\nif \"%~1\"==\"exec\" if \"%~2\"==\"resume\" if \"%~3\"==\"--help\" goto exec_resume_help\r\nif \"%~1\"==\"resume\" if \"%~2\"==\"--help\" goto resume_help\r\nif \"%~1\"==\"app-server\" if \"%~2\"==\"--help\" goto app_server_help\r\n:scan\r\nif \"%~1\"==\"\" exit /b 2\r\nif \"%~1\"==\"app-server\" goto server\r\nshift /1\r\ngoto scan\r\n:root_help\r\necho Commands:\r\necho   exec Run Codex non-interactively\r\necho   mcp Manage MCP servers\r\necho   app-server Run the app server\r\necho   resume Resume an interactive session\r\necho Options: -c -m -C -s -a --no-daemon\r\nexit /b 0\r\n:exec_help\r\necho Commands:\r\necho   resume Resume a previous session\r\necho Options: -c --model --json --sandbox --output-schema --skip-git-repo-check\r\nexit /b 0\r\n:exec_resume_help\r\necho Usage: codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]\r\necho Options: --json\r\nexit /b 0\r\n:resume_help\r\necho Usage: codex resume [OPTIONS] [SESSION_ID] [PROMPT]\r\nexit /b 0\r\n:app_server_help\r\necho Usage: codex app-server [OPTIONS]\r\nexit /b 0\r\n:server\r\n\"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"%~dp0codex-app-server.ps1\"\r\nexit /b %ERRORLEVEL%\r\n",
+                "@echo off\r\nif \"%~1\"==\"--version\" (echo codex-cli 0.160.0& exit /b 0)\r\nif \"%~1\"==\"--help\" goto root_help\r\nif \"%~1\"==\"exec\" if \"%~2\"==\"--help\" goto exec_help\r\nif \"%~1\"==\"exec\" if \"%~2\"==\"resume\" if \"%~3\"==\"--help\" goto exec_resume_help\r\nif \"%~1\"==\"resume\" if \"%~2\"==\"--help\" goto resume_help\r\nif \"%~1\"==\"app-server\" if \"%~2\"==\"--help\" goto app_server_help\r\nif \"%~1\"==\"app-server\" if \"%~2\"==\"generate-json-schema\" if \"%~3\"==\"--out\" goto config_schema\r\n:scan\r\nif \"%~1\"==\"\" exit /b 2\r\nif \"%~1\"==\"app-server\" goto server\r\nshift /1\r\ngoto scan\r\n:root_help\r\necho Commands:\r\necho   exec Run Codex non-interactively\r\necho   mcp Manage MCP servers\r\necho   app-server Run the app server\r\necho   resume Resume an interactive session\r\necho Options: -c -m -C -s -a --no-daemon\r\nexit /b 0\r\n:exec_help\r\necho Commands:\r\necho   resume Resume a previous session\r\necho Options: -c --model --json --sandbox --output-schema --skip-git-repo-check\r\nexit /b 0\r\n:exec_resume_help\r\necho Usage: codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]\r\necho Options: --json\r\nexit /b 0\r\n:resume_help\r\necho Usage: codex resume [OPTIONS] [SESSION_ID] [PROMPT]\r\nexit /b 0\r\n:app_server_help\r\necho Usage: codex app-server [OPTIONS]\r\nexit /b 0\r\n:config_schema\r\nif \"%~4\"==\"\" exit /b 2\r\nmkdir \"%~4\\v2\" >nul 2>&1\r\nif errorlevel 1 exit /b 8\r\n>\"%~4\\v2\\ConfigReadResponse.json\" echo {\"definitions\":{\"Config\":{\"properties\":{\"model_reasoning_effort\":{\"anyOf\":[{\"$ref\":\"#/definitions/ReasoningEffort\"},{\"type\":\"null\"}]}}},\"ReasoningEffort\":{\"type\":\"string\",\"minLength\":1}}}\r\nif errorlevel 1 exit /b 8\r\nexit /b 0\r\n:server\r\n\"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"%~dp0codex-app-server.ps1\"\r\nexit /b %ERRORLEVEL%\r\n",
             )
             .expect("fake codex");
             script
@@ -3734,7 +3734,7 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {{
             std::fs::write(
                 &script,
                 format!(
-                    r#"#!/bin/sh
+                    r##"#!/bin/sh
 if [ "$1" = "--version" ]; then printf '%s\n' 'codex-cli 0.160.0'; exit 0; fi
 case "$*" in
   "--help") printf '%s\n' 'Commands:' '  exec Run Codex non-interactively' '  mcp Manage MCP servers' '  app-server Run the app server' '  resume Resume an interactive session' 'Options: -c -m -C -s -a --no-daemon'; exit 0 ;;
@@ -3742,6 +3742,12 @@ case "$*" in
   "exec resume --help") printf '%s\n' 'Usage: codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]' 'Options: --json'; exit 0 ;;
   "resume --help") printf '%s\n' 'Usage: codex resume [OPTIONS] [SESSION_ID] [PROMPT]'; exit 0 ;;
   "app-server --help") printf '%s\n' 'Usage: codex app-server [OPTIONS]'; exit 0 ;;
+  "app-server generate-json-schema --out "*)
+    [ -n "$4" ] || exit 2
+    mkdir -p "$4/v2" || exit 8
+    printf '%s\n' '{{"definitions":{{"Config":{{"properties":{{"model_reasoning_effort":{{"anyOf":[{{"$ref":"#/definitions/ReasoningEffort"}},{{"type":"null"}}]}}}}}},"ReasoningEffort":{{"type":"string","minLength":1}}}}}}' > "$4/v2/ConfigReadResponse.json" || exit 8
+    exit 0
+    ;;
 esac
 found=false
 for arg in "$@"; do if [ "$arg" = "app-server" ]; then found=true; fi; done
@@ -3759,7 +3765,7 @@ while IFS= read -r line; do
       ;;
   esac
 done
-"#,
+"##,
                     delay_first_read = if delay_first_read { "true" } else { "false" },
                     delay = DELAYED_OBSERVER_READ.as_secs(),
                     marker = first_read_marker.to_string_lossy().replace('\'', "'\\''"),

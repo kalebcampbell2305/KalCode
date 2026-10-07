@@ -5,7 +5,8 @@
 //! works when the core failed to start; the resulting `provider.*` events are then simply not
 //! recorded.
 
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::time::Duration;
 
 use kalcode_core::events::{Correlation, EventPayload, EventSource, NewEvent};
 use kalcode_core::{Core, IpcError, KalError};
@@ -18,7 +19,106 @@ use crate::thread_commands::ThreadsState;
 
 /// Managed state: the provider registry, shared with detection's blocking worker and with the
 /// thread runtime (which offers only the providers detection reports usable).
-pub struct ProviderState(Arc<ProviderRegistry>);
+pub struct ProviderState {
+    registry: Arc<ProviderRegistry>,
+    initial_managed_readiness: Arc<InitialManagedReadiness>,
+}
+
+const INITIAL_MANAGED_READINESS_WAIT: Duration = Duration::from_secs(45);
+
+#[derive(Default)]
+struct InitialManagedReadinessState {
+    complete: bool,
+    callbacks: Vec<Arc<dyn Fn() + Send + Sync>>,
+}
+
+/// One runtime generation's startup managed-runtime prewarm. Consumers share this completion
+/// instead of starting a second capability probe or observing a temporary false-unavailable row.
+pub(crate) struct InitialManagedReadiness {
+    state: Mutex<InitialManagedReadinessState>,
+    completed: Condvar,
+}
+
+impl InitialManagedReadiness {
+    fn pending() -> Self {
+        Self {
+            state: Mutex::new(InitialManagedReadinessState::default()),
+            completed: Condvar::new(),
+        }
+    }
+
+    /// Waits only at a launchability boundary. Provider probes are independently bounded; this
+    /// outer bound also prevents a worker failure from delaying shutdown indefinitely.
+    pub(crate) fn wait(&self) {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let (state, timeout) = self
+            .completed
+            .wait_timeout_while(state, INITIAL_MANAGED_READINESS_WAIT, |state| {
+                !state.complete
+            })
+            .unwrap_or_else(PoisonError::into_inner);
+        if timeout.timed_out() && !state.complete {
+            tracing::warn!(event = "provider.initial_managed_readiness_timed_out");
+        }
+    }
+
+    fn on_complete(&self, callback: Arc<dyn Fn() + Send + Sync>) {
+        let run_now = {
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            let run_now = state.complete;
+            state.callbacks.push(callback.clone());
+            run_now
+        };
+        if run_now {
+            callback();
+        }
+    }
+
+    fn complete(&self) {
+        let callbacks = {
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            if state.complete {
+                return;
+            }
+            state.complete = true;
+            state.callbacks.clone()
+        };
+        self.completed.notify_all();
+        for callback in callbacks {
+            callback();
+        }
+    }
+
+    fn notify_subscribers(&self) {
+        let callbacks = self
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .callbacks
+            .clone();
+        for callback in callbacks {
+            callback();
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_pending() -> Self {
+        Self::pending()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_complete(&self) {
+        self.complete();
+    }
+}
+
+struct CompleteInitialManagedReadiness(Arc<InitialManagedReadiness>);
+
+impl Drop for CompleteInitialManagedReadiness {
+    fn drop(&mut self) {
+        self.0.complete();
+    }
+}
 
 impl ProviderState {
     pub fn from_process(runtime: &ProviderRuntimeAuthority) -> Result<Self, &'static str> {
@@ -29,12 +129,30 @@ impl ProviderState {
             DetectEnv::from_process(),
             guardian.clone(),
         ));
-        watch_installations(&registry, guardian, runtime.managed_profiles());
-        Ok(Self(registry))
+        let initial_managed_readiness =
+            watch_installations(&registry, guardian, runtime.managed_profiles());
+        Ok(Self {
+            registry,
+            initial_managed_readiness,
+        })
     }
 
     pub fn registry(&self) -> Arc<ProviderRegistry> {
-        Arc::clone(&self.0)
+        Arc::clone(&self.registry)
+    }
+
+    pub(crate) fn initial_managed_readiness(&self) -> Arc<InitialManagedReadiness> {
+        Arc::clone(&self.initial_managed_readiness)
+    }
+
+    pub(crate) fn bind_threads(&self, threads: &Arc<ThreadsState>) {
+        let threads = Arc::downgrade(threads);
+        self.initial_managed_readiness
+            .on_complete(Arc::new(move || {
+                if let Some(threads) = threads.upgrade() {
+                    threads.sync_providers();
+                }
+            }));
     }
 }
 
@@ -44,17 +162,21 @@ fn watch_installations(
     registry: &Arc<ProviderRegistry>,
     guardian: kalcode_providers::guardian::ProviderProbeGuardian,
     profiles: kalcode_providers::managed::ManagedProfiles,
-) {
+) -> Arc<InitialManagedReadiness> {
+    let initial_managed_readiness = Arc::new(InitialManagedReadiness::pending());
+    let completion = Arc::clone(&initial_managed_readiness);
     let registry = Arc::downgrade(registry);
-    let _ = std::thread::Builder::new()
+    let spawned = std::thread::Builder::new()
         .name("provider-installation-watch".into())
         .spawn(move || {
+            let _complete_initial = CompleteInitialManagedReadiness(completion);
             let source = DetectEnv::from_process();
             let spec = kalcode_providers::catalog::codex_spec();
             let env = source.provider_env(&spec.env_policy);
             let store = profiles.runtime_store();
             let mut initial = true;
             let mut policy_revision = None;
+            let mut codex_retry_pending = false;
             // Keep the current prewarm pinned so a first user launch can reuse validated bytes
             // without rehashing the distribution. Old active sessions retain their own leases.
             let mut _warm_runtime = None;
@@ -64,24 +186,32 @@ fn watch_installations(
                 };
                 let mut changes = current.changed_installations();
                 let next_policy = kalcode_providers::compatibility::active_snapshot().revision();
-                if next_policy != policy_revision
-                    && !changes.iter().any(|(id, _)| id.as_str() == "codex")
-                {
+                if needs_codex_refresh(
+                    &changes,
+                    next_policy != policy_revision,
+                    codex_retry_pending,
+                ) {
                     changes.push((
                         kalcode_contracts::agent::ProviderId::new("codex"),
                         source.resolve_executable_only(&spec),
                     ));
                 }
                 policy_revision = next_policy;
+                let provider_status_changed = !changes.is_empty();
                 for (provider, executable) in changes {
                     // Startup already has a shared detection job. Later changes refresh its
                     // cached status and health without waiting for a failed user launch.
                     if !initial {
                         current.detect_one(&provider);
                     }
-                    if provider.as_str() == kalcode_contracts::agent::ProviderId::CODEX
-                        && let Ok(cwd) = profiles.compatibility_probe_dir()
-                    {
+                    if provider.as_str() == kalcode_contracts::agent::ProviderId::CODEX {
+                        let Ok(cwd) = profiles.compatibility_probe_dir() else {
+                            codex_retry_pending = true;
+                            tracing::debug!(
+                                event = "provider.compatibility_probe_directory_unavailable"
+                            );
+                            continue;
+                        };
                         let warmed = kalcode_providers::codex::runtime::prewarm_managed_runtime(
                             executable.as_deref(),
                             &env,
@@ -98,6 +228,7 @@ fn watch_installations(
                         );
                         match warmed {
                             Ok(runtime) => {
+                                codex_retry_pending = false;
                                 use kalcode_providers::codex::runtime::ManagedRuntimeSource;
                                 let source = match runtime.source() {
                                     ManagedRuntimeSource::ValidatedSnapshot => "validated_snapshot",
@@ -110,8 +241,26 @@ fn watch_installations(
                                 };
                                 _warm_runtime = Some(runtime);
                                 current.set_managed_runtime(provider.clone(), Some(readiness));
+                                if initial {
+                                    _complete_initial.0.complete();
+                                }
+                                // Optional observing hooks warm only after core launchability is
+                                // published. The exact selected environment and guardian are
+                                // handed to a bounded background probe; this watcher never waits.
+                                if let Some(runtime) = _warm_runtime.as_ref() {
+                                    let mut hook_env = env.clone();
+                                    runtime.configure_environment(&mut hook_env);
+                                    let _ = kalcode_providers::codex::hook_compatibility::cached_or_warm(
+                                        runtime.executable(),
+                                        &hook_env,
+                                        Some(&cwd),
+                                        Some(guardian.clone()),
+                                        Some(runtime.version()),
+                                    );
+                                }
                             }
                             Err(_) => {
+                                codex_retry_pending = true;
                                 current.set_managed_runtime(provider.clone(), None);
                                 _warm_runtime = None;
                                 tracing::debug!(
@@ -120,6 +269,11 @@ fn watch_installations(
                             }
                         }
                     }
+                }
+                if initial {
+                    _complete_initial.0.complete();
+                } else if provider_status_changed {
+                    _complete_initial.0.notify_subscribers();
                 }
                 initial = false;
                 drop(current);
@@ -131,6 +285,25 @@ fn watch_installations(
                 std::thread::sleep(std::time::Duration::from_secs(30));
             }
         });
+    if spawned.is_err() {
+        initial_managed_readiness.complete();
+        tracing::warn!(event = "provider.installation_watch_start_failed");
+    }
+    initial_managed_readiness
+}
+
+fn needs_codex_refresh(
+    changes: &[(
+        kalcode_contracts::agent::ProviderId,
+        Option<std::path::PathBuf>,
+    )],
+    policy_changed: bool,
+    retry_pending: bool,
+) -> bool {
+    (policy_changed || retry_pending)
+        && !changes
+            .iter()
+            .any(|(provider, _)| provider.as_str() == kalcode_contracts::agent::ProviderId::CODEX)
 }
 
 /// Makes sure a detection exists (blocking) and records the resulting `provider.*` events when
@@ -152,7 +325,7 @@ pub fn providers_list(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     providers: crate::runtime_coordinator::RuntimeState<ProviderState>,
 ) -> Vec<ProviderStatus> {
-    providers.0.list()
+    providers.registry.list()
 }
 
 /// Detects every provider off the main thread, records what changed, and returns the statuses.
@@ -164,7 +337,7 @@ pub async fn providers_detect(
     threads: crate::runtime_coordinator::RuntimeState<ThreadsState>,
 ) -> Result<Vec<ProviderStatus>, IpcError> {
     _runtime_access.revalidate()?;
-    let registry = Arc::clone(&providers.0);
+    let registry = Arc::clone(&providers.registry);
     let (statuses, events) = tauri::async_runtime::spawn_blocking(move || {
         _runtime_access.revalidate()?;
         Ok::<_, IpcError>(registry.detect_all())
@@ -230,6 +403,76 @@ fn provider_of(event: &EventPayload) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn initial_managed_readiness_releases_waiters_and_notifies_every_refresh() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Barrier, mpsc};
+        use std::time::Duration;
+
+        let readiness = Arc::new(InitialManagedReadiness::pending());
+        let notifications = Arc::new(AtomicUsize::new(0));
+        readiness.on_complete({
+            let notifications = Arc::clone(&notifications);
+            Arc::new(move || {
+                notifications.fetch_add(1, Ordering::SeqCst);
+            })
+        });
+
+        let start = Arc::new(Barrier::new(3));
+        let (finished, completions) = mpsc::channel();
+        let waiters: Vec<_> = (0..2)
+            .map(|_| {
+                let readiness = Arc::clone(&readiness);
+                let start = Arc::clone(&start);
+                let finished = finished.clone();
+                std::thread::spawn(move || {
+                    start.wait();
+                    readiness.wait();
+                    finished.send(()).expect("completion receiver");
+                })
+            })
+            .collect();
+        start.wait();
+        assert!(
+            completions.recv_timeout(Duration::from_millis(50)).is_err(),
+            "first use must wait while managed launchability is unresolved"
+        );
+
+        readiness.complete();
+        for _ in 0..2 {
+            completions
+                .recv_timeout(Duration::from_secs(1))
+                .expect("shared completion releases every waiter");
+        }
+        for waiter in waiters {
+            waiter.join().expect("readiness waiter");
+        }
+        readiness.complete();
+        assert_eq!(notifications.load(Ordering::SeqCst), 1);
+        readiness.notify_subscribers();
+        assert_eq!(
+            notifications.load(Ordering::SeqCst),
+            2,
+            "later installation cycles must refresh bound provider consumers"
+        );
+    }
+
+    #[test]
+    fn unchanged_codex_installation_retries_after_a_transient_prewarm_failure() {
+        assert!(needs_codex_refresh(&[], false, true));
+        assert!(!needs_codex_refresh(&[], false, false));
+        assert!(!needs_codex_refresh(
+            &[(
+                kalcode_contracts::agent::ProviderId::new(
+                    kalcode_contracts::agent::ProviderId::CODEX,
+                ),
+                None,
+            )],
+            false,
+            true,
+        ));
+    }
 
     #[test]
     fn provider_events_are_correlated_with_their_provider() {
