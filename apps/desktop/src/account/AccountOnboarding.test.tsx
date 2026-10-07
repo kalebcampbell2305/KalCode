@@ -6,6 +6,7 @@ import {
   type BillingInterval,
   type PurchasableTier,
   type RuntimeStatus,
+  SECURE_STORE_UNAVAILABLE_REASON,
   SESSION_EXPIRED_REASON,
 } from "../ipc/account.ts";
 import { AccountGate } from "./AccountGate.tsx";
@@ -206,6 +207,21 @@ describe("AccountOnboarding", () => {
     await userEvent.type(screen.getByLabelText("Email"), "owner@example.com");
     await userEvent.click(screen.getByRole("button", { name: "Email me a sign-in link" }));
     expect(accountActions.startEmail).toHaveBeenCalledWith("owner@example.com");
+  });
+
+  it("says the saved sign-in is kept when the credential store could not be read", async () => {
+    const accountActions = actions();
+    render(
+      <AccountOnboarding
+        snapshot={{ ...snapshot("degraded"), degradedReason: SECURE_STORE_UNAVAILABLE_REASON }}
+        busy={false}
+        error={null}
+        actions={accountActions}
+      />,
+    );
+    expect(screen.getByText(/Your sign-in is still saved\./)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(accountActions.retry).toHaveBeenCalledOnce();
   });
 
   it("starts fixed native social providers and shows a cancellable browser handoff", async () => {

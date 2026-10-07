@@ -9,13 +9,14 @@ import {
   useRef,
   useState,
 } from "react";
-import type {
-  AccountOpenResult,
-  AccountSnapshot,
-  AccountUsageSnapshot,
-  BillingInterval,
-  PurchasableTier,
-  RuntimeStatus,
+import {
+  type AccountOpenResult,
+  type AccountSnapshot,
+  type AccountUsageSnapshot,
+  type BillingInterval,
+  type PurchasableTier,
+  type RuntimeStatus,
+  SECURE_STORE_UNAVAILABLE_REASON,
 } from "../ipc/account.ts";
 import { type AccountUiError, type AccountUiState, initialAccountUiState, reduceAccountUi } from "./accountState.ts";
 
@@ -30,6 +31,7 @@ export type SocialProvider = "google" | "microsoft";
 
 export interface AccountOperations {
   status(): Promise<AccountSnapshot>;
+  bootstrap(): Promise<AccountSnapshot>;
   runtimeStatus(): Promise<RuntimeStatus>;
   retryRuntime(): Promise<void>;
   startEmail(email: string): Promise<AccountSnapshot>;
@@ -445,11 +447,21 @@ export function AccountProvider({
             })
           : state.snapshot.phase === "confirming_plan"
             ? runSnapshot(() => client.refresh(), true)
-            : runSnapshot(() => client.status()),
+            : state.snapshot.degradedReason === SECURE_STORE_UNAVAILABLE_REASON
+              ? runSnapshot(() => client.bootstrap())
+              : runSnapshot(() => client.status()),
       refreshUsage: refreshUsageNow,
       setDisplayName,
     }),
-    [client, refreshUsageNow, runSnapshot, setDisplayName, state.snapshot.phase, state.runtime.phase],
+    [
+      client,
+      refreshUsageNow,
+      runSnapshot,
+      setDisplayName,
+      state.snapshot.phase,
+      state.snapshot.degradedReason,
+      state.runtime.phase,
+    ],
   );
 
   const value = useMemo<AccountContextValue>(() => ({ ...state, usage, actions }), [actions, state, usage]);

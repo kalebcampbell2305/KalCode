@@ -51,6 +51,12 @@ export interface AccountSnapshot {
  */
 export const SESSION_EXPIRED_REASON = "session_expired";
 
+/**
+ * `degradedReason` when the system credential store could not be read at startup (native
+ * `SECURE_STORE_UNAVAILABLE_REASON`). The saved session is kept; retrying bootstraps again.
+ */
+export const SECURE_STORE_UNAVAILABLE_REASON = "secure_store_unavailable";
+
 export interface RuntimeStatus {
   phase: RuntimePhase;
   ready: boolean;
@@ -71,6 +77,7 @@ export interface AccountOpenResult {
 }
 
 export type AccountCommandName =
+  | "account_bootstrap"
   | "account_status"
   | "account_email_start"
   | "account_social_start"
@@ -340,6 +347,11 @@ export class AccountClient {
 
   status(): Promise<AccountSnapshot> {
     return this.snapshot("account_status");
+  }
+
+  /** Restores the saved session again after startup could not read the credential store. */
+  bootstrap(): Promise<AccountSnapshot> {
+    return this.snapshot("account_bootstrap");
   }
 
   async runtimeStatus(): Promise<RuntimeStatus> {

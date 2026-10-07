@@ -40,6 +40,8 @@ struct TestStore {
     reject_set_key: Mutex<Option<String>>,
     set_gate: Mutex<Option<Arc<PollGate>>>,
     delete_gate: Mutex<Option<Arc<PollGate>>>,
+    /// Simulates a locked macOS keychain or a denied Credential Manager read.
+    fail_get: std::sync::atomic::AtomicBool,
 }
 
 impl SecretStore for TestStore {
@@ -70,6 +72,9 @@ impl SecretStore for TestStore {
     }
 
     fn get(&self, key: &SecretKey) -> Result<Option<SecretString>, SecretStoreError> {
+        if self.fail_get.load(Ordering::SeqCst) {
+            return Err(SecretStoreError::Access("keychain is locked".into()));
+        }
         Ok(self
             .values
             .lock()
@@ -1039,6 +1044,53 @@ fn an_expired_stored_session_bootstraps_to_a_session_expired_gate() {
         .expect("fresh bootstrap");
     assert_eq!(fresh.phase, AccountPhase::SignedOut);
     assert_eq!(fresh.degraded_reason, None);
+}
+
+#[test]
+fn an_unreadable_credential_store_at_startup_keeps_the_saved_session_and_retries() {
+    let store = Arc::new(TestStore::default());
+    let session =
+        SessionSecret::new(format!("kcs_{}", "a".repeat(43)), 1_900_000_000).expect("session");
+    let cached = CachedAccountSecret::new(
+        vector_token("cases", "free"),
+        PublicAccount {
+            id: ACCOUNT_ID.into(),
+            email: "owner@example.com".into(),
+            activated_at: Some("2026-09-25T12:00:00.000Z".into()),
+            display_name: None,
+        },
+    )
+    .expect("cache");
+    AccountSessionStore::new(store.as_ref())
+        .expect("store")
+        .save_full(Some(&session), None, Some(&cached), None)
+        .expect("seed");
+    let api = Arc::new(FakeApi::default());
+    api.accounts
+        .lock()
+        .expect("queue")
+        .push_back(Ok(api_account(true)));
+    let runtime = runtime(api.clone(), store.clone());
+
+    // A locked keychain (or a denied access prompt) is not a corrupt session.
+    store.fail_get.store(true, Ordering::SeqCst);
+    let degraded = runtime.bootstrap().expect("bootstrap");
+    assert_eq!(degraded.phase, AccountPhase::Degraded);
+    assert_eq!(
+        degraded.degraded_reason.as_deref(),
+        Some("secure_store_unavailable")
+    );
+    store.fail_get.store(false, Ordering::SeqCst);
+    assert!(
+        stored_session_present(&store),
+        "a failed credential read must never delete the saved sign-in"
+    );
+
+    // Once the store answers again, bootstrapping restores the saved session.
+    let restored = runtime.bootstrap().expect("retried bootstrap");
+    assert_ne!(restored.phase, AccountPhase::Degraded);
+    assert_ne!(restored.phase, AccountPhase::SignedOut);
+    assert_eq!(api.account_calls.load(Ordering::SeqCst), 1);
 }
 
 fn runtime_with_empty_store() -> AccountRuntime {

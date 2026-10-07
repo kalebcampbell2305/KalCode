@@ -2,7 +2,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AccountSnapshot, RuntimeStatus } from "../ipc/account.ts";
+import { type AccountSnapshot, type RuntimeStatus, SECURE_STORE_UNAVAILABLE_REASON } from "../ipc/account.ts";
 import {
   type AccountOperations,
   AccountProvider,
@@ -45,6 +45,7 @@ function deferred<T>() {
 function operations(overrides: Partial<AccountOperations> = {}): AccountOperations {
   return {
     status: vi.fn(async () => snapshot("signed_out")),
+    bootstrap: vi.fn(async () => snapshot("signed_out")),
     runtimeStatus: vi.fn<() => Promise<RuntimeStatus>>(async () => ({ phase: "signed_out", ready: false })),
     retryRuntime: vi.fn(async () => undefined),
     startEmail: vi.fn(async () => snapshot("email_pending")),
@@ -125,6 +126,38 @@ describe("AccountProvider", () => {
     await waitFor(() => expect(screen.getByLabelText("phase")).toHaveTextContent("ready"));
     expect(client.status).toHaveBeenCalledOnce();
     expect(client.runtimeStatus).toHaveBeenCalledOnce();
+  });
+
+  it("retries the saved-session restore when startup could not read the credential store", async () => {
+    const locked = { ...snapshot("degraded"), degradedReason: SECURE_STORE_UNAVAILABLE_REASON };
+    const client = operations({
+      status: vi.fn(async () => locked),
+      bootstrap: vi.fn(async () => snapshot("ready")),
+      runtimeStatus: vi
+        .fn<() => Promise<RuntimeStatus>>()
+        .mockResolvedValueOnce({ phase: "signed_out", ready: false })
+        .mockResolvedValue({ phase: "ready", ready: true }),
+    });
+    function RetryHarness() {
+      const account = useAccount();
+      return (
+        <div>
+          <output aria-label="phase">{account.snapshot.phase}</output>
+          <button type="button" onClick={() => void account.actions.retry()}>
+            retry
+          </button>
+        </div>
+      );
+    }
+    render(
+      <AccountProvider client={client}>
+        <RetryHarness />
+      </AccountProvider>,
+    );
+    await waitFor(() => expect(screen.getByLabelText("phase")).toHaveTextContent("degraded"));
+    await userEvent.click(screen.getByRole("button", { name: "retry" }));
+    await waitFor(() => expect(screen.getByLabelText("phase")).toHaveTextContent("ready"));
+    expect(client.bootstrap).toHaveBeenCalledOnce();
   });
 
   it("does not stop observing bootstrap just because the workspace is initially signed out", async () => {

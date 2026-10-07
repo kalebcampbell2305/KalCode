@@ -8,6 +8,7 @@ import {
   PLAN_CATALOG,
   type PlanCatalogEntry,
   type PurchasableTier,
+  SECURE_STORE_UNAVAILABLE_REASON,
   SESSION_EXPIRED_REASON,
 } from "../ipc/account.ts";
 import { Mark } from "../shell/Brand.tsx";
@@ -271,7 +272,11 @@ export function AccountOnboarding({ snapshot, busy, error, actions }: AccountOnb
           <div className={styles.center}>
             <p className={styles.eyebrow}>Account unavailable</p>
             <h1 id="account-title">Reconnect to continue</h1>
-            <p>KalCode could not verify account authority. Your workspace remains locked.</p>
+            <p>
+              {snapshot.degradedReason === SECURE_STORE_UNAVAILABLE_REASON
+                ? "KalCode couldn't read your saved sign-in from this device's credential store. Unlock it or allow access, then try again. Your sign-in is still saved."
+                : "KalCode could not verify account authority. Your workspace remains locked."}
+            </p>
             <Button variant="primary" busy={busy} onClick={() => void actions.retry()}>
               Try again
             </Button>
