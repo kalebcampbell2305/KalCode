@@ -340,7 +340,15 @@ describe("organize", () => {
   it("groups by purpose, honors moves and custom groups, and remembers collapse", () => {
     const groups = organize(
       [item("a", b("working"), "Frontend"), item("b", b("ready"), "Tests"), item("c", b("ready"))],
-      { ...DEFAULT_PREFS, groupOf: { c: "Docs" }, customGroups: ["Docs", "Empty"], collapsedGroups: ["Tests"] },
+      {
+        ...DEFAULT_PREFS,
+        groupOf: { c: "g:docs" },
+        customGroups: [
+          { id: "g:docs", name: "Docs" },
+          { id: "g:empty", name: "Empty" },
+        ],
+        collapsedGroups: ["Tests"],
+      },
       null,
     );
     expect(groups.map((g) => [g.name, g.collapsed, g.active.map((i) => i.key)])).toEqual([
@@ -349,6 +357,38 @@ describe("organize", () => {
       ["Docs", false, ["c"]],
       ["Empty", false, []],
     ]);
+  });
+
+  it("keeps the person's order of items and groups, renamed groups, and new work after it", () => {
+    const items = [
+      item("a", b("ready")),
+      item("b", b("needs_you")),
+      item("c", b("working")),
+      item("d", b("needs_you")),
+      item("w", b("ready"), "Frontend"),
+    ];
+    const groups = organize(
+      items,
+      {
+        ...DEFAULT_PREFS,
+        itemOrder: ["c", "a", "b"],
+        groupOrder: ["Terminals"],
+        groupLabels: { Frontend: "Website", Release: "Ship" },
+      },
+      null,
+    );
+    // Arranged items keep their order; the unarranged "d" follows them.
+    expect(groups.map((g) => [g.id, g.name, g.members.map((i) => i.key)])).toEqual([
+      ["Terminals", "Terminals", ["c", "a", "b", "d"]],
+      ["Frontend", "Website", ["w"]],
+      // A built-in group the person named stays visible while empty.
+      ["Release", "Ship", []],
+    ]);
+  });
+
+  it("falls back to an item's own group when the group it was moved to is gone", () => {
+    const [group] = organize([item("a", b("ready"))], { ...DEFAULT_PREFS, groupOf: { a: "g:removed" } }, null);
+    expect(group?.id).toBe("Terminals");
   });
 
   it("shows one stack without grouping", () => {

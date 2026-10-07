@@ -17,7 +17,7 @@ describe("organization preferences", () => {
     expect(prefs.pinned).toContain("newest-pin");
     expect(prefs.pinned).not.toContain("old-0");
     expect(Object.keys(prefs.groupOf)).toHaveLength(MAX_ITEMS);
-    expect(prefs.groupOf["newest-move"]).toBe("Builds");
+    expect(prefs.groupOf["newest-move"]).toBe("custom:Builds");
     expect(prefs.groupOf["old-0"]).toBeUndefined();
   });
 
@@ -44,5 +44,57 @@ describe("organization preferences", () => {
     expect(prefs.pinned).toContain("new-pin");
     expect(prefs.groupOf["new-move"]).toBe("Tests");
     expect(prefs.groupOf["old-0"]).toBe("Tests");
+  });
+
+  it("reads the earlier name-keyed format as stable ids", () => {
+    const prefs = parsePrefs(
+      JSON.stringify({
+        customGroups: ["Website", "Tests"],
+        groupOf: { "agent:a": "Website", "agent:b": "Frontend" },
+        collapsedGroups: ["Website", "Agents"],
+      }),
+    );
+    expect(prefs.customGroups).toEqual([{ id: "custom:Website", name: "Website" }]);
+    expect(prefs.groupOf).toEqual({ "agent:a": "custom:Website", "agent:b": "Frontend" });
+    expect(prefs.collapsedGroups).toEqual(["custom:Website", "Agents"]);
+  });
+
+  it("persists group names, order, item order and collapse across a reload", () => {
+    const first = renderHook(() => useOrgPrefs("ws"));
+    let id: string | null = null;
+    act(() => {
+      id = first.result.current.addGroup("Website");
+    });
+    const webId = id as unknown as string;
+    act(() => first.result.current.renameGroup(webId, "  Web   site "));
+    act(() => first.result.current.renameGroup("Agents", "AI"));
+    act(() => first.result.current.moveTo("agent:a", webId));
+    act(() => first.result.current.setCollapsed(webId, true));
+    act(() => first.result.current.update((p) => ({ ...p, groupOrder: [webId, "Agents"], itemOrder: ["x", "y"] })));
+    first.unmount();
+
+    const { prefs } = renderHook(() => useOrgPrefs("ws")).result.current;
+    expect(prefs.customGroups).toEqual([{ id: webId, name: "Web site" }]);
+    expect(prefs.groupLabels).toEqual({ Agents: "AI" });
+    expect(prefs.groupOf).toEqual({ "agent:a": webId });
+    expect(prefs.collapsedGroups).toEqual([webId]);
+    expect(prefs.groupOrder).toEqual([webId, "Agents"]);
+    expect(prefs.itemOrder).toEqual(["x", "y"]);
+  });
+
+  it("removing an added group sends its items home; naming a built-in group its own name restores it", () => {
+    const hook = renderHook(() => useOrgPrefs("ws"));
+    let id: string | null = null;
+    act(() => {
+      id = hook.result.current.addGroup("Release train");
+    });
+    const groupId = id as unknown as string;
+    act(() => hook.result.current.moveTo("agent:a", groupId));
+    act(() => hook.result.current.removeGroup(groupId));
+    act(() => hook.result.current.renameGroup("Tests", "QA"));
+    act(() => hook.result.current.renameGroup("Tests", "Tests"));
+    expect(hook.result.current.prefs.customGroups).toEqual([]);
+    expect(hook.result.current.prefs.groupOf).toEqual({});
+    expect(hook.result.current.prefs.groupLabels).toEqual({});
   });
 });

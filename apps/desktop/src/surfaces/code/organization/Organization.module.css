@@ -176,7 +176,10 @@
   background: var(--color-surface-selected);
 }
 
-.item[data-focused]::before {
+/* The edge is an aria-hidden element (first in the item, TerminalStack.tsx), rendered only in
+   these states, not ::before: axe's colour-contrast check reports "incomplete" for the row's text
+   under an absolute pseudo-element with a background. */
+.item[data-focused] > .itemEdge {
   position: absolute;
   top: 6px;
   bottom: 6px;
@@ -184,12 +187,11 @@
   width: 2px;
   border-radius: 1px;
   background: var(--color-accent);
-  content: "";
 }
 
 /* Work that needs you or is waiting is marked: an amber edge, found without reading every row. */
-.item[data-badge="needs_you"]:not([data-focused])::before,
-.item[data-badge="waiting"]:not([data-focused])::before {
+.item[data-badge="needs_you"]:not([data-focused]) > .itemEdge,
+.item[data-badge="waiting"]:not([data-focused]) > .itemEdge {
   position: absolute;
   top: 6px;
   bottom: 6px;
@@ -197,7 +199,6 @@
   width: 2px;
   border-radius: 1px;
   background: var(--status-waiting);
-  content: "";
 }
 
 .itemMain {
@@ -310,8 +311,249 @@
   height: 12px;
 }
 
-.newGroup {
-  margin: var(--space-2) var(--space-2) 0;
+/* ---- Arranging: inline names, drag and drop ---- */
+
+/* Rows and headers are grabbed anywhere; text never selects while arranging. */
+.itemMain,
+.groupHeader {
+  user-select: none;
+}
+
+/* A quiet grip on hover says the row moves; it keeps its space so nothing shifts. */
+.grip {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  margin-left: -6px;
+  margin-right: -4px;
+  color: var(--color-text-faint);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-standard);
+}
+
+.item:hover .grip,
+.itemMain:focus-visible .grip {
+  opacity: 1;
+}
+
+.groupHeader .groupGrip {
+  width: 12px;
+  height: 12px;
+  margin-right: -2px;
+  color: var(--color-text-faint);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-standard);
+}
+
+.groupHeader:hover .groupGrip,
+.groupHeader:focus-visible .groupGrip {
+  opacity: 1;
+}
+
+.groupHeader[data-editing] {
+  cursor: default;
+}
+
+.itemNameInput,
+.groupNameInput {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 1.375rem;
+  padding: 0 var(--space-1-5);
+  border: 1px solid var(--color-border-focus);
+  border-radius: var(--radius-sm);
+  outline: none;
+  background: var(--color-surface-2);
+  box-shadow: var(--glow-subtle);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--type-ui);
+}
+
+.groupNameInput {
+  font-size: var(--type-small);
+  font-weight: var(--type-label-weight);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.itemMain[data-editing] {
+  cursor: default;
+}
+
+/* While arranging, rows glide out of the way of the insertion line instead of jumping. */
+.stack[data-dragging] .item,
+.stack[data-dragging] .group {
+  transition: transform var(--dur-fast) var(--ease-standard);
+}
+
+.stack[data-dragging] .itemMain,
+.stack[data-dragging] .groupHeader {
+  cursor: grabbing;
+}
+
+.stack[data-dragging] .item:hover {
+  background: transparent;
+}
+
+.stack[data-dragging] .itemMenu,
+.stack[data-dragging] .grip,
+.stack[data-dragging] .groupGrip {
+  opacity: 0;
+}
+
+/* The row being moved stays in place, lifted out: an outlined slot shows where it came from. */
+.item[data-dragging] {
+  background: var(--color-accent-soft);
+  box-shadow: inset 0 0 0 1px var(--color-border-lit-soft);
+  opacity: 0.55;
+}
+
+/* The insertion line: exactly where the item lands. An aria-hidden element rendered only while it
+   shows, not ::after, like the row edge above (axe and text under absolute pseudo-elements). */
+.dropLine {
+  position: absolute;
+  right: var(--space-1);
+  left: var(--space-1);
+  height: 2px;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-accent-soft);
+  pointer-events: none;
+}
+
+.item[data-drop-edge="before"] > .dropLine {
+  top: -2px;
+}
+
+.item[data-drop-edge="after"] > .dropLine {
+  bottom: -2px;
+}
+
+.item[data-drop-edge="before"] {
+  transform: translateY(2px);
+}
+
+.item[data-drop-edge="after"] {
+  transform: translateY(-2px);
+}
+
+.group {
+  position: relative;
+}
+
+.group[data-drop-edge="before"] > .dropLine {
+  top: -3px;
+}
+
+.group[data-drop-edge="after"] > .dropLine {
+  bottom: -3px;
+}
+
+/* The group being moved dims; the others make room around the line. */
+.group[data-drag-self] {
+  opacity: 0.5;
+}
+
+/* Dropping into a group: the whole group lights up. */
+.group[data-drop-into] {
+  border-radius: var(--radius-sm);
+  background: var(--color-accent-soft);
+  box-shadow: inset 0 0 0 1px var(--color-border-lit-soft);
+}
+
+.groupHeader[data-drop-active] {
+  border-radius: var(--radius-sm);
+  background: var(--color-accent-soft);
+  color: var(--color-accent-text);
+}
+
+/* An empty or collapsed group offers one large target while an item drags. */
+.dropZone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1-5);
+  min-height: 2.5rem;
+  margin: var(--space-1) var(--space-2) var(--space-1-5);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  font-size: var(--type-small);
+  transition:
+    background var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard);
+}
+
+.dropZone svg {
+  width: 13px;
+  height: 13px;
+}
+
+.dropZone[data-active] {
+  border-style: solid;
+  border-color: var(--color-border-focus);
+  background: var(--color-accent-soft);
+  box-shadow: var(--glow-subtle);
+  color: var(--color-accent-text);
+}
+
+.stack[data-dragging="item"] .addGroup {
+  justify-content: center;
+  width: calc(100% - var(--space-4));
+  min-height: 2.25rem;
+  border: 1px dashed var(--color-border-strong);
+  color: var(--color-text-muted);
+}
+
+.addGroup[data-drop-active] {
+  border-style: solid;
+  border-color: var(--color-border-focus);
+  background: var(--color-accent-soft);
+  color: var(--color-accent-text);
+}
+
+/* The floating preview under the pointer: compact, lifted, never in the way of hit testing. */
+.dragGhost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: var(--z-overlay);
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  max-width: 14rem;
+  height: 1.75rem;
+  padding: 0 var(--space-2-5) 0 var(--space-1-5);
+  border: 1px solid var(--color-border-lit);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
+  box-shadow: var(--lift-active), var(--glow-subtle);
+  color: var(--color-text);
+  font-size: var(--type-ui);
+  white-space: nowrap;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.dragGhost[data-kind="group"] {
+  font-size: var(--type-small);
+  font-weight: var(--type-label-weight);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.dragGhost svg {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  color: var(--color-accent-text);
+}
+
+.dragGhost span {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* The collapsed stack: one slim button with live counters. */
