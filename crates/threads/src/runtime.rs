@@ -3099,7 +3099,18 @@ impl Inner {
                         (status == ThreadStatus::Idle && state.turn_failed)
                             .then(|| LAST_TURN_FAILED_ACTIVITY.to_owned())
                     });
-                self.provider_transition(ctx, status, detail.as_deref())?;
+                let from = self.provider_transition(ctx, status, detail.as_deref())?;
+                if status == ThreadStatus::Active && from == Some(ThreadStatus::Idle) {
+                    // The provider began a turn KalCode didn't send (a prompt typed in a coding
+                    // terminal). Start it as `deliver_locked` starts one: an earlier interrupt
+                    // or failure belongs to the turn it ended, not to this one.
+                    state.halted = false;
+                    state.turn_failed = false;
+                    self.core.write_with_events(|tx| {
+                        store::set_error(tx, id, None)?;
+                        Ok(((), Vec::new()))
+                    })?;
+                }
             }
             AgentEvent::MessageDelta { message_id, text } => {
                 let buffer = state.buffers.entry(message_id.clone()).or_default();
@@ -3350,19 +3361,25 @@ impl Inner {
     }
 
     /// A provider-driven status change. A paused thread stays paused until the user resumes.
-    fn provider_transition(&self, ctx: &Ctx, to: ThreadStatus, detail: Option<&str>) -> Result<()> {
+    /// Returns the status it moved from, or `None` when the thread stayed paused.
+    fn provider_transition(
+        &self,
+        ctx: &Ctx,
+        to: ThreadStatus,
+        detail: Option<&str>,
+    ) -> Result<Option<ThreadStatus>> {
         let now = now_rfc3339();
-        self.core.write_with_events(|tx| {
+        let (from, _) = self.core.write_with_events(|tx| {
             if store::status(tx, &ctx.thread_id)? == ThreadStatus::Paused {
-                return Ok(((), Vec::new()));
+                return Ok((None, Vec::new()));
             }
             let from = store::set_status(tx, &ctx.thread_id, to, detail, &now)?;
             Ok((
-                (),
+                Some(from),
                 ctx.status_changed(EventSource::Provider, from, to, detail),
             ))
         })?;
-        Ok(())
+        Ok(from)
     }
 
     /// A runtime- or user-driven status change.
