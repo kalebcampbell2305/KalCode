@@ -363,6 +363,11 @@ const LIVE = "0.1.8+923";
 const V019 = "0.1.9+1106";
 /** The Stable 0.1.9 build that shipped the New agent launcher, provider agent panes and Account Hub. */
 const V019_STABLE = "0.1.9+1340";
+/**
+ * PLACEHOLDER, fill at merge: the production-verified desktop build that ships KalCode Remote to
+ * MAX, merged only after Apple approves the iOS app. The roadmap test rejects it until then.
+ */
+const REMOTE_GA = "FILL_AT_MERGE";
 
 /** Comparison quotas are formatted from the same limits signed by the API. */
 function quotaValues(key: "brainstormsPerMonth" | "launchRecipes" | "externalIntegrations" | "queuedTasks") {
@@ -723,7 +728,8 @@ export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
         id: "remote",
         label: "KalCode Remote",
         from: "max",
-        status: "coming_soon",
+        status: "available",
+        verifiedIn: REMOTE_GA,
         values: { max: "Standard", max2x: "Full" },
       },
     ],

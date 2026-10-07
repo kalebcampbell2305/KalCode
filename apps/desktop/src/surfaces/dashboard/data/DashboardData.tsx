@@ -3,6 +3,7 @@ import { useToast } from "@kalcode/ui/components";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { toKalCodeError } from "../../../ipc/errors.ts";
 import { useEvents, useRuntime } from "../../../runtime/RuntimeProvider.tsx";
+import { useWorktreeStates, type WorktreeStates } from "../fleet/useWorktreeStates.ts";
 import { ACTION_LABELS, type ThreadAction } from "./actions.ts";
 import { isCodingAgent } from "./agents.ts";
 import { fleetCounts } from "./board.ts";
@@ -23,6 +24,8 @@ interface DashboardDataValue {
   /** Archived threads, from the same read (shown read-only, restorable with Unarchive). */
   archived: Resource<ThreadSummary[]>;
   terminals: Resource<TerminalInfo[]>;
+  /** One shared worktree/ownership read for Fleet cards and Needs You. */
+  worktrees: WorktreeStates;
   /** Thread id → action in flight. */
   pendingActions: ReadonlyMap<string, ThreadAction>;
   runAction: (thread: ThreadSummary, action: Exclude<ThreadAction, "open">) => Promise<void>;
@@ -170,6 +173,12 @@ export function DashboardDataProvider({ children }: { children: ReactNode }) {
   );
   const threads = useThreadSide(allThreads, false);
   const archived = useThreadSide(allThreads, true);
+  const worktreeThreads = useMemo(
+    () =>
+      resourceOwner === lifetime && threads.state.status === "ready" ? threads.state.data.filter(isCodingAgent) : null,
+    [resourceOwner, lifetime, threads.state],
+  );
+  const worktrees = useWorktreeStates(worktreeThreads);
   const terminals = useResource(
     useCallback(() => client.runningTerminals(), [client]),
     versions.terminals,
@@ -363,13 +372,14 @@ export function DashboardDataProvider({ children }: { children: ReactNode }) {
       threads: resourceOwner === lifetime ? threads : { ...threads, state: { status: "loading" } },
       archived: resourceOwner === lifetime ? archived : { ...archived, state: { status: "loading" } },
       terminals: resourceOwner === lifetime ? terminals : { ...terminals, state: { status: "loading" } },
+      worktrees,
       pendingActions,
       runAction,
       runBulk,
       urgent,
       polite,
     }),
-    [threads, archived, terminals, pendingActions, runAction, runBulk, polite, resourceOwner, lifetime],
+    [threads, archived, terminals, worktrees, pendingActions, runAction, runBulk, polite, resourceOwner, lifetime],
   );
 
   return <DashboardDataContext.Provider value={value}>{children}</DashboardDataContext.Provider>;
@@ -408,6 +418,11 @@ export function useCodingAgents() {
   const threads = useThreadSummaries();
   const state = useAgentsOnly(threads.state);
   return { ...threads, state };
+}
+
+/** The one shared worktree/ownership feed used by every Dashboard and attention projection. */
+export function useAgentWorktreeStates(): WorktreeStates {
+  return useDashboardData().worktrees;
 }
 
 /**

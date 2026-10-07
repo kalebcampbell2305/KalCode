@@ -8,6 +8,49 @@ const POLL_MS = 10_000;
 const EVENT_DEBOUNCE_MS = 1_500;
 /** The native command reads at most this many threads per call. */
 const MAX_IDS = 64;
+/** Git reads are heavy; large Squads use a small pool rather than one process burst per chunk. */
+const READ_CONCURRENCY = 2;
+
+export interface WorktreeStateGeneration {
+  states: ThreadWorktreeState[];
+  /** Native omitted at least one requested agent, so ownership coverage is not complete. */
+  incomplete: boolean;
+}
+
+/**
+ * Reads every agent through the native command's bounded contract. Results become visible only
+ * after every chunk succeeds, so Needs You never compares paths from mixed read generations.
+ */
+export async function readWorktreeStateGeneration(
+  read: (threadIds: string[]) => Promise<ThreadWorktreeState[]>,
+  threadIds: readonly string[],
+): Promise<WorktreeStateGeneration> {
+  const chunks: string[][] = [];
+  for (let index = 0; index < threadIds.length; index += MAX_IDS) {
+    chunks.push(threadIds.slice(index, index + MAX_IDS));
+  }
+  const results = new Array<ThreadWorktreeState[]>(chunks.length);
+  let next = 0;
+  let failure: unknown = null;
+  const worker = async () => {
+    while (failure === null && next < chunks.length) {
+      const index = next;
+      next += 1;
+      const chunk = chunks[index];
+      if (!chunk) continue;
+      try {
+        results[index] = await read(chunk);
+      } catch (error) {
+        failure ??= error;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(READ_CONCURRENCY, chunks.length) }, worker));
+  if (failure !== null) throw failure;
+  const states = results.flat();
+  const returned = new Set(states.map((state) => state.threadId));
+  return { states, incomplete: threadIds.some((id) => !returned.has(id)) };
+}
 
 /**
  * Worktree facts (ahead/behind, dirty, would-conflict) for the agents that run in their own
@@ -17,6 +60,14 @@ const MAX_IDS = 64;
  */
 export interface WorktreeStates {
   states: Map<string, ThreadWorktreeState>;
+  /** The current agent set has either been read or failed explicitly. */
+  ready: boolean;
+  /** The latest read failed; `states` remains the last known snapshot. */
+  failed: boolean;
+  /** Some agents or changed paths were omitted by a native read. */
+  incomplete: boolean;
+  /** Re-read now (Needs You and the Fleet share this same reader). */
+  reload: () => void;
   /** Applies facts the caller just observed (e.g. after a commit) without waiting for a read. */
   apply: (state: ThreadWorktreeState) => void;
 }
@@ -48,24 +99,19 @@ export function keepUnchanged(
 export function useWorktreeStates(threads: readonly ThreadSummary[] | null): WorktreeStates {
   const { client } = useRuntime();
   const { events } = useEvents();
-  const ids = useMemo(
-    () =>
-      (threads ?? [])
-        .filter((t) => t.worktreeId)
-        .map((t) => t.id)
-        .slice(0, MAX_IDS),
-    [threads],
-  );
+  const ids = useMemo(() => (threads ?? []).filter((t) => t.worktreeId).map((t) => t.id), [threads]);
   const key = ids.join(",");
   const trigger = events.find((e) => /^(thread\.|file\.|git\.)/.test(e.type))?.seq ?? 0;
   const [states, setStates] = useState<Map<string, ThreadWorktreeState>>(() => new Map());
+  const [readState, setReadState] = useState({ key: "", ready: false, failed: false, incomplete: false });
   // The reader for the current set of ids; events ask it for a (debounced) read.
-  const reader = useRef<{ request: () => void } | null>(null);
+  const reader = useRef<{ request: () => void; reload: () => void } | null>(null);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: `key` stands for `ids`.
   useEffect(() => {
     if (ids.length === 0) {
       setStates(new Map());
+      setReadState({ key, ready: true, failed: false, incomplete: false });
       reader.current = null;
       return;
     }
@@ -80,14 +126,23 @@ export function useWorktreeStates(threads: readonly ThreadSummary[] | null): Wor
         return;
       }
       inFlight = true;
-      client
-        .threadWorktreeStates(ids)
+      readWorktreeStateGeneration((chunk) => client.threadWorktreeStates(chunk), ids)
         .then(
-          (list) => {
-            if (!disposed) setStates((current) => keepUnchanged(current, list));
+          (generation) => {
+            if (!disposed) {
+              setStates((current) => keepUnchanged(current, generation.states));
+              setReadState({ key, ready: true, failed: false, incomplete: generation.incomplete });
+            }
           },
           () => {
-            // Keep the last observed facts; cards say "Checking the worktree…" until the first read.
+            if (!disposed) {
+              setReadState((current) => ({
+                key,
+                ready: true,
+                failed: true,
+                incomplete: current.key === key ? current.incomplete : false,
+              }));
+            }
           },
         )
         .finally(() => {
@@ -103,6 +158,7 @@ export function useWorktreeStates(threads: readonly ThreadSummary[] | null): Wor
         if (debounce) clearTimeout(debounce);
         debounce = setTimeout(read, EVENT_DEBOUNCE_MS);
       },
+      reload: read,
     };
     read();
     const timer = setInterval(read, POLL_MS);
@@ -121,5 +177,11 @@ export function useWorktreeStates(threads: readonly ThreadSummary[] | null): Wor
     (state: ThreadWorktreeState) => setStates((current) => new Map(current).set(state.threadId, state)),
     [],
   );
-  return useMemo(() => ({ states, apply }), [states, apply]);
+  const reload = useCallback(() => reader.current?.reload(), []);
+  const currentRead = readState.key === key ? readState : { ready: ids.length === 0, failed: false, incomplete: false };
+  const incomplete = currentRead.incomplete || [...states.values()].some((state) => state.changedPathsTruncated);
+  return useMemo(
+    () => ({ states, ready: currentRead.ready, failed: currentRead.failed, incomplete, reload, apply }),
+    [states, currentRead.ready, currentRead.failed, incomplete, reload, apply],
+  );
 }

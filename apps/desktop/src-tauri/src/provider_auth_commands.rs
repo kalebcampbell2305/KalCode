@@ -10,7 +10,9 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use kalcode_contracts::agent::{AgentProvider, AuthState, ProviderError, ProviderId};
-use kalcode_contracts::provider_accounts::ProviderAccount;
+use kalcode_contracts::provider_accounts::{
+    ProviderAccount, ProviderAccountModel, ProviderAccountModelCatalog,
+};
 use kalcode_core::{ErrorCategory, IpcError, KalError};
 use kalcode_providers::account_auth::{
     CodexAccountAuthError, CodexAccountAuthManager, CodexAccountState, PendingCodexLogin,
@@ -40,9 +42,10 @@ pub use cursor::*;
 mod e2e;
 
 const CODEX_TRUTH_TTL: Duration = Duration::from_secs(5 * 60);
-// Cancellation must allow the observer's 500 ms termination grace plus Windows'
-// bounded 5 s process-tree reap before treating the account as still busy.
-const ACCOUNT_VALIDATION_PREEMPT_TIMEOUT: Duration = Duration::from_secs(6);
+// Account model discovery is informational and starts asynchronously from the UI. Give an exact
+// account's startup refresh time to publish its auth truth instead of leaking that internal
+// single-flight as a user-visible error. This never cancels the incumbent validation.
+const ACCOUNT_CATALOG_VALIDATION_WAIT: Duration = Duration::from_secs(6);
 const MAX_PENDING_LOGINS: usize = 8;
 const AUTH_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -55,62 +58,11 @@ enum RuntimeAuthError {
     Claude(ClaudeAccountAuthError),
     Gemini(GeminiAccountAuthError),
     GeminiUnavailable,
+    Adapter(ProviderError),
+    ModelsUnavailable,
 }
 
 impl RuntimeAuthError {
-    /// A launch refusal with a stable code and fixed, user-safe copy. Only a provider that is
-    /// missing maps to a plain provider error; nothing here is a provider start failure.
-    fn into_provider_error(self) -> ProviderError {
-        use kalcode_contracts::threads::error_codes;
-        let refused = |code: &str, message: String| ProviderError::Refused {
-            code: code.to_owned(),
-            message,
-        };
-        let version = |window: &VersionWindow| {
-            refused(
-                error_codes::PROVIDER_VERSION_UNSUPPORTED,
-                window_unsupported_message(window),
-            )
-        };
-        match self {
-            Self::Account(error) => refused(error.code, error.message),
-            Self::ProviderUnavailable | Self::GeminiUnavailable => ProviderError::NotInstalled,
-            Self::Busy => refused(
-                error_codes::PROVIDER_ACCOUNT_BUSY,
-                "This account is busy with a sign-in or account change in KalCode. Finish it, then try launching the agent again."
-                    .into(),
-            ),
-            Self::Provider(CodexAccountAuthError::UnsupportedVersion) => {
-                version(&kalcode_providers::codex::MANAGED_VERSIONS)
-            }
-            Self::Gemini(GeminiAccountAuthError::UnsupportedVersion) => {
-                version(&kalcode_providers::gemini::MANAGED_VERSIONS)
-            }
-            Self::Claude(error) => match claude_failure_ipc(&error) {
-                Some((code, message)) if code == error_codes::PROVIDER_VERSION_UNSUPPORTED => {
-                    refused(code, message)
-                }
-                _ => refused(
-                    error_codes::PROVIDER_ACCOUNT_CHECK_FAILED,
-                    format!(
-                        "KalCode couldn't check this Claude Code account (reason: {}). Check your connection, then retry.",
-                        error.reason_code()
-                    ),
-                ),
-            },
-            Self::Provider(_) => refused(
-                error_codes::PROVIDER_ACCOUNT_CHECK_FAILED,
-                "KalCode couldn't check this Codex account. Check your connection, then retry."
-                    .into(),
-            ),
-            Self::Gemini(_) => refused(
-                error_codes::PROVIDER_ACCOUNT_CHECK_FAILED,
-                "KalCode couldn't check this Gemini CLI account. Check your connection, then retry."
-                    .into(),
-            ),
-        }
-    }
-
     fn into_ipc(self, command: &'static str) -> IpcError {
         if let Self::Claude(error) = &self
             && let Some((code, message)) = claude_failure_ipc(error)
@@ -151,6 +103,10 @@ impl RuntimeAuthError {
             Self::Provider(CodexAccountAuthError::Canceled) => {
                 ("provider_login_canceled", "Codex sign-in was canceled.")
             }
+            Self::Provider(CodexAccountAuthError::NotAuthenticated) => (
+                "provider_account_not_authenticated",
+                "Connect this Codex account before loading its available models.",
+            ),
             Self::Provider(_) => (
                 "provider_auth_failed",
                 "The official Codex account operation did not complete safely.",
@@ -190,6 +146,40 @@ impl RuntimeAuthError {
             Self::Gemini(_) => (
                 "provider_auth_failed",
                 "The official Gemini CLI account operation did not complete safely.",
+            ),
+            Self::Adapter(error) => {
+                let (code, message) = match error {
+                    ProviderError::NotInstalled => (
+                        "provider_not_installed".to_owned(),
+                        "That provider is not installed on this computer.".to_owned(),
+                    ),
+                    ProviderError::NotAuthenticated => (
+                        "provider_account_not_authenticated".to_owned(),
+                        "Connect this provider account before loading its available models."
+                            .to_owned(),
+                    ),
+                    ProviderError::Refused { code, message } => (code, message),
+                    ProviderError::Protocol(_) => (
+                        "provider_models_invalid".to_owned(),
+                        "The provider returned an invalid model catalog. Update it, then retry."
+                            .to_owned(),
+                    ),
+                    _ => (
+                        "provider_models_unavailable".to_owned(),
+                        "KalCode could not load this account's model catalog. Retry when the provider is available."
+                            .to_owned(),
+                    ),
+                };
+                return IpcError {
+                    category: ErrorCategory::Provider,
+                    code,
+                    message,
+                    retryable: true,
+                };
+            }
+            Self::ModelsUnavailable => (
+                "provider_models_unavailable",
+                "This provider does not expose a model catalog in this KalCode build.",
             ),
         };
         KalError::new(ErrorCategory::Provider, code, message).log_and_convert(command)
@@ -490,9 +480,68 @@ impl ProviderRuntimeAuthority {
         })
     }
 
-    /// Supersedes one exact background validation before a foreground Codex plan read. The
-    /// provider process receives the cancellation token, proves cleanup, then the RAII validation
+    /// Waits for one exact account validation and takes its slot atomically. Catalog reads are
+    /// allowed to follow a startup refresh, but must never cancel it or race another refresh into
+    /// the gap between observing a free slot and claiming it.
+    fn begin_account_catalog_validation(
+        &self,
+        provider: &str,
+        account_id: &str,
+        timeout: Duration,
+    ) -> Result<AccountValidation, RuntimeAuthError> {
+        let key = (provider.to_owned(), account_id.to_owned());
+        let started = Instant::now();
+        let deadline = started.checked_add(timeout).unwrap_or(started);
+        let mut active = self
+            .inner
+            .active_validations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        loop {
+            if !active.contains_key(&key) {
+                let canceled = Arc::new(AtomicBool::new(false));
+                active.insert(key.clone(), Arc::clone(&canceled));
+                return Ok(AccountValidation {
+                    runtime: self.clone(),
+                    key,
+                    canceled,
+                });
+            }
+
+            let now = Instant::now();
+            if now >= deadline {
+                return Err(RuntimeAuthError::Busy);
+            }
+            let waited = self
+                .inner
+                .validation_changed
+                .wait_timeout(active, deadline.saturating_duration_since(now))
+                .unwrap_or_else(PoisonError::into_inner);
+            active = waited.0;
+            if waited.1.timed_out() && active.contains_key(&key) {
+                return Err(RuntimeAuthError::Busy);
+            }
+        }
+    }
+
+    /// Asks one exact background validation to stop. The observer sees the token within one
+    /// receive poll, ends its read without recording a result, and tears down on its own thread.
+    fn cancel_account_validation(&self, provider: &str, account_id: &str) {
+        let key = (provider.to_owned(), account_id.to_owned());
+        let active = self
+            .inner
+            .active_validations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(canceled) = active.get(&key) {
+            canceled.store(true, Ordering::Release);
+        }
+    }
+
+    /// Cancels one exact background validation and waits for its RAII registration to be removed.
+    /// The provider process receives the cancellation token, proves cleanup, then the validation
     /// removes itself and wakes this waiter. No provider I/O runs while the registry mutex is held.
+    #[cfg(test)]
     fn preempt_account_validation(
         &self,
         provider: &str,
@@ -972,6 +1021,153 @@ impl ProviderRuntimeAuthority {
         Some(entry.eligibility)
     }
 
+    fn account_models(
+        &self,
+        account_id: &str,
+    ) -> Result<ProviderAccountModelCatalog, RuntimeAuthError> {
+        let account = self
+            .inner
+            .accounts
+            .get(account_id)
+            .map_err(RuntimeAuthError::Account)?;
+        let account = self
+            .inner
+            .accounts
+            .get_active_for_provider(account_id, &account.provider_id)
+            .map_err(RuntimeAuthError::Account)?;
+        let models = match account.provider_id.as_str() {
+            ProviderId::CODEX => self.codex_account_models(account_id, true)?,
+            ProviderId::CURSOR => self
+                .cursor_models(account_id)
+                .map_err(RuntimeAuthError::Adapter)?
+                .into_iter()
+                .map(|model| ProviderAccountModel {
+                    id: model.id,
+                    display_name: model.display_name,
+                    is_default: model.is_default,
+                    default_effort: None,
+                    supported_efforts: Vec::new(),
+                })
+                .collect(),
+            provider_id => {
+                let capabilities = catalog::capabilities(provider_id)
+                    .ok_or(RuntimeAuthError::ModelsUnavailable)?;
+                let supported_efforts =
+                    kalcode_providers::interactive::supported_efforts(provider_id);
+                capabilities
+                    .models
+                    .into_iter()
+                    .map(|model| ProviderAccountModel {
+                        id: model.id,
+                        display_name: model.display_name,
+                        is_default: model.is_default,
+                        default_effort: None,
+                        supported_efforts: supported_efforts.clone(),
+                    })
+                    .collect()
+            }
+        };
+        Ok(ProviderAccountModelCatalog {
+            account_id: account.id,
+            provider_id: account.provider_id,
+            models,
+        })
+    }
+
+    fn codex_account_models(
+        &self,
+        account_id: &str,
+        allow_config_repair: bool,
+    ) -> Result<Vec<ProviderAccountModel>, RuntimeAuthError> {
+        let validation = self.begin_account_catalog_validation(
+            ProviderId::CODEX,
+            account_id,
+            ACCOUNT_CATALOG_VALIDATION_WAIT,
+        )?;
+        let cancellation = validation.cancellation();
+        let manager = self
+            .inner
+            .codex_auth
+            .as_ref()
+            .cloned()
+            .ok_or(RuntimeAuthError::ProviderUnavailable)?;
+        let recorded_failure = Arc::new(Mutex::new(None));
+        let provider_failure = Arc::clone(&recorded_failure);
+        let observer = self.clone();
+        let observed_account_id = account_id.to_owned();
+        let result = self.inner.accounts.observe_with_active_account(
+            &self.inner.profiles,
+            ProviderId::CODEX,
+            account_id,
+            move |_, lease| {
+                manager
+                    .list_models_with_observer_lease_observed(
+                        account_id,
+                        lease,
+                        cancellation,
+                        move |result| {
+                            if result == &Err(CodexAccountAuthError::NotAuthenticated) {
+                                observer
+                                    .inner
+                                    .accounts
+                                    .mark_authentication(
+                                        &observed_account_id,
+                                        AuthState::NotAuthenticated,
+                                        None,
+                                        Some("codex_not_authenticated"),
+                                    )
+                                    .map_err(|_| CodexAccountAuthError::StateUpdateFailed)?;
+                            }
+                            Ok(())
+                        },
+                    )
+                    .map_err(|error| {
+                        *provider_failure
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner) = Some(error.clone());
+                        ProviderError::Start(error.to_string())
+                    })
+            },
+        );
+        match result {
+            Ok(models) => Ok(models
+                .into_iter()
+                .map(|model| ProviderAccountModel {
+                    id: model.model,
+                    display_name: model.display_name,
+                    is_default: model.is_default,
+                    default_effort: Some(model.default_reasoning_effort),
+                    supported_efforts: model.supported_reasoning_efforts,
+                })
+                .collect()),
+            Err(error) => {
+                let failure = recorded_failure
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .clone();
+                if failure == Some(CodexAccountAuthError::Canceled)
+                    || (failure.is_none() && is_profile_busy(&error))
+                {
+                    return Err(RuntimeAuthError::Busy);
+                }
+                if allow_config_repair
+                    && failure == Some(CodexAccountAuthError::ProfileConfigChanged)
+                {
+                    drop(validation);
+                    self.repair_codex_profile_config(account_id)?;
+                    return self.codex_account_models(account_id, false);
+                }
+                Err(match failure {
+                    Some(error) => RuntimeAuthError::Provider(error),
+                    None if matches!(error, ProviderError::NotInstalled) => {
+                        RuntimeAuthError::ProviderUnavailable
+                    }
+                    None => RuntimeAuthError::Provider(CodexAccountAuthError::ConnectionEnded),
+                })
+            }
+        }
+    }
+
     fn refresh_codex_account(&self, account_id: &str) -> Result<ProviderAccount, RuntimeAuthError> {
         self.refresh_codex_account_inner(account_id, true)
     }
@@ -1119,18 +1315,18 @@ impl ProviderRuntimeAuthority {
     /// Give the real provider launch priority over passive observers for this exact account.
     /// Authentication is enforced by AccountStore's shared launch lease and the provider itself;
     /// missing plan/usage metadata never adds a synchronous network check or a launch requirement.
+    ///
+    /// The launch cancels the exact background observer and does not wait for its teardown. The
+    /// observer is credential-read-only and its shared lease coexists with sessions by design;
+    /// sign-in, sign-out and archive writers are still excluded by the profile lease. Teardown
+    /// (termination grace, process-tree reap and the guardian's durable quiescence proof) took
+    /// seconds under load, and waiting for it refused the user's launch as busy.
     pub fn prepare_account_launch(
         &self,
         provider: &ProviderId,
         account_id: &str,
     ) -> Result<(), ProviderError> {
-        if !self.preempt_account_validation(
-            provider.as_str(),
-            account_id,
-            ACCOUNT_VALIDATION_PREEMPT_TIMEOUT,
-        ) {
-            return Err(RuntimeAuthError::Busy.into_provider_error());
-        }
+        self.cancel_account_validation(provider.as_str(), account_id);
         Ok(())
     }
 
@@ -1835,6 +2031,31 @@ pub async fn provider_claude_logout(
         .to_ipc()
     })?
     .map_err(|error| error.into_ipc("provider_claude_logout"))
+}
+
+#[tauri::command(async)]
+pub async fn provider_account_models(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    state: crate::runtime_coordinator::RuntimeState<ProviderAuthState>,
+    account_id: String,
+) -> Result<ProviderAccountModelCatalog, IpcError> {
+    _runtime_access.revalidate()?;
+    let runtime = state.runtime("provider_account_models")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        _runtime_access
+            .revalidate_core()
+            .map_err(RuntimeAuthError::Account)?;
+        runtime.account_models(&account_id)
+    })
+    .await
+    .map_err(|_| {
+        KalError::internal(
+            "provider_models_task_failed",
+            "The provider model catalog task stopped. Retry.",
+        )
+        .to_ipc()
+    })?
+    .map_err(|error| error.into_ipc("provider_account_models"))
 }
 
 #[tauri::command(async)]
@@ -2827,9 +3048,167 @@ mod tests {
 
     #[cfg(any(windows, target_os = "macos"))]
     #[test]
+    fn account_model_catalog_waits_for_the_exact_validation_then_acquires_it() {
+        let mut fixture = Fixture::new();
+        install_read_only_codex_app_server(&mut fixture, "pro", false, false);
+        let validation = fixture
+            .runtime
+            .begin_account_validation(ProviderId::CODEX, &fixture.account.id)
+            .expect("startup validation");
+        let cancellation = validation.cancellation();
+        let runtime = fixture.runtime.clone();
+        let account_id = fixture.account.id.clone();
+        let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(0);
+        let (result_tx, result_rx) = std::sync::mpsc::sync_channel(0);
+        let catalog = std::thread::spawn(move || {
+            entered_tx.send(()).expect("catalog entered");
+            result_tx
+                .send(runtime.account_models(&account_id))
+                .expect("catalog result received");
+        });
+
+        // Hang guards only: a loaded gate can delay the thread start and the cold
+        // cmd -> PowerShell fake provider well past their usual sub-second times.
+        entered_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("catalog entered");
+        assert!(
+            result_rx.recv_timeout(Duration::from_millis(100)).is_err(),
+            "catalog discovery must wait instead of surfacing a transient busy error"
+        );
+        assert!(
+            !cancellation.load(Ordering::Acquire),
+            "catalog discovery must not cancel the startup refresh"
+        );
+
+        drop(validation);
+        let result = result_rx
+            .recv_timeout(Duration::from_secs(120))
+            .expect("catalog resumes after validation release")
+            .expect("catalog succeeds");
+        assert_eq!(result.models[0].id, "codex-test-exact");
+        catalog.join().expect("catalog joins");
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn account_model_catalog_timeout_never_cancels_the_incumbent_validation() {
+        let fixture = Fixture::new();
+        let validation = fixture
+            .runtime
+            .begin_account_validation(ProviderId::CODEX, &fixture.account.id)
+            .expect("startup validation");
+        let cancellation = validation.cancellation();
+
+        assert!(matches!(
+            fixture.runtime.begin_account_catalog_validation(
+                ProviderId::CODEX,
+                &fixture.account.id,
+                Duration::from_millis(25),
+            ),
+            Err(RuntimeAuthError::Busy)
+        ));
+        assert!(
+            !cancellation.load(Ordering::Acquire),
+            "a catalog timeout must leave the foreground validation untouched"
+        );
+        assert!(matches!(
+            fixture
+                .runtime
+                .begin_account_validation(ProviderId::CODEX, &fixture.account.id),
+            Err(RuntimeAuthError::Busy)
+        ));
+        drop(validation);
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn account_model_catalog_validation_does_not_wait_for_another_account() {
+        let fixture = Fixture::new();
+        let other = fixture
+            .runtime
+            .account_store()
+            .create(ProviderId::CODEX, "Other")
+            .expect("other account");
+        let validation = fixture
+            .runtime
+            .begin_account_validation(ProviderId::CODEX, &fixture.account.id)
+            .expect("startup validation");
+        let cancellation = validation.cancellation();
+
+        let catalog = fixture
+            .runtime
+            .begin_account_catalog_validation(ProviderId::CODEX, &other.id, Duration::ZERO)
+            .expect("another account claims its independent slot immediately");
+        assert!(!cancellation.load(Ordering::Acquire));
+        assert!(!catalog.cancellation().load(Ordering::Acquire));
+        drop(catalog);
+        drop(validation);
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn same_account_catalog_validations_serialize_without_overlap() {
+        let fixture = Fixture::new();
+        let first = fixture
+            .runtime
+            .begin_account_catalog_validation(
+                ProviderId::CODEX,
+                &fixture.account.id,
+                Duration::ZERO,
+            )
+            .expect("first catalog validation");
+        let runtime = fixture.runtime.clone();
+        let account_id = fixture.account.id.clone();
+        let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(0);
+        let (acquired_tx, acquired_rx) = std::sync::mpsc::sync_channel(0);
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(0);
+        let second = std::thread::spawn(move || {
+            entered_tx.send(()).expect("second entered");
+            let validation = runtime
+                .begin_account_catalog_validation(
+                    ProviderId::CODEX,
+                    &account_id,
+                    Duration::from_secs(2),
+                )
+                .expect("second catalog validation");
+            acquired_tx.send(()).expect("second acquired");
+            release_rx.recv().expect("second released");
+            drop(validation);
+        });
+
+        entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("second entered");
+        assert!(
+            acquired_rx
+                .recv_timeout(Duration::from_millis(100))
+                .is_err(),
+            "the second catalog validation cannot overlap the first"
+        );
+        drop(first);
+        acquired_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("second acquires after first releases");
+        assert!(matches!(
+            fixture
+                .runtime
+                .begin_account_validation(ProviderId::CODEX, &fixture.account.id),
+            Err(RuntimeAuthError::Busy)
+        ));
+        release_tx.send(()).expect("release second");
+        second.join().expect("second joins");
+        let _released = fixture
+            .runtime
+            .begin_account_validation(ProviderId::CODEX, &fixture.account.id)
+            .expect("second released exact account slot");
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
     fn launch_preempts_a_delayed_background_observer_without_false_sign_out() {
         let mut fixture = Fixture::new();
-        let marker = install_read_only_codex_app_server(&mut fixture, "pro", true);
+        let marker = install_read_only_codex_app_server(&mut fixture, "pro", true, false);
         let store = fixture.runtime.account_store();
         store
             .mark_authentication(
@@ -2842,11 +3221,18 @@ mod tests {
         let runtime = fixture.runtime.clone();
         let account_id = fixture.account.id.clone();
         let background = std::thread::spawn(move || runtime.refresh_codex_account(&account_id));
-        // Only waits for the observer to reach its delayed read (a cold cmd -> PowerShell start
-        // on Windows can take seconds on a loaded machine); the delay starts at the marker.
-        let entered_deadline = Instant::now() + Duration::from_secs(20);
-        while !marker.exists() && Instant::now() < entered_deadline {
+        // Only waits for the observer to reach its delayed read; the delay starts at the marker.
+        // A cold cmd -> PowerShell start took over 20 s under parallel test load, so this is a
+        // hang guard, and an observer that ends before reaching the read reports its result.
+        let entered_deadline = Instant::now() + Duration::from_secs(120);
+        while !marker.exists() && !background.is_finished() && Instant::now() < entered_deadline {
             std::thread::sleep(Duration::from_millis(5));
+        }
+        if !marker.exists() && background.is_finished() {
+            panic!(
+                "background observer ended before account/read: {:?}",
+                background.join().expect("background observer joins")
+            );
         }
         assert!(marker.exists(), "background observer entered account/read");
 
@@ -2855,8 +3241,8 @@ mod tests {
             .runtime
             .prepare_account_launch(&ProviderId::new(ProviderId::CODEX), &fixture.account.id)
             .expect("foreground launch proceeds after preemption");
-        // A preempting launch pays only the observer's termination grace; it never starts
-        // another account check. Waiting for the observer would take the whole delayed read.
+        // A preempting launch only cancels the observer: it neither waits for the observer's
+        // teardown nor starts another account check. Waiting for the read would take 45 s.
         assert!(
             started.elapsed() < DELAYED_OBSERVER_READ / 3,
             "launch must not wait for the observer's delayed account read: {:?}",
@@ -2875,6 +3261,34 @@ mod tests {
             Some("cached@example.test")
         );
         assert_eq!(refreshed.last_error_code, None);
+    }
+
+    /// Gate 37536759481: under parallel test load the preempted observer's teardown (terminate
+    /// grace, reap and the guardian's durable quiescence proof) outlasted the launch's 6 s wait,
+    /// and the user's launch was refused as `provider_account_busy`. A validation that is still
+    /// registered must be canceled, never block or refuse the launch.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn launch_never_waits_for_or_refuses_on_a_slow_observer_teardown() {
+        let fixture = Fixture::new();
+        let validation = fixture
+            .runtime
+            .begin_account_validation(ProviderId::CODEX, &fixture.account.id)
+            .expect("background validation");
+        let cancellation = validation.cancellation();
+
+        let started = Instant::now();
+        fixture
+            .runtime
+            .prepare_account_launch(&ProviderId::new(ProviderId::CODEX), &fixture.account.id)
+            .expect("launch proceeds while the observer is still tearing down");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "launch must not wait for observer teardown: {:?}",
+            started.elapsed()
+        );
+        assert!(cancellation.load(Ordering::Acquire), "observer canceled");
+        drop(validation);
     }
 
     #[cfg(any(windows, target_os = "macos"))]
@@ -3001,7 +3415,7 @@ mod tests {
     #[test]
     fn codex_launch_uses_cached_auth_without_refreshing_stale_plan_metadata() {
         let mut fixture = Fixture::new();
-        install_read_only_codex_app_server(&mut fixture, "pro", false);
+        install_read_only_codex_app_server(&mut fixture, "pro", false, false);
         let store = fixture.runtime.account_store();
         observe_codex_plan(&fixture, &connected("pro"));
         let session = codex_session(&fixture);
@@ -3121,6 +3535,64 @@ mod tests {
     #[cfg(any(windows, target_os = "macos"))]
     const DELAYED_OBSERVER_READ: Duration = Duration::from_secs(45);
 
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn account_model_catalog_preserves_exact_model_and_effort_metadata() {
+        let mut fixture = Fixture::new();
+        install_read_only_codex_app_server(&mut fixture, "pro", false, false);
+        let catalog = fixture
+            .runtime
+            .account_models(&fixture.account.id)
+            .expect("account models");
+        assert_eq!(catalog.account_id, fixture.account.id);
+        assert_eq!(catalog.provider_id.as_str(), ProviderId::CODEX);
+        assert_eq!(catalog.models.len(), 1);
+        assert_eq!(catalog.models[0].id, "codex-test-exact");
+        assert_eq!(catalog.models[0].default_effort.as_deref(), Some("high"));
+        assert_eq!(catalog.models[0].supported_efforts, ["low", "high"]);
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn model_discovery_expiry_signs_out_only_the_exact_account() {
+        let mut fixture = Fixture::new();
+        install_read_only_codex_app_server(&mut fixture, "pro", false, true);
+        let store = fixture.runtime.account_store();
+        let other = store
+            .create(ProviderId::CODEX, "Other")
+            .expect("other account");
+        for account in [&fixture.account, &other] {
+            store
+                .mark_authentication(
+                    &account.id,
+                    AuthState::Authenticated,
+                    Some("preserved@example.test"),
+                    None,
+                )
+                .expect("seed auth truth");
+        }
+
+        assert!(matches!(
+            fixture.runtime.account_models(&fixture.account.id),
+            Err(RuntimeAuthError::Provider(
+                CodexAccountAuthError::NotAuthenticated
+            ))
+        ));
+        let expired = store.get(&fixture.account.id).expect("expired account");
+        assert_eq!(expired.authentication_state, AuthState::NotAuthenticated);
+        assert_eq!(expired.provider_reported_identity, None);
+        assert_eq!(
+            expired.last_error_code.as_deref(),
+            Some("codex_not_authenticated")
+        );
+        let unaffected = store.get(&other.id).expect("other account");
+        assert_eq!(unaffected.authentication_state, AuthState::Authenticated);
+        assert_eq!(
+            unaffected.provider_reported_identity.as_deref(),
+            Some("preserved@example.test")
+        );
+    }
+
     /// Installs only the certified read-only Codex app-server account surface. This fake never
     /// reads provider credentials or contacts a provider.
     #[cfg(any(windows, target_os = "macos"))]
@@ -3128,6 +3600,7 @@ mod tests {
         fixture: &mut Fixture,
         plan: &str,
         delay_first_read: bool,
+        signed_out: bool,
     ) -> std::path::PathBuf {
         let dir = fixture._temp.path().join("codex-read-only");
         std::fs::create_dir_all(&dir).expect("fake codex directory");
@@ -3149,7 +3622,12 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {{
       [IO.File]::WriteAllText('{marker}', 'entered')
       Start-Sleep -Seconds {delay}
     }}
-    $result = @{{ account = @{{ type = 'chatgpt'; email = 'restored@example.test'; planType = '{plan}' }}; requiresOpenaiAuth = $true }}
+    $result = @{{ account = {account}; requiresOpenaiAuth = $true }}
+  }} elseif ($request.method -eq 'model/list') {{
+    if ($request.params.includeHidden -ne $false -or $request.params.limit -ne 100) {{ exit 9 }}
+    $efforts = @(@{{ reasoningEffort = 'low'; description = 'Low' }}, @{{ reasoningEffort = 'high'; description = 'High' }})
+    $model = @{{ id = 'catalog-exact'; model = 'codex-test-exact'; displayName = 'Codex exact'; description = 'Exact account model'; hidden = $false; isDefault = $true; defaultReasoningEffort = 'high'; supportedReasoningEfforts = $efforts }}
+    $result = @{{ data = @($model); nextCursor = $null }}
   }} else {{ continue }}
   [Console]::Out.WriteLine((@{{ id = $request.id; result = $result }} | ConvertTo-Json -Compress -Depth 8))
   [Console]::Out.Flush()
@@ -3158,6 +3636,11 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {{
                     delay_first_read = if delay_first_read { "$true" } else { "$false" },
                     delay = DELAYED_OBSERVER_READ.as_secs(),
                     marker = first_read_marker.to_string_lossy().replace('`', "``").replace('\'', "''"),
+                    account = if signed_out {
+                        "$null".to_owned()
+                    } else {
+                        format!("@{{ type = 'chatgpt'; email = 'restored@example.test'; planType = '{plan}' }}")
+                    },
                 ),
             )
             .expect("fake app-server");
@@ -3188,7 +3671,10 @@ while IFS= read -r line; do
     *'"method":"initialize"'*) printf '{{"id":%s,"result":{{"userAgent":"codex_cli_rs/0.160.0","codexHome":"%s","platformFamily":"unix","platformOs":"macos"}}}}\n' "$id" "$CODEX_HOME" ;;
     *'"method":"account/read"'*'"refreshToken":false'*)
       if {delay_first_read} && [ ! -e '{marker}' ]; then : > '{marker}'; sleep {delay}; fi
-      printf '{{"id":%s,"result":{{"account":{{"type":"chatgpt","email":"restored@example.test","planType":"{plan}"}},"requiresOpenaiAuth":true}}}}\n' "$id"
+      printf '{{"id":%s,"result":{{"account":{account},"requiresOpenaiAuth":true}}}}\n' "$id"
+      ;;
+    *'"method":"model/list"'*)
+      printf '{{"id":%s,"result":{{"data":[{{"id":"catalog-exact","model":"codex-test-exact","displayName":"Codex exact","description":"Exact account model","hidden":false,"isDefault":true,"defaultReasoningEffort":"high","supportedReasoningEfforts":[{{"reasoningEffort":"low","description":"Low"}},{{"reasoningEffort":"high","description":"High"}}]}}],"nextCursor":null}}}}\n' "$id"
       ;;
   esac
 done
@@ -3196,6 +3682,11 @@ done
                     delay_first_read = if delay_first_read { "true" } else { "false" },
                     delay = DELAYED_OBSERVER_READ.as_secs(),
                     marker = first_read_marker.to_string_lossy().replace('\'', "'\\''"),
+                    account = if signed_out {
+                        "null".to_owned()
+                    } else {
+                        format!(r#"{{"type":"chatgpt","email":"restored@example.test","planType":"{plan}"}}"#)
+                    },
                 ),
             )
             .expect("fake codex");

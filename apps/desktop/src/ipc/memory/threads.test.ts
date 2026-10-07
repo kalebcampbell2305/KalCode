@@ -314,6 +314,43 @@ describe("memory thread runtime", () => {
     expect(await code(create(client, "x", { providerId: "codex", model: "gpt-9" }))).toBe("invalid_model");
   });
 
+  it("accepts only exact models reported for the selected provider account", async () => {
+    const { client } = await setup();
+    const codex = (await client.listProviderAccounts("codex")).find(
+      (account) => account.authenticationState === "authenticated",
+    );
+    expect(codex).toBeDefined();
+    if (!codex) throw new Error("authenticated Codex fixture account missing");
+    const catalog = await client.providerAccountModels(codex.id);
+    const exact = catalog.models[0];
+    expect(exact).toBeDefined();
+    if (!exact) throw new Error("Codex fixture model missing");
+
+    await expect(
+      create(client, "use the exact account model", {
+        providerId: "codex",
+        providerAccountId: codex.id,
+        model: exact.id,
+      }),
+    ).resolves.toMatchObject({ providerId: "codex", providerAccountId: codex.id, model: exact.id });
+
+    const claude = (await client.listProviderAccounts("claude-code"))[0];
+    expect(claude).toBeDefined();
+    if (!claude) throw new Error("Claude fixture account missing");
+    const wrongProviderModel = (await client.providerAccountModels(claude.id)).models[0];
+    expect(wrongProviderModel).toBeDefined();
+    if (!wrongProviderModel) throw new Error("Claude fixture model missing");
+    expect(
+      await code(
+        create(client, "reject another provider's model", {
+          providerId: "codex",
+          providerAccountId: codex.id,
+          model: wrongProviderModel.id,
+        }),
+      ),
+    ).toBe("invalid_model");
+  });
+
   it("offers no providers in the no-providers scenario", async () => {
     const { client } = await setup("no-providers");
     const options = await client.threadOptions();

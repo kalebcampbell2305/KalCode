@@ -14,12 +14,13 @@ import { agentStateOf, type ThreadSummary } from "@kalcode/protocol";
 import { useToast } from "@kalcode/ui/components";
 import { useCallback, useMemo } from "react";
 import { toKalCodeError } from "../ipc/errors.ts";
+import { focusOperationsTarget, type OperationsVoiceTarget } from "../kalvoice/sceneOperations.ts";
 import type { AttentionAction, AttentionItem } from "../shell/attention/model.ts";
 import { dismissAttention } from "../shell/attention/useAttention.ts";
 import { type Destination, useNavigation } from "../shell/navigation.tsx";
 import { useOptionalNotifications } from "../shell/notifications/NotificationsProvider.tsx";
 import { useStartAgents } from "../surfaces/code/useLaunchAgent.ts";
-import { useOptionalAllCodingAgents } from "../surfaces/dashboard/data/DashboardData.tsx";
+import { useAgentWorktreeStates, useCodingAgents } from "../surfaces/dashboard/data/DashboardData.tsx";
 import { useRuntime } from "./RuntimeProvider.tsx";
 import { useUiIntents } from "./uiIntents.tsx";
 
@@ -55,6 +56,40 @@ export interface KalActions {
 
 const done = (message: string): ActionResult => ({ ok: true, message });
 
+export type OperationAttentionAction = Extract<AttentionAction, { id: "open-operation" }>;
+
+/** Maps an inbox action to the same exact Operations target used by KalVoice and Favorites. */
+export function operationFocusTarget(action: OperationAttentionAction): OperationsVoiceTarget {
+  return action.tab === "queue"
+    ? {
+        kind: "queue",
+        tab: "queue",
+        runId: action.operationId,
+        workspaceId: action.workspaceId,
+        label: action.operationName,
+      }
+    : {
+        kind: "run",
+        tab: "runs",
+        runId: action.operationId,
+        workspaceId: action.workspaceId,
+        label: action.operationName,
+      };
+}
+
+/** Navigate first so the view can mount, then focus the exact canonical row/detail. */
+export async function focusAttentionOperation(
+  action: OperationAttentionAction,
+  navigate: (destination: Destination) => void,
+  focus: (target: OperationsVoiceTarget) => Promise<boolean> | boolean = focusOperationsTarget,
+): Promise<ActionResult> {
+  navigate("operations");
+  const focused = await focus(operationFocusTarget(action));
+  return focused
+    ? done(action.tab === "queue" ? "Opened the queued work." : "Opened the run.")
+    : { ok: false, message: "Operations opened, but that work is no longer visible." };
+}
+
 /** The waiting agents, most recent first. Pure: also used by tests and KalVoice copy. */
 export function waitingAgents(agents: readonly ThreadSummary[]): ThreadSummary[] {
   return agents
@@ -70,7 +105,9 @@ export function useKalActions(): KalActions {
   const notifications = useOptionalNotifications();
   const closeInbox = useCallback(() => notifications?.setPanelOpen(false), [notifications]);
   const startAgents = useStartAgents();
-  const agents = useOptionalAllCodingAgents();
+  const { state: agentState, reload: reloadAgents } = useCodingAgents();
+  const agents = agentState.status === "ready" ? agentState.data : null;
+  const { reload: reloadOwnership } = useAgentWorktreeStates();
 
   const openAgent = useCallback(
     async ({ agentId, workspaceId }: { agentId: string; workspaceId: string }) => {
@@ -142,6 +179,17 @@ export function useKalActions(): KalActions {
     [navigate],
   );
 
+  const openOperation = useCallback(
+    async (action: OperationAttentionAction) => {
+      const result = await focusAttentionOperation(action, navigate);
+      if (!result.ok) {
+        toast.show({ tone: "danger", title: "Couldn't focus that work", description: result.message });
+      }
+      return result;
+    },
+    [navigate, toast],
+  );
+
   const runAttention = useCallback(
     async (item: AttentionItem, action: AttentionAction): Promise<ActionResult> => {
       switch (action.id) {
@@ -150,6 +198,18 @@ export function useKalActions(): KalActions {
           return openAgent(action);
         case "retry-agent":
           return retryAgent(action.agentId);
+        case "open-operation":
+          closeInbox();
+          return openOperation(action);
+        case "open-operations":
+          closeInbox();
+          return open("operations");
+        case "retry-agents":
+          reloadAgents();
+          return done("Checking agents again.");
+        case "retry-ownership":
+          reloadOwnership();
+          return done("Checking file ownership again.");
         case "open-approvals":
           closeInbox();
           return openApprovals();
@@ -161,7 +221,7 @@ export function useKalActions(): KalActions {
           return done("Dismissed.");
       }
     },
-    [closeInbox, openAgent, retryAgent, openApprovals, signIn],
+    [closeInbox, openAgent, retryAgent, openOperation, reloadAgents, reloadOwnership, openApprovals, signIn, open],
   );
 
   return useMemo(

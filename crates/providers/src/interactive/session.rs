@@ -1399,6 +1399,21 @@ impl Shared {
                     record.source.as_deref(),
                     None | Some("startup" | "resume" | "clear")
                 ) {
+                    // A fresh Codex pane is already at its native prompt: no synthetic submit is
+                    // needed before Operations can deliver a dependency-gated first task. A
+                    // delayed startup hook may arrive after local typing or a turn began, so it
+                    // may establish readiness only while every local turn/input authority is
+                    // still pristine.
+                    if lifecycle.handoff_readiness == HandoffReadiness::Unverified
+                        && !lifecycle.codex_tracking_failed
+                        && lifecycle.codex_pending_submits == 0
+                        && lifecycle.codex_turn.is_none()
+                        && lifecycle.codex_permission.is_none()
+                        && !lifecycle.input_pending
+                        && lock(&self.pending).is_empty()
+                    {
+                        lifecycle.handoff_readiness = HandoffReadiness::Ready;
+                    }
                     events.push(Self::ready());
                 }
             }
@@ -2140,7 +2155,7 @@ impl Shared {
 /// Exact, bounded terminal-emulator replies generated in response to a provider query. These
 /// bytes are written through xterm's ordinary input callback but are not human input. The
 /// classification is deliberately narrow and does not include keys, paste framing, or text.
-fn terminal_protocol_reply(data: &[u8]) -> bool {
+pub fn terminal_protocol_reply(data: &[u8]) -> bool {
     if data.len() < 3 || data.len() > 256 || data[0] != 0x1b {
         return false;
     }
@@ -2384,10 +2399,15 @@ impl AgentSession for InteractiveSession {
     }
 
     fn send(&self, input: AgentInput) -> Result<(), ProviderError> {
-        if self.shared.provider_id != "cursor" {
+        if !matches!(
+            self.shared.provider_id.as_str(),
+            "claude-code" | "codex" | "cursor"
+        ) {
             return Err(ProviderError::Unsupported);
         }
         let AgentInput::Text { text } = input;
+        let profile = self.shared.profile();
+        let cursor = self.shared.provider_id == "cursor";
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         loop {
             match self.shared.deliver_handoff(&text, || Ok(())) {
@@ -2395,11 +2415,32 @@ impl AgentSession for InteractiveSession {
                 Err(HandoffDeliveryError::Unverified) if std::time::Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(20));
                 }
-                Err(HandoffDeliveryError::Io) => return Err(ProviderError::Io("Cursor task delivery could not be verified. Check the terminal before retrying.".into())),
-                Err(error) => return Err(ProviderError::Refused {
-                    code: "cursor_input_not_ready".into(),
-                    message: format!("Cursor could not accept the task: {error} Launch a Cursor terminal in Code, finish native setup, then retry the task."),
-                }),
+                Err(HandoffDeliveryError::Io) => {
+                    return Err(ProviderError::Io(format!(
+                        "{} task delivery could not be verified. Check the terminal before retrying.",
+                        profile.name
+                    )));
+                }
+                Err(error) => {
+                    return Err(ProviderError::Refused {
+                        code: if cursor {
+                            "cursor_input_not_ready"
+                        } else {
+                            "provider_input_not_ready"
+                        }
+                        .into(),
+                        message: if cursor {
+                            format!(
+                                "Cursor could not accept the task: {error} Launch a Cursor terminal in Code, finish native setup, then retry the task."
+                            )
+                        } else {
+                            format!(
+                                "{} could not accept the task: {error} Open this terminal in Code, finish any active setup, prompt, or turn, then run the task again.",
+                                profile.name
+                            )
+                        },
+                    });
+                }
             }
         }
     }

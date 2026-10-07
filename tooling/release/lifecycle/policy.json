@@ -89,6 +89,12 @@
       "why": "tooling, CI, agent/dev files, unpublished docs and the marketing films (kalcode-film/, a standalone npm project outside the pnpm workspace, and launch/, the Blender launch film) and marketing copy (marketing/); the website does not render docs/*.md, and assets/ only feeds the committed brand generators"
     },
     {
+      "id": "mobile",
+      "globs": ["apps/mobile/**"],
+      "lanes": ["internal"],
+      "why": "the KalCode Remote iOS/iPadOS app (apps/mobile/ios) and its README: it ships through App Store Connect from the Mac, never in a desktop, website or API release"
+    },
+    {
       "id": "website",
       "globs": ["apps/website/**"],
       "lanes": ["website"],

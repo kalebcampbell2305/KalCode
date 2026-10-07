@@ -45,6 +45,7 @@ import type {
   ProviderAccount,
   ProviderAccountBinding,
   ProviderAccountBindingKind,
+  ProviderAccountModelCatalog,
   ProviderAccountUsage,
   ProviderHealth,
   ProviderStatus,
@@ -78,6 +79,8 @@ import type {
 import type { ContextFileChoice, ContextInput, ContextSendResult, PromptReview } from "./context.ts";
 import { toKalCodeError } from "./errors.ts";
 import { HandoffsClient } from "./handoffs.ts";
+import type { RemoteStatus } from "./remote.ts";
+import { SquadsClient } from "./squads.ts";
 import type { ImportedTerminalImage, TerminalImageTarget } from "./terminalImages.ts";
 import type { CommandName, NativeTheme, Transport, Unsubscribe } from "./transport.ts";
 import type { UpdateChannel, UpdateStatus } from "./updater.ts";
@@ -158,10 +161,12 @@ const SHARED_READS: ReadonlySet<CommandName> = new Set<CommandName>([
   "kalvoice_status",
   "notification_list",
   "operations_snapshot",
+  "squads_snapshot",
   "permission_profiles_list",
   "permission_settings_get",
   "provider_account_bindings_list",
   "provider_account_usage",
+  "provider_account_models",
   "provider_accounts_list",
   "provider_health_list",
   "providers_list",
@@ -181,6 +186,7 @@ const SHARED_READS: ReadonlySet<CommandName> = new Set<CommandName>([
 /** The only module that talks to the native runtime. Every failure becomes a KalCodeError. */
 export class KalCodeClient {
   readonly handoffs: HandoffsClient;
+  readonly squads: SquadsClient;
   /**
    * Shared reads in flight, by command and arguments. A call joins one only if no other command
    * was sent and no event arrived since it started, so a joined read never predates a change.
@@ -189,6 +195,7 @@ export class KalCodeClient {
 
   constructor(readonly transport: Transport) {
     this.handoffs = new HandoffsClient((command, args) => this.call(command, args));
+    this.squads = new SquadsClient((command, args) => this.call(command, args));
   }
 
   private async call<T>(command: CommandName, args?: Record<string, unknown>): Promise<T> {
@@ -263,6 +270,26 @@ export class KalCodeClient {
 
   updaterStatus(): Promise<UpdateStatus> {
     return this.call("updater_status");
+  }
+
+  remoteStatus(): Promise<RemoteStatus> {
+    return this.call("remote_status");
+  }
+
+  remoteSetEnabled(enabled: boolean): Promise<RemoteStatus> {
+    return this.call("remote_set_enabled", { enabled });
+  }
+
+  remotePairStart(): Promise<RemoteStatus> {
+    return this.call("remote_pair_start");
+  }
+
+  remotePairCancel(): Promise<RemoteStatus> {
+    return this.call("remote_pair_cancel");
+  }
+
+  remoteDeviceRevoke(deviceId: string): Promise<RemoteStatus> {
+    return this.call("remote_device_revoke", { deviceId });
   }
 
   updaterSetChannel(channel: UpdateChannel): Promise<UpdateStatus> {
@@ -550,6 +577,11 @@ export class KalCodeClient {
    */
   providerAccountUsage(accountIds?: readonly string[]): Promise<ProviderAccountUsage[]> {
     return this.call("provider_account_usage", { accountIds: accountIds ? [...accountIds] : null });
+  }
+
+  /** Exact provider-native models and efforts available to one active account. */
+  providerAccountModels(accountId: string): Promise<ProviderAccountModelCatalog> {
+    return this.call("provider_account_models", { accountId });
   }
 
   refreshCursorAccount(accountId: string): Promise<CursorAccountState> {

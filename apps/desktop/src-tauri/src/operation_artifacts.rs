@@ -393,6 +393,7 @@ mod tests {
             started_at: Some("2026-09-30T12:00:01.000Z".into()),
             ended_at: Some("2026-09-30T12:00:02.000Z".into()),
             current_action: None,
+            attention_reason: None,
             outcome: Some("Succeeded".into()),
             position: 0,
             blockers: Vec::new(),

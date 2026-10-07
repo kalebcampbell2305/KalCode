@@ -1,19 +1,30 @@
 /**
  * Needs You: KalCode's one attention inbox. Every item is something that genuinely needs the
  * person, and says WHAT happened, WHY it needs them and WHAT to do next. Items are derived from the
- * canonical state every other surface reads (the coding agents and their `agentStateOf` state, the
- * permission engine's pending approvals and the notification center's provider sign-outs); the
- * inbox keeps no copy of its own. Ordinary progress (an agent working, a turn finishing without
- * changes) never lands here.
+ * canonical state every other surface reads (coding agents and their `agentStateOf` state,
+ * Operations runs/queue, the permission engine's pending approvals and the notification center's
+ * provider sign-outs); the inbox keeps no copy of its own. Ordinary progress (an agent working, a
+ * turn finishing without changes or a queued dependency wait) never lands here.
  */
-import { agentStateOf, type Notification, type ThreadSummary } from "@kalcode/protocol";
+import { agentStateOf, type Notification, type OperationRecord, type ThreadSummary } from "@kalcode/protocol";
 
-export type AttentionKind = "question" | "approval" | "failed" | "auth" | "stalled" | "review";
+export type AttentionKind = "question" | "approval" | "blocked" | "failed" | "auth" | "stalled" | "review";
 
 /** An action the item offers. The id is a canonical KalCode action (see `runtime/actions.tsx`). */
 export type AttentionAction =
   | { id: "open-agent"; label: string; agentId: string; workspaceId: string }
   | { id: "retry-agent"; label: string; agentId: string }
+  | {
+      id: "open-operation";
+      label: string;
+      operationId: string;
+      operationName: string;
+      workspaceId: string;
+      tab: "runs" | "queue";
+    }
+  | { id: "open-operations"; label: string }
+  | { id: "retry-agents"; label: string }
+  | { id: "retry-ownership"; label: string }
   | { id: "open-approvals"; label: string }
   | { id: "sign-in"; label: string; providerId: string }
   | { id: "dismiss"; label: string };
@@ -55,6 +66,7 @@ const RANK: Record<AttentionKind, number> = {
   auth: 60,
   approval: 50,
   question: 50,
+  blocked: 45,
   failed: 40,
   stalled: 20,
   review: 10,
@@ -67,9 +79,33 @@ export interface AttentionInput {
   approvals: readonly { id: string; action: { threadId?: string | null; summary: string; requestedAt: string } }[];
   /** The notification center's list (only unread provider sign-outs are used). */
   notifications: readonly Notification[];
+  /** Canonical Operations records. Squad members reference these records; this is not a copy. */
+  operations?: readonly AttentionOperation[];
+  /** The latest Operations read failed. Last-good records may still be supplied above. */
+  operationsFailed?: boolean;
+  /** The shared coding-agent read failed (last-known agents, when any, remain above). */
+  agentReadFailed?: boolean;
+  /** Canonical changed-path intersections, one record per agent pair. */
+  overlaps?: readonly AttentionOverlap[];
+  /** The shared ownership read failed or returned bounded/truncated facts. */
+  ownershipFailed?: boolean;
+  ownershipIncomplete?: boolean;
   /** Keys the person dismissed. */
   dismissed: ReadonlySet<string>;
   now: number;
+}
+
+/**
+ * `attentionReason` is an explicit, durable Operations hold reason. It is optional while older
+ * native builds roll forward; ordinary paused work has no reason and never enters Needs You.
+ */
+export type AttentionOperation = OperationRecord & { attentionReason?: string | null };
+
+export interface AttentionOverlap {
+  agentIds: readonly [string, string];
+  workspaceId: string;
+  files: readonly string[];
+  incomplete: boolean;
 }
 
 function at(iso: string | null | undefined): number {
@@ -92,6 +128,117 @@ export function sourceOf(agent: Pick<ThreadSummary, "providerName" | "name">): s
 
 function openAgent(agent: ThreadSummary): AttentionAction {
   return { id: "open-agent", label: "Open agent", agentId: agent.id, workspaceId: agent.workspaceId };
+}
+
+function operationTime(operation: AttentionOperation): string {
+  return operation.endedAt ?? operation.startedAt ?? operation.createdAt;
+}
+
+function operationTab(operation: AttentionOperation): "runs" | "queue" {
+  return operation.startedAt === null && operation.endedAt === null ? "queue" : "runs";
+}
+
+/** A dependency hold is expected workflow; the failed dependency itself is the actionable item. */
+function isExpectedDependencyWait(operation: AttentionOperation): boolean {
+  return (
+    operation.status === "blocked" &&
+    !operation.attentionReason &&
+    operation.blockers.length > 0 &&
+    operation.blockers.every((blocker) => operation.spec.dependencies.includes(blocker))
+  );
+}
+
+function operationItem(operation: AttentionOperation, now: number): Omit<AttentionItem, "rank"> | null {
+  const reason = operation.attentionReason?.trim();
+  const actionableHold = (operation.status === "blocked" || operation.status === "paused") && Boolean(reason);
+  if (operation.status === "paused" && !actionableHold) return null;
+  if (isExpectedDependencyWait(operation)) return null;
+  if (!actionableHold && !["blocked", "failed", "interrupted"].includes(operation.status)) return null;
+  const terminal = operation.status === "failed" || operation.status === "interrupted";
+  const occurredAt = operationTime(operation);
+  if (terminal && now - at(occurredAt) > REVIEW_WINDOW_MS) return null;
+  const tab = operationTab(operation);
+  const open: AttentionAction = {
+    id: "open-operation",
+    label: tab === "queue" ? "Open queue" : "Open run",
+    operationId: operation.id,
+    operationName: operation.spec.name,
+    workspaceId: operation.spec.workspaceId,
+    tab,
+  };
+  const detail =
+    reason || operation.outcome?.trim() || operation.currentAction?.trim() || operation.blockers[0]?.trim() || null;
+  if (operation.status === "failed") {
+    return {
+      key: `operation:failed:${operation.id}:${occurredAt}`,
+      kind: "failed",
+      source: "Operations",
+      workspaceName: operation.workspaceName || null,
+      what: `${operation.spec.name} failed`,
+      why: detail || "This run ended with an error. Open it to see what happened and decide what to retry.",
+      actions: [open],
+      at: occurredAt,
+      agentId: operation.threadId,
+      dismissible: true,
+    };
+  }
+  if (operation.status === "interrupted") {
+    return {
+      key: `operation:interrupted:${operation.id}:${occurredAt}`,
+      kind: "failed",
+      source: "Operations",
+      workspaceName: operation.workspaceName || null,
+      what: `${operation.spec.name} was interrupted`,
+      why: detail || "This run stopped before it finished. Open it to decide whether it should run again.",
+      actions: [open],
+      at: occurredAt,
+      agentId: operation.threadId,
+      dismissible: true,
+    };
+  }
+  return {
+    key: `operation:blocked:${operation.id}`,
+    kind: "blocked",
+    source: "Operations",
+    workspaceName: operation.workspaceName || null,
+    what: `${operation.spec.name} is blocked`,
+    why: detail || "This work cannot continue until its blocker is resolved.",
+    actions: [open],
+    at: occurredAt,
+    agentId: operation.threadId,
+    dismissible: false,
+  };
+}
+
+function overlapItem(
+  overlap: AttentionOverlap,
+  agents: ReadonlyMap<string, ThreadSummary>,
+): Omit<AttentionItem, "rank"> | null {
+  const [leftId, rightId] = overlap.agentIds;
+  const left = agents.get(leftId);
+  const right = agents.get(rightId);
+  if (!left || !right) return null;
+  const count = `${overlap.incomplete ? "at least " : ""}${overlap.files.length} ${
+    overlap.files.length === 1 ? "file" : "files"
+  }`;
+  const shown = overlap.files.slice(0, 3);
+  const more = overlap.files.length - shown.length;
+  const paths = `${shown.join(", ")}${more > 0 ? ` and ${more} more` : ""}`;
+  return {
+    key: `ownership:${[leftId, rightId].toSorted().join(":")}`,
+    kind: "blocked",
+    source: "Ownership",
+    workspaceName: left.workspaceName || right.workspaceName || null,
+    what: `${left.name} and ${right.name} overlap`,
+    why: `Both changed ${count}${paths ? `: ${paths}` : ""}. Coordinate ownership before either change merges.`,
+    actions: [
+      { id: "open-agent", label: `Open ${left.name}`, agentId: left.id, workspaceId: left.workspaceId },
+      { id: "open-agent", label: `Open ${right.name}`, agentId: right.id, workspaceId: right.workspaceId },
+    ],
+    at: at(left.lastActivityAt) >= at(right.lastActivityAt) ? left.lastActivityAt : right.lastActivityAt,
+    agentId: null,
+    dismissible: false,
+  };
 }
 
 function agentItem(agent: ThreadSummary, now: number): Omit<AttentionItem, "rank"> | null {
@@ -175,14 +322,89 @@ function agentItem(agent: ThreadSummary, now: number): Omit<AttentionItem, "rank
 }
 
 /** Every item that needs the person, most urgent first, newest first within a kind. */
-export function attentionItems({ agents, approvals, notifications, dismissed, now }: AttentionInput): AttentionItem[] {
+export function attentionItems({
+  agents,
+  approvals,
+  notifications,
+  operations = [],
+  operationsFailed = false,
+  agentReadFailed = false,
+  overlaps = [],
+  ownershipFailed = false,
+  ownershipIncomplete = false,
+  dismissed,
+  now,
+}: AttentionInput): AttentionItem[] {
   const items: AttentionItem[] = [];
   const agentIds = new Set<string>();
+  const agentsById = new Map<string, ThreadSummary>();
+  const representedAgentIds = new Set<string>();
   for (const agent of agents) {
     if (agent.archivedAt !== null) continue;
     agentIds.add(agent.id);
+    agentsById.set(agent.id, agent);
     const item = agentItem(agent, now);
+    if (item) {
+      representedAgentIds.add(agent.id);
+      if (!(item.dismissible && dismissed.has(item.key))) items.push({ ...item, rank: RANK[item.kind] });
+    }
+  }
+  for (const operation of operations) {
+    // A real coding-agent session already represented above remains one Needs You item.
+    if (operation.threadId && representedAgentIds.has(operation.threadId)) continue;
+    const item = operationItem(operation, now);
     if (item && !(item.dismissible && dismissed.has(item.key))) items.push({ ...item, rank: RANK[item.kind] });
+  }
+  if (operationsFailed) {
+    items.push({
+      key: "operations:unavailable",
+      kind: "failed",
+      rank: RANK.failed,
+      source: "Operations",
+      workspaceName: null,
+      what: "Couldn't check runs and queue",
+      why: "KalCode is keeping the last known state, but Operations did not answer. Open it to retry the live view.",
+      actions: [{ id: "open-operations", label: "Open Operations" }],
+      at: new Date(now).toISOString(),
+      agentId: null,
+      dismissible: false,
+    });
+  }
+  if (agentReadFailed) {
+    items.push({
+      key: "agents:unavailable",
+      kind: "failed",
+      rank: RANK.failed,
+      source: "Agent Fleet",
+      workspaceName: null,
+      what: "Couldn't refresh agent status",
+      why: "Your agents keep running, but KalCode couldn't read their latest state. Try the shared Fleet read again.",
+      actions: [{ id: "retry-agents", label: "Try again" }],
+      at: new Date(now).toISOString(),
+      agentId: null,
+      dismissible: false,
+    });
+  }
+  for (const overlap of overlaps) {
+    const item = overlapItem(overlap, agentsById);
+    if (item) items.push({ ...item, rank: RANK.blocked });
+  }
+  if (ownershipFailed || ownershipIncomplete) {
+    items.push({
+      key: ownershipFailed ? "ownership:unavailable" : "ownership:incomplete",
+      kind: ownershipFailed ? "failed" : "blocked",
+      rank: ownershipFailed ? RANK.failed : RANK.blocked,
+      source: "Ownership",
+      workspaceName: null,
+      what: ownershipFailed ? "Couldn't check file ownership" : "Ownership check is incomplete",
+      why: ownershipFailed
+        ? "KalCode kept the last known file facts, but couldn't refresh them. Try the shared ownership read again."
+        : "Some agents or changed paths exceeded the bounded ownership scan. Known overlaps are shown, but more may exist.",
+      actions: [{ id: "retry-ownership", label: "Check again" }],
+      at: new Date(now).toISOString(),
+      agentId: null,
+      dismissible: false,
+    });
   }
   // Approvals that no listed agent accounts for (a chat thread, KalVoice, a utility): one each.
   for (const approval of approvals) {
@@ -239,7 +461,7 @@ export function attentionItems({ agents, approvals, notifications, dismissed, no
 export function attentionSummary(items: readonly AttentionItem[]): string {
   if (items.length === 0) return "Nothing needs you";
   const count = (...kinds: AttentionKind[]) => items.filter((item) => kinds.includes(item.kind)).length;
-  const blocked = count("question", "approval", "failed", "auth");
+  const blocked = count("question", "approval", "blocked", "failed", "auth");
   const review = count("review");
   const stalled = count("stalled");
   return [

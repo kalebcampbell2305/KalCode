@@ -40,6 +40,7 @@ pub struct RuntimeBundle {
     pub operations: Option<Arc<crate::operations_commands::OperationsState>>,
     pub handoffs: Option<Arc<HandoffState>>,
     pub integrations: Option<Arc<crate::integration_commands::IntegrationState>>,
+    pub remote: Option<Arc<crate::remote::RemoteState>>,
 }
 
 impl RuntimeBundle {
@@ -275,6 +276,7 @@ impl RuntimeBundle {
                 Err(error) => tracing::error!(event = "operations.start_failed", code = error.code),
             }
         }
+        let remote_account = account.snapshot().account.map(|identity| identity.id);
         if let Some(git) = &bundle.git {
             match HandoffState::start(
                 core.clone(),
@@ -292,6 +294,15 @@ impl RuntimeBundle {
         }
         panes.bind(permissions.service().as_ref(), threads.runtime().ok());
         notifications.bind(threads.runtime_handle());
+        check!();
+        // KalCode Remote last: its devices read and act through every service above.
+        if let Some(account_id) = remote_account {
+            bundle.remote = Some(Arc::new(crate::remote::RemoteState::start(
+                app,
+                state,
+                &account_id,
+            )));
+        }
     }
 
     fn complete(&self) -> bool {
@@ -317,6 +328,10 @@ impl RuntimeBundle {
         // Source-bearing Context previews are the exception: leases are already drained here,
         // so erase them before any cleanup retry and never carry them into another account.
         let mut clean = true;
+        // First: paired devices are told goodbye before the services they mirror stop.
+        if let Some(remote) = &self.remote {
+            remote.shutdown();
+        }
         if let Some(integrations) = &self.integrations {
             integrations.bridge.shutdown();
         }
@@ -1007,6 +1022,7 @@ service!(crate::utility_commands::UtilityState, utilities);
 service!(crate::operations_commands::OperationsState, operations);
 service!(HandoffState, handoffs);
 service!(crate::integration_commands::IntegrationState, integrations);
+service!(crate::remote::RemoteState, remote);
 
 pub struct RuntimeState<T: RuntimeService> {
     service: Arc<T>,

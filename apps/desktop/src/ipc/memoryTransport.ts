@@ -66,7 +66,9 @@ import { createPanesMemory, type PaneControls } from "./memory/panes.ts";
 import { createPermissionMemory, type PermissionMemory } from "./memory/permissions.ts";
 import { createProviderAccountsMemory } from "./memory/providerAccounts.ts";
 import { createRailMemory } from "./memory/rail.ts";
+import { createRemoteMemory } from "./memory/remote.ts";
 import { sessionResolveHandler } from "./memory/sessionResolve.ts";
+import { createSquadsMemory, type ORION_FIXTURE } from "./memory/squads.ts";
 import { createThreadsMemory } from "./memory/threads.ts";
 import { createUnifiedMemory } from "./memory/unifiedMemory.ts";
 import { createUpdaterMemory } from "./memory/updater.ts";
@@ -90,6 +92,7 @@ export type MemoryScenario =
   | "account-ready"
   | "account-ready-pro"
   | "account-ready-max"
+  | "account-ready-owner"
   | "account-expired"
   | "account-offline-grace"
   | "approvals"
@@ -128,6 +131,7 @@ const AVAILABLE_FEATURES: ReadonlySet<string> = new Set([
   "provider_profiles",
   "notification_center",
   "account_sign_in",
+  "remote",
 ]);
 
 /** Latest schema version (mirrors crates/native-core/src/db.rs). */
@@ -418,7 +422,7 @@ export function createMemoryTransport(
   const code = createMemoryWorkspaces({
     emit: (event, workspaceId) => emit(event, { correlation: { workspaceId } }),
     requireCore,
-    preload: scenario === "code",
+    preload: scenario === "code" || scenario === "account-ready-max",
   });
   const operations = createOperationsMemory({
     empty: scenario === "empty",
@@ -433,20 +437,23 @@ export function createMemoryTransport(
   });
   const providerAccounts = createProviderAccountsMemory(requireCore, scenario === "provider-accounts-empty");
   const updater = createUpdaterMemory(info.version);
+  const remote = createRemoteMemory();
   const accountScenario: AccountMemoryScenario =
     scenario === "account-ready-pro"
       ? "ready_pro"
       : scenario === "account-ready-max"
         ? "ready_max"
-        : scenario === "account-fresh"
-          ? "fresh"
-          : scenario === "account-unactivated"
-            ? "unactivated"
-            : scenario === "account-expired"
-              ? "expired"
-              : scenario === "account-offline-grace"
-                ? "offline_grace"
-                : "ready";
+        : scenario === "account-ready-owner"
+          ? "ready_owner"
+          : scenario === "account-fresh"
+            ? "fresh"
+            : scenario === "account-unactivated"
+              ? "unactivated"
+              : scenario === "account-expired"
+                ? "expired"
+                : scenario === "account-offline-grace"
+                  ? "offline_grace"
+                  : "ready";
   const account = createAccountMemory(accountScenario);
 
   const ensureDetected = async () => {
@@ -497,6 +504,7 @@ export function createMemoryTransport(
       expireForThread: (threadId) => permissions.expireForThread(threadId),
     },
     (accountId, providerId) => providerAccounts.resolve(accountId, providerId),
+    (accountId, providerId) => providerAccounts.modelIds(accountId, providerId),
   );
   const context = createContextMemory({
     getThread: (threadId) => threads.handlers.thread_get?.({ threadId }) as ThreadSummary,
@@ -530,6 +538,69 @@ export function createMemoryTransport(
     info: (threadId) => panes.handlers.provider_pane_info({ threadId }) as import("@kalcode/protocol").PaneInfo | null,
     deliver: (threadId, instanceId, text) => panes.deliverHandoff(threadId, instanceId, text),
   });
+  const squads = createSquadsMemory({
+    requireCore,
+    operations: operations.agents,
+    seedOrion: scenario === "account-ready-max",
+    accountState: (member) => {
+      try {
+        const selected = providerAccounts.resolve(member.providerAccountId, member.providerId);
+        return {
+          available: selected.authenticationState !== "not_authenticated",
+          accountLabel: selected.displayName,
+        };
+      } catch {
+        return { available: false, accountLabel: null };
+      }
+    },
+    workspaceId: () => {
+      const workspaces = (code.handlers.workspace_list?.({}) ?? []) as Workspace[];
+      return (workspaces.find((workspace) => workspace.available) ?? workspaces[0])?.id ?? "";
+    },
+    createPane: async (member, workspaceId) =>
+      (await panes.handlers.provider_pane_create({
+        providerId: member.providerId,
+        providerAccountId: member.providerAccountId,
+        workspaceId,
+        // The Codex fixture truthfully exposes no discoverable model catalog. The Squad and
+        // Operation retain the requested exact model while its fake pane uses provider default.
+        model: member.providerId === "codex" ? null : member.model,
+        effort: member.effort,
+        permissionMode: "bypass",
+        isolate: member.worktree,
+        name: member.name,
+      })) as ThreadSummary,
+    sendTask: async (threadId, task) => {
+      await panes.handlers.provider_pane_write({ threadId, data: `${task}\r` });
+    },
+    setPaneStatus: (threadId, status, activity) => {
+      threads.setPaneStatus(threadId, status, activity, 0);
+    },
+    afterOrionSeed: async (launch) => {
+      // Let the fake provider finish its prompt echo, then establish stable UI evidence using
+      // the canonical Threads/Operations records. This is fixture evidence, never production.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const operationByKey = new Map(launch.members.map((member) => [member.key, member.operationId] as const));
+      const records = operations.agents.exact([...operationByKey.values()]);
+      const threadFor = (key: keyof typeof ORION_FIXTURE.operations) =>
+        records.find((record) => record.id === operationByKey.get(key))?.threadId ?? null;
+      const leadThread = threadFor("lead");
+      if (leadThread) threads.setPaneStatus(leadThread, "active", "Implementing updater reliability", 0);
+      const testsOperation = operationByKey.get("tests");
+      const testsThread = threadFor("tests");
+      if (testsOperation && testsThread) {
+        const reason = "Review the updater recovery test decision.";
+        threads.setPaneStatus(testsThread, "waiting_for_user", reason, 0);
+        operations.agents.attention(testsOperation, reason);
+      }
+      const reviewOperation = operationByKey.get("review");
+      const reviewThread = threadFor("review");
+      if (reviewOperation && reviewThread) {
+        await panes.handlers.provider_pane_write({ threadId: reviewThread, data: "exit\r" });
+        operations.agents.finish(reviewOperation, "succeeded", "Updater integrity review completed in the UI fixture.");
+      }
+    },
+  });
   answer = (view) => {
     threads.resolveApproval(view.id, view.status === "approved");
     panes.resolveApproval(view);
@@ -543,12 +614,14 @@ export function createMemoryTransport(
     ...permissions.handlers,
     ...panes.handlers,
     ...handoffs,
+    ...squads.handlers,
     ...rail.handlers,
     ...layouts.handlers,
     ...notificationsMemory.handlers,
     ...health.handlers,
     ...providerAccounts.handlers,
     ...updater.handlers,
+    ...remote.handlers,
     ...account.handlers,
     ...operations.handlers,
     // The related-process scan Code reads for terminal status (KalTidy's scan): one shell per live
@@ -907,6 +980,7 @@ function readScenario(): MemoryScenario {
     value === "account-ready" ||
     value === "account-ready-pro" ||
     value === "account-ready-max" ||
+    value === "account-ready-owner" ||
     value === "account-expired" ||
     value === "account-offline-grace" ||
     value === "approvals" ||

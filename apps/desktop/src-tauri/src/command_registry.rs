@@ -22,6 +22,14 @@ pub(crate) const COMMANDS: &[&str] = &[
     "account_usage",
     "account_set_display_name",
     "runtime_status",
+    "squads_snapshot",
+    "squads_save",
+    "squads_delete",
+    "recipe_save",
+    "recipe_delete",
+    "squads_launch",
+    "recipe_launch",
+    "squads_reassign_manager",
     "operations_snapshot",
     "operations_detail",
     "operations_history",
@@ -119,6 +127,7 @@ pub(crate) const COMMANDS: &[&str] = &[
     "provider_account_unbind",
     "provider_account_bindings_list",
     "provider_account_usage",
+    "provider_account_models",
     "provider_codex_account_refresh",
     "provider_codex_login_start",
     "provider_codex_login_wait",
@@ -262,4 +271,10 @@ pub(crate) const COMMANDS: &[&str] = &[
     // Z7-W3: notification center.
     "notification_list",
     "notification_mark",
+    // KalCode Remote (Settings › Remote).
+    "remote_status",
+    "remote_set_enabled",
+    "remote_pair_start",
+    "remote_pair_cancel",
+    "remote_device_revoke",
 ];

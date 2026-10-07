@@ -73,8 +73,8 @@ interface EventLite {
   payload: Record<string, unknown>;
 }
 
-/** The schema version this build migrates to (through v24 unified memory). */
-const LATEST = 25;
+/** The schema version this build migrates to (through v26 Squads). */
+const LATEST = 26;
 
 test("a v1 database from the released app is upgraded to the latest schema with a backup and nothing lost", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-"));
@@ -448,7 +448,7 @@ print(m[0], m[1], n, e[0], e[1])`,
   }
 });
 
-/** Tables the migrations after v6 add (v7 git core, v8 context, v9 workspace layouts), sorted by name. */
+/** Representative tables the migrations after v6 add through v26 Squads, sorted by name. */
 const POST_V6_TABLES = [
   "checkpoints",
   "context_firewall_log",
@@ -457,6 +457,10 @@ const POST_V6_TABLES = [
   "context_packages",
   "git_worktrees",
   "layout_presets",
+  "squad_definitions",
+  "squad_launch_members",
+  "squad_launches",
+  "squad_recipes",
   "workspace_layouts",
 ];
 
@@ -513,12 +517,14 @@ test("a v6 database (the owner's installed app) reaches the latest schema in one
 c=sqlite3.connect(sys.argv[1])
 names=json.loads(sys.argv[2])
 found=[r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name") if r[0] in names]
-print(c.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], c.execute("SELECT value FROM kalvoice_preferences WHERE key='voice.speakReplies'").fetchone()[0], c.execute("SELECT COUNT(*) FROM threads WHERE id=?",(sys.argv[3],)).fetchone()[0], ",".join(found) or "-")`;
+attention="attention_reason" in [r[1] for r in c.execute("PRAGMA table_info(operations)")]
+print(c.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], c.execute("SELECT value FROM kalvoice_preferences WHERE key='voice.speakReplies'").fetchone()[0], c.execute("SELECT COUNT(*) FROM threads WHERE id=?",(sys.argv[3],)).fetchone()[0], attention, ",".join(found) or "-")`;
     const tables = JSON.stringify(POST_V6_TABLES);
-    expect(python(script, join(dataDir, "backups", backups[0] as string), tables, V4_THREAD)).toBe("6 true 1 -");
-    // The live database kept every row and gained the later tables.
+    expect(python(script, join(dataDir, "backups", backups[0] as string), tables, V4_THREAD)).toBe("6 true 1 False -");
+    // The live database kept every row and gained the later tables plus the additive Operations
+    // attention hold used to recover unavailable Squad members.
     expect(python(script, join(dataDir, "kalcode.db"), tables, V4_THREAD)).toBe(
-      `${LATEST} true 1 ${POST_V6_TABLES.join(",")}`,
+      `${LATEST} true 1 True ${POST_V6_TABLES.join(",")}`,
     );
   } finally {
     removeDir(dataDir);

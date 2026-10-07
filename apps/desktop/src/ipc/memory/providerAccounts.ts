@@ -8,9 +8,11 @@ import type {
   ProviderAccount,
   ProviderAccountBinding,
   ProviderAccountBindingKind,
+  ProviderAccountModel,
   ProviderAccountUsage,
   ProviderUsageWindow,
 } from "@kalcode/protocol";
+import { providerCatalog } from "../memoryProviders.ts";
 import type { DashboardHandlers } from "./dashboard.ts";
 
 /** Mutable only in the ui-test runtime: tests supply discovery results, never a product model catalog. */
@@ -145,10 +147,41 @@ function fixtureUsage(account: ProviderAccount, now: number): ProviderAccountUsa
   return { ...base, status: "available", plan, windows, checkedAt, reason: null };
 }
 
+/** UI-test data only; production catalogs always come from the native provider adapter. */
+function fixtureModels(account: ProviderAccount): ProviderAccountModel[] {
+  if (account.providerId === "cursor") {
+    return cursorModelFixture.map((model) => ({
+      ...model,
+      defaultEffort: null,
+      supportedEfforts: [],
+    }));
+  }
+  if (account.providerId === "codex") {
+    return [
+      {
+        id: "codex-ui-test-exact",
+        displayName: "Codex exact model",
+        isDefault: true,
+        defaultEffort: "high",
+        supportedEfforts: ["low", "medium", "high", "xhigh"],
+      },
+    ];
+  }
+  const providerModels =
+    providerCatalog().find((provider) => provider.id === account.providerId)?.capabilities.models ?? [];
+  return providerModels.map((model) => ({
+    ...model,
+    defaultEffort: null,
+    supportedEfforts: account.providerId === "claude-code" ? ["low", "medium", "high", "xhigh", "max"] : [],
+  }));
+}
+
 export interface ProviderAccountsMemory {
   handlers: DashboardHandlers;
   /** Resolves active public metadata for the fixture thread runtime. */
   resolve(accountId: string, providerId: string): ProviderAccount;
+  /** The same account-scoped exact model ids exposed by `provider_account_models`. */
+  modelIds(accountId: string, providerId: string): readonly string[];
   /** Deletes every binding scoped to a removed workspace (native `remove_workspace` does too). */
   forgetWorkspace(workspaceId: string): void;
 }
@@ -209,6 +242,9 @@ export function createProviderAccountsMemory(requireCore: () => void, empty = fa
 
   return {
     resolve,
+    modelIds(accountId, providerId) {
+      return fixtureModels(resolve(accountId, providerId)).map((model) => model.id);
+    },
     forgetWorkspace(workspaceId) {
       for (const [key, binding] of bindings) {
         if (binding.kind === "workspace" && binding.scopeId === workspaceId) bindings.delete(key);
@@ -318,12 +354,28 @@ export function createProviderAccountsMemory(requireCore: () => void, empty = fa
           .filter((candidate) => candidate.archivedAt === null && (ids === null || ids.has(candidate.id)))
           .map((candidate) => fixtureUsage(candidate, now));
       },
+      provider_account_models: (args) => {
+        requireCore();
+        const current = active(args.accountId);
+        if (current.providerId === "codex" && current.authenticationState === "not_authenticated") {
+          fail(
+            "provider_account_not_authenticated",
+            "Connect this Codex account before loading its available models.",
+            "provider",
+          );
+        }
+        return {
+          accountId: current.id,
+          providerId: current.providerId,
+          models: fixtureModels(current),
+        };
+      },
       provider_account_bindings_list: (args) => {
         requireCore();
         const provider = args.providerId == null ? null : providerId(args.providerId);
         const kind = args.kind == null ? null : bindingKind(args.kind, true);
         const scope = args.scopeId == null ? null : accountId(args.scopeId);
-        const order = (binding: ProviderAccountBinding) => `${binding.providerId} ${binding.kind} ${binding.scopeId}`;
+        const order = (binding: ProviderAccountBinding) => `${binding.providerId}\0${binding.kind}\0${binding.scopeId}`;
         return [...bindings.values()]
           .filter(
             (binding) =>

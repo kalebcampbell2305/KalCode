@@ -41,6 +41,7 @@ import {
   paneCanvasListening,
 } from "../shell/panes/paneCommands.ts";
 import { useOptionalSearch } from "../shell/rail/search/SearchProvider.tsx";
+import { announceClosedPane } from "../surfaces/code/kaltidy/closedPanes.ts";
 import { useKalTidy } from "../surfaces/code/kaltidy/kalTidyContext.ts";
 import { isCodingAgent } from "../surfaces/dashboard/data/agents.ts";
 import { usePermissions } from "../surfaces/permissions/index.ts";
@@ -665,6 +666,39 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
         case "open_provider_panes":
           scopedPane(directive.workspaceId, { kind: "open-provider-panes", threadIds: directive.threadIds });
           break;
+        case "launch_squad":
+        case "launch_recipe": {
+          const launch =
+            directive.kind === "launch_squad"
+              ? client.squads.launch(directive.query, directive.workspaceId, scope.requestId, null)
+              : client.squads.launchRecipe(directive.query, directive.workspaceId, scope.requestId, null);
+          void launch.then(
+            async (result) => {
+              if (scope.signal.aborted) return;
+              const count = result.members.length;
+              scope.report({
+                ok: true,
+                message: `Launched ${result.name} with ${count} ${count === 1 ? "agent" : "agents"}.`,
+              });
+              try {
+                const activated = await workspaces.activate(directive.workspaceId);
+                if (!scope.signal.aborted && activated) navigate("code");
+              } catch (error) {
+                if (!scope.signal.aborted) {
+                  toast.show({
+                    tone: "danger",
+                    title: "Squads",
+                    description: `The Squad launched, but KalCode couldn't open its workspace. ${toKalCodeError(error).message}`,
+                  });
+                }
+              }
+            },
+            (error) => {
+              if (!scope.signal.aborted) scope.report({ ok: false, message: toKalCodeError(error).message });
+            },
+          );
+          break;
+        }
         case "control_pane":
           scopedPane(directive.workspaceId, { kind: "control-pane", command: directive.command });
           break;
@@ -1607,12 +1641,24 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
         case "request_resolved":
           applyResponse(signal.response);
           return;
+        case "remote_acted":
+          // A paired KalCode Remote device acted here: close the panes of the agents it removed
+          // and show the agents it launched, as if the same action ran in this window.
+          for (const id of signal.closedAgentIds) announceClosedPane({ kind: "agent", id });
+          if (signal.directive?.kind === "open_provider_panes") {
+            runDirective(signal.directive, {
+              requestId: "remote",
+              signal: sceneLifetime.current.signal,
+              report: () => undefined,
+            });
+          }
+          return;
         default:
           break;
       }
       dispatch({ type: "signal", signal });
     },
-    [client, talk, applyResponse, beginRequest, refreshStatus, toast, status],
+    [client, talk, applyResponse, runDirective, beginRequest, refreshStatus, toast, status],
   );
 
   const onSignalRef = useRef(onSignal);

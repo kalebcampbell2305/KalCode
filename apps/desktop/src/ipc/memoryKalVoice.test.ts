@@ -243,6 +243,19 @@ describe("memory KalVoice agent status (mirrors native grammar_agents)", () => {
     expect(response.directive).toEqual(directive);
   });
 
+  it("requires the request's current workspace instead of guessing one", async () => {
+    const memory = createMemoryKalVoice(() => undefined, "");
+    const response = (await invoke(memory, "kalvoice_request", {
+      request: { ...request("launch Release Train squad"), workspaceId: null },
+    })) as KalVoiceResponse;
+    expect(response).toMatchObject({
+      intent: "launch_squad",
+      counted: false,
+      directive: null,
+      outcome: { kind: "failed", code: "no_workspace" },
+    });
+  });
+
   it.each([
     ["which agent is stuck", "which_sessions", { kind: "filter_agents", filter: "waiting", providerId: null }],
     ["which one is stuck", "which_sessions", { kind: "filter_agents", filter: "waiting", providerId: null }],
@@ -288,5 +301,54 @@ describe("memory KalVoice agent status (mirrors native grammar_agents)", () => {
     expect(any.intent).toBe("open_finished_agent");
     const cursor = await ask("open the cursor agent that just finished");
     expect(cursor.outcome).toMatchObject({ kind: "failed", message: "No Cursor agent has finished yet." });
+  });
+});
+
+describe("memory KalVoice Squad and Recipe parity", () => {
+  async function ask(text: string) {
+    const memory = createMemoryKalVoice(() => undefined, "");
+    return (await invoke(memory, "kalvoice_request", { request: request(text) })) as KalVoiceResponse;
+  }
+
+  it.each([
+    [
+      "launch Release Train squad",
+      "launch_squad",
+      { kind: "launch_squad", query: "release train", workspaceId: "0192f3c4-0000-7000-8000-00000000000a" },
+    ],
+    [
+      "start squad Cross Provider Review",
+      "launch_squad",
+      { kind: "launch_squad", query: "cross provider review", workspaceId: "0192f3c4-0000-7000-8000-00000000000a" },
+    ],
+    [
+      "run Release Verification recipe",
+      "launch_recipe",
+      {
+        kind: "launch_recipe",
+        query: "release verification",
+        workspaceId: "0192f3c4-0000-7000-8000-00000000000a",
+      },
+    ],
+    [
+      "launch recipe Ship Current Build",
+      "launch_recipe",
+      { kind: "launch_recipe", query: "ship current build", workspaceId: "0192f3c4-0000-7000-8000-00000000000a" },
+    ],
+  ])("%j routes to the canonical %s action", async (text, intent, directive) => {
+    const response = await ask(text);
+    expect(response.intent).toBe(intent);
+    expect(response.counted).toBe(false);
+    expect(response.directive).toEqual(directive);
+  });
+
+  it.each([
+    "don't launch Release Train squad",
+    "launch Release Train squad and delete the branch",
+    "launch Release Train recipe then stop every agent",
+  ])("does not execute the compound or negated request %j", async (text) => {
+    const response = await ask(text);
+    expect(response.directive).toBeNull();
+    expect(response.intent).not.toMatch(/^launch_(?:squad|recipe)$/);
   });
 });
