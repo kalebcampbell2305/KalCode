@@ -89,6 +89,20 @@ fn main() {
         );
     }
     println!("cargo:rustc-env=KALCODE_APP_VERSION={version}");
+    // Live Update's compatibility contract: the hash of every native build input, computed by
+    // the release tooling (`tooling/release/live-update.mjs`). Empty in development builds,
+    // which then never apply a live UI update.
+    println!("cargo:rerun-if-env-changed=KALCODE_NATIVE_FINGERPRINT");
+    let fingerprint = std::env::var("KALCODE_NATIVE_FINGERPRINT").unwrap_or_default();
+    assert!(
+        fingerprint.is_empty()
+            || (fingerprint.len() == 64
+                && fingerprint
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))),
+        "KALCODE_NATIVE_FINGERPRINT must be 64 lowercase hex characters"
+    );
+    println!("cargo:rustc-env=KALCODE_NATIVE_FINGERPRINT={fingerprint}");
     println!("cargo:rerun-if-changed=test-capabilities");
     println!("cargo:rerun-if-env-changed=KALCODE_AUTHENTICODE_IDENTITY_OIDS");
     let mut commands = COMMANDS.to_vec();

@@ -2066,6 +2066,12 @@ impl ThreadRuntime {
         )
     }
 
+    /// How many threads own a live provider session (a provider process). Live Update never
+    /// replaces the shell process while one does.
+    pub fn running_session_count(&self) -> usize {
+        self.inner.running_targets().len()
+    }
+
     /// A point-in-time, read-only snapshot of the exact sessions a scoped stop would affect.
     /// Status alone is insufficient: idle and paused threads can still own provider processes.
     /// Callers bind these stable ids, then re-read this snapshot before stopping each id

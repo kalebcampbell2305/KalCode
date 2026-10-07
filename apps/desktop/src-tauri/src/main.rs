@@ -13,6 +13,8 @@ fn main() {
                 "version": env!("KALCODE_APP_VERSION"),
                 "channel": kalcode_contracts::app::BuildChannel::current(),
                 "testHooks": kalcode_desktop_lib::environment::TEST_HOOKS_ENABLED,
+                // Live Update's native fingerprint; null in development builds.
+                "nativeFingerprint": kalcode_desktop_lib::live_update::native_fingerprint(),
             })
         );
         return;

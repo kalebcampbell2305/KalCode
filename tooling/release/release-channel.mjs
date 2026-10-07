@@ -106,7 +106,7 @@ export function validateBuildInfo(output, { version, requestedReleaseChannel }) 
     throw channelError("production binary --build-info output must be a JSON object");
   }
 
-  const expectedFields = new Set(["schemaVersion", "version", "channel", "testHooks"]);
+  const expectedFields = new Set(["schemaVersion", "version", "channel", "testHooks", "nativeFingerprint"]);
   const unexpected = Object.keys(info).filter((field) => !expectedFields.has(field));
   if (unexpected.length > 0)
     throw channelError(`production binary --build-info has unexpected fields: ${unexpected.join(", ")}`);
@@ -119,12 +119,18 @@ export function validateBuildInfo(output, { version, requestedReleaseChannel }) 
   const compiledChannel = PRODUCT_TO_COMPILED[requestedReleaseChannel];
   validateCompiledChannel({ requestedReleaseChannel, compiledChannel }, info.channel);
   if (info.testHooks !== false) throw channelError("production binary reports test hooks enabled");
+  // Live Update's contract: 64 hex characters, or null in a build made without the release tooling.
+  const nativeFingerprint = info.nativeFingerprint ?? null;
+  if (nativeFingerprint !== null && !/^[0-9a-f]{64}$/.test(nativeFingerprint)) {
+    throw channelError("production binary reports an invalid native fingerprint");
+  }
 
   return {
     schemaVersion: info.schemaVersion,
     version: info.version,
     channel: info.channel,
     testHooks: info.testHooks,
+    nativeFingerprint,
   };
 }
 

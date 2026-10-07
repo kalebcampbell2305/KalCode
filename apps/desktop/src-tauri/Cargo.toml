@@ -81,7 +81,7 @@ webview2-com = "0.38.2"
 windows-core = "0.61.2"
 # Live Browser screenshots (WebView2 CapturePreview into an in-memory stream).
 windows = { version = "0.61", features = ["Win32_System_Com", "Win32_UI_Shell"] }
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_Security_Cryptography", "Win32_Security_Cryptography_Catalog", "Win32_Security_Cryptography_Sip", "Win32_Security_WinTrust", "Win32_Storage_FileSystem", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_Security_Cryptography", "Win32_Security_Cryptography_Catalog", "Win32_Security_Cryptography_Sip", "Win32_Security_WinTrust", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_SystemInformation", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
 
 # libproc bindings for the KalVoice loopback owner proof (kalvoice_guardian.rs).
 [target.'cfg(target_os = "macos")'.dependencies]

@@ -2,9 +2,11 @@ import { Button, Panel, SegmentedControl, Skeleton, useToast } from "@kalcode/ui
 import { RefreshCw, RotateCcw, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toKalCodeError } from "../../ipc/errors.ts";
+import { type LiveStatus, liveUpdateStatus, onLiveStatus } from "../../ipc/liveUpdate.ts";
 import type { UpdateChannel, UpdateStatus } from "../../ipc/updater.ts";
 import { formatVersion } from "../../platform/version.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
+import { liveUpdateLine } from "./liveUpdateModel.ts";
 import styles from "./UpdaterSettings.module.css";
 import { channelOptions, installsWhenClosed, restartAndInstall, updatePresentation } from "./updaterModel.ts";
 
@@ -20,6 +22,24 @@ export function UpdaterSettings() {
   const [loadingError, setLoadingError] = useState<string | null>(null);
   const [operation, setOperation] = useState<Operation | null>(null);
   const [confirmRecovery, setConfirmRecovery] = useState(false);
+  const [live, setLive] = useState<LiveStatus | null>(null);
+
+  // Live Update pushes its state; nothing here polls it.
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | null = null;
+    void liveUpdateStatus()
+      .then((next) => active && setLive(next))
+      .catch(() => undefined);
+    void onLiveStatus((next) => setLive(next)).then((stop) => {
+      if (active) unlisten = stop;
+      else stop();
+    });
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -92,6 +112,7 @@ export function UpdaterSettings() {
   }
 
   const presentation = updatePresentation(status);
+  const liveLine = liveUpdateLine(live);
   const busy = operation !== null || status.phase === "checking" || status.phase === "downloading";
   const canCancel = operation === "check" || status.phase === "checking" || status.phase === "downloading";
 
@@ -135,6 +156,19 @@ export function UpdaterSettings() {
           <progress className={styles.progress} max={100} value={presentation.progress}>
             {presentation.progress}%
           </progress>
+        ) : null}
+        {liveLine ? (
+          <div className={styles.status} aria-live="polite">
+            <span
+              className={styles.statusDot}
+              data-phase={liveLine.tone === "success" ? "ready" : liveLine.tone === "warning" ? "failed" : "idle"}
+              aria-hidden="true"
+            />
+            <div className={styles.statusText}>
+              <p className={styles.statusLabel}>{liveLine.label}</p>
+              <p className={styles.help}>{liveLine.detail}</p>
+            </div>
+          </div>
         ) : null}
 
         <div className={styles.actions}>

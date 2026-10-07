@@ -1,0 +1,73 @@
+/* Shown only for the second or two of a core handoff: KalCode is about to reopen on the new build. */
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-dialog);
+  display: grid;
+  place-items: center;
+  background: var(--color-scrim);
+  animation: fade var(--dur-base) var(--ease-emphasized);
+}
+
+.card {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--color-border-lit-soft);
+  border-radius: var(--radius-xl);
+  background: var(--panel-sheen), var(--color-surface-3);
+  box-shadow: var(--shadow-xl);
+  animation: rise var(--dur-base) var(--ease-emphasized);
+}
+
+.title {
+  font-size: var(--type-ui);
+  font-weight: var(--weight-semibold);
+}
+
+.detail {
+  margin-top: var(--space-0-5);
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.spinner {
+  flex: none;
+  width: 1.25rem;
+  height: 1.25rem;
+  border: 2px solid var(--color-border-strong);
+  border-top-color: var(--color-accent-text);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+}
+
+/* Reduced motion (the app setting, or the OS preference unless the app asks for full motion). */
+:global(:root[data-motion="reduced"]) .spinner {
+  animation-duration: 2.4s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :global(:root:not([data-motion="full"])) .spinner {
+    animation-duration: 2.4s;
+  }
+}

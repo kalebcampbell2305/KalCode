@@ -40,6 +40,7 @@ mod kalvoice_components;
 mod kalvoice_executor;
 mod kalvoice_guardian;
 mod layout_commands;
+pub mod live_update;
 mod locator_commands;
 pub mod native_confirm;
 mod notification_commands;
@@ -529,10 +530,9 @@ fn build_e2e_main_webview(app: &mut tauri::App) -> Result<(), Box<dyn std::error
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run(removed_overrides: Vec<String>) {
-    #[cfg(feature = "e2e")]
     let mut context = tauri::generate_context!();
-    #[cfg(not(feature = "e2e"))]
-    let context = tauri::generate_context!();
+    // Live Update serves the WebView from the active verified UI bundle when there is one.
+    let live = live_update::install_assets(&mut context);
     #[cfg(feature = "e2e")]
     for config in &mut context.config_mut().app.windows {
         if config.label == "main" {
@@ -569,6 +569,7 @@ pub fn run(removed_overrides: Vec<String>) {
                 .with_handler(kalvoice_commands::on_shortcut)
                 .build(),
         )
+        .manage(live)
         .manage(RuntimeShutdown::default())
         .manage(runtime_shutdown::ExitControl::default())
         .manage(browser_commands::BrowserViews::default())
@@ -664,6 +665,7 @@ pub fn run(removed_overrides: Vec<String>) {
             kalvoice_commands::watch_foreground(app.handle());
             kalvoice_commands::install_fn_monitor(app.handle());
             account_links::start(app.handle(), account, coordinator);
+            live_update::start(app.handle());
             updater.check_in_background();
             updater.start_periodic_checks();
 
@@ -741,6 +743,10 @@ pub fn run(removed_overrides: Vec<String>) {
                 updater_commands::updater_cancel,
                 updater_commands::updater_install,
                 updater_commands::updater_restore_previous,
+                live_update::live_update_status,
+                live_update::live_update_ui_ready,
+                live_update::live_update_begin_reload,
+                live_update::live_update_handoff_ready,
                 browser_commands::browser_attach,
                 browser_commands::browser_page_lease,
                 context_commands::context_file_pick,

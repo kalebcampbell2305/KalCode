@@ -674,7 +674,7 @@ This replaces "merge it yourself", `gh pr merge`, hand-built `train/<topic>` bra
 - **Newest valid build wins.** An older job never overwrites a newer live build; a stalled older job is SUPERSEDED by any newer build that ships. Coalesce rapid landings opportunistically, with no fixed delay.
 - **Website:** claim `target/lanes/website-deploy.lock`, deploy from main, verify the build stamp, release the lock.
 - **Takeover:** if a lock's session no longer appears in ListAgents (or a publish lease is older than 30 minutes), any session may take it over.
-- **DONE** means the user restarts KalCode and receives the feature.
+- **DONE** means existing users receive the feature: live while KalCode stays open when the Live Update rule allows, otherwise on the next close and reopen.
 
 ## Permanent parallel gate worker pool rule (owner directive 2026-10-04)
 
@@ -860,6 +860,29 @@ A version change does **not** by itself mean: creating new features, stopping cu
 **6. Versions serve the marketing cadence, not engineering.** A new public version needs no minimum number of features: 0.1.9 may carry one major feature, 0.1.10 three, 0.1.11 two. The owner changes the version whenever they want a new public marketing or update moment; never question whether a version has "enough" changes. If the owner separately asks for a launch/update video, changelog, release post or marketing assets, build them around the features shipped since the previous public version; never create them automatically just because the number changed. Cadence: BUILD → OWNER CHANGES VERSION WHEN DESIRED → OPTIONAL MARKETING/VIDEO → KEEP BUILDING.
 
 **Current capability status (keep this line accurate).** Builds ship as `X.Y.Z+N`: the checked-in public version plus build number N (the commit count of the merged `main` release commit). The release tooling stamps it (Windows version resources `X.Y.Z.N`, macOS `CFBundleVersion` N), the updater orders builds numerically, and installed 0.1.7 clients accept newer builds and versions. The UI shows the public version, plus "build N" where versions are detailed. The current public version is 0.1.10 (owner-declared 2026-10-07), and there is no separate Owner update channel yet: Owner-first means installing the validated build on the Owner machines before publishing it to the feed. Never bump the public version to ship a build. When a lifecycle hook reports unshipped desktop changes, ship them as a new internal build of the current public version.
+
+## Permanent Live Update rule (owner directive 2026-10-05)
+
+> "KALCODE USES LIVE UPDATE.
+>
+> MOST UI AND INDEPENDENT SERVICE CHANGES SHOULD BECOME AVAILABLE WHILE KALCODE REMAINS OPEN.
+>
+> WHEN A CORE/NATIVE UPDATE GENUINELY REQUIRES A NEW PROCESS, KALCODE SHOULD PERFORM A SAFE AUTOMATIC SEAMLESS HANDOFF, RESTORING THE USER'S WORKSPACE AND PRESERVING LIVE PROVIDER/TERMINAL SESSIONS WHERE TECHNICALLY POSSIBLE.
+>
+> USERS SHOULD NOT NORMALLY HAVE TO MANUALLY CLOSE AND REOPEN KALCODE TO RECEIVE FEATURES.
+>
+> ALL UPDATES MUST REMAIN SIGNED/VERIFIED, ATOMIC, COMPATIBILITY-AWARE, ROLLBACK-CAPABLE, FAST, AND SAFE."
+
+This applies to Claude Code, Codex and every future agent. **Newest valid build wins**: BUILD SHIPS → RUNNING KALCODE DETECTS IT → DOWNLOADS + VERIFIES → LIVE-APPLIES OR SEAMLESSLY HANDS OFF → USER HAS THE NEWEST VALID BUILD. Close-and-reopen (the automatic-update rule below) is the fallback, not the normal experience.
+
+- **One feed, a plan per build.** The canonical feed (`stable.json`) still names the newest build. Every Windows build also publishes, under `releases/updater/<channel>/<version>/live/`, a signed live descriptor envelope and its UI bundle (`tooling/release/live-update.mjs`, built and signed in `build-windows.mjs`, uploaded and read back by `publish.mjs`, served by `apps/website/worker/downloads.ts` only for published builds). The descriptor carries the build's **native fingerprint**: a hash of every native build input (`NATIVE_PATHS`), compiled into the shell as `KALCODE_NATIVE_FINGERPRINT` and reported by `kalcode --build-info`.
+- **Update classes, never guessed** (`crates/updater/src/live.rs`, `apps/desktop/src-tauri/src/live_update.rs`). Level 1 (**ui**): the running shell's fingerprint equals the new build's, so the new UI is verified, staged, atomically activated and loaded by reloading only the renderer at a quiet moment. Terminals and coding agents keep running in the shell and re-attach with scrollback; drafts and the current place come back. Level 3 (**core**): anything native differs (shell, services, PTY/session bridge, updater, WebView integration), so the signed installer applies it in a silent install-and-relaunch handoff that restores window and workspace. Level 2 (**service**) has no separate class yet, because every service (agent state, accounts, KalVoice, Browser helper, orchestration, memory) runs inside the shell process, so a service change is a core change. A service moved out of process must bring its own versioned contract before it can roll independently.
+- **Provider agents must survive.** A live UI update never touches terminals or agents. Today every PTY and provider process is a child of the shell in a kill-on-close Job Object (the containment rule), so a core handoff starts on its own only when no terminal, provider pane or provider session is running, no other KalCode process is open (Tauri's NSIS template closes every `kalcode.exe` of the user) and the person has been away from input for 2 minutes. Otherwise the core update waits, shows why in Settings → Updates and installs on close. Keeping agents alive across a core handoff requires moving PTY/session ownership into a separate session host that the new shell re-attaches to; never fake it by killing and silently resuming sessions.
+- **Security is unchanged:** Minisign over the descriptor with the updater key, bound to version, target, channel and a `-live.json` file name (an installer signature never authorizes a live update), SHA-256 and size for the bundle and every file, re-hashed on every serve, trusted host only, and no remote code outside verified bundles.
+- **Atomic, recoverable, no loops:** stage into a temporary directory, verify, rename, then make one atomic `active.json` write. The new UI must report ready (`live_update_ui_ready`) within 45 s or it rolls back to the previous healthy UI (else the embedded one) and is never activated again. Two starts without ready also roll it back. An installed newer shell supersedes older live UIs, and interrupted staging is cleaned at startup.
+- **Observability:** phases CHECKING, DOWNLOADING, VERIFYING, STAGED, LIVE_APPLYING, HANDOFF_PREPARING, HANDOFF, UPDATED, ROLLED_BACK, FAILED and SUPERSEDED, with detect, download, verify, activate, renderer-refresh, core-handoff and state-restore timings (`live_update_status`, Settings → Updates).
+- **UX:** no modals. One "KalCode updated" toast after it happened, and "Applying KalCode update…" only during a handoff.
+- **Testing:** verify live updates on isolated installs and data folders, never on the owner's running instance (active application protection). The other-instance guard makes an isolated install refuse to proceed while the owner's KalCode runs.
 
 ## Permanent automatic-update rule (owner directive 2026-10-01)
 

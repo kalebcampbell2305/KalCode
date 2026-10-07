@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PromptReview, PromptWarning } from "../ipc/context.ts";
+import { holdLiveReload } from "../shell/liveUpdate/hold.ts";
 
 export interface PromptConfirmationRequest<T> {
   review: () => Promise<PromptReview>;
@@ -29,6 +30,27 @@ function abandonReview(authority: PromptReviewAuthority, reviewId: string) {
 
 function abandonPending(pending: PendingOperation | null) {
   if (pending) void pending.cancelReview(pending.reviewId).catch(() => undefined);
+}
+
+/**
+ * Runs a prompt's effect (the send or create) and its completion while holding any live UI
+ * update's page reload: the composer is cleared in `onComplete`, so reloading before it runs
+ * would restore text that was already sent. The direct path and the confirmed path both use this.
+ */
+async function runHeld<T>(effect: () => Promise<T>, done: (value: T) => void, failed: (error: unknown) => void) {
+  const release = holdLiveReload();
+  try {
+    let value: T;
+    try {
+      value = await effect();
+    } catch (error) {
+      failed(error);
+      return;
+    }
+    done(value);
+  } finally {
+    release();
+  }
 }
 
 /**
@@ -104,11 +126,21 @@ export function usePromptConfirmation(scopeKey: string, authority: PromptReviewA
           setBusy(false);
           return;
         }
-        const value = await operation.effect(null);
-        if (!mountedRef.current || generation !== generationRef.current) return;
-        activeRef.current = false;
-        setBusy(false);
-        operation.onComplete(value);
+        await runHeld(
+          () => operation.effect(null),
+          (value) => {
+            if (!mountedRef.current || generation !== generationRef.current) return;
+            activeRef.current = false;
+            setBusy(false);
+            operation.onComplete(value);
+          },
+          (error) => {
+            if (!mountedRef.current || generation !== generationRef.current) return;
+            activeRef.current = false;
+            setBusy(false);
+            operation.onError(error);
+          },
+        );
       } catch (error) {
         if (!mountedRef.current || generation !== generationRef.current) return;
         activeRef.current = false;
@@ -125,18 +157,21 @@ export function usePromptConfirmation(scopeKey: string, authority: PromptReviewA
     pendingRef.current = null;
     setWarning(null);
     setBusy(true);
-    try {
-      const value = await pending.effect(pending.reviewId);
-      if (!mountedRef.current || pending.generation !== generationRef.current) return;
-      activeRef.current = false;
-      setBusy(false);
-      pending.onComplete(value);
-    } catch (error) {
-      if (!mountedRef.current || pending.generation !== generationRef.current) return;
-      activeRef.current = false;
-      setBusy(false);
-      pending.onError(error);
-    }
+    await runHeld(
+      () => pending.effect(pending.reviewId),
+      (value) => {
+        if (!mountedRef.current || pending.generation !== generationRef.current) return;
+        activeRef.current = false;
+        setBusy(false);
+        pending.onComplete(value);
+      },
+      (error) => {
+        if (!mountedRef.current || pending.generation !== generationRef.current) return;
+        activeRef.current = false;
+        setBusy(false);
+        pending.onError(error);
+      },
+    );
   }, []);
 
   return { warning, busy, request, confirm, cancel };

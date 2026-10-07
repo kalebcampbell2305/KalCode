@@ -30,7 +30,7 @@ mod apply_lease;
 mod installer;
 mod silent_fallback;
 use apply_lease::ApplyLease;
-use installer::PreparedInstaller;
+use installer::{InstallerMode, PreparedInstaller};
 use silent_fallback::SilentInstallRecord;
 
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(15 * 60);
@@ -471,9 +471,110 @@ impl DesktopUpdaterState {
         self.0.preparation.begin().ok_or_else(preparation_cancelled)
     }
 
-    /// The launch check's pipeline, gated on `periodic_recheck_allowed`.
+    /// The launch check's pipeline, gated on `periodic_recheck_allowed`. While a verified build
+    /// is staged, only the small feed is read; a newer build it announces replaces the staged one
+    /// (newest valid build wins), and the staged one is kept otherwise.
     fn recheck_in_background(&self) {
-        self.spawn_background_check(periodic_recheck_allowed);
+        let status = self.status();
+        if status.phase != UpdatePhase::Ready {
+            self.spawn_background_check(periodic_recheck_allowed);
+            return;
+        }
+        let Some(staged) = status.available_version else {
+            return;
+        };
+        let updater = self.clone();
+        tauri::async_runtime::spawn(async move {
+            if updater.feed_announces_newer(&staged).await
+                && let Err(error) = updater.check_replacing_staged().await
+            {
+                tracing::warn!(
+                    event = "updater.background_check_failed",
+                    error_code = error.code()
+                );
+            }
+        });
+    }
+
+    /// A check that replaces the staged build with the newer one the feed announces. The staged
+    /// build is held aside, not discarded: when no newer build ends up staged (a failed download
+    /// or verification, or the feed changed again), it is put back, still ready to install.
+    async fn check_replacing_staged(&self) -> Result<UpdateStatus, UpdateError> {
+        let public_key = self.key()?.to_owned();
+        let _target = self.target()?;
+        let (token, channel, registration, kept) = {
+            let mut runtime = self.runtime();
+            if !staged_recheck_allowed(runtime.machine.status().phase) {
+                return Ok(runtime.status());
+            }
+            let kept = runtime.prepared.take();
+            match runtime.begin_cancellable_check() {
+                Ok((token, channel, registration)) => (token, channel, registration, kept),
+                Err(error) => {
+                    runtime.prepared = kept;
+                    return Err(error);
+                }
+            }
+        };
+        let result =
+            Abortable::new(self.check_inner(token, channel, &public_key), registration).await;
+        let mut runtime = self.runtime();
+        runtime.finish_check(token);
+        let replaced = runtime.prepared.is_some();
+        let restored = !replaced
+            && kept.as_ref().is_some_and(|old| {
+                runtime
+                    .machine
+                    .restore_ready(token, old.candidate.clone())
+                    .is_ok()
+            });
+        let old = if restored {
+            runtime.prepared = kept;
+            None
+        } else {
+            kept
+        };
+        let status = runtime.status();
+        drop(runtime);
+        if let Some(installer) = old.and_then(|old| old.installer) {
+            discard_staged(installer);
+        }
+        match result {
+            Ok(Err(error)) if !restored => {
+                let _ = self.runtime().machine.fail(token, error.to_string());
+                Err(error)
+            }
+            Ok(Err(error)) => {
+                tracing::warn!(
+                    event = "updater.replacement_failed_staged_kept",
+                    error_code = error.code()
+                );
+                Ok(status)
+            }
+            _ => Ok(status),
+        }
+    }
+
+    /// Whether the selected channel's feed now announces a build newer than `staged`. Any
+    /// failure reads as no: the staged build stays.
+    async fn feed_announces_newer(&self, staged: &str) -> bool {
+        let channel = self.status().channel;
+        let Ok(target) = self.target() else {
+            return false;
+        };
+        let Ok(raw) = self.fetch_feed(channel.endpoint(), || Ok(())).await else {
+            return false;
+        };
+        let Ok(Some((feed, _value, _platform))) = parse_feed(&raw, target) else {
+            return false;
+        };
+        matches!(
+            (
+                Version::parse(feed.version.trim_start_matches('v')),
+                Version::parse(staged)
+            ),
+            (Ok(announced), Ok(staged)) if announced > staged
+        )
     }
 
     fn spawn_background_check(&self, allowed: fn(UpdatePhase) -> bool) {
@@ -638,7 +739,35 @@ impl DesktopUpdaterState {
         };
         let candidate = release.candidate;
 
-        let recovery_available = self.ensure_recovery_baseline(public_key, token).await?;
+        // Live Update: a build whose native shell is identical applies its UI now, while
+        // KalCode keeps running; any other build continues below to the staged installer.
+        if let Ok(target) = self.target() {
+            crate::live_update::consider(
+                &self.0.app,
+                &candidate.version,
+                channel,
+                target,
+                public_key,
+            )
+            .await;
+        }
+        self.runtime().machine.check_token(token)?;
+
+        // The recovery baseline is best-effort: without it, updating still works and only
+        // "Restore previous version" stays unavailable.
+        let recovery_available = match self.ensure_recovery_baseline(public_key, token).await {
+            Ok(available) => available,
+            Err(error) if matches!(error.code(), "stale_update_operation" | "update_cancelled") => {
+                return Err(error);
+            }
+            Err(error) => {
+                tracing::warn!(
+                    event = "updater.recovery_baseline_unavailable",
+                    error_code = error.code()
+                );
+                false
+            }
+        };
         {
             let mut runtime = self.runtime();
             runtime.machine.set_recovery_available(recovery_available);
@@ -792,6 +921,12 @@ impl DesktopUpdaterState {
                 "No verified update is ready to install.",
             )
         })?;
+        // The installer would close every other KalCode process of this user too. Install on a
+        // later close instead, counted like a Windows sign-out rather than a failed attempt.
+        if other_instance_running() {
+            self.update_silent_record(silent_fallback::after_session_end);
+            return Err(other_instance_error());
+        }
         let binding = installer.binding().clone();
         let mac_swap = installer.mac_swap_attempt();
         self.runtime().machine.check_token(token)?;
@@ -1112,7 +1247,18 @@ impl DesktopUpdaterState {
         run_owned_operation(
             &self.0.runtime,
             Runtime::admit_install,
-            |token, prepared| self.install_owned(token, prepared?),
+            |token, prepared| self.install_owned(token, prepared?, InstallerMode::RestartNow),
+        )
+    }
+
+    /// Live Update's core handoff: installs the staged build silently and relaunches it. The
+    /// caller (`live_update`) has proved no terminal or coding agent would be lost.
+    pub fn hand_off(&self) -> Result<(), UpdateError> {
+        require_stable_installer()?;
+        run_owned_operation(
+            &self.0.runtime,
+            Runtime::admit_install,
+            |token, prepared| self.install_owned(token, prepared?, InstallerMode::Handoff),
         )
     }
 
@@ -1121,7 +1267,12 @@ impl DesktopUpdaterState {
         &self,
         token: OperationToken,
         update: PreparedUpdate,
+        mode: InstallerMode,
     ) -> Result<(), UpdateError> {
+        // The NSIS installer closes every KalCode process of this user, not only this one.
+        if other_instance_running() {
+            return Err(other_instance_error());
+        }
         let preparation = self.begin_preparation()?;
         let cancel = || {
             if preparation.cancelled() {
@@ -1163,7 +1314,7 @@ impl DesktopUpdaterState {
             binding,
             mac_swap,
         )?;
-        match launch_after_quiescence(&self.0.before_exit, || installer.launch()) {
+        match launch_after_quiescence(&self.0.before_exit, || installer.launch(mode)) {
             Ok(()) => {
                 self.0.app.cleanup_before_exit();
                 std::process::exit(0);
@@ -1264,7 +1415,9 @@ impl DesktopUpdaterState {
             binding,
             mac_swap,
         )?;
-        match launch_after_quiescence(&self.0.before_exit, || installer.launch()) {
+        match launch_after_quiescence(&self.0.before_exit, || {
+            installer.launch(InstallerMode::RestartNow)
+        }) {
             Ok(()) => {
                 self.0.app.cleanup_before_exit();
                 std::process::exit(0);
@@ -1383,6 +1536,66 @@ fn session_ending() -> bool {
     unsafe { GetSystemMetrics(SM_SHUTTINGDOWN) != 0 }
 }
 
+/// For Live Update's handoff gate.
+pub(crate) fn session_ending_now() -> bool {
+    session_ending()
+}
+
+fn other_instance_error() -> UpdateError {
+    UpdateError::new(
+        "update_other_instance",
+        "Close the other KalCode window first. Installing would close it too.",
+    )
+}
+
+/// Whether another `kalcode.exe` runs. Tauri's NSIS template closes every process with that
+/// image name for the current user before installing, so an install must never start while a
+/// second KalCode (an isolated test instance, or the owner's main window) runs.
+#[cfg(windows)]
+#[allow(unsafe_code)]
+pub(crate) fn other_instance_running() -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+        TH32CS_SNAPPROCESS,
+    };
+    let own = std::process::id();
+    // SAFETY: a documented snapshot call; the handle is checked and closed below.
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    if snapshot == INVALID_HANDLE_VALUE {
+        // Unknown: refuse rather than risk closing someone's KalCode.
+        return true;
+    }
+    // SAFETY: an all-zero PROCESSENTRY32W is valid once `dwSize` is set.
+    let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
+    entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+    let mut found = false;
+    // SAFETY: `snapshot` is a valid process snapshot and `entry` is sized for it.
+    let mut more = unsafe { Process32FirstW(snapshot, &mut entry) } != 0;
+    while more {
+        let length = entry
+            .szExeFile
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(entry.szExeFile.len());
+        let name = String::from_utf16_lossy(&entry.szExeFile[..length]);
+        if entry.th32ProcessID != own && name.eq_ignore_ascii_case("kalcode.exe") {
+            found = true;
+            break;
+        }
+        // SAFETY: as above.
+        more = unsafe { Process32NextW(snapshot, &mut entry) } != 0;
+    }
+    // SAFETY: `snapshot` came from CreateToolhelp32Snapshot and is closed exactly once.
+    unsafe { CloseHandle(snapshot) };
+    found
+}
+
+#[cfg(not(windows))]
+pub(crate) const fn other_instance_running() -> bool {
+    false
+}
+
 /// The macOS helper is crash-safe at every step (an atomic swap and a journaled phase), so a
 /// logout part-way leaves either build installed and the next launch reconciles it.
 #[cfg(not(windows))]
@@ -1405,6 +1618,11 @@ fn periodic_recheck_allowed(phase: UpdatePhase) -> bool {
         | UpdatePhase::Ready
         | UpdatePhase::Installing => false,
     }
+}
+
+/// A staged build is replaced only from Ready, after the feed announced a newer one.
+fn staged_recheck_allowed(phase: UpdatePhase) -> bool {
+    phase == UpdatePhase::Ready
 }
 
 /// `base` spread uniformly over plus or minus `PERIODIC_CHECK_JITTER_PERCENT`, chosen by `sample`.

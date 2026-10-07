@@ -208,8 +208,8 @@ impl PreparedInstaller {
     /// Launches the exact held installer. The caller must quiesce application work first and exit
     /// promptly after success. No shell command string or artifact-controlled argument is used.
     #[cfg(windows)]
-    pub fn launch(self) -> Result<(), UpdateError> {
-        let command = installer_command(&self.path, InstallerMode::RestartNow);
+    pub fn launch(self, mode: InstallerMode) -> Result<(), UpdateError> {
+        let command = installer_command(&self.path, mode);
         self.spawn_installer(command)
     }
 
@@ -241,7 +241,7 @@ impl PreparedInstaller {
     }
 
     #[cfg(target_os = "macos")]
-    pub fn launch(mut self) -> Result<(), UpdateError> {
+    pub fn launch(mut self, _mode: InstallerMode) -> Result<(), UpdateError> {
         let prepared = self.macos.take().ok_or_else(installer_invalid)?;
         prepared.launch()?;
         std::mem::forget(self);
@@ -259,7 +259,7 @@ impl PreparedInstaller {
     }
 
     #[cfg(not(any(windows, target_os = "macos")))]
-    pub fn launch(self) -> Result<(), UpdateError> {
+    pub fn launch(self, _mode: InstallerMode) -> Result<(), UpdateError> {
         Err(installer_invalid())
     }
 
@@ -337,14 +337,17 @@ fn write_all_cancellable(
     cancel()
 }
 
-/// How the verified NSIS installer runs.
-#[cfg(windows)]
+/// How the verified installer runs (the NSIS arguments on Windows).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum InstallerMode {
+pub enum InstallerMode {
     /// The user chose to restart and install: Tauri's passive progress window, then reopen.
     RestartNow,
     /// KalCode closed with a same-version build staged: no window, and KalCode stays closed.
+    #[cfg_attr(not(windows), allow(dead_code))]
     AfterExit,
+    /// Live Update's core handoff: no window, then KalCode reopens on the new build and
+    /// restores its workspace.
+    Handoff,
 }
 
 #[cfg(windows)]
@@ -354,6 +357,7 @@ const fn installer_args(mode: InstallerMode) -> &'static [&'static str] {
     match mode {
         InstallerMode::RestartNow => &["/P", "/UPDATE", "/R"],
         InstallerMode::AfterExit => &["/S", "/UPDATE"],
+        InstallerMode::Handoff => &["/S", "/UPDATE", "/R"],
     }
 }
 
@@ -1332,6 +1336,11 @@ mod tests {
         let after_exit = installer_args(InstallerMode::AfterExit);
         assert_eq!(after_exit, ["/S", "/UPDATE"]);
         assert!(!after_exit.contains(&"/R"), "the user closed KalCode");
+        assert_eq!(
+            installer_args(InstallerMode::Handoff),
+            ["/S", "/UPDATE", "/R"],
+            "a handoff is silent and reopens KalCode on the new build"
+        );
         assert!(!after_exit.contains(&"/P"), "no progress window");
     }
 

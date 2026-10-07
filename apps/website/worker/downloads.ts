@@ -132,6 +132,7 @@ export function contentTypeFor(file: string): string {
 
 type Route =
   | { kind: "updater"; key: string; file: string; mutable: boolean }
+  | { kind: "updater-live"; key: string; file: string; channel: string; version: string }
   | { kind: "latest-installer"; os: "windows"; arch: "x64" }
   | { kind: "latest-installer"; os: "macos"; arch: "arm64" }
   | { kind: "pinned"; version: string; file: string }
@@ -150,6 +151,18 @@ export function matchDownloadRoute(pathname: string): Route | null {
     const version = parts[1] ?? "";
     if (parts.length === 2 && version.endsWith(".json") && isValidVersion(version.slice(0, -5))) {
       return { kind: "updater", key: pathname.slice(1), file: version, mutable: false };
+    }
+    // Live Update: a published build's signed live descriptor envelope and its UI bundle. Clients
+    // verify both against the updater key; serving is limited to builds published on the channel.
+    if (parts.length === 4 && parts[2] === "live" && isValidVersion(version)) {
+      const file = parts[3] ?? "";
+      if (
+        /^(?:windows-x86_64|darwin-aarch64)\.json$/.test(file) ||
+        (isValidFileName(file) && /^KalCode_[0-9A-Za-z._-]+_ui\.kui$/.test(file))
+      ) {
+        return { kind: "updater-live", key: pathname.slice(1), file, channel, version };
+      }
+      return { kind: "invalid-pinned" };
     }
     if (isValidVersion(version) && (parts.length === 4 || parts.length === 5)) {
       const file = parts.at(-1) ?? "";
@@ -549,6 +562,15 @@ async function route(request: Request, url: URL, deps: DownloadDeps, match: Rout
     return request.method === "HEAD" ? new Response(null, { status: 200, headers: response.headers }) : response;
   }
 
+  if (match.kind === "updater-live") {
+    if (!(await published(deps, match.channel, match.version))) return notFound(request, url, deps);
+    return serveFile(request, url, deps, bucket, {
+      key: match.key,
+      file: match.file,
+      cacheControl: IMMUTABLE_CACHE,
+      maxBytes: match.file.endsWith(".kui") ? 64 * 1024 * 1024 : 64 * 1024,
+    });
+  }
   if (match.kind === "updater") {
     if (deps.catalog) {
       const parts = match.key.slice("releases/updater/".length).split("/");
@@ -647,7 +669,10 @@ export async function handleDownload(request: Request, deps: DownloadDeps): Prom
 
   // A staged immutable version has no customer pointer. Resolve its exact claim through the
   // same catalog while keeping legacy moving links unchanged until the explicit rollout.
-  const usesCatalog = deps.catalogPointersEnabled !== false || (match.kind === "updater" && !match.mutable);
+  const usesCatalog =
+    deps.catalogPointersEnabled !== false ||
+    (match.kind === "updater" && !match.mutable) ||
+    match.kind === "updater-live";
   const routeDeps = { ...deps };
   if (!usesCatalog) delete routeDeps.catalog;
 

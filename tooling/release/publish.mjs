@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 
 import {
   assertCleanTree,
@@ -25,6 +25,7 @@ import {
   WEBSITE_MANIFEST,
   writeJson,
 } from "./lib.mjs";
+import { liveKeys } from "./live-update.mjs";
 import { expectedMacDmgFile } from "./macos-contract.mjs";
 import { buildManifest, validateManifest } from "./manifest.mjs";
 import {
@@ -59,7 +60,7 @@ import {
   releaseProcessOptions,
 } from "./signing.mjs";
 import { createPlatformUpdaterManifest, qaChangeDeclarationProblems } from "./updater-manifest.mjs";
-import { readUpdaterPublicKey } from "./updater-signing.mjs";
+import { readUpdaterPublicKey, verifyUpdaterArtifact } from "./updater-signing.mjs";
 
 let mode;
 try {
@@ -672,6 +673,38 @@ console.log(
     : `  ok   ${packets.length} verified platform packet(s), notes and aggregate manifests passed`,
 );
 
+// ---- Live Update ------------------------------------------------------------------------------
+// A signed Windows build carries its live descriptor and UI bundle (tooling/release/live-update.mjs).
+// Both are re-verified here: the descriptor's signature against the tracked updater key, bound to
+// this version, target and channel, and the bundle against the size and SHA-256 in the build record.
+const liveArtifacts = new Map();
+if (mode !== "local") {
+  for (const packet of packets) {
+    const live = packet.build?.live;
+    if (packet.target !== "windows-x86_64" || !live?.signed) continue;
+    const dir = dirname(packet.artifactPath);
+    const descriptorPath = join(dir, live.descriptorFile);
+    const envelopePath = join(dir, live.envelopeFile);
+    const uiPath = join(dir, live.uiFile);
+    const missing = [descriptorPath, `${descriptorPath}.sig`, envelopePath, uiPath].filter((path) => !existsSync(path));
+    if (missing.length > 0) fail(`live update artifacts missing: ${missing.join(", ")}`);
+    if ((await sha256File(uiPath)) !== live.uiSha256) fail("live update UI bundle does not match its build record");
+    verifyUpdaterArtifact({
+      artifactPath: descriptorPath,
+      signaturePath: `${descriptorPath}.sig`,
+      version,
+      target: packet.target,
+      channel,
+    });
+    const envelope = readJson(envelopePath);
+    if (Buffer.from(envelope.descriptor ?? "", "base64").toString("utf8") !== readFileSync(descriptorPath, "utf8")) {
+      fail("live update envelope does not carry the signed descriptor");
+    }
+    liveArtifacts.set(packet.target, { envelopePath, uiPath, uiFile: live.uiFile, uiSha256: live.uiSha256 });
+  }
+  if (liveArtifacts.size > 0) console.log("  ok   live update descriptor and UI bundle verified");
+}
+
 // ---- Upload -----------------------------------------------------------------------------------
 const planArtifacts = packets.map((packet) => ({
   target: packet.target,
@@ -683,6 +716,7 @@ const planArtifacts = packets.map((packet) => ({
   includeDownloadArtifact: !reusedDownloads.has(packet.target),
   includeUpdaterArtifact: !reusedUpdaterArtifacts.has(packet.target),
   includeUpdaterSignature: !reusedUpdaterSignatures.has(packet.target),
+  ...(liveArtifacts.has(packet.target) && { live: liveArtifacts.get(packet.target) }),
 }));
 const uploads = buildPublishPlan({
   bucket: R2_BUCKET,
@@ -772,6 +806,19 @@ try {
       artifactKey: objects.updater.artifact,
       publicKeyBase64: updaterPublicKey,
     });
+  }
+  for (const [target, live] of liveArtifacts) {
+    const keys = liveKeys(channel, version, live.uiFile, target);
+    const uiReadback = join(finalReadback, `${target}-${live.uiFile}`);
+    const envelopeReadback = join(finalReadback, `${target}-live.json`);
+    if (getR2Object(keys.ui, uiReadback).status !== 0) fail(`could not read back ${keys.ui}`);
+    if (getR2Object(keys.envelope, envelopeReadback).status !== 0) fail(`could not read back ${keys.envelope}`);
+    if (
+      (await sha256File(uiReadback)) !== live.uiSha256 ||
+      (await sha256File(envelopeReadback)) !== (await sha256File(live.envelopePath))
+    ) {
+      fail(`${target} live update artifacts read back with different bytes`);
+    }
   }
   const downloadDescriptorPath = join(finalReadback, "download.json");
   const updaterDescriptorPath = join(finalReadback, "updater.json");
