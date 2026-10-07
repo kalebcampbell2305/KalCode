@@ -863,7 +863,7 @@ A version change does **not** by itself mean: creating new features, stopping cu
 
 ## Permanent automatic-update rule (owner directive 2026-10-01)
 
-**EVERYTHING IS AUTOMATIC.** A new build of the current public version (for example 0.1.8+N → 0.1.8+M) reaches the owner and every user just by closing KalCode and opening it again, on both Windows and macOS. KalCode downloads and verifies the build in the background and installs it when KalCode closes. There is no prompt, notice or "Restart to update" click for same-version builds. The in-app update prompt is only for new public versions (0.1.8 → 0.1.9). Keep every signature, integrity, journal and rollback safeguard. Release verification must prove the close-and-reopen path on both platforms.
+**EVERYTHING IS AUTOMATIC.** A new build of the current public version (for example 0.1.8+N → 0.1.8+M) reaches the owner and every user just by closing KalCode and opening it again, on both Windows and macOS. KalCode downloads and verifies the build in the background and installs it when KalCode closes. There is no prompt, notice or "Restart to update" click, for a new build of the same version or for a new public version (0.1.9 → 0.1.10 installed on close the same way). The in-app "Restart to update" prompt appears only as the fallback when silent staging fails. Keep every signature, integrity, journal and rollback safeguard. Release verification must prove the close-and-reopen path on both platforms.
 
 ## Permanent zero-owner release rule (owner directive 2026-10-01)
 
