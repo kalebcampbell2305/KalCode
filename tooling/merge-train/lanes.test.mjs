@@ -457,10 +457,7 @@ describe("merge lanes", { concurrency: true }, () => {
     // A changed head inside the stack releases it: the plan rebuilds as before.
     openPr(env, 2, { "crates/threads/src/runtime.rs": "// two, revised\n" }, { from: "refs/heads/pr-2^0" });
     const third = await train.buildAll();
-    assert.ok(
-      !third.levels.some((l) => l.sha === first.levels[1].sha),
-      "a stack whose PR head changed is not kept",
-    );
+    assert.ok(!third.levels.some((l) => l.sha === first.levels[1].sha), "a stack whose PR head changed is not kept");
   });
 
   test("a lower level that lands keeps the deeper levels valid: they fast-forward on their exact gated tree", async () => {
