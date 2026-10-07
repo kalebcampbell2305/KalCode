@@ -427,6 +427,42 @@ describe("merge lanes", { concurrency: true }, () => {
     assert.ok(!train.log.slice(mark).some((l) => l.startsWith("stacking")));
   });
 
+  test("append-only while gating: a PR that joins a gating lane stacks above it; nothing gating is rebuilt or cancelled", async () => {
+    const env = setup();
+    openPr(env, 1, { "feature-1/a.txt": "one\n" });
+    openPr(env, 2, { "crates/threads/src/runtime.rs": "// two\n" });
+    const train = makeTrain(env, cloneOf(env, "pinned"));
+    const first = await train.buildAll();
+    assert.deepEqual(
+      first.levels.map((l) => nums(l.included)),
+      [[1], [1, 2]],
+    );
+    env.provider.autoGate = () => "pending";
+
+    // #3 shares #2's risky zone, so a fresh plan would rebuild #2's lane as one level [1, 2, 3].
+    openPr(env, 3, { "crates/contracts/src/agent_state.rs": "// three\n" });
+    const second = await train.buildAll();
+    assert.deepEqual(
+      second.levels.map((l) => nums(l.included)),
+      [[1], [1, 2], [1, 2, 3]],
+      "the gating stack keeps its levels and #3 stacks above it",
+    );
+    assert.deepEqual(
+      second.levels.slice(0, 2).map((l) => [l.sha, l.action]),
+      first.levels.map((l) => [l.sha, "reused"]),
+    );
+    assert.deepEqual(env.provider.cancelled, [], "no gate in flight is cancelled");
+    assert.equal(trainBranches(env).length, 3);
+
+    // A changed head inside the stack releases it: the plan rebuilds as before.
+    openPr(env, 2, { "crates/threads/src/runtime.rs": "// two, revised\n" }, { from: "refs/heads/pr-2^0" });
+    const third = await train.buildAll();
+    assert.ok(
+      !third.levels.some((l) => l.sha === first.levels[1].sha),
+      "a stack whose PR head changed is not kept",
+    );
+  });
+
   test("a lower level that lands keeps the deeper levels valid: they fast-forward on their exact gated tree", async () => {
     const env = setup();
     openPr(env, 1, { "feature-1/a.txt": "one\n" });
