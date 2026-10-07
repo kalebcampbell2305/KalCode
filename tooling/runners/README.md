@@ -45,7 +45,17 @@ macOS release work keeps the existing path: the release runner on Windows drives
 
 The guard is copied next to the runner and wired as `ACTIONS_RUNNER_HOOK_JOB_STARTED` in the runner's `.env`. A job can't change either file, and a job the guard refuses fails before any of its steps run. Re-run the setup script after changing the guard.
 
-## Split gate: build PC + second PC
+## All gates on the second PC (owner, 2026-10-07)
+
+Owner, 2026-10-07: "to all gates on PC 2 ... We use this computer to build ... the other one to pass the gates
+and ship to users." Every `gate.yml` Windows job (`Gate (Windows)`, `Gate (Windows, native)` and
+`Gate (Windows, PC2)`) now runs on the second PC's gate runners `kalcode-win-gate-2` and
+`kalcode-win-gate-2b` (label `kalcode-gate-pc2`); the build PC's pool workers no longer take gate jobs. On
+that PC one Rust gate runs at a time (`C:\ProgramData\KalCodePC2\locks\rust.lock`), the desktop UI and
+native E2E suites never overlap (`machine-lock.mjs` in the same folder), and every gate job holds the machine
+lock below shared, so the Windows update proof still runs alone. The history below explains the split.
+
+## Split gate: build PC + second PC (2026-10-05, superseded)
 
 Owner, 2026-10-05: split gate work across both Windows PCs so neither pins its CPU. `gate.yml` runs two
 Windows jobs on the same event SHA: `Gate (Windows)` on the build PC's pool (Rust, desktop frontend/UI,
@@ -128,12 +138,12 @@ owner directives:
 1. **UI and user-requested coding agents first.** Never blocked or killed for high CPU alone; the
    Resource Governor throttles optional background work first and only delays a user agent for genuine
    hard resource pressure, showing the real reason.
-2. **Gates/builds distributed across machines.** The build PC runs `Gate (Windows)` + `Gate (Windows,
-   native)` on the BelowNormal worker pool (heavy native work also holds one of three file locks and
-   needs >=10 GiB free RAM); PC2 runs `Gate (Windows, PC2)` (JS/web) as `gate-split.mjs` assigns. Both
-   halves gate the exact SHA in parallel and both must be green to land.
-3. **Release QA.** PC2's desktop-QA runs the Windows update proofs (never while its gate half runs); the
-   Mac runs Mac release builds and notarization over SSH. One coordinator lands and releases.
+2. **Gates on PC2, builds on the build PC (owner, 2026-10-07).** PC2's two gate runners run every gate
+   job (`Gate (Windows)`, `Gate (Windows, native)`, `Gate (Windows, PC2)`) as `gate-split.mjs` assigns, at
+   BelowNormal, one Rust gate at a time. All jobs gate the exact SHA and all must be green to land. The
+   build PC runs release builds, signing and packaging.
+3. **Release QA.** PC2's desktop-QA runs the Windows update proofs (never alongside a gate job: the PC2 machine lock); the
+   Mac runs Mac release builds and notarization over SSH. Any validated agent lands and releases.
 4. **Background maintenance lowest.**
 
 During a lane gate the box can still be starved by **other sessions'** heavy non-gate builds (e.g. a
