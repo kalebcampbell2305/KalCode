@@ -60,11 +60,22 @@ pub struct StepBinding {
     pub step_key: String,
     pub intent: ChainStepIntent,
     pub worktree: ChainWorktree,
-    /// Owner reference of the chain's shared worktree (the chain id) and its branch.
+    /// The shared worktree's branch and owner reference: the chain itself, or the source agent
+    /// whose own worktree the chain continues in.
     pub shared_branch: Option<String>,
+    pub worktree_owner: Option<String>,
     pub report_path: Option<String>,
     /// This Operation is the step's current attempt (an older attempt is never re-bound).
     pub current: bool,
+}
+
+/// A provider account a step could run on, for route validation and alternatives.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteAccount {
+    pub id: String,
+    pub provider_id: String,
+    pub label: String,
+    pub authenticated: bool,
 }
 
 /// Everything the handoff package for one step needs, read in one consistent snapshot.
@@ -73,6 +84,8 @@ pub struct DeliveryContext {
     pub chain: Chain,
     pub step: ChainStep,
     pub operations: HashMap<String, OperationRecord>,
+    /// Owner reference of the shared worktree (the chain, or the source agent).
+    pub worktree_owner: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -85,6 +98,7 @@ struct ChainRow {
     acceptance: Vec<String>,
     worktree: ChainWorktree,
     branch: Option<String>,
+    worktree_owner: Option<String>,
     paused: bool,
     cancelled: bool,
     superseded_reason: Option<String>,
@@ -144,7 +158,35 @@ impl ChainsStore {
         request: ChainStartRequest,
         queue_limit: Option<PlanLimit>,
     ) -> Result<Chain> {
-        let request = normalize_request(request)?;
+        let mut request = normalize_request(request)?;
+        let source_worktree = match request.source_thread_id.as_deref() {
+            Some(source) => self.source_worktree(&request.workspace_id, source)?,
+            None => None,
+        };
+        if request.source_thread_id.is_some() {
+            request.worktree = if source_worktree.is_some() {
+                ChainWorktree::Shared
+            } else {
+                ChainWorktree::Project
+            };
+            if request.worktree == ChainWorktree::Shared {
+                reject_parallel_writers(&request.steps)?;
+            }
+        }
+        if request.worktree == ChainWorktree::Shared
+            && source_worktree.is_none()
+            && request
+                .steps
+                .iter()
+                .filter(|step| step.depends_on.is_empty())
+                .count()
+                > 1
+        {
+            return Err(KalError::validation(
+                "chain_shared_single_start",
+                "A chain in a shared worktree starts with one step that creates it. Make the other first steps follow it, or use the project checkout.",
+            ));
+        }
         let fingerprint = fingerprint_of(
             "chain",
             &serde_json::to_string(&StartFingerprint { request: &request })?,
@@ -210,8 +252,14 @@ impl ChainsStore {
                 },
                 queue_limit,
             )?;
-            let branch = (request.worktree == ChainWorktree::Shared)
-                .then(|| chain_branch_name(&request.name, &launch_id));
+            let (owner, branch) = match (&source_worktree, request.worktree) {
+                (Some((owner, branch)), _) => (Some(owner.clone()), Some(branch.clone())),
+                (None, ChainWorktree::Shared) => (
+                    Some(launch_id.clone()),
+                    Some(chain_branch_name(&request.name, &launch_id)),
+                ),
+                (None, ChainWorktree::Project) => (None, None),
+            };
             tx.execute(
                 "INSERT INTO chains (launch_id, acceptance, worktree, worktree_owner_id, branch)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -219,7 +267,7 @@ impl ChainsStore {
                     launch_id,
                     serde_json::to_string(&request.acceptance)?,
                     request.worktree.as_str(),
-                    (request.worktree == ChainWorktree::Shared).then_some(launch_id.as_str()),
+                    owner,
                     branch
                 ],
             )?;
@@ -250,6 +298,46 @@ impl ChainsStore {
             Ok((launch_id, Vec::new()))
         })?;
         self.get(&chain_id)
+    }
+
+    /// The source agent's own active KalCode worktree (owner and branch), or `None` when it
+    /// works in the project checkout. The agent must belong to the chain's workspace.
+    fn source_worktree(
+        &self,
+        workspace_id: &str,
+        source: &str,
+    ) -> Result<Option<(String, String)>> {
+        if !is_valid_id(source) {
+            return Err(KalError::validation(
+                "invalid_chain_source",
+                "That coding agent reference isn't valid.",
+            ));
+        }
+        self.core.read(|conn| {
+            let thread_workspace: Option<String> = conn
+                .query_row(
+                    "SELECT workspace_id FROM threads WHERE id = ?1",
+                    [source],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if thread_workspace.as_deref() != Some(workspace_id) {
+                return Err(KalError::validation(
+                    "chain_source_unavailable",
+                    "The coding agent this chain continues is not in this project.",
+                ));
+            }
+            Ok(conn
+                .query_row(
+                    "SELECT owner_ref, branch FROM git_worktrees
+                     WHERE owner_ref = ?1 AND workspace_id = ?2 AND purpose = 'thread'
+                       AND status = 'active'
+                     ORDER BY created_at DESC LIMIT 1",
+                    params![source, workspace_id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .optional()?)
+        })
     }
 
     pub fn get(&self, id: &str) -> Result<Chain> {
@@ -331,6 +419,7 @@ impl ChainsStore {
                 intent: parse_intent(&intent)?,
                 worktree: chain.worktree,
                 shared_branch: chain.branch,
+                worktree_owner: chain.worktree_owner,
                 current: current_id == operation_id,
                 report_path: (current_id == operation_id)
                     .then_some(report_path)
@@ -359,6 +448,7 @@ impl ChainsStore {
             chain,
             step,
             operations,
+            worktree_owner: row.worktree_owner,
         }))
     }
 
@@ -417,6 +507,42 @@ impl ChainsStore {
         Ok(Some(report))
     }
 
+    /// A report already stored for the current attempt (for example when settling it was
+    /// interrupted after the report was read), so it still decides the step.
+    pub fn stored_report(&self, operation_id: &str) -> Result<Option<ChainStepReport>> {
+        self.core.read(|conn| {
+            let encoded: Option<Option<String>> = conn
+                .query_row(
+                    "SELECT report FROM chain_steps WHERE operation_id = ?1",
+                    [operation_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            Ok(encoded
+                .flatten()
+                .as_deref()
+                .map(serde_json::from_str)
+                .transpose()?)
+        })
+    }
+
+    /// True when an earlier attempt of another step in this chain already started an agent, so
+    /// a missing shared worktree means work was lost rather than not yet created.
+    pub fn earlier_work_started(&self, operation_id: &str) -> Result<bool> {
+        let Some(binding) = self.binding(operation_id)? else {
+            return Ok(false);
+        };
+        self.core.read(|conn| {
+            Ok(conn.query_row(
+                "SELECT EXISTS(
+                   SELECT 1 FROM chain_step_attempts a JOIN operations o ON o.id = a.operation_id
+                   WHERE a.launch_id = ?1 AND a.operation_id <> ?2 AND o.thread_id IS NOT NULL)",
+                params![binding.chain_id, operation_id],
+                |row| row.get(0),
+            )?)
+        })
+    }
+
     fn store_report(&self, operation_id: &str, report: &ChainStepReport) -> Result<()> {
         let encoded = serde_json::to_string(report)?;
         self.write(|tx| {
@@ -425,6 +551,26 @@ impl ChainsStore {
                 params![operation_id, encoded],
             )?;
             Ok(())
+        })
+    }
+
+    /// Every non-archived provider account, for validating a step's route.
+    pub fn route_accounts(&self) -> Result<Vec<RouteAccount>> {
+        self.core.read(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, provider_id, display_name, authentication_state FROM provider_accounts
+                 WHERE archived_at IS NULL ORDER BY provider_id, display_name",
+            )?;
+            Ok(stmt
+                .query_map([], |row| {
+                    Ok(RouteAccount {
+                        id: row.get(0)?,
+                        provider_id: row.get(1)?,
+                        label: row.get(2)?,
+                        authenticated: row.get::<_, String>(3)? != "not_authenticated",
+                    })
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?)
         })
     }
 
@@ -548,16 +694,34 @@ impl ChainsStore {
             .find(|step| step.key == key)
             .ok_or_else(step_not_found)?;
         let current = operations.get(&step.operation_id)?;
+        let changes_requested = current.status == OperationStatus::Succeeded
+            && step
+                .report
+                .as_ref()
+                .is_some_and(|report| report.result == ChainStepResult::ChangesRequested);
+        let awaiting = current.status == OperationStatus::Running && step.awaiting_report;
         let retryable = !step.skipped
-            && matches!(
-                current.status,
-                OperationStatus::Failed | OperationStatus::Cancelled | OperationStatus::Interrupted
-            );
+            && (changes_requested
+                || awaiting
+                || matches!(
+                    current.status,
+                    OperationStatus::Failed
+                        | OperationStatus::Cancelled
+                        | OperationStatus::Interrupted
+                ));
         if !retryable {
             return Err(KalError::validation(
                 "chain_step_not_retryable",
-                "Only a failed, cancelled or interrupted step can be retried.",
+                "Only a failed, cancelled, interrupted or unreported step, or a review that asked for changes, can be retried.",
             ));
+        }
+        if awaiting {
+            // The earlier attempt's agent stays open under the person's control; its run ends.
+            operations.finish(
+                &step.operation_id,
+                OperationStatus::Interrupted,
+                "Retried in its chain; this attempt never reported.",
+            )?;
         }
         let route = match route {
             Some(route) => normalize_route(route)?,
@@ -611,18 +775,31 @@ impl ChainsStore {
             tx.execute(
                 "UPDATE chain_steps SET operation_id = ?3, attempt = ?4, report = NULL,
                     report_path = NULL, awaiting_report = 0, skipped = 0, skip_reason = NULL
-                 WHERE launch_id = ?1 AND step_key = ?2",
-                params![id, step.key, new_operation, attempt],
-            )?;
+                 WHERE launch_id = ?1 AND step_key = ?2 AND operation_id = ?5",
+                params![id, step.key, new_operation, attempt, step.operation_id],
+            )?
+            .eq(&1)
+            .then_some(())
+            .ok_or_else(step_changed)?;
             tx.execute(
                 "INSERT INTO chain_step_attempts (operation_id, launch_id, step_key, attempt)
                  VALUES (?1, ?2, ?3, ?4)",
                 params![new_operation, id, step.key, attempt],
             )?;
-            rewire_dependents(tx, &steps, &step.operation_id, &[new_operation.clone()])?;
+            rewire_dependents(
+                tx,
+                &steps,
+                &step.operation_id,
+                std::slice::from_ref(&new_operation),
+            )?;
             refresh_pending(tx)?;
             Ok(((), Vec::new()))
         })?;
+        if row.paused {
+            // A paused chain holds every step that has not started, including this new attempt.
+            operations.hold(&new_operation, true)?;
+            return Ok(Vec::new());
+        }
         let mut authorize = vec![new_operation];
         authorize.extend(pending_dependents(&operations, &steps, key)?);
         Ok(authorize)
@@ -677,9 +854,12 @@ impl ChainsStore {
         self.core.transact(|tx| {
             tx.execute(
                 "UPDATE chain_steps SET skipped = 1, skip_reason = ?3, awaiting_report = 0
-                 WHERE launch_id = ?1 AND step_key = ?2",
-                params![id, key, reason],
-            )?;
+                 WHERE launch_id = ?1 AND step_key = ?2 AND operation_id = ?4 AND skipped = 0",
+                params![id, key, reason, step.operation_id],
+            )?
+            .eq(&1)
+            .then_some(())
+            .ok_or_else(step_changed)?;
             rewire_dependents(tx, &steps, &step.operation_id, &replacement)?;
             refresh_pending(tx)?;
             Ok(((), Vec::new()))
@@ -803,16 +983,19 @@ impl ChainsStore {
             };
             let by_key: HashMap<&str, &StepRow> =
                 steps.iter().map(|step| (step.key.as_str(), step)).collect();
-            let reviews = step
+            // Only when nothing before the Fix asked for changes: every non-skipped dependency
+            // passed, and at least one of them was a review.
+            let dependencies = step
                 .depends_on
                 .iter()
                 .filter_map(|dep| by_key.get(dep.as_str()))
-                .filter(|dep| dep.intent == ChainStepIntent::Review && !dep.skipped)
+                .filter(|dep| !dep.skipped)
                 .collect::<Vec<_>>();
-            let all_passed = !reviews.is_empty()
-                && reviews.iter().all(|review| {
-                    review
-                        .report
+            let all_passed = dependencies
+                .iter()
+                .any(|dep| dep.intent == ChainStepIntent::Review)
+                && dependencies.iter().all(|dep| {
+                    dep.report
                         .as_ref()
                         .is_some_and(|report| report.result == ChainStepResult::Passed)
                 });
@@ -824,13 +1007,15 @@ impl ChainsStore {
     }
 
     /// Shared-worktree chains that still have unstarted steps, for supersession checks.
-    pub fn open_shared_chains(&self) -> Result<Vec<(String, String, String)>> {
+    /// `(chain id, workspace id, branch, worktree owner)` for supersession checks.
+    pub fn open_shared_chains(&self) -> Result<Vec<(String, String, String, String)>> {
         self.core.read(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT c.launch_id, l.workspace_id, c.branch FROM chains c
+                "SELECT c.launch_id, l.workspace_id, c.branch, c.worktree_owner_id FROM chains c
                  JOIN squad_launches l ON l.id = c.launch_id
                  WHERE c.worktree = 'shared' AND c.cancelled = 0
                    AND c.superseded_reason IS NULL AND c.branch IS NOT NULL
+                   AND c.worktree_owner_id IS NOT NULL
                    AND EXISTS (
                      SELECT 1 FROM chain_steps s JOIN operations o ON o.id = s.operation_id
                      WHERE s.launch_id = c.launch_id AND s.skipped = 0
@@ -838,7 +1023,9 @@ impl ChainsStore {
                    )",
             )?;
             Ok(stmt
-                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+                .query_map([], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                })?
                 .collect::<std::result::Result<Vec<_>, _>>()?)
         })
     }
@@ -892,6 +1079,15 @@ pub fn read_report_file(path: &Path) -> Result<Option<ChainStepReport>> {
     };
     if !metadata.is_file() || crate::protected_file::is_link_or_reparse(&metadata) {
         return Err(report_invalid("it is not an ordinary file"));
+    }
+    // The report folder and its `.kalcode` parent must be real folders, never links elsewhere.
+    for folder in path.ancestors().skip(1).take(2) {
+        let linked = std::fs::symlink_metadata(folder)
+            .map(|metadata| crate::protected_file::is_link_or_reparse(&metadata))
+            .unwrap_or(true);
+        if linked {
+            return Err(report_invalid("its folder is a link"));
+        }
     }
     let expected = std::fs::canonicalize(path).map_err(|_| report_invalid("it is not readable"))?;
     let bytes =
@@ -1441,6 +1637,9 @@ fn chain_phase(row: &ChainRow, steps: &[ChainStep]) -> ChainPhase {
         return ChainPhase::Superseded;
     }
     if steps.iter().all(|step| step.phase.satisfied()) {
+        if unresolved_changes(steps).is_some() {
+            return ChainPhase::NeedsYou;
+        }
         return ChainPhase::ReadyToMerge;
     }
     let attention = |step: &ChainStep| {
@@ -1460,10 +1659,12 @@ fn chain_phase(row: &ChainRow, steps: &[ChainStep]) -> ChainPhase {
             ChainStepPhase::Working | ChainStepPhase::Starting
         )
     });
-    if steps
-        .iter()
-        .any(|step| step.phase == ChainStepPhase::Failed)
-        && !active
+    if steps.iter().any(|step| {
+        matches!(
+            step.phase,
+            ChainStepPhase::Failed | ChainStepPhase::Cancelled
+        )
+    }) && !active
     {
         return ChainPhase::Blocked;
     }
@@ -1497,9 +1698,21 @@ fn next_action(row: &ChainRow, phase: ChainPhase, steps: &[ChainStep]) -> Option
                         step.waiting_reason.clone().unwrap_or_default()
                     )
                 })
+            })
+            .or_else(|| {
+                unresolved_changes(steps).map(|step| {
+                    format!(
+                        "{} asked for changes that no later step made. Make them, then retry {}.",
+                        step.name, step.name
+                    )
+                })
             }),
         ChainPhase::Blocked => first(ChainStepPhase::Failed)
-            .map(|step| format!("{} failed. Retry it, reroute it or skip it.", step.name)),
+            .map(|step| format!("{} failed. Retry it, reroute it or skip it.", step.name))
+            .or_else(|| {
+                first(ChainStepPhase::Cancelled)
+                    .map(|step| format!("{} was cancelled. Retry it or skip it.", step.name))
+            }),
         ChainPhase::Paused => Some("Paused. Resume to continue with the next step.".to_owned()),
         ChainPhase::Cancelled => Some("Cancelled. Started terminals stay open.".to_owned()),
         ChainPhase::Superseded => row.superseded_reason.clone(),
@@ -1523,6 +1736,37 @@ fn next_action(row: &ChainRow, phase: ChainPhase, steps: &[ChainStep]) -> Option
             }
         }
     }
+}
+
+/// A review that asked for changes no later writing step (Fix, Continue, Implement) addressed.
+fn unresolved_changes(steps: &[ChainStep]) -> Option<&ChainStep> {
+    steps.iter().find(|review| {
+        review.phase == ChainStepPhase::ChangesRequested
+            && !steps.iter().any(|later| {
+                !later.intent.read_only()
+                    && later.phase == ChainStepPhase::Passed
+                    && step_follows(steps, &later.key, &review.key)
+            })
+    })
+}
+
+fn step_follows(steps: &[ChainStep], from: &str, target: &str) -> bool {
+    let mut stack = vec![from];
+    let mut seen = HashSet::new();
+    while let Some(key) = stack.pop() {
+        if !seen.insert(key) {
+            continue;
+        }
+        if let Some(step) = steps.iter().find(|step| step.key == key) {
+            for dependency in &step.depends_on {
+                if dependency == target {
+                    return true;
+                }
+                stack.push(dependency.as_str());
+            }
+        }
+    }
+    false
 }
 
 fn join_names(names: &[String]) -> String {
@@ -1557,7 +1801,8 @@ fn load_chain(conn: &Connection, id: &str) -> Result<Option<ChainRow>> {
     let row = conn
         .query_row(
             "SELECT l.id, l.name, l.goal, l.workspace_id, l.created_at, c.acceptance,
-                    c.worktree, c.branch, c.paused, c.cancelled, c.superseded_reason
+                    c.worktree, c.branch, c.paused, c.cancelled, c.superseded_reason,
+                    c.worktree_owner_id
              FROM chains c JOIN squad_launches l ON l.id = c.launch_id
              WHERE c.launch_id = ?1",
             [id],
@@ -1574,6 +1819,7 @@ fn load_chain(conn: &Connection, id: &str) -> Result<Option<ChainRow>> {
                     row.get::<_, bool>(8)?,
                     row.get::<_, bool>(9)?,
                     row.get::<_, Option<String>>(10)?,
+                    row.get::<_, Option<String>>(11)?,
                 ))
             },
         )
@@ -1591,6 +1837,7 @@ fn load_chain(conn: &Connection, id: &str) -> Result<Option<ChainRow>> {
             paused,
             cancelled,
             superseded_reason,
+            worktree_owner,
         )| {
             Ok(ChainRow {
                 id,
@@ -1605,6 +1852,7 @@ fn load_chain(conn: &Connection, id: &str) -> Result<Option<ChainRow>> {
                     _ => return Err(corrupt()),
                 },
                 branch,
+                worktree_owner,
                 paused,
                 cancelled,
                 superseded_reason,
@@ -1737,6 +1985,13 @@ fn validate_id(id: &str) -> Result<()> {
 
 fn report_invalid(why: &str) -> KalError {
     KalError::validation("chain_report_invalid", format!("{why}."))
+}
+
+fn step_changed() -> KalError {
+    KalError::validation(
+        "chain_step_changed",
+        "This step changed a moment ago. Check the chain, then try again.",
+    )
 }
 
 fn chain_not_found() -> KalError {

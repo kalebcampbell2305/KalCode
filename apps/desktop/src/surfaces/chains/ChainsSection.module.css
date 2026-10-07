@@ -1,0 +1,173 @@
+/* Activity's Chains: above the Agent Fleet, below Needs You. */
+.section {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-bottom: var(--space-6);
+}
+
+.head {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.title {
+  margin: 0;
+  color: var(--color-text);
+  font-size: var(--type-title);
+  font-weight: var(--type-title-weight);
+  letter-spacing: var(--type-title-tracking);
+}
+
+.summary {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  font-size: var(--type-small);
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.list {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* ---------------- History ---------------- */
+
+.history {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.historyToggle {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--control-h-sm);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.historyToggle:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.historyToggle:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.historyChevron {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.historyToggle[aria-expanded="true"] .historyChevron {
+  transform: rotate(90deg);
+}
+
+.historyCount {
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-full);
+  background: var(--status-muted-soft);
+  color: var(--color-text-secondary);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.historyNames {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-weight: var(--weight-regular);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------------- Empty + problem ---------------- */
+
+.empty,
+.problem {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-5);
+  padding: var(--space-2-5) var(--space-3) var(--space-2-5) var(--space-3-5);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-1);
+}
+
+.emptyGlyph {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border: 1px solid var(--color-border-lit-soft);
+  border-radius: var(--radius-md);
+  background: var(--color-accent-soft);
+  color: var(--color-accent-text);
+}
+
+.emptyGlyph svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.emptyTitle {
+  margin: 0;
+  color: var(--color-text);
+  font-size: var(--type-ui);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+
+.emptyText {
+  flex: 1 1 14rem;
+  min-width: 0;
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--type-small);
+}
+
+.problem {
+  border-style: solid;
+  border-color: var(--status-failed-line);
+  background: var(--status-failed-soft);
+  color: var(--status-failed-text);
+  font-size: var(--text-xs);
+}
+
+.problem > span {
+  flex: 1 1 14rem;
+}

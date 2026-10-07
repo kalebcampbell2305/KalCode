@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-chains-reroute-step"
+description = "Enables the chains_reroute_step command without any pre-configured scope."
+commands.allow = ["chains_reroute_step"]
+
+[[permission]]
+identifier = "deny-chains-reroute-step"
+description = "Denies the chains_reroute_step command without any pre-configured scope."
+commands.deny = ["chains_reroute_step"]

@@ -100,6 +100,10 @@ pub struct ChainStartRequest {
     pub acceptance: Vec<String>,
     pub worktree: ChainWorktree,
     pub steps: Vec<ChainStepDefinition>,
+    /// The coding agent whose work the chain continues. Its steps then run where that agent's
+    /// work is: its own KalCode worktree, or the project checkout (overriding `worktree`).
+    #[serde(default)]
+    pub source_thread_id: Option<String>,
 }
 
 /// A step's explicit outcome. Never inferred from terminal prose or an idle prompt.

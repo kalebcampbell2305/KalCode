@@ -29,6 +29,7 @@ import {
   X,
 } from "lucide-react";
 import { type MouseEvent, memo, useEffect, useId, useRef, useState } from "react";
+import { useOptionalChains } from "../../runtime/chains/useChains.tsx";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
 import { FavoriteButton, useFavoriteMenuItems } from "../../shell/favorites/FavoriteActions.tsx";
 import { MODE_LABELS } from "../permissions/labels.ts";
@@ -197,6 +198,8 @@ export const AgentCard = memo(function AgentCard({
   const clock = useClock((at) => (givenNow === undefined ? clockTexts({ thread, now: at, archived }) : null));
   const now = givenNow ?? clock;
   const display = displayStatusOf(thread.status);
+  // A step of a handoff chain says so, in the same words as its pane header: "Chain · Review 2/4".
+  const chainStep = useOptionalChains()?.chainForOperation(thread.id) ?? null;
   const resourceWait = isWaitingForResources(thread) ? presentThread(thread) : null;
   const ready = !archived && readiness?.ready === true;
   const agentState = agentStateOf(thread);
@@ -321,6 +324,16 @@ export const AgentCard = memo(function AgentCard({
           {ready ? <GitMerge aria-hidden="true" className={styles.stateGlyph} /> : null}
           {label}
         </span>
+        {chainStep ? (
+          <span
+            className={styles.chain}
+            data-kind="chain"
+            title={`${chainStep.chain.name}, step ${chainStep.step.position + 1} of ${chainStep.chain.steps.length}`}
+          >
+            Chain · {chainStep.step.intent.charAt(0).toUpperCase()}
+            {chainStep.step.intent.slice(1)} {chainStep.step.position + 1}/{chainStep.chain.steps.length}
+          </span>
+        ) : null}
         {elapsedMs !== null && !archived ? (
           <time
             className={styles.elapsed}

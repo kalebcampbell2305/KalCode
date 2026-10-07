@@ -1,0 +1,120 @@
+/* One step's route: a quiet one-line summary that expands into the New agent choices. */
+.picker {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.summary {
+  display: inline-flex;
+  max-width: 100%;
+  min-width: 0;
+  align-items: center;
+  align-self: flex-start;
+  gap: var(--space-2);
+  height: var(--control-h-sm);
+  padding: 0 var(--space-2) 0 var(--space-1-5);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-bg-sunken);
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.summary:hover:not(:disabled) {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.summary:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.summary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.picker[data-open] > .summary {
+  border-color: var(--color-border-lit-soft);
+  color: var(--color-text);
+}
+
+.picker[data-invalid] > .summary {
+  border-color: var(--status-failed-line);
+}
+
+.summaryText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chevron {
+  flex: none;
+  width: 0.75rem;
+  height: 0.75rem;
+  color: var(--color-text-muted);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.picker[data-open] .chevron {
+  transform: rotate(180deg);
+}
+
+.fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+  gap: var(--space-2);
+  padding: var(--space-2-5);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-sunken);
+  box-shadow: var(--shadow-well);
+  animation: unfold var(--dur-base) var(--ease-out);
+}
+
+.field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.fieldLabel {
+  color: var(--color-text-muted);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.fields select {
+  height: var(--control-h-sm);
+  font-size: var(--text-xs);
+}
+
+.note {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--status-waiting-text);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+}
+
+@keyframes unfold {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}

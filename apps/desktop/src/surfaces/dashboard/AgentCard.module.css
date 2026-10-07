@@ -265,6 +265,25 @@
   white-space: nowrap;
 }
 
+/* A chain step's place in its chain; quieter than the state, and it gives way first when narrow. */
+.chain {
+  display: inline-flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  align-items: center;
+  padding: 0.0625rem var(--space-1-5);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-bg-sunken);
+  color: var(--color-accent-text);
+  font-size: var(--type-label);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .stateGlyph {
   width: 0.75rem;
   height: 0.75rem;

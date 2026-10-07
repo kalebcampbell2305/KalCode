@@ -6,4 +6,9 @@ export type ChainStartRequest = {
 /**
  * Idempotency key: a retried start with the same inputs returns the same chain.
  */
-requestId: string, workspaceId: string, name: string, goal: string, acceptance: Array<string>, worktree: ChainWorktree, steps: Array<ChainStepDefinition>, };
+requestId: string, workspaceId: string, name: string, goal: string, acceptance: Array<string>, worktree: ChainWorktree, steps: Array<ChainStepDefinition>,
+/**
+ * The coding agent whose work the chain continues. Its steps then run where that agent's
+ * work is: its own KalCode worktree, or the project checkout (overriding `worktree`).
+ */
+sourceThreadId: string | null, };

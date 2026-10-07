@@ -1,10 +1,4 @@
-import type {
-  Chain,
-  ChainStartRequest,
-  ChainStepResult,
-  ChainStepRoute,
-  ChainsSnapshot,
-} from "@kalcode/protocol";
+import type { Chain, ChainStartRequest, ChainStepResult, ChainStepRoute, ChainsSnapshot } from "@kalcode/protocol";
 import { toKalCodeError } from "./errors.ts";
 
 export type ChainsCommandName =

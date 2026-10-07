@@ -54,7 +54,7 @@ fn step(
 ) -> ChainStepDefinition {
     ChainStepDefinition {
         key: key.into(),
-        name: format!("{}", intent_name(intent)),
+        name: intent.label().to_owned(),
         intent,
         provider_id: provider.into(),
         provider_account_id: account.into(),
@@ -63,10 +63,6 @@ fn step(
         instructions: None,
         depends_on: depends_on.iter().map(|key| (*key).to_owned()).collect(),
     }
-}
-
-fn intent_name(intent: ChainStepIntent) -> &'static str {
-    intent.label()
 }
 
 struct Harness {
@@ -113,6 +109,7 @@ impl Harness {
                 step("fix", Fix, "claude-code", &self.claude, &["review"]),
                 step("test", Test, "codex", &self.codex, &["fix"]),
             ],
+            source_thread_id: None,
         }
     }
 
@@ -239,6 +236,12 @@ fn start_rejects_parallel_writers_forward_references_and_empty_goals() {
     assert_eq!(
         h.chains.start(forward, None).err().map(|e| e.code),
         Some("invalid_chain_dependency")
+    );
+    let mut stranger = h.standard("req-s");
+    stranger.source_thread_id = Some(uuid::Uuid::now_v7().to_string());
+    assert_eq!(
+        h.chains.start(stranger, None).err().map(|e| e.code),
+        Some("chain_source_unavailable")
     );
     let mut empty = h.standard("req-e");
     empty.goal = "  ".into();
@@ -474,4 +477,113 @@ fn a_signed_out_account_holds_only_its_step_with_a_reason() {
     );
     assert_eq!(chain.steps[0].phase, ChainStepPhase::Starting);
     assert_eq!(chain.phase, ChainPhase::NeedsYou);
+}
+
+#[test]
+#[allow(clippy::expect_used)]
+fn review_findings_never_reach_ready_to_merge_without_a_fix() {
+    use ChainStepIntent::*;
+    let h = harness();
+    let mut request = h.standard("req-8");
+    request.steps = vec![
+        step("implement", Implement, "claude-code", &h.claude, &[]),
+        step("review", Review, "codex", &h.codex, &["implement"]),
+    ];
+    let chain = h.chains.start(request, None).expect("start").id;
+    h.complete(&chain, "implement", ChainStepResult::Passed);
+    h.complete(&chain, "review", ChainStepResult::ChangesRequested);
+    let waiting = h.chains.get(&chain).expect("chain");
+    assert_eq!(waiting.phase, ChainPhase::NeedsYou);
+    assert!(waiting
+        .next_action
+        .is_some_and(|text| text.contains("asked for changes")));
+    // The review can run again once the changes were made.
+    let renew = h.chains.retry_step(&chain, "review", None).expect("retry review");
+    assert_eq!(renew.len(), 1);
+}
+
+#[test]
+#[allow(clippy::expect_used)]
+fn fix_runs_when_a_test_asked_for_changes_even_if_the_review_passed() {
+    use ChainStepIntent::*;
+    let h = harness();
+    let mut request = h.standard("req-9");
+    request.steps = vec![
+        step("implement", Implement, "claude-code", &h.claude, &[]),
+        step("review", Review, "codex", &h.codex, &["implement"]),
+        step("test", Test, "codex", &h.codex, &["implement"]),
+        step("fix", Fix, "claude-code", &h.claude, &["review", "test"]),
+    ];
+    let chain = h.chains.start(request, None).expect("start").id;
+    h.complete(&chain, "implement", ChainStepResult::Passed);
+    h.complete(&chain, "review", ChainStepResult::Passed);
+    h.complete(&chain, "test", ChainStepResult::ChangesRequested);
+    h.chains.apply_rules().expect("rules");
+    assert_eq!(h.phase(&chain, "fix"), ChainStepPhase::Starting);
+}
+
+#[test]
+#[allow(clippy::expect_used)]
+fn a_cancelled_step_blocks_the_chain_with_a_next_action() {
+    let h = harness();
+    let chain = h.chains.start(h.standard("req-10"), None).expect("start").id;
+    h.operations
+        .cancel_pending(&h.operation(&chain, "implement"))
+        .expect("cancel step from the queue");
+    let blocked = h.chains.get(&chain).expect("chain");
+    assert_eq!(blocked.phase, ChainPhase::Blocked);
+    assert!(blocked
+        .next_action
+        .is_some_and(|text| text.contains("was cancelled")));
+    assert!(h.chains.retry_step(&chain, "implement", None).is_ok());
+}
+
+#[test]
+#[allow(clippy::expect_used)]
+fn retry_ends_an_unreported_attempt_and_respects_a_paused_chain() {
+    let h = harness();
+    let chain = h.chains.start(h.standard("req-11"), None).expect("start").id;
+    let first = h.operation(&chain, "implement");
+    h.operations
+        .claim_user_squad_agent(&first)
+        .expect("claim")
+        .expect("claimable");
+    h.operations
+        .bind(&first, None, Some(&first), None, None)
+        .expect("bind");
+    assert!(h.chains.mark_awaiting_report(&first).expect("await"));
+    h.chains.pause(&chain).expect("pause");
+    let authorize = h.chains.retry_step(&chain, "implement", None).expect("retry");
+    assert!(authorize.is_empty(), "a paused chain authorizes nothing");
+    assert_eq!(h.status(&first), OperationStatus::Interrupted);
+    let second = h.operation(&chain, "implement");
+    assert_ne!(second, first);
+    assert_eq!(h.status(&second), OperationStatus::Paused);
+    // A second retry of the now-pending attempt is refused instead of orphaning an agent.
+    assert_eq!(
+        h.chains
+            .retry_step(&chain, "implement", None)
+            .err()
+            .map(|error| error.code),
+        Some("chain_step_not_retryable")
+    );
+    let resumed = h.chains.resume(&chain).expect("resume");
+    assert!(resumed.contains(&second));
+}
+
+#[test]
+fn a_shared_worktree_chain_starts_with_one_step() {
+    use ChainStepIntent::*;
+    let h = harness();
+    let mut request = h.standard("req-12");
+    request.steps = vec![
+        step("review", Review, "codex", &h.codex, &[]),
+        step("test", Test, "codex", &h.codex, &[]),
+    ];
+    assert_eq!(
+        h.chains.start(request.clone(), None).err().map(|e| e.code),
+        Some("chain_shared_single_start")
+    );
+    request.worktree = ChainWorktree::Project;
+    assert!(h.chains.start(request, None).is_ok());
 }

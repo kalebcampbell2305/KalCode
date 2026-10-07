@@ -1,4 +1,5 @@
 import { useMemo, useSyncExternalStore } from "react";
+import { useOptionalChains } from "../../runtime/chains/useChains.tsx";
 import { useCodingAgents } from "../../surfaces/dashboard/data/DashboardData.tsx";
 import { useAgentOverlaps } from "../../surfaces/dashboard/fleet/useAgentOverlaps.ts";
 import { useNow } from "../../surfaces/dashboard/useNow.ts";
@@ -69,6 +70,9 @@ export function useAttention(): Attention {
   // Both providers wrap the app; a standalone render (tests, a pane) just has nothing from them.
   const pending = useOptionalPermissions()?.pending ?? NONE;
   const notifications = useOptionalNotifications()?.notifications ?? NONE;
+  const chainsStore = useOptionalChains();
+  const chains = chainsStore?.chains ?? NONE;
+  const chainOperations = chainsStore?.operationsById;
   const gone = useDismissedAttention();
   const now = useNow(30_000);
   const agents = state.status === "ready" ? state.data : null;
@@ -79,6 +83,8 @@ export function useAttention(): Attention {
         approvals: pending,
         notifications,
         operations: deck?.operations.data?.items ?? NONE,
+        chains,
+        chainOperations,
         operationsFailed: deck?.operations.failed ?? false,
         agentReadFailed:
           state.status === "error" ||
@@ -95,6 +101,8 @@ export function useAttention(): Attention {
       pending,
       notifications,
       deck?.operations.data?.items,
+      chains,
+      chainOperations,
       deck?.operations.failed,
       state,
       ownership.overlaps,

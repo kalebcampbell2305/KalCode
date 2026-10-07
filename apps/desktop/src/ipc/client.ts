@@ -76,9 +76,9 @@ import type {
   WorkspaceLayout,
   WorkspaceRailEntry,
 } from "@kalcode/protocol";
+import { ChainsClient } from "./chains.ts";
 import type { ContextFileChoice, ContextInput, ContextSendResult, PromptReview } from "./context.ts";
 import { toKalCodeError } from "./errors.ts";
-import { ChainsClient } from "./chains.ts";
 import { HandoffsClient } from "./handoffs.ts";
 import { LaunchRecipesClient } from "./recipes.ts";
 import type { RemoteStatus } from "./remote.ts";
