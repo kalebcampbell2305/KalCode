@@ -23,11 +23,16 @@ must use its own durable event evidence, never the latest model of a reused agen
 
 ## Surface integration
 
-Code headers, Agent Fleet, Threads, Runs, Queue, Squads, Handoffs and KalVoice consume
+Code headers, Agent Fleet, Workspace Dock, Threads, Runs, Queue, Squads, Handoffs and KalVoice consume
 canonical session facts. Account Usage and terminal headers share weekly usage state.
 Task titles remain primary. Truncated identity is available through full detail, with
 keyboard access in the compact terminal header. The website demonstration labels its
 simulated identity and follows the same weekly-first presentation.
+
+Workspace Dock Runs and Queue reuse the Operations identity projection. Completed
+runs retain their own observed account/model/effort even when their terminal is reused.
+Queued work displays selected intent. Account health retains unknown, checking and
+expired states instead of presenting unverified accounts as healthy.
 
 ## Failure and isolation guarantees
 

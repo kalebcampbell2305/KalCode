@@ -76,7 +76,6 @@ import {
 } from "../../kalvoice/sceneOperations.ts";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { HUB_SECTIONS } from "../../shell/AccountHub.tsx";
-import { accountProviderName } from "../../shell/accountCommands.ts";
 import { FavoriteButton, FavoriteToggle } from "../../shell/favorites/FavoriteActions.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
 import { useOpenInPane } from "../../shell/panes/useOpenInPane.ts";
@@ -89,12 +88,10 @@ import {
   modelEffortsAreKnown,
 } from "../code/panes/agentLaunch.ts";
 import type { PaneProviderId } from "../code/panes/paneChannel.ts";
-import { useOptionalAllThreads } from "../dashboard/data/DashboardData.tsx";
 import { PERMISSION_MODE_HINTS, PERMISSION_MODE_LABELS } from "../dashboard/data/format.ts";
 import { focusSection } from "../dashboard/useNow.ts";
 import { accountName, accountSignIn, sortAccounts } from "../providers/accountIdentity.ts";
 import { useOptionalProviderAccountSessions } from "../providers/ProviderAccountSessions.tsx";
-import { useSessionIdentity } from "../providers/useSessionIdentity.ts";
 import { SquadsPanel } from "../squads/SquadsPanel.tsx";
 import {
   type ActivityRange,
@@ -114,6 +111,7 @@ import {
   timeLabel,
 } from "./model.ts";
 import styles from "./OperationsPage.module.css";
+import { type ObservedOperationRecord, operationUsesLiveIdentity, useOperationIdentity } from "./operationIdentity.ts";
 import { useOperations } from "./useOperations.ts";
 
 export interface OperationsPageProps {
@@ -212,44 +210,6 @@ function accountOptionLabel(account: ProviderAccount): string {
 
 function modelOptionLabel(model: Pick<ModelEffortInfo, "id" | "displayName">): string {
   return model.displayName === model.id ? model.id : `${model.displayName} · ${model.id}`;
-}
-
-type ObservedOperationRecord = OperationRecord & {
-  observedProviderId?: string | null;
-  observedProviderAccountId?: string | null;
-  observedAccountLabel?: string | null;
-  observedModel?: string | null;
-  observedEffort?: string | null;
-};
-
-function operationUsesLiveIdentity(record: OperationRecord): boolean {
-  return ["starting", "running", "blocked"].includes(record.status);
-}
-
-function useOperationIdentity(record: ObservedOperationRecord) {
-  const threads = useOptionalAllThreads();
-  const thread =
-    operationUsesLiveIdentity(record) && record.threadId && threads
-      ? (threads.find((candidate) => candidate.id === record.threadId) ?? null)
-      : null;
-  const providerId = record.observedProviderId ?? record.spec.providerId ?? "unknown";
-  const hasObservedBinding = record.observedProviderId !== undefined && record.observedProviderId !== null;
-  return useSessionIdentity(
-    thread
-      ? thread
-      : {
-          providerId,
-          providerName: accountProviderName(providerId),
-          providerAccountId: hasObservedBinding
-            ? (record.observedProviderAccountId ?? null)
-            : record.spec.providerAccountId,
-          accountLabel: hasObservedBinding ? (record.observedAccountLabel ?? null) : record.accountLabel,
-          model: record.spec.model,
-          effort: record.spec.effort,
-          activeModel: record.observedModel,
-          activeEffort: record.observedEffort,
-        },
-  );
 }
 
 function RuntimeMetadata({ record }: { record: ObservedOperationRecord }) {

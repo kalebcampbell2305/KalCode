@@ -1,0 +1,489 @@
+/* Code's Workspace Dock (the Command Deck's right column): tabs over canonical surfaces, a
+   resizable left edge, and a collapsed rail of tab icons with live badges. */
+
+.dock {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: var(--sidebar-w-collapsed);
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+  border-left: 1px solid var(--color-border);
+  background: linear-gradient(180deg, var(--color-surface-1), var(--color-bg-sunken) 60%);
+  outline: none;
+  container: dock / inline-size;
+  transition:
+    width var(--dur-base) var(--ease-out),
+    box-shadow var(--dur-base) var(--ease-out);
+}
+
+/* Open: the person's width, never so wide that the terminals beside it drop below a usable width
+   (the clamp's floor wins on small windows, where the dock overlays instead; see the media query).
+   Its left edge carries the mirrored lit hairline, like the sidebar's right edge. */
+.dock[data-open] {
+  width: clamp(15rem, var(--workspace-dock-width, 18rem), calc(100vw - var(--sidebar-w-collapsed) - 30rem));
+  border-image: linear-gradient(180deg, var(--color-border-lit), var(--color-border) 14rem) 1;
+  background:
+    radial-gradient(18rem 14rem at 100% 0%, var(--color-accent-soft), transparent 70%),
+    linear-gradient(180deg, var(--color-surface-1), var(--color-bg-sunken) 60%);
+}
+
+.dock[data-expanded] {
+  box-shadow: var(--shadow-xl), var(--glow-subtle);
+}
+
+/* While the edge is dragged the width follows the pointer exactly. */
+.dock[data-resizing] {
+  transition: none;
+  user-select: none;
+}
+
+.dock:focus-visible {
+  box-shadow: inset 2px 0 var(--color-border-focus);
+}
+
+/* ---- Header: tabs, then + / expand / collapse ---- */
+
+.header {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex: none;
+  align-items: stretch;
+  height: var(--panel-header-h);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.tabs {
+  display: flex;
+  flex: 1;
+  align-items: stretch;
+  gap: var(--space-0-5);
+  min-width: 0;
+  padding: 0 var(--space-1-5);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.tabSlot {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  min-width: 0;
+}
+
+/* The tab being dragged lifts and follows the pointer; the others hold still under the line. */
+.tabSlot[data-dragging] {
+  z-index: 3;
+  transform: translate(var(--drag-x, 0), -2px);
+}
+
+.tabSlot[data-dragging] .tab {
+  border-color: var(--color-border-lit);
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  box-shadow: var(--shadow-md), var(--glow-subtle);
+  cursor: grabbing;
+}
+
+.tabSlot[data-drop="before"]::before,
+.tabSlot[data-drop="after"]::after {
+  content: "";
+  position: absolute;
+  z-index: 4;
+  top: var(--space-2);
+  bottom: var(--space-2);
+  width: 2px;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  box-shadow: var(--glow-active);
+}
+
+.tabSlot[data-drop="before"]::before {
+  left: calc(-1 * var(--space-0-5) - 1px);
+}
+
+.tabSlot[data-drop="after"]::after {
+  right: calc(-1 * var(--space-0-5) - 1px);
+}
+
+.tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  height: calc(var(--panel-header-h) - var(--space-3));
+  min-width: 0;
+  padding: 0 var(--space-2-5);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-family: var(--font-label);
+  font-size: var(--type-small);
+  font-weight: var(--type-label-weight);
+  white-space: nowrap;
+  cursor: pointer;
+  touch-action: pan-y;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.tab[data-closable] {
+  padding-right: calc(var(--space-2-5) + 1rem);
+}
+
+.tab:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text-secondary);
+}
+
+/* The active view: a lit chip with the electric-blue base line. */
+.tab[aria-selected="true"] {
+  border-color: var(--color-border-lit-soft);
+  background: var(--color-accent-soft);
+  color: var(--color-text);
+}
+
+.tabIndicator {
+  position: absolute;
+  right: var(--space-2);
+  bottom: -1px;
+  left: var(--space-2);
+  height: 2px;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  opacity: 0;
+  transform: scaleX(0.4);
+  transition:
+    opacity var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.tab[aria-selected="true"] .tabIndicator {
+  opacity: 1;
+  transform: none;
+}
+
+.tab:focus-visible {
+  z-index: 2;
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: -1px;
+}
+
+.tab > svg {
+  width: 0.875rem;
+  height: 0.875rem;
+  flex: none;
+}
+
+.tab[aria-selected="true"] > svg {
+  color: var(--color-accent-text);
+}
+
+.tab .pin {
+  width: 0.625rem;
+  height: 0.625rem;
+  color: var(--color-accent-text);
+}
+
+.tabCount {
+  --_c: var(--status-working);
+  min-width: 1.125rem;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--_c) 18%, transparent);
+  color: var(--color-text);
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1rem;
+  text-align: center;
+}
+
+.tabCount[data-tone="waiting"],
+.badge[data-tone="waiting"] {
+  --_c: var(--status-waiting);
+}
+
+.tabCount[data-tone="failed"],
+.badge[data-tone="failed"] {
+  --_c: var(--status-failed);
+}
+
+.close {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  right: var(--space-1);
+  display: grid;
+  place-items: center;
+  width: 1.125rem;
+  height: 1.125rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-faint);
+  opacity: 0;
+  transform: translateY(-50%);
+  cursor: pointer;
+  transition:
+    opacity var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out);
+}
+
+.tabSlot:hover .close,
+.tabSlot:focus-within .close,
+.tab[aria-selected="true"] + .close {
+  opacity: 1;
+}
+
+.tabSlot[data-dragging] .close {
+  opacity: 0;
+}
+
+.close:hover {
+  background: var(--status-failed-soft);
+  color: var(--status-failed-text);
+}
+
+.close svg {
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+.headerActions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-0-5);
+  padding: 0 var(--space-1-5);
+  border-left: 1px solid var(--color-border-subtle);
+}
+
+/* ---- Panels ---- */
+
+.panels {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.panels[hidden] {
+  display: none;
+}
+
+.panel {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  animation: panel-in var(--dur-base) var(--ease-out);
+}
+
+.panel[hidden] {
+  display: none;
+}
+
+.panel[data-surface="browser"] {
+  overflow: hidden;
+}
+
+@keyframes panel-in {
+  from {
+    opacity: 0.4;
+  }
+}
+
+/* ---- The resize edge ---- */
+
+.resize {
+  position: absolute;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  z-index: 5;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 0.4375rem;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.resize::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: var(--color-accent);
+  box-shadow: var(--glow-active);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.resize:hover::after,
+.resize:focus-visible::after,
+.dock[data-resizing] .resize::after {
+  opacity: 1;
+}
+
+.resize:focus-visible {
+  outline: none;
+}
+
+/* ---- Collapsed rail ---- */
+
+.rail {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  width: var(--sidebar-w-collapsed);
+  min-height: 0;
+  padding: var(--space-2) 0;
+}
+
+.railTabs {
+  display: flex;
+  margin: 0;
+  min-width: 0;
+  border: 0;
+  border-inline: 0;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-height: 0;
+  padding: var(--space-1) 0;
+  border-top: 1px solid var(--color-border-subtle);
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.railTab {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.railTab:hover {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.railTab[data-active] {
+  border-color: var(--color-border-lit-soft);
+  color: var(--color-accent-text);
+}
+
+.railTab:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 1px;
+}
+
+.railTab svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.badge {
+  --_c: var(--status-working);
+  position: absolute;
+  top: -0.3125rem;
+  right: -0.3125rem;
+  min-width: 1.125rem;
+  padding: 0 var(--space-1);
+  border: 1px solid color-mix(in srgb, var(--_c) 45%, transparent);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--_c) 22%, var(--color-surface-1));
+  color: var(--color-text);
+  font-size: 0.6875rem;
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  line-height: 1rem;
+  text-align: center;
+}
+
+/* ---- Narrow docks: the selected tab keeps its name, the others show their icon ---- */
+
+@container dock (max-width: 22rem) {
+  .tab[aria-selected="false"] .tabLabel {
+    display: none;
+  }
+}
+
+/* On compact windows the dock overlays Code instead of crushing terminal panes below a useful
+   width. The same dock and Browser stay mounted; only its placement changes. */
+@media (max-width: 760px) {
+  .dock[data-open] {
+    position: absolute;
+    z-index: var(--z-overlay);
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(var(--workspace-dock-width, 18rem), calc(100vw - var(--space-4)));
+    height: auto;
+    box-shadow: var(--shadow-xl), var(--glow-subtle);
+  }
+}
+
+/* Reduced motion, from the OS unless the app's Motion setting says Full, or from that setting. */
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion="full"]) .dock,
+  :root:not([data-motion="full"]) .tab,
+  :root:not([data-motion="full"]) .tabIndicator,
+  :root:not([data-motion="full"]) .close,
+  :root:not([data-motion="full"]) .railTab {
+    transition: none;
+  }
+
+  :root:not([data-motion="full"]) .panel {
+    animation: none;
+  }
+}
+
+:root[data-motion="reduced"] .dock,
+:root[data-motion="reduced"] .tab,
+:root[data-motion="reduced"] .tabIndicator,
+:root[data-motion="reduced"] .close,
+:root[data-motion="reduced"] .railTab {
+  transition: none;
+}
+
+:root[data-motion="reduced"] .panel {
+  animation: none;
+}

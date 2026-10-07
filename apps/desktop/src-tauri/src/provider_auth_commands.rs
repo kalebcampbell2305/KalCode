@@ -16,7 +16,8 @@ use kalcode_contracts::provider_accounts::{
 };
 use kalcode_core::{ErrorCategory, IpcError, KalError};
 use kalcode_providers::account_auth::{
-    CodexAccountAuthError, CodexAccountAuthManager, CodexAccountState, PendingCodexLogin,
+    CodexAccountAuthError, CodexAccountAuthManager, CodexAccountModel, CodexAccountState,
+    PendingCodexLogin,
 };
 use kalcode_providers::accounts::AccountStore;
 use kalcode_providers::claude_account_auth::{
@@ -49,6 +50,32 @@ const CODEX_TRUTH_TTL: Duration = Duration::from_secs(5 * 60);
 const ACCOUNT_CATALOG_VALIDATION_WAIT: Duration = Duration::from_secs(6);
 const MAX_PENDING_LOGINS: usize = 8;
 const AUTH_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(20);
+
+fn provider_account_model(model: CodexAccountModel) -> ProviderAccountModel {
+    ProviderAccountModel {
+        id: model.model,
+        display_name: model.display_name,
+        is_default: model.is_default,
+        default_effort: Some(model.default_reasoning_effort),
+        supported_efforts: model.supported_reasoning_efforts,
+    }
+}
+
+fn provider_account_model_catalog(
+    account: ProviderAccount,
+    models: Vec<ProviderAccountModel>,
+) -> ProviderAccountModelCatalog {
+    let source = catalog::model_catalog_source(account.provider_id.as_str());
+    let supported_efforts =
+        kalcode_providers::interactive::supported_efforts(account.provider_id.as_str());
+    ProviderAccountModelCatalog {
+        account_id: account.id,
+        provider_id: account.provider_id,
+        source: Some(source),
+        supported_efforts: Some(supported_efforts),
+        models,
+    }
+}
 
 #[derive(Debug)]
 enum RuntimeAuthError {
@@ -1031,9 +1058,6 @@ impl ProviderRuntimeAuthority {
             .accounts
             .get_active_for_provider(account_id, &account.provider_id)
             .map_err(RuntimeAuthError::Account)?;
-        let source = catalog::model_catalog_source(account.provider_id.as_str());
-        let supported_efforts =
-            kalcode_providers::interactive::supported_efforts(account.provider_id.as_str());
         let models = match account.provider_id.as_str() {
             ProviderId::CODEX => self.codex_account_models(account_id, true)?,
             ProviderId::CURSOR => self
@@ -1066,13 +1090,7 @@ impl ProviderRuntimeAuthority {
                     .collect()
             }
         };
-        Ok(ProviderAccountModelCatalog {
-            account_id: account.id,
-            provider_id: account.provider_id,
-            source: Some(source),
-            supported_efforts: Some(supported_efforts),
-            models,
-        })
+        Ok(provider_account_model_catalog(account, models))
     }
 
     fn codex_account_models(
@@ -1131,16 +1149,7 @@ impl ProviderRuntimeAuthority {
             },
         );
         match result {
-            Ok(models) => Ok(models
-                .into_iter()
-                .map(|model| ProviderAccountModel {
-                    id: model.model,
-                    display_name: model.display_name,
-                    is_default: model.is_default,
-                    default_effort: Some(model.default_reasoning_effort),
-                    supported_efforts: model.supported_reasoning_efforts,
-                })
-                .collect()),
+            Ok(models) => Ok(models.into_iter().map(provider_account_model).collect()),
             Err(error) => {
                 let failure = recorded_failure
                     .lock()
@@ -3614,15 +3623,21 @@ mod tests {
     #[cfg(any(windows, target_os = "macos"))]
     const DELAYED_OBSERVER_READ: Duration = Duration::from_secs(45);
 
-    #[cfg(any(windows, target_os = "macos"))]
     #[test]
-    fn account_model_catalog_preserves_exact_model_and_effort_metadata() {
-        let mut fixture = Fixture::new();
-        install_read_only_codex_app_server(&mut fixture, "pro", false, false);
-        let catalog = fixture
-            .runtime
-            .account_models(&fixture.account.id)
-            .expect("account models");
+    fn codex_account_model_mapping_preserves_exact_model_and_effort_metadata() {
+        let fixture = Fixture::new();
+        let catalog = provider_account_model_catalog(
+            fixture.account.clone(),
+            vec![provider_account_model(CodexAccountModel {
+                catalog_id: "catalog-exact".to_owned(),
+                model: "codex-test-exact".to_owned(),
+                display_name: "Codex exact".to_owned(),
+                is_default: true,
+                default_reasoning_effort: "high".to_owned(),
+                supported_reasoning_efforts: vec!["low".to_owned(), "high".to_owned()],
+            })],
+        );
+
         assert_eq!(catalog.account_id, fixture.account.id);
         assert_eq!(catalog.provider_id.as_str(), ProviderId::CODEX);
         assert_eq!(
@@ -3635,8 +3650,53 @@ mod tests {
         );
         assert_eq!(catalog.models.len(), 1);
         assert_eq!(catalog.models[0].id, "codex-test-exact");
+        assert_eq!(catalog.models[0].display_name, "Codex exact");
+        assert!(catalog.models[0].is_default);
         assert_eq!(catalog.models[0].default_effort.as_deref(), Some("high"));
         assert_eq!(catalog.models[0].supported_efforts, ["low", "high"]);
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn account_model_catalog_preserves_exact_model_and_effort_metadata() {
+        let mut fixture = Fixture::new();
+        install_read_only_codex_app_server(&mut fixture, "pro", false, false);
+        let catalog = fixture
+            .runtime
+            .account_models(&fixture.account.id)
+            .expect("account models");
+
+        assert_eq!(catalog.account_id, fixture.account.id);
+        assert_eq!(catalog.provider_id.as_str(), ProviderId::CODEX);
+        assert_eq!(
+            catalog.source,
+            Some(kalcode_contracts::provider_accounts::ProviderModelCatalogSource::Runtime)
+        );
+        assert_eq!(
+            catalog.supported_efforts.as_deref(),
+            Some(kalcode_providers::interactive::supported_efforts(ProviderId::CODEX).as_slice())
+        );
+        assert_eq!(catalog.models.len(), 1);
+        assert_eq!(catalog.models[0].id, "codex-test-exact");
+        assert_eq!(catalog.models[0].display_name, "Codex exact");
+        assert!(catalog.models[0].is_default);
+        assert_eq!(catalog.models[0].default_effort.as_deref(), Some("high"));
+        assert_eq!(catalog.models[0].supported_efforts, ["low", "high"]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn production_account_model_catalog_rejects_an_unmanaged_batch_shim() {
+        let mut fixture = Fixture::new();
+        let marker = install_read_only_codex_app_server(&mut fixture, "pro", false, false);
+        install_unmanaged_codex_batch_shim(marker.parent().expect("fake provider directory"));
+
+        assert!(matches!(
+            fixture.runtime.account_models(&fixture.account.id),
+            Err(RuntimeAuthError::Provider(
+                CodexAccountAuthError::StartFailed
+            ))
+        ));
     }
 
     #[cfg(any(windows, target_os = "macos"))]
@@ -3731,10 +3791,65 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {{
                 ),
             )
             .expect("fake app-server");
+            let node = std::env::var_os("PATH")
+                .into_iter()
+                .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+                .map(|path| path.join("node.exe"))
+                .find(|path| path.is_file())
+                .expect("Node.js executable on the test process PATH");
+            std::fs::copy(&node, dir.join("node.exe")).expect("isolated Node.js executable");
+
+            let package_root = dir.join("node_modules/@openai/codex");
+            let package_bin = package_root.join("bin");
+            std::fs::create_dir_all(&package_bin).expect("fake npm package bin");
+            std::fs::write(
+                package_bin.join("codex.js"),
+                r#"const { spawn } = require("child_process");
+const path = require("path");
+const args = process.argv.slice(2);
+const command = args.join(" ");
+if (args.includes("--version")) {
+  process.stdout.write("codex-cli 0.160.0\n");
+  process.exit(0);
+}
+const help = new Map([
+  ["--help", "Commands:\n  exec Run Codex non-interactively\n  mcp Manage MCP servers\n  app-server Run the app server\n  resume Resume an interactive session\nOptions: -c -m -C -s -a --no-daemon\n"],
+  ["exec --help", "Commands:\n  resume Resume a previous session\nOptions: -c --model --json --sandbox --output-schema --skip-git-repo-check\n"],
+  ["exec resume --help", "Usage: codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]\nOptions: --json\n"],
+  ["resume --help", "Usage: codex resume [OPTIONS] [SESSION_ID] [PROMPT]\n"],
+  ["app-server --help", "Usage: codex app-server [OPTIONS]\n"],
+]);
+if (help.has(command)) {
+  process.stdout.write(help.get(command));
+  process.exit(0);
+}
+if (!args.includes("app-server")) process.exit(2);
+const root = path.resolve(__dirname, "../../../..");
+const powershell = path.join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+const child = spawn(powershell, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path.join(root, "codex-app-server.ps1")], {
+  stdio: "inherit",
+  windowsHide: true,
+});
+child.on("error", () => process.exit(9));
+child.on("exit", (code) => process.exit(code ?? 9));
+"#,
+            )
+            .expect("fake npm Codex entrypoint");
+
+            // The official npm package includes the platform-native distribution. The production
+            // runtime resolver requires that bounded layout even though this deterministic fake's
+            // resolved JavaScript entrypoint serves the test protocol directly.
+            let native = package_root
+                .join("node_modules/@openai/codex-win32-x64")
+                .join("vendor/x86_64-pc-windows-msvc/bin/codex.exe");
+            std::fs::create_dir_all(native.parent().expect("fake native bin"))
+                .expect("fake native distribution");
+            std::fs::copy(&node, native).expect("fake native executable");
+
             let script = dir.join("codex.cmd");
             std::fs::write(
                 &script,
-                "@echo off\r\nif \"%~1\"==\"--version\" (echo codex-cli 0.160.0& exit /b 0)\r\nif \"%~1\"==\"--help\" goto root_help\r\nif \"%~1\"==\"exec\" if \"%~2\"==\"--help\" goto exec_help\r\nif \"%~1\"==\"exec\" if \"%~2\"==\"resume\" if \"%~3\"==\"--help\" goto exec_resume_help\r\nif \"%~1\"==\"resume\" if \"%~2\"==\"--help\" goto resume_help\r\nif \"%~1\"==\"app-server\" if \"%~2\"==\"--help\" goto app_server_help\r\n:scan\r\nif \"%~1\"==\"\" exit /b 2\r\nif \"%~1\"==\"app-server\" goto server\r\nshift /1\r\ngoto scan\r\n:root_help\r\necho Commands:\r\necho   exec Run Codex non-interactively\r\necho   mcp Manage MCP servers\r\necho   app-server Run the app server\r\necho   resume Resume an interactive session\r\necho Options: -c -m -C -s -a --no-daemon\r\nexit /b 0\r\n:exec_help\r\necho Commands:\r\necho   resume Resume a previous session\r\necho Options: -c --model --json --sandbox --output-schema --skip-git-repo-check\r\nexit /b 0\r\n:exec_resume_help\r\necho Usage: codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]\r\necho Options: --json\r\nexit /b 0\r\n:resume_help\r\necho Usage: codex resume [OPTIONS] [SESSION_ID] [PROMPT]\r\nexit /b 0\r\n:app_server_help\r\necho Usage: codex app-server [OPTIONS]\r\nexit /b 0\r\n:server\r\n\"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"%~dp0codex-app-server.ps1\"\r\nexit /b %ERRORLEVEL%\r\n",
+                "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\r\nIF EXIST \"%dp0%\\node.exe\" (\r\n  SET \"_prog=%dp0%\\node.exe\"\r\n) ELSE (\r\n  SET \"_prog=node\"\r\n  SET PATHEXT=%PATHEXT:;.JS;=;%\r\n)\r\n\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js\" %*\r\n",
             )
             .expect("fake codex");
             script
@@ -3796,6 +3911,15 @@ done
             env!("KALCODE_PUBLIC_VERSION"),
         )));
         first_read_marker
+    }
+
+    #[cfg(windows)]
+    fn install_unmanaged_codex_batch_shim(dir: &std::path::Path) {
+        std::fs::write(
+            dir.join("codex.cmd"),
+            "@echo off\r\nif \"%~1\"==\"--version\" (echo codex-cli 0.160.0& exit /b 0)\r\nif \"%~1\"==\"app-server\" goto server\r\nexit /b 2\r\n:server\r\n\"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"%~dp0codex-app-server.ps1\"\r\nexit /b %ERRORLEVEL%\r\n",
+        )
+        .expect("unmanaged fake Codex batch shim");
     }
 
     /// A stable version string alone never proves compatibility. This fake omits the required

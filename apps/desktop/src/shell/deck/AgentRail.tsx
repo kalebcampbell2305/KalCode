@@ -1,160 +1,64 @@
 /**
- * The Command Deck's right rail: every coding agent (any provider's coding terminal in Code),
+ * The Workspace Dock's Agents view: every coding agent (any provider's coding terminal in Code),
  * grouped by the shared agent state — agents that need the person first, then failed, working and
- * waiting; idle agents fold away and the last few that finished stay briefly. Each row opens
- * the agent's terminal in Code. Chat threads live in Threads, not here. Collapses to a narrow
- * strip of live counts: on its own while no agent runs and nothing needs the person, or when the
- * person collapses it.
+ * waiting; idle agents fold away and the last few that finished stay briefly. Each row opens the
+ * agent's terminal in Code. Chat threads live in Threads, not here. The dock (`shell/dock/`) owns
+ * the frame, tabs and collapsed rail; this module owns the agent list and its live grouping.
  */
 import { AGENT_STATE_TEXT, AGENT_STATE_TONE, agentStateOf, isAgentBusy, type ThreadSummary } from "@kalcode/protocol";
-import { Button, IconButton, ProviderGlyph, Skeleton, Tooltip } from "@kalcode/ui/components";
-import { Bot, ChevronRight, PanelRightClose, PanelRightOpen, Plus, RotateCw, X } from "lucide-react";
-import { type RefObject, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { Button, ProviderGlyph, Skeleton } from "@kalcode/ui/components";
+import { Bot, ChevronRight, Plus, RotateCw, X } from "lucide-react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { useOptionalUiIntents } from "../../runtime/uiIntents.tsx";
 import { isClearableAgent } from "../../surfaces/code/kaltidy/agents.ts";
 import { useKalTidy } from "../../surfaces/code/kaltidy/kalTidyContext.ts";
 import { useLaunchAgent } from "../../surfaces/code/useLaunchAgent.ts";
 import { useCodingAgents } from "../../surfaces/dashboard/data/DashboardData.tsx";
 import { useClock } from "../../surfaces/dashboard/useNow.ts";
+import { useSessionIdentity } from "../../surfaces/providers/useSessionIdentity.ts";
 import { useNavigation } from "../navigation.tsx";
-import { beginLiveResize } from "../panes/liveResize.ts";
 import styles from "./AgentRail.module.css";
-import { useDeckUi } from "./DeckUi.tsx";
-import { type AgentSections, agentSections, railWantsOpen, runningAgentCount, shortElapsed } from "./deckModel.ts";
+import { type AgentSections, agentSections, runningAgentCount, shortElapsed } from "./deckModel.ts";
 
-/** Which agents "Just finished" shows: the one part of the rail's grouping that moves with time. */
+/** Which agents "Just finished" shows: the one part of the grouping that moves with time. */
 function finishedKey(sections: AgentSections): string {
   return sections.finished.map((thread) => thread.id).join(",");
 }
 
-export function AgentRail() {
-  const { agentsOpen, setAgentsOpen, setAgentsActive } = useDeckUi();
+/**
+ * The canonical coding agents grouped for the dock. A tick re-renders only when an agent leaves
+ * "Just finished"; each row's own time follows the clock by itself.
+ */
+export function useAgentSections() {
   const { state, reload } = useCodingAgents();
-  // A tick re-renders the rail only when an agent leaves "Just finished"; each row's own time
-  // follows the clock by itself.
   const now = useClock((at) => (state.status === "ready" ? finishedKey(agentSections(state.data, at)) : ""));
   const sections = useMemo(() => (state.status === "ready" ? agentSections(state.data, now) : null), [state, now]);
-  // Until the person pins or collapses it, the rail opens while an agent works or needs them
-  // (not for a launch's brief "Starting").
-  const active = sections ? railWantsOpen(sections) : null;
-  useEffect(() => {
-    if (active !== null) setAgentsActive(active);
-  }, [active, setAgentsActive]);
-  const dock = useRef<HTMLElement>(null);
-  useWidthTransition(dock, agentsOpen);
+  return { state, reload, sections };
+}
 
-  const running = sections ? runningAgentCount(sections) : 0;
+/** The Agents tab's content. */
+export function AgentsView({ agents }: { agents: ReturnType<typeof useAgentSections> }) {
+  const { state, reload, sections } = agents;
   return (
-    <aside
-      ref={dock}
-      className={styles.dock}
-      data-open={agentsOpen || undefined}
-      data-deck-agents
-      {...(agentsOpen
-        ? { id: "deck-agents", "aria-labelledby": "deck-agents-heading", tabIndex: -1 }
-        : { "aria-label": "Agents (collapsed)" })}
-    >
-      {agentsOpen ? (
-        <div className={styles.rail}>
-          <div className={styles.header}>
-            <h2 className={styles.heading} id="deck-agents-heading">
-              Agents
-              {running > 0 ? <span className={styles.headingCount}>{running}</span> : null}
-            </h2>
-            <Tooltip content="Hide agents" side="left">
-              <IconButton
-                size="sm"
-                label="Hide agents"
-                icon={<PanelRightClose />}
-                onClick={() => setAgentsOpen(false)}
-              />
-            </Tooltip>
-          </div>
-          <div className={styles.body}>
-            {state.status === "loading" ? (
-              <div className={styles.loading} aria-busy="true">
-                <Skeleton width="80%" />
-                <Skeleton width="62%" />
-                <Skeleton width="70%" />
-              </div>
-            ) : state.status === "error" ? (
-              <div className={styles.problem} role="alert">
-                <p>Agents couldn't load. {state.error.message}</p>
-                <Button size="sm" variant="secondary" icon={<RotateCw />} onClick={reload}>
-                  Try again
-                </Button>
-              </div>
-            ) : sections ? (
-              <AgentList sections={sections} />
-            ) : (
-              <p className={styles.quiet}>Agents aren't part of this build.</p>
-            )}
-          </div>
+    <div className={styles.body}>
+      {state.status === "loading" ? (
+        <div className={styles.loading} aria-busy="true">
+          <Skeleton width="80%" />
+          <Skeleton width="62%" />
+          <Skeleton width="70%" />
         </div>
+      ) : state.status === "error" ? (
+        <div className={styles.problem} role="alert">
+          <p>Agents couldn't load. {state.error.message}</p>
+          <Button size="sm" variant="secondary" icon={<RotateCw />} onClick={reload}>
+            Try again
+          </Button>
+        </div>
+      ) : sections ? (
+        <AgentList sections={sections} />
       ) : (
-        <div className={styles.strip}>
-          <Tooltip content="Show agents" side="left">
-            <IconButton size="sm" label="Show agents" icon={<PanelRightOpen />} onClick={() => setAgentsOpen(true)} />
-          </Tooltip>
-          {sections ? <StripCounts sections={sections} onOpen={() => setAgentsOpen(true)} /> : null}
-        </div>
+        <p className={styles.quiet}>Agents aren't part of this build.</p>
       )}
-    </aside>
-  );
-}
-
-/**
- * The rail's width eases between its strip and its full width. Terminals beside it fit once when
- * the change settles (the pane divider's live-resize path) instead of re-flowing every frame.
- */
-function useWidthTransition(dock: RefObject<HTMLElement | null>, open: boolean) {
-  const first = useRef(true);
-  useEffect(() => {
-    void open;
-    if (first.current) {
-      first.current = false;
-      return;
-    }
-    const element = dock.current;
-    if (!element) return;
-    const end = beginLiveResize();
-    const finish = (event?: TransitionEvent) => {
-      if (event && (event.target !== element || event.propertyName !== "width")) return;
-      end();
-    };
-    element.addEventListener("transitionend", finish);
-    // Reduced motion (no transition) or an interrupted one still ends the live resize.
-    const timer = window.setTimeout(() => finish(), 400);
-    return () => {
-      element.removeEventListener("transitionend", finish);
-      window.clearTimeout(timer);
-      end();
-    };
-  }, [dock, open]);
-}
-
-function StripCounts({ sections, onOpen }: { sections: AgentSections; onOpen: () => void }) {
-  const counts = [
-    { tone: "waiting", value: sections.needsYou.length, label: "need you" },
-    { tone: "working", value: sections.working.length, label: "working" },
-    { tone: "muted", value: sections.blocked.length, label: "waiting" },
-    { tone: "failed", value: sections.failed.length, label: "failed" },
-  ].filter((c) => c.value > 0);
-  return (
-    <div className={styles.stripCounts}>
-      {counts.map((c) => (
-        <Tooltip key={c.label} content={`${c.value} ${c.label}`} side="left">
-          <button
-            type="button"
-            className={styles.stripCount}
-            data-tone={c.tone}
-            onClick={onOpen}
-            aria-label={`${c.value} ${c.value === 1 && c.label === "need you" ? "needs you" : c.label}. Show agents`}
-          >
-            {c.value}
-          </button>
-        </Tooltip>
-      ))}
     </div>
   );
 }
@@ -308,6 +212,7 @@ function AgentRow({
   /** Present for agents whose session is over: the row's X clears them. */
   onDismiss?: (t: ThreadSummary) => void;
 }) {
+  const identity = useSessionIdentity(thread);
   const state = agentStateOf(thread);
   const tone = AGENT_STATE_TONE[state];
   const label = AGENT_STATE_TEXT[state];
@@ -316,6 +221,7 @@ function AgentRow({
   const elapsed = Number.isNaN(since) ? null : shortElapsed(now - since);
   const live = isAgentBusy(state);
   const detail = live && thread.currentActivity ? `${label} · ${thread.currentActivity}` : label;
+  const identityDetail = `${identity.detail} Workspace: ${thread.workspaceName}.`;
   const dismissible = onDismiss !== undefined && isClearableAgent(thread);
   const isLeaving = leaving?.has(thread.id) ?? false;
   return (
@@ -332,7 +238,8 @@ function AgentRow({
         data-group={state === "needs_you" ? "attention" : state}
         data-state={state}
         onClick={() => onOpen(thread)}
-        aria-label={`${thread.name}, ${label}, ${thread.providerName} in ${thread.workspaceName}. Open agent`}
+        aria-label={`${thread.name}, ${label}. ${identityDetail} Open agent`}
+        title={identityDetail}
       >
         {/* The warm edge on an inert element, not ::before (see AgentRail.module.css). */}
         {state === "needs_you" ? <span className={styles.attentionEdge} aria-hidden="true" /> : null}
@@ -347,7 +254,7 @@ function AgentRow({
           </span>
           <span className={styles.rowDetail}>{detail}</span>
           <span className={styles.rowMeta}>
-            {thread.providerName} · {thread.workspaceName}
+            {identity.compact} · {thread.workspaceName}
             {thread.pendingApprovals > 0 && thread.status !== "waiting_for_permission" ? (
               <span className={styles.rowFlag}>
                 {thread.pendingApprovals} {thread.pendingApprovals === 1 ? "approval" : "approvals"}
