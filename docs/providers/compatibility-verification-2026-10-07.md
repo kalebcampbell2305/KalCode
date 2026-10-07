@@ -86,6 +86,13 @@ The shared train identified a missing inventory registration for the new opt-in 
 certification. Its reviewed entry and exact cross-platform ignore counts were added; no existing
 test was disabled. The inventory audit reproduced the omission before the correction.
 
+Combined-candidate release proof also caught account display incorrectly depending on launch
+readiness for an outdated CLI. The account remains visibly signed in while launch readiness stays
+false; existing outdated-provider and managed-recovery browser regressions passed independently
+after this correction. A 21-worker frontend run timed out in three files; bounded unchanged-source
+reproof passed all 11 cases, with initial failure evidence preserved and the other 286 passing
+files retained. No timeout or assertion was weakened.
+
 ## Rollback and delivery
 
 No database migration, credential migration, personal-memory mutation or archive import is
