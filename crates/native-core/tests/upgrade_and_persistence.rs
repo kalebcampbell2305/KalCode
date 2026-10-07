@@ -57,7 +57,8 @@ fn migrations_are_numbered_contiguously() {
             (23, "cursor_accounts"),
             (24, "unified_memory"),
             (25, "terminal_directory"),
-            (26, "squads")
+            (26, "squads"),
+            (27, "thread_runtime_identity")
         ]
     );
 }

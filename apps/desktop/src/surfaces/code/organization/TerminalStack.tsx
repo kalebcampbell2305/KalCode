@@ -250,7 +250,7 @@ export const TerminalStack = memo(function TerminalStack({ organization, control
     setEditing(null);
     focusNav(`item:${item.key}`);
     const clean = name.replace(/\s+/g, " ").trim();
-    if (!clean || clean === item.title || !rename) return;
+    if (!clean || !rename) return;
     setPendingNames((current) => new Map(current).set(item.key, clean));
     try {
       await rename(item.content, clean);

@@ -31,10 +31,27 @@ pub struct SessionCandidate {
     pub provider_name: String,
     /// The thread's provider-account label ("Gemini B"); `null` for threads without one.
     pub account_label: Option<String>,
+    /// Exact launch-time model selection. This is configuration, not proof of the active model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub model: Option<String>,
+    /// Provider-reported active model when the runtime exposes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub active_model: Option<String>,
+    /// Exact launch-time reasoning selection. This is configuration, not proof of active effort.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub effort: Option<String>,
+    /// Provider-reported active reasoning effort when the runtime exposes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub active_effort: Option<String>,
     pub workspace_id: String,
     pub workspace_name: String,
     pub status: ThreadStatus,
-    /// "Name · Provider · Account" (the account part is left out when the thread has none).
+    /// Full provider/account/model/effort identity. Unreported configured values are marked
+    /// `selected`; unknown active values are explicitly provider-controlled.
     pub label: String,
 }
 
@@ -212,6 +229,10 @@ mod tests {
             provider_id: ProviderId::new(ProviderId::GEMINI_CLI),
             provider_name: "Gemini CLI".into(),
             account_label: Some("Gemini B".into()),
+            model: Some("gemini-2.5-pro".into()),
+            active_model: Some("gemini-2.5-pro-002".into()),
+            effort: Some("high".into()),
+            active_effort: None,
             workspace_id: "0192f3c4-0000-7000-8000-00000000a001".into(),
             workspace_name: "kalcode".into(),
             status: ThreadStatus::Idle,
@@ -226,6 +247,10 @@ mod tests {
         assert_eq!(resolved["tier"], "provider_account_name");
         assert_eq!(resolved["target"]["threadId"], candidate.thread_id);
         assert_eq!(resolved["target"]["accountLabel"], "Gemini B");
+        assert_eq!(resolved["target"]["model"], "gemini-2.5-pro");
+        assert_eq!(resolved["target"]["activeModel"], "gemini-2.5-pro-002");
+        assert_eq!(resolved["target"]["effort"], "high");
+        assert!(resolved["target"].get("activeEffort").is_none());
         let ambiguous = serde_json::to_value(SessionResolution::Ambiguous {
             question: "Which one?".into(),
             choices: vec![candidate],
@@ -234,6 +259,22 @@ mod tests {
         .expect("json");
         assert_eq!(ambiguous["kind"], "ambiguous");
         assert_eq!(ambiguous["total"], 1);
+        let legacy: SessionCandidate = serde_json::from_value(serde_json::json!({
+            "threadId": "t",
+            "name": "Legacy",
+            "providerId": "codex",
+            "providerName": "Codex",
+            "accountLabel": null,
+            "workspaceId": "w",
+            "workspaceName": "Workspace",
+            "status": "idle",
+            "label": "Legacy · Codex"
+        }))
+        .expect("legacy candidate");
+        assert_eq!(legacy.model, None);
+        assert_eq!(legacy.active_model, None);
+        assert_eq!(legacy.effort, None);
+        assert_eq!(legacy.active_effort, None);
         let missing = serde_json::to_value(SessionResolution::NotFound {
             message: "No session".into(),
         })

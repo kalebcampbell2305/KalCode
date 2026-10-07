@@ -32,17 +32,18 @@ test.describe("live demo (desktop)", () => {
     const panes = await app(page).locator(".lk-tab").count();
     await app(page).getByRole("button", { name: "New agent" }).click();
     const dialog = app(page).getByRole("dialog", { name: /New agent/ });
-    await expect(dialog).toContainText("A real coding agent in its own terminal");
+    await expect(dialog).toContainText("A simulated session");
+    await expect(dialog).toContainText("KalCode launches the real provider terminal");
     await dialog.getByRole("radio", { name: /Personal.*Plus/ }).click();
     await dialog.getByRole("button", { name: "One more agent" }).click();
     await dialog.getByRole("button", { name: "Launch 2 Codex agents" }).click();
     await expect(app(page).locator(".lk-tab")).toHaveCount(panes + 2);
-    // As in the app, a fresh agent is "New agent" until its first prompt names the task.
-    await expect(app(page).getByRole("button", { name: "New agent", exact: true }).first()).toBeVisible();
+    // As in the app, a taskless agent starts with its clean provider name.
+    await expect(app(page).getByRole("button", { name: "Codex", exact: true }).first()).toBeVisible();
     // The new agent waits at its own prompt, like a real terminal.
     await expect(
       app(page)
-        .getByRole("textbox", { name: /Prompt for New agent/ })
+        .getByRole("textbox", { name: /Prompt for Codex/ })
         .first(),
     ).toBeVisible();
     expect(errors).toEqual([]);

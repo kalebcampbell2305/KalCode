@@ -33,7 +33,7 @@ import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
 import { MOD_LABEL } from "../../shell/shortcuts.ts";
-import { preselectLaunchAccount } from "../code/panes/agentLaunch.ts";
+import { modelCatalogCanVerifyCapabilities, preselectLaunchAccount } from "../code/panes/agentLaunch.ts";
 import { PANE_PROVIDERS } from "../code/panes/paneChannel.ts";
 import { providerIdentity } from "../code/panes/paneLabels.ts";
 import { DEFAULT_MODE_CHOICES, MODE_LABELS, startModeFor, usePermissions } from "../permissions/index.ts";
@@ -276,6 +276,8 @@ function NewThreadForm({
   const account = useAccount();
   const toast = useToast();
   const id = useId();
+  const accountSessions = useOptionalProviderAccountSessions();
+  const discoverModels = accountSessions?.discoverModels;
   // New threads start in the active workspace (the one the rail and Code show), when it can run one.
   const activeWorkspaceId = useWorkspaces().active?.id ?? null;
   const offered = (workspace: string | null): workspace is string =>
@@ -334,14 +336,66 @@ function NewThreadForm({
   const providerAccounts = sortAccounts(
     accounts.filter((account) => account.providerId === providerId && account.archivedAt === null),
   );
-  const providerAccountId = providerAccounts.some((account) => account.id === chosenAccountId)
-    ? chosenAccountId
-    : preselectLaunchAccount(accounts, bindings, providerId, workspaceId);
+  // Account-list refreshes may remove the exact account the person chose. Keep that id as a
+  // blocked choice until they explicitly choose another; silently moving the launch to a default
+  // account could run the task under the wrong provider identity. An empty choice can still adopt
+  // the first account added through this form.
+  const providerAccountId = chosenAccountId || preselectLaunchAccount(accounts, bindings, providerId, workspaceId);
   const providerAccount = providerAccounts.find((account) => account.id === providerAccountId);
+  const selectedAccountUnavailable = chosenAccountId !== "" && providerAccount === undefined;
   const workspaceBinding = bindingFor(bindings, providerId, workspaceId);
   const accountReady = providerAccount != null && providerAccount.authenticationState !== "not_authenticated";
   const workspace = options.workspaces.find((w) => w.id === workspaceId);
-  const modelName = provider?.models.find((m) => m.id === model)?.displayName ?? "Provider default";
+  const accountModels = accountSessions?.states.get(providerAccountId)?.models ?? null;
+  const accountModelStatus = accountModels?.status;
+  const accountScopedModels = accountSessions !== null;
+  const availableModels = accountScopedModels
+    ? accountReady &&
+      (accountModelStatus === "available" ||
+        accountModelStatus === "stale" ||
+        (accountModelStatus === "checking" && (accountModels?.items.length ?? 0) > 0))
+      ? (accountModels?.items ?? null)
+      : null
+    : (provider?.models ?? null);
+  const defaultModel = availableModels?.find((candidate) => candidate.isDefault) ?? null;
+  const selectedModel = availableModels?.find((candidate) => candidate.id === model) ?? null;
+  const providerAlias = provider?.models.find((candidate) => candidate.id === model) ?? null;
+  // Only a current runtime response can positively prove that a saved/explicit model is absent.
+  // Documented aliases, stale data and transient failures preserve the person's exact choice.
+  const canVerifyModelAbsence = modelCatalogCanVerifyCapabilities({
+    status: accountModelStatus,
+    source: accountModels?.source,
+  });
+  const modelUnavailable = Boolean(model && canVerifyModelAbsence && !selectedModel);
+  const preservedModelLabel = providerAlias ? exactModelLabel(providerAlias) : model;
+  const modelOptions = [
+    {
+      value: "",
+      label: defaultModel ? `Provider default · ${exactModelLabel(defaultModel)}` : "Provider default",
+    },
+    ...(availableModels?.map((candidate) => ({
+      value: candidate.id,
+      label: `${exactModelLabel(candidate)}${candidate.isDefault ? " · reported default" : ""}`,
+    })) ?? []),
+    ...(model && !selectedModel
+      ? [{ value: model, label: modelUnavailable ? `Unavailable · ${preservedModelLabel}` : preservedModelLabel }]
+      : []),
+  ];
+  const modelName = model ? (selectedModel ? exactModelLabel(selectedModel) : preservedModelLabel) : "Provider default";
+  const modelHint =
+    accountModelStatus === "checking"
+      ? `Checking exact models for ${providerAccount ? accountName(providerAccount) : "this account"}…`
+      : accountModelStatus === "stale"
+        ? `${accountModels?.reason ?? "Model availability may have changed."} Existing exact choices stay selected until a fresh runtime check.`
+        : accountModelStatus === "unavailable"
+          ? `${accountModels?.reason ?? "Exact models are unavailable."} Provider default remains available.`
+          : accountModelStatus === "available" && accountModels?.source === "runtime"
+            ? `Models reported by ${providerAccount ? accountName(providerAccount) : "this account"}.`
+            : accountModelStatus === "available" && accountModels?.source === "documented_aliases"
+              ? "Documented model aliases. Exact availability is checked when the thread starts."
+              : accountModelStatus === "available" && accountModels?.source === "not_discoverable"
+                ? "This provider does not expose an exact model catalog. Provider default remains available."
+                : undefined;
   const promptScope = [
     account.generation,
     account.snapshot.account?.id ?? "signed-out",
@@ -353,6 +407,13 @@ function NewThreadForm({
   const confirmation = usePromptConfirmation(promptScope, client);
   const cancelConfirmation = confirmation.cancel;
   const launchDetail = providerAccount ? `${modelName} · ${accountName(providerAccount)}` : modelName;
+
+  const authenticationState = providerAccount?.authenticationState;
+  const reportedIdentity = providerAccount?.providerReportedIdentity;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reconnecting to a different provider identity invalidates account model discovery.
+  useEffect(() => {
+    if (providerAccount && authenticationState !== "not_authenticated") void discoverModels?.(providerAccount.id);
+  }, [discoverModels, providerAccount, authenticationState, reportedIdentity]);
 
   useEffect(() => {
     taskRef.current?.focus();
@@ -388,6 +449,7 @@ function NewThreadForm({
       return;
     }
     if (!providerAccountId || !accountReady) return;
+    if (modelUnavailable) return;
     setError(null);
     const submittedTask = task;
     const input: CreateThreadInput = {
@@ -512,36 +574,79 @@ function NewThreadForm({
                 ))}
               </Select>
             </Field>
-            <LaunchAccountPicker
-              providerId={providerId}
-              providerName={provider?.displayName ?? providerId}
-              accounts={accounts}
-              value={providerAccountId}
-              onChange={(next) => {
-                confirmation.cancel();
-                setProviderAccountId(next);
-              }}
-              onReload={onReloadAccounts}
-              disabled={confirmation.busy}
-              hint={providerAccount ? sourceText(providerAccount, workspaceBinding, workspace?.name) : undefined}
-            />
-            <Field htmlFor={`${id}-model`} label="Model">
+            {selectedAccountUnavailable && providerAccounts.length > 0 ? (
+              <Field htmlFor={`${id}-replacement-account`} label="Account">
+                <Select
+                  id={`${id}-replacement-account`}
+                  value=""
+                  aria-invalid="true"
+                  aria-describedby={`${id}-account-error`}
+                  disabled={confirmation.busy}
+                  onChange={(event) => {
+                    confirmation.cancel();
+                    setProviderAccountId(event.target.value);
+                  }}
+                >
+                  <option value="" disabled>
+                    Choose another account
+                  </option>
+                  {providerAccounts.map((candidate) => (
+                    <option key={candidate.id} value={candidate.id}>
+                      {accountName(candidate)}
+                      {candidate.isDefault ? " · Default" : ""}
+                      {candidate.authenticationState === "not_authenticated" ? " · Reconnect required" : ""}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            ) : (
+              <LaunchAccountPicker
+                providerId={providerId}
+                providerName={provider?.displayName ?? providerId}
+                accounts={accounts}
+                value={providerAccountId}
+                onChange={(next) => {
+                  confirmation.cancel();
+                  setProviderAccountId(next);
+                }}
+                onReload={onReloadAccounts}
+                disabled={confirmation.busy}
+                hint={providerAccount ? sourceText(providerAccount, workspaceBinding, workspace?.name) : undefined}
+              />
+            )}
+            {selectedAccountUnavailable ? (
+              <p id={`${id}-account-error`} className={styles.error} role="alert">
+                The selected account is no longer available. Add or choose another account to continue.
+              </p>
+            ) : null}
+            <Field htmlFor={`${id}-model`} label="Model" hint={modelHint}>
               <Select
                 id={`${id}-model`}
                 value={model}
+                aria-busy={accountModelStatus === "checking" || undefined}
+                aria-invalid={modelUnavailable || undefined}
+                aria-describedby={modelUnavailable ? `${id}-model-error` : undefined}
+                onFocus={() => {
+                  if (providerAccountId && accountReady) void discoverModels?.(providerAccountId);
+                }}
                 onChange={(event) => {
                   confirmation.cancel();
                   setModel(event.target.value);
                 }}
               >
-                <option value="">Provider default</option>
-                {provider?.models.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.displayName}
+                {modelOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
                   </option>
                 ))}
               </Select>
             </Field>
+            {modelUnavailable ? (
+              <p id={`${id}-model-error`} className={styles.error} role="alert">
+                This exact model is unavailable for {providerAccount ? accountName(providerAccount) : "this account"}.
+                Choose an available model or Provider default.
+              </p>
+            ) : null}
           </div>
           <ProviderAvailability providers={unavailable} />
         </div>
@@ -675,7 +780,12 @@ function NewThreadForm({
         ) : null}
 
         <div className={styles.footer}>
-          <Button type="submit" variant="primary" busy={confirmation.busy} disabled={!task.trim() || !accountReady}>
+          <Button
+            type="submit"
+            variant="primary"
+            busy={confirmation.busy}
+            disabled={!task.trim() || !accountReady || modelUnavailable}
+          >
             Start thread
           </Button>
           <Button variant="ghost" onClick={cancelAndExit} disabled={confirmation.busy}>
@@ -693,6 +803,11 @@ function NewThreadForm({
       />
     </>
   );
+}
+
+/** Friendly model name plus the exact provider-native id whenever they differ. */
+function exactModelLabel(model: { id: string; displayName: string }): string {
+  return model.displayName === model.id ? model.id : `${model.displayName} · ${model.id}`;
 }
 
 function bindingFor(

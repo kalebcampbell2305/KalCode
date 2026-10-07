@@ -19,6 +19,7 @@ const T = "01999a4e-0002-7001-8a2e-000000002001";
 describe("resourcesFor", () => {
   it.each<[EventEnvelope["type"], DashboardResource[]]>([
     ["thread.status_changed", ["threads"]],
+    ["thread.runtime_identity_changed", ["threads"]],
     ["thread.archived", ["threads"]],
     ["tool.started", ["threads"]],
     ["file.modified", ["threads"]],

@@ -683,8 +683,9 @@ impl DesktopRecognizers {
             names.push(active.name);
         }
         if let Some(threads) = &self.threads
-            && let Ok(threads) = threads.list(None, false)
+            && let Ok(mut threads) = threads.list(None, false)
         {
+            crate::session_resolver::refresh_session_identity(&self.core, &mut threads);
             names.extend(threads.iter().take(12).map(|thread| thread.name.clone()));
             names.extend(
                 threads
@@ -692,12 +693,12 @@ impl DesktopRecognizers {
                     .take(4)
                     .filter_map(|thread| thread.account_label.clone()),
             );
-            names.extend(
-                threads
-                    .iter()
-                    .take(4)
-                    .filter_map(|thread| thread.model.clone()),
-            );
+            names.extend(threads.iter().take(4).filter_map(|thread| {
+                crate::session_resolver::session_model(thread).map(str::to_owned)
+            }));
+            names.extend(threads.iter().take(4).filter_map(|thread| {
+                crate::session_resolver::session_effort(thread).map(str::to_owned)
+            }));
             names.extend(
                 threads
                     .iter()

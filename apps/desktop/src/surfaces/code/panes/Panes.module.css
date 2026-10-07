@@ -42,7 +42,7 @@
   --pane-tint: var(--status-failed);
 }
 
-/* ---------- Header: name · account · model · effort · usage | mode · status · actions ---------- */
+/* ---------- Header: task · provider · account · model · effort · usage | state · actions ---------- */
 
 .header {
   display: flex;
@@ -137,9 +137,19 @@
   display: inline-flex;
   flex: 0 6 auto;
   align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   color: var(--color-text-muted);
   font-size: var(--text-xs);
   white-space: nowrap;
+}
+
+.identityInfo {
+  --_h: 1.25rem;
+  flex: none;
+  color: var(--color-text-faint);
+  font-size: var(--text-xs);
 }
 
 .seg {
@@ -158,13 +168,22 @@
 
 /* Text segments ellipsize (a flex container can't), and never shrink to a stub of letters. */
 .accountName,
-.model {
+.model,
+.effort,
+.provider {
   display: inline-block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.provider {
+  min-width: 2.75rem;
+  max-width: 8rem;
+  color: var(--color-text-secondary);
 }
 
 .accountName {
   min-width: 2.75rem;
-  overflow: hidden;
   max-width: 11rem;
   color: var(--color-text-secondary);
   font-weight: var(--weight-medium);
@@ -178,7 +197,6 @@
 
 .model {
   min-width: 3rem;
-  overflow: hidden;
   max-width: 13rem;
   color: var(--color-text-secondary);
   font-family: var(--font-mono);
@@ -186,20 +204,10 @@
   text-overflow: ellipsis;
 }
 
-/* Runtime model IDs may include version and reasoning parameters. Keep the complete identity
-   visible even when several Cursor terminals share a narrow workspace. */
-.exactModel {
-  flex: 1 0 100%;
-  min-width: 0;
-  padding-bottom: var(--space-1);
-  color: var(--color-text-secondary);
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-  overflow-wrap: anywhere;
-}
-
 .effort {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 3rem;
+  max-width: 12rem;
 }
 
 /* The account's usage badge (the canonical one; it owns its low-usage warning tone). It reads as

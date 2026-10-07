@@ -110,12 +110,18 @@ export function fleetFilterOf(chip: DashboardChip): FleetFilter {
 
 function searchFields(thread: ThreadSummary, extra: readonly (string | undefined)[]): string[] {
   const group = fleetGroupOf(thread);
+  const runtimeIdentity = thread as ThreadSummary & {
+    activeModel?: string | null;
+    activeEffort?: string | null;
+  };
   return [
     thread.name,
     thread.workspaceName,
     thread.branch,
     thread.providerName,
     thread.accountLabel,
+    runtimeIdentity.activeModel,
+    runtimeIdentity.activeEffort,
     thread.model,
     thread.effort,
     thread.currentActivity,

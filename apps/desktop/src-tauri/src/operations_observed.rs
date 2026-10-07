@@ -8,9 +8,9 @@ use kalcode_contracts::operations::{
     OperationEnvironmentKind, OperationKind, OperationLane, OperationRecord, OperationSpec,
     OperationStatus,
 };
-use kalcode_contracts::threads::{ThreadSummary, ToolCallRecord, ToolCallStatus};
+use kalcode_contracts::threads::{ThreadSummary, ToolCallStatus};
 use kalcode_core::operations::{BackgroundRunRecord, ShellRunRecord};
-use kalcode_threads::store::AgentTurnRecord;
+use kalcode_threads::store::{AgentTurnRecord, ToolCallHistoryRecord};
 
 pub(crate) fn agent_turn_run(thread: &ThreadSummary, turn: &AgentTurnRecord) -> OperationRecord {
     let mut spec = observed_spec(
@@ -18,9 +18,21 @@ pub(crate) fn agent_turn_run(thread: &ThreadSummary, turn: &AgentTurnRecord) -> 
         turn.workspace_id.clone(),
         OperationKind::Agent,
     );
-    spec.provider_id = Some(thread.provider_id.to_string());
-    spec.provider_account_id = thread.provider_account_id.clone();
-    spec.model = thread.model.clone();
+    let historical = turn.completed_event_seq.is_some()
+        || turn.next_started_event_seq.is_some()
+        || turn.has_later_turn;
+    spec.provider_id = turn
+        .observed_provider_id
+        .as_ref()
+        .map(ToString::to_string)
+        .or_else(|| (!historical).then(|| thread.provider_id.to_string()));
+    spec.provider_account_id = turn.observed_provider_account_id.clone().or_else(|| {
+        (!historical)
+            .then(|| thread.provider_account_id.clone())
+            .flatten()
+    });
+    spec.model = (!historical).then(|| thread.model.clone()).flatten();
+    spec.effort = (!historical).then(|| thread.effort.clone()).flatten();
     let (status, current_action, outcome) = match (turn.ok, turn.interrupted) {
         (_, Some(true)) => (
             OperationStatus::Interrupted,
@@ -82,9 +94,18 @@ pub(crate) fn agent_turn_run(thread: &ThreadSummary, turn: &AgentTurnRecord) -> 
         workspace_name: thread.workspace_name.clone(),
         branch: thread.branch.clone(),
         version: None,
-        account_label: thread.account_label.clone(),
+        account_label: turn.observed_account_label.clone().or_else(|| {
+            (!historical)
+                .then(|| thread.account_label.clone())
+                .flatten()
+        }),
         terminal_id: thread.terminal_id.clone(),
         thread_id: Some(thread.id.clone()),
+        observed_provider_id: turn.observed_provider_id.as_ref().map(ToString::to_string),
+        observed_provider_account_id: turn.observed_provider_account_id.clone(),
+        observed_account_label: turn.observed_account_label.clone(),
+        observed_model: turn.observed_model.clone(),
+        observed_effort: turn.observed_effort.clone(),
         created_at: turn.created_at.clone(),
         started_at: Some(turn.created_at.clone()),
         ended_at: turn.completed_at.clone(),
@@ -96,7 +117,16 @@ pub(crate) fn agent_turn_run(thread: &ThreadSummary, turn: &AgentTurnRecord) -> 
     }
 }
 
-pub(crate) fn tool_run(thread: &ThreadSummary, tool: ToolCallRecord) -> OperationRecord {
+pub(crate) fn tool_run(thread: &ThreadSummary, history: ToolCallHistoryRecord) -> OperationRecord {
+    let ToolCallHistoryRecord {
+        call: tool,
+        observed_provider_id,
+        observed_provider_account_id,
+        observed_account_label,
+        observed_model,
+        observed_effort,
+        ..
+    } = history;
     let status = match tool.status {
         ToolCallStatus::Requested => OperationStatus::Starting,
         ToolCallStatus::Running => OperationStatus::Running,
@@ -118,9 +148,8 @@ pub(crate) fn tool_run(thread: &ThreadSummary, tool: ToolCallRecord) -> Operatio
         thread.workspace_id.clone(),
         tool_kind(&tool.tool, &tool.summary),
     );
-    spec.provider_id = Some(thread.provider_id.to_string());
-    spec.provider_account_id = thread.provider_account_id.clone();
-    spec.model = thread.model.clone();
+    spec.provider_id = observed_provider_id.as_ref().map(ToString::to_string);
+    spec.provider_account_id = observed_provider_account_id.clone();
     let outcome = tool
         .result_summary
         .as_deref()
@@ -140,9 +169,14 @@ pub(crate) fn tool_run(thread: &ThreadSummary, tool: ToolCallRecord) -> Operatio
         workspace_name: thread.workspace_name.clone(),
         branch: thread.branch.clone(),
         version: None,
-        account_label: thread.account_label.clone(),
+        account_label: observed_account_label.clone(),
         terminal_id: thread.terminal_id.clone(),
         thread_id: Some(thread.id.clone()),
+        observed_provider_id: observed_provider_id.as_ref().map(ToString::to_string),
+        observed_provider_account_id,
+        observed_account_label,
+        observed_model,
+        observed_effort,
         created_at: tool.requested_at.clone(),
         started_at: tool.started_at,
         ended_at: ended.then_some(tool.completed_at).flatten(),
@@ -207,6 +241,11 @@ pub(crate) fn shell_run(run: &ShellRunRecord) -> OperationRecord {
         account_label: None,
         terminal_id: Some(run.terminal_id.clone()),
         thread_id: None,
+        observed_provider_id: None,
+        observed_provider_account_id: None,
+        observed_account_label: None,
+        observed_model: None,
+        observed_effort: None,
         created_at: run.started_at.clone(),
         started_at: Some(run.started_at.clone()),
         ended_at: run.completed_at.clone(),
@@ -272,6 +311,11 @@ pub(crate) fn background_run(run: &BackgroundRunRecord) -> OperationRecord {
         account_label: None,
         terminal_id: None,
         thread_id: None,
+        observed_provider_id: None,
+        observed_provider_account_id: None,
+        observed_account_label: None,
+        observed_model: None,
+        observed_effort: None,
         created_at: run.started_at.clone(),
         started_at: Some(run.started_at.clone()),
         ended_at: run.completed_at.clone(),
@@ -426,6 +470,11 @@ fn doctor_record(run_id: String, run: DoctorObservation) -> OperationRecord {
         account_label: None,
         terminal_id: None,
         thread_id: None,
+        observed_provider_id: None,
+        observed_provider_account_id: None,
+        observed_account_label: None,
+        observed_model: None,
+        observed_effort: None,
         created_at,
         started_at: run.started_at,
         ended_at,
@@ -498,7 +547,7 @@ mod tests {
     use kalcode_contracts::agent::ProviderId;
     use kalcode_contracts::events::{Correlation, EventSource};
     use kalcode_contracts::permissions::PermissionMode;
-    use kalcode_contracts::threads::ThreadStatus;
+    use kalcode_contracts::threads::{ThreadStatus, ToolCallRecord};
 
     fn thread() -> ThreadSummary {
         ThreadSummary {
@@ -508,7 +557,9 @@ mod tests {
             provider_id: ProviderId::new(ProviderId::CODEX),
             provider_name: "Codex".into(),
             model: Some("gpt-6".into()),
+            active_model: None,
             effort: None,
+            active_effort: None,
             provider_account_id: Some("account-1".into()),
             account_label: Some("Work".into()),
             workspace_id: "workspace-1".into(),
@@ -553,16 +604,24 @@ mod tests {
     fn tool_projection_preserves_real_lifecycle_and_parent_metadata() {
         let row = tool_run(
             &thread(),
-            ToolCallRecord {
-                id: "tool-1".into(),
-                thread_id: "thread-1".into(),
-                tool: "Bash".into(),
-                summary: "Run cargo test".into(),
-                status: ToolCallStatus::Failed,
-                result_summary: Some("2 tests failed".into()),
-                requested_at: "2026-09-30T10:00:01Z".into(),
-                started_at: Some("2026-09-30T10:00:02Z".into()),
-                completed_at: Some("2026-09-30T10:00:05Z".into()),
+            ToolCallHistoryRecord {
+                workspace_id: "workspace-1".into(),
+                call: ToolCallRecord {
+                    id: "tool-1".into(),
+                    thread_id: "thread-1".into(),
+                    tool: "Bash".into(),
+                    summary: "Run cargo test".into(),
+                    status: ToolCallStatus::Failed,
+                    result_summary: Some("2 tests failed".into()),
+                    requested_at: "2026-09-30T10:00:01Z".into(),
+                    started_at: Some("2026-09-30T10:00:02Z".into()),
+                    completed_at: Some("2026-09-30T10:00:05Z".into()),
+                },
+                observed_provider_id: Some(ProviderId::new(ProviderId::CODEX)),
+                observed_provider_account_id: Some("account-1".into()),
+                observed_account_label: Some("Work".into()),
+                observed_model: Some("provider/model-a".into()),
+                observed_effort: Some("high".into()),
             },
         );
         assert_eq!(row.id, "tool:tool-1");
@@ -570,6 +629,11 @@ mod tests {
         assert_eq!(row.spec.kind, OperationKind::Test);
         assert_eq!(row.status, OperationStatus::Failed);
         assert_eq!(row.thread_id.as_deref(), Some("thread-1"));
+        assert_eq!(
+            row.observed_provider_account_id.as_deref(),
+            Some("account-1")
+        );
+        assert_eq!(row.observed_model.as_deref(), Some("provider/model-a"));
         assert_eq!(row.outcome.as_deref(), Some("2 tests failed"));
     }
 
@@ -577,6 +641,10 @@ mod tests {
     fn historical_agent_turn_without_completion_stays_unknown() {
         let mut summary = thread();
         summary.status = ThreadStatus::Idle;
+        summary.provider_account_id = Some("account-2".into());
+        summary.account_label = Some("Latest account".into());
+        summary.active_model = Some("provider/model-b".into());
+        summary.active_effort = Some("ultra".into());
         let row = agent_turn_run(
             &summary,
             &AgentTurnRecord {
@@ -592,11 +660,23 @@ mod tests {
                 interrupted: None,
                 has_later_turn: true,
                 operation_id: None,
+                observed_provider_id: Some(ProviderId::new(ProviderId::CODEX)),
+                observed_provider_account_id: Some("account-1".into()),
+                observed_account_label: Some("Historical work".into()),
+                observed_model: Some("provider/model-a".into()),
+                observed_effort: Some("high".into()),
             },
         );
         assert_eq!(row.id, "turn:message-1");
         assert_eq!(row.status, OperationStatus::Unknown);
         assert_eq!(row.ended_at, None);
+        assert_eq!(
+            row.observed_provider_account_id.as_deref(),
+            Some("account-1")
+        );
+        assert_eq!(row.account_label.as_deref(), Some("Historical work"));
+        assert_eq!(row.observed_model.as_deref(), Some("provider/model-a"));
+        assert_eq!(row.observed_effort.as_deref(), Some("high"));
         assert!(
             row.outcome
                 .as_deref()

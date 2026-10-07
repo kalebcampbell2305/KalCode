@@ -149,6 +149,7 @@ impl TurnNormalizer for GeminiNormalizer {
                     events.push(AgentEvent::SessionStarted {
                         provider_session_id: id.to_ascii_lowercase(),
                         model,
+                        effort: None,
                     });
                 } else {
                     tracing::warn!(
@@ -356,7 +357,8 @@ mod tests {
             events[0],
             AgentEvent::SessionStarted {
                 provider_session_id: SESSION.into(),
-                model: Some("gemini-2.5-pro".into())
+                model: Some("gemini-2.5-pro".into()),
+                effort: None,
             }
         );
         assert!(

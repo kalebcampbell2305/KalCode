@@ -24,8 +24,8 @@ use kalcode_context::{
     RenderedPackage, WorkspaceRoot,
 };
 use kalcode_contracts::agent::{
-    AgentEvent, AgentInput, AgentSession, FileChange, LaunchOrigin, ModelInfo, ProviderError,
-    ProviderId, SessionConfig,
+    AgentEvent, AgentInput, AgentSession, FileChange, LaunchOrigin, ProviderError, ProviderId,
+    SessionConfig,
 };
 use kalcode_contracts::events::{Correlation, EventPayload, EventSource, NewEvent};
 use kalcode_contracts::ids::{is_valid_id, new_id};
@@ -387,21 +387,25 @@ fn normalize_effort(effort: Option<&str>) -> Result<Option<String>> {
     }
 }
 
-/// Whether one already syntax-validated model is accepted by the provider's declared catalog.
-/// Claude Code also documents full model ids and bracketed aliases that cannot be exhaustively
-/// listed in the static catalog; keep that exception identical for create and reconfigure.
-fn provider_accepts_model(provider_id: &ProviderId, models: &[ModelInfo], model: &str) -> bool {
-    models.is_empty()
-        || models.iter().any(|available| available.id == model)
-        || (provider_id.as_str() == ProviderId::CLAUDE_CODE
-            && model.len() <= validate::MAX_MODEL_CHARS
-            && model
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || b"._:[]-".contains(&byte))
-            && (model.starts_with("claude-")
-                || model.split_once('[').is_some_and(|(alias, suffix)| {
-                    matches!(alias, "opus" | "sonnet" | "haiku" | "fable") && suffix.ends_with(']')
-                })))
+/// Validates provider-reported effort metadata without changing the provider's native token.
+/// Launch configuration remains normalized separately by [`normalize_effort`].
+fn reported_effort(effort: Option<&str>) -> Result<Option<String>> {
+    let Some(effort) = effort else {
+        return Ok(None);
+    };
+    if !effort.is_empty()
+        && effort.len() <= 32
+        && effort
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        Ok(Some(effort.to_owned()))
+    } else {
+        Err(KalError::validation(
+            "invalid_effort",
+            "That provider-reported reasoning effort isn't valid.",
+        ))
+    }
 }
 
 struct AdmittedPrompt {
@@ -645,6 +649,7 @@ impl ThreadRuntime {
             subscription,
         };
         runtime.inner.restore_default_names()?;
+        runtime.inner.clear_active_runtime_identities()?;
         runtime.inner.recover();
         Ok(runtime)
     }
@@ -832,18 +837,10 @@ impl ThreadRuntime {
             }
         }
 
-        let entry = self
-            .inner
+        self.inner
             .providers
             .get(provider_id)
             .ok_or_else(|| provider_unavailable(provider_id.as_str()))?;
-        let models = entry.provider.capabilities().models;
-        if !provider_accepts_model(provider_id, &models, &model) {
-            return Err(KalError::validation(
-                "invalid_model",
-                "That model isn't available for this provider.",
-            ));
-        }
 
         let mut reserved = 0usize;
         for state in &states {
@@ -1073,6 +1070,13 @@ impl ThreadRuntime {
         self.inner
             .core
             .read(|conn| store::agent_turn(conn, message_id, workspace_id))
+    }
+
+    /// Exact first durable user turn covered by one Operation interval.
+    pub fn agent_turn_for_operation(&self, operation_id: &str) -> Result<Option<AgentTurnRecord>> {
+        self.inner
+            .core
+            .read(|conn| store::agent_turn_for_operation(conn, operation_id))
     }
 
     /// Newest-first durable tool-call history across threads.
@@ -2515,6 +2519,16 @@ fn cap_message(mut content: String) -> String {
 }
 
 impl Inner {
+    /// A nonterminal provider-observed identity is valid only for a process-local live session.
+    /// Clear it synchronously before startup queries; terminal rows retain observed history.
+    fn clear_active_runtime_identities(&self) -> Result<()> {
+        self.core.write_with_events(|tx| {
+            store::reset_nonterminal_active_identities(tx)?;
+            Ok(((), Vec::new()))
+        })?;
+        Ok(())
+    }
+
     fn existing_live(&self, thread_id: &str) -> Option<Arc<LiveThread>> {
         self.live
             .lock()
@@ -2631,7 +2645,9 @@ impl Inner {
             provider_id: row.provider_id,
             provider_name,
             model: row.model,
+            active_model: row.active_model,
             effort: row.effort,
+            active_effort: row.active_effort,
             provider_account_id: row.provider_account_id,
             account_label: row.account_label,
             workspace_id: row.workspace_id,
@@ -2731,15 +2747,6 @@ impl Inner {
         let account_label = request
             .provider_account_id
             .and(request.account_label.or(entry.account_label.as_deref()));
-        if let Some(model) = &model {
-            let models = entry.provider.capabilities().models;
-            if !provider_accepts_model(&provider_id, &models, model) {
-                return Err(KalError::validation(
-                    "invalid_model",
-                    format!("That model isn't available for {provider_name}."),
-                ));
-            }
-        }
         let workspace = self.workspaces.resolve(request.workspace_id)?;
         // The plan's agent cap is checked before the folder is prepared, so a refused agent
         // leaves no worktree or branch behind.
@@ -2919,6 +2926,24 @@ impl Inner {
             secret_ref: entry.secret_ref.clone(),
             launch_origin: state.origin,
         };
+        self.core.write_with_events(|tx| {
+            store::reset_active_identity(tx, &row.id)?;
+            let current = store::get(tx, &row.id)?;
+            Ok((
+                (),
+                vec![Ctx::from_row(&current).event(
+                    EventSource::Core,
+                    EventPayload::ThreadRuntimeIdentityChanged {
+                        thread_id: current.id.clone(),
+                        provider_id: current.provider_id.clone(),
+                        provider_account_id: current.provider_account_id.clone(),
+                        account_label: current.account_label.clone(),
+                        active_model: None,
+                        active_effort: None,
+                    },
+                )],
+            ))
+        })?;
         let provider_name = entry.provider.display_name().to_owned();
         let session: Arc<dyn AgentSession> = match entry
             .provider
@@ -3334,20 +3359,39 @@ impl Inner {
             AgentEvent::SessionStarted {
                 provider_session_id,
                 model,
+                effort,
             } => {
                 let session_id = validate::provider_text(&provider_session_id, 256);
                 let model = validate::model(model.as_deref()).ok().flatten();
+                let effort = reported_effort(effort.as_deref()).ok().flatten();
                 self.core.write_with_events(|tx| {
-                    store::set_provider_session(tx, id, &session_id, model.as_deref())?;
-                    let mut events = Vec::new();
+                    store::set_provider_session(
+                        tx,
+                        id,
+                        &session_id,
+                        model.as_deref(),
+                        effort.as_deref(),
+                    )?;
+                    let bound = store::get(tx, id)?;
+                    let mut events = vec![ctx.event(
+                        EventSource::Provider,
+                        EventPayload::ThreadRuntimeIdentityChanged {
+                            thread_id: id.to_owned(),
+                            provider_id: bound.provider_id,
+                            provider_account_id: bound.provider_account_id,
+                            account_label: bound.account_label,
+                            active_model: model.clone(),
+                            active_effort: effort.clone(),
+                        },
+                    )];
                     if store::status(tx, id)? == ThreadStatus::Starting {
                         let from = store::set_status(tx, id, ThreadStatus::Active, None, &now)?;
-                        events = ctx.status_changed(
+                        events.extend(ctx.status_changed(
                             EventSource::Provider,
                             from,
                             ThreadStatus::Active,
                             None,
-                        );
+                        ));
                     }
                     Ok(((), events))
                 })?;
@@ -4611,7 +4655,7 @@ impl Inner {
                 store::set_activity(tx, thread_id, Some(ACCOUNT_SWITCHED_ACTIVITY), &now)?;
             }
             let row = store::get(tx, thread_id)?;
-            let event = ctx.event(
+            let account_event = ctx.event(
                 EventSource::Ui,
                 EventPayload::ThreadAccountChanged {
                     thread_id: thread_id.to_owned(),
@@ -4619,7 +4663,18 @@ impl Inner {
                     account_label: row.account_label.clone(),
                 },
             );
-            Ok((row, vec![event]))
+            let identity_event = Ctx::from_row(&row).event(
+                EventSource::Ui,
+                EventPayload::ThreadRuntimeIdentityChanged {
+                    thread_id: row.id.clone(),
+                    provider_id: row.provider_id.clone(),
+                    provider_account_id: row.provider_account_id.clone(),
+                    account_label: row.account_label.clone(),
+                    active_model: None,
+                    active_effort: None,
+                },
+            );
+            Ok((row, vec![account_event, identity_event]))
         })?;
         drop(state);
         tracing::info!(event = "thread.account_changed", thread_id = %thread_id);

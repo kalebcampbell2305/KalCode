@@ -215,6 +215,34 @@ describe("KalVoice scene target resolution", () => {
     expect(sceneChoiceLabel(frontend)).not.toBe(sceneChoiceLabel(backend));
   });
 
+  it("uses exact selector identity in ambiguity labels without calling configured choices active", () => {
+    const live = target({
+      entityId: "live",
+      title: "Release",
+      providerName: "Codex",
+      accountLabel: "Work",
+      model: "provider/model-v2",
+      modelSource: "provider",
+      effort: "ultra",
+      effortSource: "provider",
+    });
+    const configured = target({
+      entityId: "configured",
+      title: "Release",
+      providerName: "Codex",
+      accountLabel: "Personal",
+      model: "configured/model-v1",
+      modelSource: "configured",
+      effort: "high",
+      effortSource: "configured",
+    });
+
+    expect(sceneChoiceLabel(live)).toBe("Release — Codex · Work · provider/model-v2 · ultra");
+    expect(sceneChoiceLabel(configured)).toBe(
+      "Release — Codex · Personal · configured/model-v1 (selected) · high (selected)",
+    );
+  });
+
   it("adapts locator results without carrying snippets or match metadata", () => {
     const result: LocatorResult = {
       kind: "terminal",

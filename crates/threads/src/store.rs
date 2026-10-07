@@ -41,7 +41,9 @@ pub struct ThreadRow {
     pub provider_id: ProviderId,
     pub provider_name: String,
     pub model: Option<String>,
+    pub active_model: Option<String>,
     pub effort: Option<String>,
+    pub active_effort: Option<String>,
     pub provider_account_id: Option<String>,
     pub account_label: Option<String>,
     pub workspace_id: String,
@@ -91,6 +93,15 @@ pub struct AgentTurnRecord {
     /// turn in an Operation interval is covered, so later manual turns on the same thread remain
     /// independently visible in Runs history.
     pub operation_id: Option<String>,
+    /// Provider/account binding recorded for the exact native session that ran this turn.
+    pub observed_provider_id: Option<ProviderId>,
+    pub observed_provider_account_id: Option<String>,
+    pub observed_account_label: Option<String>,
+    /// Last provider-confirmed model effective during this exact turn. This is derived from the
+    /// durable runtime-identity event log and remains `None` when old history has no evidence.
+    pub observed_model: Option<String>,
+    /// Last provider-confirmed reasoning effort effective during this exact turn.
+    pub observed_effort: Option<String>,
 }
 
 /// A tool call together with its canonical workspace ownership.
@@ -98,6 +109,11 @@ pub struct AgentTurnRecord {
 pub struct ToolCallHistoryRecord {
     pub workspace_id: String,
     pub call: ToolCallRecord,
+    pub observed_provider_id: Option<ProviderId>,
+    pub observed_provider_account_id: Option<String>,
+    pub observed_account_label: Option<String>,
+    pub observed_model: Option<String>,
+    pub observed_effort: Option<String>,
 }
 
 const MAX_OBSERVED_HISTORY_PAGE: u32 = 200;
@@ -116,7 +132,7 @@ const THREAD_COLUMNS: &str =
       JOIN thread_messages pending
         ON pending.id = a.value AND pending.thread_id = t.id AND pending.role = 'user'
       WHERE a.key = 'thread.undelivered_message:' || t.id
-    )";
+    ), t.active_model, t.active_effort";
 
 /// `threads t` with the thread's own Git worktree `w` (`git_worktrees`, purpose `thread`, owned
 /// by the thread): the active one, else the newest. `NULL` columns for a thread without one.
@@ -132,6 +148,7 @@ fn row_to_thread(row: &Row<'_>) -> rusqlite::Result<ThreadRow> {
         provider_id: ProviderId::new(row.get::<_, String>(2)?),
         provider_name: row.get(3)?,
         model: row.get(4)?,
+        active_model: row.get(28)?,
         provider_account_id: row.get(5)?,
         account_label: row.get(6)?,
         workspace_id: row.get(7)?,
@@ -151,6 +168,7 @@ fn row_to_thread(row: &Row<'_>) -> rusqlite::Result<ThreadRow> {
         files_changed: row.get(21)?,
         permission_profile_id: row.get(22)?,
         effort: row.get(23)?,
+        active_effort: row.get(29)?,
         worktree_id: None,
         worktree_branch: None,
         isolated: false,
@@ -280,12 +298,41 @@ pub fn set_provider_session(
     id: &str,
     session_id: &str,
     model: Option<&str>,
+    effort: Option<&str>,
 ) -> Result<()> {
-    conn.execute(
-        "UPDATE threads SET provider_session_id = ?2, model = COALESCE(model, ?3) WHERE id = ?1",
-        params![id, session_id, model],
+    let changed = conn.execute(
+        "UPDATE threads
+         SET provider_session_id = ?2, active_model = ?3, active_effort = ?4
+         WHERE id = ?1",
+        params![id, session_id, model, effort],
     )?;
+    if changed == 0 {
+        return Err(thread_not_found());
+    }
     Ok(())
+}
+
+/// A new provider process has not confirmed its runtime identity yet. Launch intent remains.
+pub fn reset_active_identity(conn: &Connection, id: &str) -> Result<()> {
+    let changed = conn.execute(
+        "UPDATE threads SET active_model = NULL, active_effort = NULL WHERE id = ?1",
+        [id],
+    )?;
+    if changed == 0 {
+        return Err(thread_not_found());
+    }
+    Ok(())
+}
+
+/// Process restart invalidates identity on sessions that should still have had a live provider.
+/// Terminal rows retain their last provider-observed identity as durable execution history.
+pub fn reset_nonterminal_active_identities(conn: &Connection) -> Result<usize> {
+    Ok(conn.execute(
+        "UPDATE threads SET active_model = NULL, active_effort = NULL
+         WHERE status NOT IN ('completed', 'failed', 'interrupted')
+           AND (active_model IS NOT NULL OR active_effort IS NOT NULL)",
+        [],
+    )?)
 }
 
 /// Changes only the launch-time model and effort for an existing thread. Runtime callers hold
@@ -329,7 +376,8 @@ pub fn set_account(
 ) -> Result<()> {
     let changed = conn.execute(
         "UPDATE threads
-         SET provider_account_id = ?2, account_label = ?3, provider_session_id = NULL
+         SET provider_account_id = ?2, account_label = ?3, provider_session_id = NULL,
+             active_model = NULL, active_effort = NULL
          WHERE id = ?1",
         params![id, provider_account_id, account_label],
     )?;
@@ -406,7 +454,7 @@ pub fn move_to_workspace(
     cwd: &str,
     now: &str,
 ) -> Result<()> {
-    conn.execute("UPDATE threads SET workspace_id = ?2, workspace_name = ?3, cwd = ?4, provider_session_id = NULL, status = 'idle', current_activity = 'Moved to another workspace', last_activity_at = ?5, error_code = NULL, error_message = NULL WHERE id = ?1", params![id, workspace_id, workspace_name, cwd, now])?;
+    conn.execute("UPDATE threads SET workspace_id = ?2, workspace_name = ?3, cwd = ?4, provider_session_id = NULL, active_model = NULL, active_effort = NULL, status = 'idle', current_activity = 'Moved to another workspace', last_activity_at = ?5, error_code = NULL, error_message = NULL WHERE id = ?1", params![id, workspace_id, workspace_name, cwd, now])?;
     clear_undelivered(conn, id)?;
     Ok(())
 }
@@ -653,6 +701,46 @@ pub fn agent_turn(
     .next())
 }
 
+/// The exact first durable user turn covered by one Operation interval.
+///
+/// Operations store a thread and time interval rather than a message id. Resolve the same first
+/// `agent.message` event used by [`load_agent_turns`] without paging or joining the thread's latest
+/// identity, then reuse the exact turn query and its sequence-bounded runtime evidence.
+pub fn agent_turn_for_operation(
+    conn: &Connection,
+    operation_id: &str,
+) -> Result<Option<AgentTurnRecord>> {
+    if !is_valid_id(operation_id) {
+        return Err(KalError::validation(
+            "invalid_operation_id",
+            "That operation reference isn't valid.",
+        ));
+    }
+    let message_id = conn
+        .query_row(
+            "SELECT json_extract(e.payload, '$.messageId')
+             FROM operations o
+             JOIN events e
+               ON e.type = 'agent.message'
+              AND e.thread_id = o.thread_id
+              AND json_extract(e.payload, '$.threadId') = o.thread_id
+              AND json_extract(e.payload, '$.role') = 'user'
+              AND e.occurred_at >= o.started_at
+              AND (o.ended_at IS NULL OR e.occurred_at <= o.ended_at)
+             WHERE o.id = ?1 AND o.started_at IS NOT NULL
+             ORDER BY e.seq
+             LIMIT 1",
+            [operation_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    message_id
+        .as_deref()
+        .map(|message_id| agent_turn(conn, message_id, None))
+        .transpose()
+        .map(Option::flatten)
+}
+
 fn agent_turn_cursor(
     conn: &Connection,
     workspace_id: Option<&str>,
@@ -709,7 +797,16 @@ fn load_agent_turns(
                          AND json_extract(next.payload, '$.threadId') = s.thread_id
                          AND json_extract(next.payload, '$.role') = 'user'
                          AND next.seq > s.started_event_seq
-                     ), 9223372036854775807)) AS completed_event_seq
+                     ), 9223372036854775807)) AS completed_event_seq,
+                  (SELECT MIN(boundary.seq) FROM events boundary
+                   WHERE boundary.type = 'thread.runtime_identity_changed'
+                     AND boundary.thread_id = s.thread_id
+                     AND json_extract(boundary.payload, '$.threadId') = s.thread_id
+                     AND boundary.seq > s.started_event_seq
+                     AND boundary.source IN ('core', 'ui')
+                     AND json_type(boundary.payload, '$.activeModel') = 'null'
+                     AND json_type(boundary.payload, '$.activeEffort') = 'null')
+                    AS next_identity_boundary_seq
            FROM selected s
          )
          SELECT b.message_id, b.thread_id, b.workspace_id, b.created_at,
@@ -734,9 +831,28 @@ fn load_agent_turns(
                        AND covered.occurred_at >= o.started_at
                        AND (o.ended_at IS NULL OR covered.occurred_at <= o.ended_at)
                    )
-                 ORDER BY o.started_at, o.id LIMIT 1)
+                 ORDER BY o.started_at, o.id LIMIT 1),
+                json_extract(identity.payload, '$.providerId'),
+                json_extract(identity.payload, '$.providerAccountId'),
+                json_extract(identity.payload, '$.accountLabel'),
+                json_extract(identity.payload, '$.activeModel'),
+                json_extract(identity.payload, '$.activeEffort')
          FROM bounded b
          LEFT JOIN events completed ON completed.seq = b.completed_event_seq
+         LEFT JOIN events identity ON identity.seq = (
+           SELECT MAX(observed.seq) FROM events observed
+           WHERE b.started_event_seq IS NOT NULL
+             AND observed.type = 'thread.runtime_identity_changed'
+             AND observed.thread_id = b.thread_id
+             AND json_extract(observed.payload, '$.threadId') = b.thread_id
+             AND observed.seq <= CASE
+               WHEN b.completed_event_seq IS NOT NULL THEN b.completed_event_seq
+               ELSE MIN(
+                 COALESCE(b.next_started_event_seq - 1, 9223372036854775807),
+                 COALESCE(b.next_identity_boundary_seq - 1, 9223372036854775807)
+               )
+             END
+         )
          ORDER BY b.created_at DESC, b.message_id DESC"
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -755,6 +871,11 @@ fn load_agent_turns(
                 interrupted: row.get(9)?,
                 has_later_turn: row.get(10)?,
                 operation_id: row.get(11)?,
+                observed_provider_id: row.get::<_, Option<String>>(12)?.map(ProviderId::new),
+                observed_provider_account_id: row.get(13)?,
+                observed_account_label: row.get(14)?,
+                observed_model: row.get(15)?,
+                observed_effort: row.get(16)?,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?)
@@ -966,9 +1087,27 @@ pub fn tool_call_history(
     let fetch = i64::from(limit) + 1;
     let mut stmt = conn.prepare(
         "SELECT c.id, c.thread_id, c.tool, c.summary, c.status, c.result_summary,
-                c.requested_at, c.started_at, c.completed_at, t.workspace_id
+                c.requested_at, c.started_at, c.completed_at, t.workspace_id,
+                json_extract(identity.payload, '$.providerId'),
+                json_extract(identity.payload, '$.providerAccountId'),
+                json_extract(identity.payload, '$.accountLabel'),
+                json_extract(identity.payload, '$.activeModel'),
+                json_extract(identity.payload, '$.activeEffort')
          FROM tool_calls c
          JOIN threads t ON t.id = c.thread_id
+         LEFT JOIN events identity ON identity.seq = (
+           SELECT MAX(observed.seq) FROM events observed
+           WHERE observed.type = 'thread.runtime_identity_changed'
+             AND observed.thread_id = c.thread_id
+             AND json_extract(observed.payload, '$.threadId') = c.thread_id
+             AND observed.seq <= (
+               SELECT MIN(requested.seq) FROM events requested
+               WHERE requested.type = 'tool.requested'
+                 AND requested.thread_id = c.thread_id
+                 AND json_extract(requested.payload, '$.threadId') = c.thread_id
+                 AND json_extract(requested.payload, '$.toolCallId') = c.id
+             )
+         )
          WHERE (?1 IS NULL OR t.workspace_id = ?1)
            AND (?2 IS NULL OR c.thread_id = ?2)
            AND (?3 IS NULL OR c.requested_at < ?3 OR (c.requested_at = ?3 AND c.id < ?4))
@@ -1004,9 +1143,27 @@ pub fn tool_call(
     Ok(conn
         .query_row(
             "SELECT c.id, c.thread_id, c.tool, c.summary, c.status, c.result_summary,
-                    c.requested_at, c.started_at, c.completed_at, t.workspace_id
+                    c.requested_at, c.started_at, c.completed_at, t.workspace_id,
+                    json_extract(identity.payload, '$.providerId'),
+                    json_extract(identity.payload, '$.providerAccountId'),
+                    json_extract(identity.payload, '$.accountLabel'),
+                    json_extract(identity.payload, '$.activeModel'),
+                    json_extract(identity.payload, '$.activeEffort')
              FROM tool_calls c
              JOIN threads t ON t.id = c.thread_id
+             LEFT JOIN events identity ON identity.seq = (
+               SELECT MAX(observed.seq) FROM events observed
+               WHERE observed.type = 'thread.runtime_identity_changed'
+                 AND observed.thread_id = c.thread_id
+                 AND json_extract(observed.payload, '$.threadId') = c.thread_id
+                 AND observed.seq <= (
+                   SELECT MIN(requested.seq) FROM events requested
+                   WHERE requested.type = 'tool.requested'
+                     AND requested.thread_id = c.thread_id
+                     AND json_extract(requested.payload, '$.threadId') = c.thread_id
+                     AND json_extract(requested.payload, '$.toolCallId') = c.id
+                 )
+             )
              WHERE c.id = ?1 AND (?2 IS NULL OR t.workspace_id = ?2)",
             params![tool_id, workspace_id],
             tool_call_history_from_row,
@@ -1035,6 +1192,11 @@ fn tool_call_cursor(
 fn tool_call_history_from_row(row: &Row<'_>) -> rusqlite::Result<ToolCallHistoryRecord> {
     Ok(ToolCallHistoryRecord {
         workspace_id: row.get(9)?,
+        observed_provider_id: row.get::<_, Option<String>>(10)?.map(ProviderId::new),
+        observed_provider_account_id: row.get(11)?,
+        observed_account_label: row.get(12)?,
+        observed_model: row.get(13)?,
+        observed_effort: row.get(14)?,
         call: ToolCallRecord {
             id: row.get(0)?,
             thread_id: row.get(1)?,
@@ -1277,8 +1439,17 @@ mod tests {
             params![id, a],
         )
         .expect("bind a");
-        set_provider_session(&conn, &id, "gemini-chat-under-a", Some("gemini-2.5-pro"))
-            .expect("resume id");
+        set_provider_session(
+            &conn,
+            &id,
+            "gemini-chat-under-a",
+            Some("gemini-2.5-pro"),
+            None,
+        )
+        .expect("resume id");
+        let reported = get(&conn, &id).expect("reported runtime identity");
+        assert_eq!(reported.model, None);
+        assert_eq!(reported.active_model.as_deref(), Some("gemini-2.5-pro"));
 
         set_account(&conn, &id, &b, Some("Gemini B")).expect("rebind");
         let row = get(&conn, &id).expect("row");
@@ -1288,7 +1459,14 @@ mod tests {
             row.provider_session_id, None,
             "a resume id lives in the old account's profile home and must not survive a rebind"
         );
-        assert_eq!(row.model.as_deref(), Some("gemini-2.5-pro"));
+        assert_eq!(
+            row.model, None,
+            "runtime truth does not rewrite launch intent"
+        );
+        assert_eq!(
+            row.active_model, None,
+            "changing accounts clears the old session's observed identity"
+        );
         assert_eq!(
             set_account(&conn, &new_id(), &b, Some("Gemini B"))
                 .expect_err("missing thread")
@@ -1440,6 +1618,21 @@ mod tests {
             "2026-09-30T11:00:00.010Z",
         )
         .expect("first message");
+        event(
+            &conn,
+            "thread.runtime_identity_changed",
+            Some(&workspace_id),
+            Some(&thread_id),
+            serde_json::json!({
+                "threadId": thread_id,
+                "providerId": "codex",
+                "providerAccountId": "account-a",
+                "accountLabel": "Work A",
+                "activeModel": "provider-model-a",
+                "activeEffort": "High"
+            }),
+            "2026-09-30T11:00:00.005Z",
+        );
         let (_, first_started) = event(
             &conn,
             "agent.message",
@@ -1455,6 +1648,21 @@ mod tests {
             Some(&thread_id),
             serde_json::json!({"threadId": thread_id, "ok": true, "interrupted": false}),
             "2026-09-30T11:00:00.020Z",
+        );
+        event(
+            &conn,
+            "thread.runtime_identity_changed",
+            Some(&workspace_id),
+            Some(&thread_id),
+            serde_json::json!({
+                "threadId": thread_id,
+                "providerId": "codex",
+                "providerAccountId": "account-b",
+                "accountLabel": "Work B",
+                "activeModel": "provider-model-b",
+                "activeEffort": null
+            }),
+            "2026-09-30T11:00:00.025Z",
         );
         let second = insert_message(
             &conn,
@@ -1480,6 +1688,21 @@ mod tests {
             Some(&thread_id),
             serde_json::json!({"threadId": thread_id, "ok": false, "interrupted": false}),
             "2026-09-30T11:00:00.040Z",
+        );
+        event(
+            &conn,
+            "thread.runtime_identity_changed",
+            Some(&workspace_id),
+            Some(&thread_id),
+            serde_json::json!({
+                "threadId": thread_id,
+                "providerId": "codex",
+                "providerAccountId": "account-c",
+                "accountLabel": "Work C",
+                "activeModel": "provider-model-after-run",
+                "activeEffort": "Max"
+            }),
+            "2026-09-30T11:00:00.045Z",
         );
         let operation_id = new_id();
         conn.execute(
@@ -1507,6 +1730,30 @@ mod tests {
             first_turn.operation_id.as_deref(),
             Some(operation_id.as_str())
         );
+        assert_eq!(
+            first_turn.observed_model.as_deref(),
+            Some("provider-model-a")
+        );
+        assert_eq!(first_turn.observed_effort.as_deref(), Some("High"));
+        assert_eq!(
+            first_turn
+                .observed_provider_id
+                .as_ref()
+                .map(ProviderId::as_str),
+            Some("codex")
+        );
+        assert_eq!(
+            first_turn.observed_provider_account_id.as_deref(),
+            Some("account-a")
+        );
+        assert_eq!(first_turn.observed_account_label.as_deref(), Some("Work A"));
+        assert_eq!(
+            agent_turn_for_operation(&conn, &operation_id)
+                .expect("operation turn")
+                .expect("covered turn"),
+            first_turn,
+            "operation detail resolves the same exact sequence-bounded turn without paging"
+        );
         assert!(first_turn.has_later_turn);
         let second_turn = agent_turn(&conn, &second.id, Some(&workspace_id))
             .expect("second exact")
@@ -1517,6 +1764,17 @@ mod tests {
         assert_eq!(second_turn.operation_id, None, "later turn is not hidden");
         assert!(!second_turn.has_later_turn);
         assert_eq!(second_turn.ok, Some(false));
+        assert_eq!(
+            second_turn.observed_model.as_deref(),
+            Some("provider-model-b"),
+            "an identity update after completion cannot rewrite an older run"
+        );
+        assert_eq!(second_turn.observed_effort, None);
+        assert_eq!(
+            second_turn.observed_provider_account_id.as_deref(),
+            Some("account-b"),
+            "a later account binding cannot rewrite an older run"
+        );
 
         let unknown_thread = new_id();
         thread_in(
@@ -1573,6 +1831,241 @@ mod tests {
         assert_eq!(unknown_turn.completed_event_seq, None);
         assert_eq!(unknown_turn.next_started_event_seq, Some(later_started));
         assert!(unknown_turn.has_later_turn);
+
+        let imported_thread = new_id();
+        thread_in(
+            &conn,
+            &imported_thread,
+            &workspace_id,
+            "2026-09-30T11:45:00.000Z",
+        );
+        let imported = insert_message(
+            &conn,
+            &imported_thread,
+            MessageRole::User,
+            "imported without event evidence",
+            None,
+            "2026-09-30T11:45:00.010Z",
+        )
+        .expect("imported turn");
+        event(
+            &conn,
+            "thread.runtime_identity_changed",
+            Some(&workspace_id),
+            Some(&imported_thread),
+            serde_json::json!({
+                "threadId": imported_thread,
+                "activeModel": "unrelated-live-model",
+                "activeEffort": "High"
+            }),
+            "2026-09-30T11:45:00.020Z",
+        );
+        let imported_turn = agent_turn(&conn, &imported.id, Some(&workspace_id))
+            .expect("imported exact")
+            .expect("imported turn remains visible");
+        assert_eq!(imported_turn.started_event_seq, None);
+        assert_eq!(imported_turn.observed_model, None);
+        assert_eq!(imported_turn.observed_effort, None);
+    }
+
+    #[test]
+    fn unresolved_turn_identity_stops_before_the_next_session_reset() {
+        let conn = conn();
+        let workspace_id = new_id();
+        let thread_id = new_id();
+        thread_in(&conn, &thread_id, &workspace_id, "2026-09-30T11:50:00.000Z");
+        event(
+            &conn,
+            "thread.runtime_identity_changed",
+            Some(&workspace_id),
+            Some(&thread_id),
+            serde_json::json!({
+                "threadId": thread_id,
+                "providerId": "codex",
+                "providerAccountId": "account-a",
+                "accountLabel": "Work A",
+                "activeModel": "provider-model-a",
+                "activeEffort": "High"
+            }),
+            "2026-09-30T11:50:00.005Z",
+        );
+        let first = insert_message(
+            &conn,
+            &thread_id,
+            MessageRole::User,
+            "unresolved first turn",
+            None,
+            "2026-09-30T11:50:00.010Z",
+        )
+        .expect("first message");
+        event(
+            &conn,
+            "agent.message",
+            Some(&workspace_id),
+            Some(&thread_id),
+            serde_json::json!({"threadId": thread_id, "messageId": first.id, "role": "user"}),
+            "2026-09-30T11:50:00.010Z",
+        );
+
+        // The first process exits without a turn-completed event. A fresh launch under B writes
+        // this null boundary before accepting its first message.
+        event(
+            &conn,
+            "thread.runtime_identity_changed",
+            Some(&workspace_id),
+            Some(&thread_id),
+            serde_json::json!({
+                "threadId": thread_id,
+                "providerId": "codex",
+                "providerAccountId": "account-b",
+                "accountLabel": "Work B",
+                "activeModel": null,
+                "activeEffort": null
+            }),
+            "2026-09-30T11:50:00.020Z",
+        );
+        let second = insert_message(
+            &conn,
+            &thread_id,
+            MessageRole::User,
+            "fresh second turn",
+            None,
+            "2026-09-30T11:50:00.030Z",
+        )
+        .expect("second message");
+        event(
+            &conn,
+            "agent.message",
+            Some(&workspace_id),
+            Some(&thread_id),
+            serde_json::json!({"threadId": thread_id, "messageId": second.id, "role": "user"}),
+            "2026-09-30T11:50:00.030Z",
+        );
+
+        let first_turn = agent_turn(&conn, &first.id, Some(&workspace_id))
+            .expect("first exact")
+            .expect("first turn");
+        assert_eq!(first_turn.completed_event_seq, None);
+        assert_eq!(
+            first_turn.observed_model.as_deref(),
+            Some("provider-model-a")
+        );
+        assert_eq!(first_turn.observed_effort.as_deref(), Some("High"));
+        assert_eq!(
+            first_turn.observed_provider_account_id.as_deref(),
+            Some("account-a"),
+            "the next process reset must not rewrite the unresolved prior turn"
+        );
+
+        let second_turn = agent_turn(&conn, &second.id, Some(&workspace_id))
+            .expect("second exact")
+            .expect("second turn");
+        assert_eq!(second_turn.observed_model, None);
+        assert_eq!(second_turn.observed_effort, None);
+        assert_eq!(
+            second_turn.observed_provider_account_id.as_deref(),
+            Some("account-b"),
+            "the fresh turn retains its exact binding while runtime selectors remain unknown"
+        );
+
+        let redelivery_thread = new_id();
+        thread_in(
+            &conn,
+            &redelivery_thread,
+            &workspace_id,
+            "2026-09-30T11:51:00.000Z",
+        );
+        event(
+            &conn,
+            "thread.runtime_identity_changed",
+            Some(&workspace_id),
+            Some(&redelivery_thread),
+            serde_json::json!({
+                "threadId": redelivery_thread,
+                "providerId": "codex",
+                "providerAccountId": "account-a",
+                "accountLabel": "Work A",
+                "activeModel": "provider-model-a",
+                "activeEffort": "High"
+            }),
+            "2026-09-30T11:51:00.005Z",
+        );
+        let redelivered = insert_message(
+            &conn,
+            &redelivery_thread,
+            MessageRole::User,
+            "resume this same durable turn",
+            None,
+            "2026-09-30T11:51:00.010Z",
+        )
+        .expect("redelivered message");
+        event(
+            &conn,
+            "agent.message",
+            Some(&workspace_id),
+            Some(&redelivery_thread),
+            serde_json::json!({
+                "threadId": redelivery_thread,
+                "messageId": redelivered.id,
+                "role": "user"
+            }),
+            "2026-09-30T11:51:00.010Z",
+        );
+        event(
+            &conn,
+            "thread.runtime_identity_changed",
+            Some(&workspace_id),
+            Some(&redelivery_thread),
+            serde_json::json!({
+                "threadId": redelivery_thread,
+                "providerId": "codex",
+                "providerAccountId": "account-b",
+                "accountLabel": "Work B",
+                "activeModel": null,
+                "activeEffort": null
+            }),
+            "2026-09-30T11:51:00.020Z",
+        );
+        event(
+            &conn,
+            "thread.runtime_identity_changed",
+            Some(&workspace_id),
+            Some(&redelivery_thread),
+            serde_json::json!({
+                "threadId": redelivery_thread,
+                "providerId": "codex",
+                "providerAccountId": "account-b",
+                "accountLabel": "Work B",
+                "activeModel": "provider-model-b",
+                "activeEffort": "Max"
+            }),
+            "2026-09-30T11:51:00.030Z",
+        );
+        event(
+            &conn,
+            "agent.turn_completed",
+            Some(&workspace_id),
+            Some(&redelivery_thread),
+            serde_json::json!({
+                "threadId": redelivery_thread,
+                "ok": true,
+                "interrupted": false
+            }),
+            "2026-09-30T11:51:00.040Z",
+        );
+        let resumed_turn = agent_turn(&conn, &redelivered.id, Some(&workspace_id))
+            .expect("redelivered exact")
+            .expect("redelivered turn");
+        assert_eq!(
+            resumed_turn.observed_model.as_deref(),
+            Some("provider-model-b"),
+            "completion proves the same durable turn continued after the reset"
+        );
+        assert_eq!(resumed_turn.observed_effort.as_deref(), Some("Max"));
+        assert_eq!(
+            resumed_turn.observed_provider_account_id.as_deref(),
+            Some("account-b")
+        );
     }
 
     #[test]
@@ -1597,6 +2090,49 @@ mod tests {
                 .expect("tool call"),
             );
         }
+        event(
+            &conn,
+            "thread.runtime_identity_changed",
+            Some(&workspace_id),
+            Some(&thread_id),
+            serde_json::json!({
+                "threadId": thread_id,
+                "providerId": "codex",
+                "providerAccountId": "account-tool-a",
+                "accountLabel": "Tool A",
+                "activeModel": "tool-model-a",
+                "activeEffort": "High"
+            }),
+            "2026-09-30T12:00:01.000Z",
+        );
+        event(
+            &conn,
+            "tool.requested",
+            Some(&workspace_id),
+            Some(&thread_id),
+            serde_json::json!({
+                "threadId": thread_id,
+                "toolCallId": ids[0],
+                "tool": "Read",
+                "summary": "Read a file"
+            }),
+            "2026-09-30T12:00:01.001Z",
+        );
+        event(
+            &conn,
+            "thread.runtime_identity_changed",
+            Some(&workspace_id),
+            Some(&thread_id),
+            serde_json::json!({
+                "threadId": thread_id,
+                "providerId": "codex",
+                "providerAccountId": "account-tool-b",
+                "accountLabel": "Tool B",
+                "activeModel": "tool-model-b",
+                "activeEffort": null
+            }),
+            "2026-09-30T12:00:01.002Z",
+        );
 
         let mut cursor = None;
         let mut paged = Vec::new();
@@ -1621,6 +2157,13 @@ mod tests {
             .expect("oldest tool");
         assert_eq!(oldest.workspace_id, workspace_id);
         assert_eq!(oldest.call.thread_id, thread_id);
+        assert_eq!(oldest.observed_model.as_deref(), Some("tool-model-a"));
+        assert_eq!(oldest.observed_effort.as_deref(), Some("High"));
+        assert_eq!(
+            oldest.observed_provider_account_id.as_deref(),
+            Some("account-tool-a"),
+            "a later identity cannot rewrite the account or model that requested this tool"
+        );
         assert_eq!(
             tool_call(&conn, &ids[0], Some(&other_workspace)).expect("wrong scope"),
             None

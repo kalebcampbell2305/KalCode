@@ -2,9 +2,10 @@ import type { ProviderAccount, ProviderAccountBinding } from "@kalcode/protocol"
 import { describe, expect, it } from "vitest";
 import { isCodingAgent } from "../../dashboard/data/agents.ts";
 import {
-  AGENT_EFFORTS,
   clampAgentCount,
+  effortForModel,
   effortLabel,
+  effortsForModel,
   LAUNCH_MEMORY_KEY,
   launchAccounts,
   launchLabel,
@@ -12,6 +13,7 @@ import {
   preselectLaunchAccount,
   type RememberedLaunch,
   readLaunchMemory,
+  rememberedLaunch,
   rememberLaunch,
   resolveLaunchAccount,
   sameSignIns,
@@ -43,10 +45,16 @@ describe("launching coding agents", () => {
     expect(launchLabel(3, "Codex")).toBe("Launch 3 Codex agents");
   });
 
-  it("offers each provider's own efforts (Gemini CLI has none)", () => {
-    expect(AGENT_EFFORTS["claude-code"]).toContain("max");
-    expect(AGENT_EFFORTS.codex).toContain("minimal");
-    expect(AGENT_EFFORTS["gemini-cli"]).toEqual([]);
+  it("uses model effort metadata first, then account catalog metadata, with no provider guess", () => {
+    const none = { id: "fixed", displayName: "Fixed", isDefault: false, supportedEfforts: [] };
+    expect(effortsForModel("codex", none, ["high"])).toEqual([]);
+    expect(effortForModel("codex", none, "high", ["high"])).toBe("");
+
+    const absent = { id: "legacy", displayName: "Legacy", isDefault: false };
+    expect(effortsForModel("codex", absent)).toEqual([]);
+    expect(effortsForModel("codex", absent, [])).toEqual([]);
+    expect(effortsForModel("codex", absent, ["medium"])).toEqual(["medium"]);
+    expect(effortForModel("codex", absent, "medium", ["medium"])).toBe("medium");
   });
 
   it("offers only this provider's accounts that are still in KalCode", () => {
@@ -108,20 +116,62 @@ describe("the launcher's memory", () => {
 
   it("round-trips the last launch per provider and ignores malformed data", () => {
     const store = memoryStore();
-    expect(readLaunchMemory(store)).toEqual({ last: null, byProvider: {} });
+    expect(readLaunchMemory(store)).toEqual({ last: null, byProvider: {}, byContext: {} });
     rememberLaunch(entry(), store);
     rememberLaunch(entry({ providerId: "codex", accountId: "x", model: null, effort: null, count: 1 }), store);
     const memory = readLaunchMemory(store);
     expect(memory.last?.providerId).toBe("codex");
     expect(memory.byProvider["claude-code"]).toMatchObject({ accountId: "b", model: "opus", effort: "high", count: 3 });
     store.setItem(LAUNCH_MEMORY_KEY, "{not json");
-    expect(readLaunchMemory(store)).toEqual({ last: null, byProvider: {} });
+    expect(readLaunchMemory(store)).toEqual({ last: null, byProvider: {}, byContext: {} });
     store.setItem(
       LAUNCH_MEMORY_KEY,
       JSON.stringify({ last: { providerId: "nope", accountId: "a", workspaceId: "ws" } }),
     );
     expect(readLaunchMemory(store).last).toBeNull();
-    expect(readLaunchMemory(null)).toEqual({ last: null, byProvider: {} });
+    expect(readLaunchMemory(null)).toEqual({ last: null, byProvider: {}, byContext: {} });
+  });
+
+  it("keeps exact model and effort choices separate per project and account", () => {
+    const store = memoryStore();
+    rememberLaunch(entry({ workspaceId: "project-a", accountId: "work", model: "opus", effort: "high" }), store);
+    rememberLaunch(
+      entry({ workspaceId: "project-a", accountId: "personal", model: "sonnet", effort: "medium" }),
+      store,
+    );
+    rememberLaunch(entry({ workspaceId: "project-b", accountId: "work", model: "haiku", effort: "low" }), store);
+
+    const memory = readLaunchMemory(store);
+    expect(rememberedLaunch(memory, "project-a", "claude-code", "work")).toMatchObject({
+      model: "opus",
+      effort: "high",
+    });
+    expect(rememberedLaunch(memory, "project-a", "claude-code", "personal")).toMatchObject({
+      model: "sonnet",
+      effort: "medium",
+    });
+    expect(rememberedLaunch(memory, "project-b", "claude-code", "work")).toMatchObject({
+      model: "haiku",
+      effort: "low",
+    });
+  });
+
+  it("round-trips a provider model id at the supported 512-byte boundary", () => {
+    const store = memoryStore();
+    const exact = `vendor/${"m".repeat(505)}`;
+    rememberLaunch(entry({ model: exact, modelName: exact }), store);
+    expect(rememberedLaunch(readLaunchMemory(store), "ws", "claude-code", "b")?.model).toBe(exact);
+  });
+
+  it("migrates a legacy provider entry only into its recorded project and account", () => {
+    const store = memoryStore();
+    const legacy = entry({ workspaceId: "project-a", accountId: "work", model: "opus", effort: "high" });
+    store.setItem(LAUNCH_MEMORY_KEY, JSON.stringify({ last: legacy, byProvider: { "claude-code": legacy } }));
+
+    const memory = readLaunchMemory(store);
+    expect(rememberedLaunch(memory, "project-a", "claude-code", "work")).toMatchObject({ model: "opus" });
+    expect(rememberedLaunch(memory, "project-a", "claude-code", "personal")).toBeNull();
+    expect(rememberedLaunch(memory, "project-b", "claude-code", "work")).toBeNull();
   });
 
   it("starts with the remembered account unless the workspace binding changed since that launch", () => {
@@ -135,8 +185,19 @@ describe("the launcher's memory", () => {
     expect(resolveLaunchAccount(accounts, bindTo("a"), "claude-code", "ws", entry({ boundAccountId: "a" }))).toBe("b");
     // Account Center then chose "c" for this workspace: that newer explicit choice wins.
     expect(resolveLaunchAccount(accounts, bindTo("c"), "claude-code", "ws", entry({ boundAccountId: "a" }))).toBe("c");
-    // A removed remembered account falls back to the runtime order.
-    expect(resolveLaunchAccount([accounts[0] as ProviderAccount], [], "claude-code", "ws", entry())).toBe("a");
+    // A removed or archived remembered account never falls through to another account.
+    expect(resolveLaunchAccount([accounts[0] as ProviderAccount], [], "claude-code", "ws", entry())).toBe("");
+    expect(
+      resolveLaunchAccount(
+        [accounts[0] as ProviderAccount, account("b", { archivedAt: "2026-10-07T12:00:00Z" })],
+        [],
+        "claude-code",
+        "ws",
+        entry(),
+      ),
+    ).toBe("");
+    // A newer explicit Account Center binding still replaces the unavailable remembered account.
+    expect(resolveLaunchAccount([accounts[0] as ProviderAccount], bindTo("a"), "claude-code", "ws", entry())).toBe("a");
     expect(resolveLaunchAccount(accounts, [], "claude-code", "ws", undefined)).toBe("a");
   });
 

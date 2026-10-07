@@ -124,13 +124,24 @@ test.describe("provider panes", () => {
     const threadId = await region.getAttribute("data-provider-pane");
     const tab = page.locator(`[role="tab"][data-content-key="agent:${threadId}"]`);
     await expect(tab).toHaveText("Claude Code");
-    // One compact header: account · model · effort · usage; the provider is named, never guessed.
+    // One compact header: provider · account · model · effort · usage. Unknown runtime facts stay
+    // explicit instead of turning a launch default into an active-model claim.
     await expect(region.locator("[data-pane-identity]")).toHaveAttribute(
       "title",
-      /^Claude Code · Personal · Provider default model/,
+      /^Claude Code · Personal · Model controlled by provider · Reasoning controlled by provider/,
     );
+    const identityDetail = region.locator("[data-pane-identity-detail]");
+    await expect(identityDetail).toHaveAccessibleName(
+      /^Session identity: Claude Code · Personal · Model controlled by provider · Reasoning controlled by provider/,
+    );
+    await identityDetail.focus();
+    await expect(page.getByRole("tooltip")).toContainText(
+      "Claude Code · Personal · Model controlled by provider · Reasoning controlled by provider",
+    );
+    await expect(region.locator("[data-pane-provider]")).toHaveText("Claude Code");
     await expect(region.locator("[data-pane-account]")).toContainText("Personal");
-    await expect(region.locator("[data-pane-model]"), "an unknown model shows nothing").toHaveCount(0);
+    await expect(region.locator("[data-pane-model]")).toHaveText("Model controlled by provider");
+    await expect(region.locator("[data-pane-effort]")).toHaveText("Reasoning controlled by provider");
     // The header always names the mode the pane runs in. Which start mode is canonical (Auto or
     // Bypass) is owned and asserted by the permissions specs, not by the header.
     await expect(region.locator("[data-pane-mode]")).toBeVisible();

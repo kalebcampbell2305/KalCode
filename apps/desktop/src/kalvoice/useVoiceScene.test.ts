@@ -1,4 +1,4 @@
-import type { TerminalInfo, ThreadSummary, Workspace } from "@kalcode/protocol";
+import type { ProviderAccount, TerminalInfo, ThreadSummary, Workspace } from "@kalcode/protocol";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveVoiceSceneTarget } from "./sceneTargets.ts";
@@ -147,6 +147,53 @@ describe("live KalVoice scene", () => {
     expect(
       resolveVoiceSceneTarget({ kind: "named", query: "Codex working on KalCode" }, { targets: [threadTarget] }),
     ).toEqual({ kind: "resolved", target: threadTarget });
+  });
+
+  it("publishes current account identity and provider-reported model and effort with provenance", () => {
+    const live = {
+      ...thread,
+      accountLabel: "Old nickname",
+      activeModel: "provider/model-v2",
+      activeEffort: "ultra",
+    } as ThreadSummary & { activeModel: string; activeEffort: string };
+    const account = {
+      id: "account",
+      providerId: "codex",
+      displayName: "Current nickname",
+      authenticationState: "authenticated",
+      archivedAt: null,
+    } as ProviderAccount;
+
+    const target = createBaseVoiceSceneTargets({
+      workspaces: [workspace],
+      terminals: [],
+      threads: [live],
+      accounts: [account],
+    }).find((candidate) => candidate.entityId === live.id);
+
+    expect(target).toMatchObject({
+      title: "Updater",
+      accountLabel: "Current nickname",
+      model: "provider/model-v2",
+      modelSource: "provider",
+      effort: "ultra",
+      effortSource: "provider",
+      aliases: expect.arrayContaining(["Current nickname", "provider/model-v2", "ultra"]),
+    });
+    expect(target?.aliases).not.toContain("Old nickname");
+  });
+
+  it("marks configured selectors as selected when the provider has not reported active values", () => {
+    const target = createBaseVoiceSceneTargets({ workspaces: [workspace], terminals: [], threads: [thread] }).find(
+      (candidate) => candidate.entityId === thread.id,
+    );
+
+    expect(target).toMatchObject({
+      model: "gpt-6",
+      modelSource: "configured",
+      effort: "high",
+      effortSource: "configured",
+    });
   });
 
   it("merges live geometry and focus without dropping structured activity", () => {

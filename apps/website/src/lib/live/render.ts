@@ -49,7 +49,6 @@ import {
   MODE_LABEL,
   MODELS,
   type Mode,
-  modelLabel,
   needsYou,
   PRIMARY_SURFACES,
   PROVIDER_NAME,
@@ -64,6 +63,7 @@ import {
   type Tab,
   VOICE_PHRASES,
   WORKSPACE,
+  weeklyWindow,
   workMark,
 } from "./model";
 import { TOUR } from "./tour";
@@ -119,6 +119,39 @@ function meter(left: number): string {
   return `<span class="lk-meter" data-low="${left < 20}" aria-hidden="true"><span class="lk-meter__fill" data-w="${step}"></span></span>`;
 }
 
+function weeklyUsage(account: Account | undefined) {
+  const window = account ? weeklyWindow(account) : null;
+  return {
+    window,
+    low: window ? window.left < 20 : false,
+    short: window ? `${window.left}% left` : "Weekly usage unavailable",
+    detail: window ? `${window.left}% weekly left` : "Weekly usage unavailable",
+    label: window ? `${window.left}% of weekly usage left` : "Weekly usage unavailable",
+  };
+}
+
+/** Native selector truth without pretending an alias/default reveals a provider's resolved model ID. */
+function modelIdentity(agent: Agent): string {
+  const selector = agent.model.trim().toLowerCase();
+  if (selector === "auto (default)") return "model: provider auto (resolved ID not reported)";
+  if (selector === "account default") return "model: account default (resolved ID not reported)";
+  if (selector === "default") return "model: provider default (resolved ID not reported)";
+  return `model: ${selector} (selected)`;
+}
+
+function reasoningIdentity(agent: Agent): string {
+  const label = agent.provider === "claude" ? "effort" : "reasoning";
+  if (!agent.effort) return `${label}: provider-controlled (not reported)`;
+  if (agent.effort === "Default") return `${label}: provider default (resolved level not reported)`;
+  return `${label}: ${agent.effort.toLowerCase()} (selected)`;
+}
+
+/** Task title is primary; truthful simulated selector metadata is always the secondary line. */
+function agentIdentity(state: State, agent: Agent): string {
+  const account = accountOf(state, agent.account);
+  return `${PROVIDER_NAME[agent.provider]} · ${account?.name ?? "Account"} · ${modelIdentity(agent)} · ${reasoningIdentity(agent)}`;
+}
+
 function elapsed(minutes: number): string {
   return minutes ? `${minutes}m` : "now";
 }
@@ -137,7 +170,7 @@ function chipAccount(state: State): Account | undefined {
 function topBar(state: State): string {
   const c = counts(state);
   const account = chipAccount(state);
-  const left = account?.windows[0]?.left ?? 0;
+  const usage = weeklyUsage(account);
   return `<header class="lk-top">
   <div class="lk-brand"><span class="lk-brand__mark" aria-hidden="true"></span><span class="lk-wordmark" aria-hidden="true"></span><span class="visually-hidden">KalCode</span><span class="lk-demo"${hint("This is a temporary demo workspace. Reset or reload to start over.")}>Demo</span></div>
   <div class="lk-ctx">
@@ -151,7 +184,7 @@ function topBar(state: State): string {
     <button type="button" class="lk-signal" data-tone="${c.working ? "working" : "muted"}" data-do="go:dashboard" aria-label="${c.working} ${c.working === 1 ? "agent" : "agents"} working. Show agents"><span class="lk-signal__dot" aria-hidden="true"></span><strong>${c.working}</strong><span class="lk-signal__word">working</span></button>
     <button type="button" class="lk-signal" data-tone="${c.needs ? "waiting" : "muted"}" data-do="needs" data-tour="needs" data-active="${c.needs > 0}" aria-label="${c.needs} ${c.needs === 1 ? "thing needs" : "things need"} you"><span class="lk-signal__dot" aria-hidden="true"></span><strong>${c.needs}</strong><span class="lk-signal__word">${c.needs === 1 ? "needs" : "need"} you</span></button>
   </div>
-  <button type="button" class="lk-accounts" data-do="menu:accounts" data-tour="accounts" data-low="${left < 20}" aria-label="Account and usage center" aria-expanded="${state.menu === "accounts"}"${hint("Your provider accounts and what each has left.")}>${icon("users")}<span class="lk-accounts__text"><strong>${esc(account?.name ?? "Accounts")}</strong><small>${left}% left</small></span>${icon("chevron", "lk-caret")}</button>
+  <button type="button" class="lk-accounts" data-do="menu:accounts" data-tour="accounts" data-low="${usage.low}" aria-label="Account and usage center. ${esc(usage.label)}" aria-expanded="${state.menu === "accounts"}"${hint("This simulated account chip shows weekly usage only.")}>${icon("users")}<span class="lk-accounts__text"><strong>${esc(account?.name ?? "Accounts")}</strong><small>${esc(usage.short)}</small></span>${icon("chevron", "lk-caret")}</button>
 </header>`;
 }
 
@@ -280,14 +313,15 @@ function tabBar(state: State): string {
 
 // ── Agents rail ─────────────────────────────────────────────────────────────────────────────
 
-function railRow(a: Agent): string {
+function railRow(state: State, a: Agent): string {
   const s = agentState(a);
+  const identity = agentIdentity(state, a);
   const explained = isAgentBusy(s) || s === "needs_you" || s === "waiting";
   const detail =
     explained && a.activity && a.activity !== AGENT_STATE_TEXT[s]
       ? `${AGENT_STATE_TEXT[s]} · ${a.activity}`
       : AGENT_STATE_TEXT[s];
-  return `<button type="button" class="lk-rail__row" data-key="r-${a.id}" data-do="agent:${a.id}" data-tone="${AGENT_STATE_TONE[s]}" data-needs="${s === "needs_you"}" aria-label="${esc(a.name)}, ${AGENT_STATE_TEXT[s]}, ${PROVIDER_NAME[a.provider]} in ${WORKSPACE.name}. Open agent"><span class="lk-rail__glyph">${glyph(a.provider)}<span class="lk-pulse"></span></span><span class="lk-rail__text"><span class="lk-rail__top"><strong>${esc(a.name)}</strong><time>${elapsed(a.minutes)}</time></span><span class="lk-rail__detail">${esc(detail)}</span><small>${PROVIDER_NAME[a.provider]} · ${WORKSPACE.name}</small></span></button>`;
+  return `<button type="button" class="lk-rail__row" data-key="r-${a.id}" data-do="agent:${a.id}" data-tone="${AGENT_STATE_TONE[s]}" data-needs="${s === "needs_you"}" aria-label="${esc(`${a.name}, ${AGENT_STATE_TEXT[s]}, ${identity}. Open agent`)}"><span class="lk-rail__glyph">${glyph(a.provider)}<span class="lk-pulse"></span></span><span class="lk-rail__text"><span class="lk-rail__top"><strong>${esc(a.name)}</strong><time>${elapsed(a.minutes)}</time></span><span class="lk-rail__detail">${esc(detail)}</span><small title="${esc(identity)}">${esc(identity)}</small></span></button>`;
 }
 
 function rail(state: State): string {
@@ -300,11 +334,11 @@ function rail(state: State): string {
   }
   const group = (label: string, t: string, agents: Agent[]) =>
     agents.length
-      ? `<section class="lk-rail__group" data-tone="${t}"><p class="lk-label" data-tone="${t}"><span class="lk-dot"></span>${label} <span>${agents.length}</span></p>${agents.map((a) => railRow(a)).join("")}</section>`
+      ? `<section class="lk-rail__group" data-tone="${t}"><p class="lk-label" data-tone="${t}"><span class="lk-dot"></span>${label} <span>${agents.length}</span></p>${agents.map((a) => railRow(state, a)).join("")}</section>`
       : "";
   const idle = agentsIn(state, "idle");
   const idleGroup = idle.length
-    ? `<section class="lk-rail__group"><button type="button" class="lk-rail__fold" data-do="rail-idle" aria-expanded="${state.idleOpen}">${icon("chevronRight")}Idle <span>${idle.length}</span></button>${state.idleOpen ? idle.map((a) => railRow(a)).join("") : ""}</section>`
+    ? `<section class="lk-rail__group"><button type="button" class="lk-rail__fold" data-do="rail-idle" aria-expanded="${state.idleOpen}">${icon("chevronRight")}Idle <span>${idle.length}</span></button>${state.idleOpen ? idle.map((a) => railRow(state, a)).join("") : ""}</section>`
     : "";
   const body = [
     group("Needs you", "waiting", agentsIn(state, "needs_you")),
@@ -355,7 +389,8 @@ function modeBadge(mode: Mode): string {
 
 export function agentPane(state: State, agent: Agent): string {
   const account = accountOf(state, agent.account);
-  const usage = account?.windows[0];
+  const usage = weeklyUsage(account);
+  const identity = agentIdentity(state, agent);
   const approval = agent.approval
     ? `<div class="lk-approval" role="group" aria-label="${esc(agent.name)} needs approval"><p class="lk-approval__title">${icon("approvals")} ${esc(agent.approval.title)}</p><code>${esc(agent.approval.command)}</code><p class="lk-approval__why">${esc(agent.approval.reason)}</p><div class="lk-approval__actions"><button type="button" class="lk-btn lk-btn--danger" data-do="deny:${agent.id}">Deny</button><button type="button" class="lk-btn lk-btn--primary" data-do="approve:${agent.id}">Approve once</button></div></div>`
     : "";
@@ -369,14 +404,13 @@ export function agentPane(state: State, agent: Agent): string {
           .map((s) => `<button type="button" class="lk-chip" data-do="prompt:${agent.id}:${esc(s)}">${esc(s)}</button>`)
           .join("")}</div>`
       : "";
-  const effort = agent.effort && agent.effort !== "Default" ? agent.effort : "";
   const pickerOpen = state.picker?.agent === agent.id;
   return `<div class="lk-agent">
   <div class="lk-agent__head">
     <div class="lk-agent__lead">
       <strong class="lk-agent__title" title="${esc(agent.name)}">${esc(agent.name)}</strong>
-      <span class="lk-ident" title="${esc(`${PROVIDER_NAME[agent.provider]} · ${account?.name ?? ""} · ${modelLabel(agent)}${effort ? ` · ${effort} effort` : ""}`)}"><span class="visually-hidden">${PROVIDER_NAME[agent.provider]}</span><button type="button" class="lk-ident__acct" data-do="picker:${agent.id}" data-picker-for="${agent.id}" aria-expanded="${pickerOpen}" aria-label="${esc(account?.name ?? "Account")}. Switch ${PROVIDER_NAME[agent.provider]} account"${hint("Switch account for a new session")}>${glyph(agent.provider)}<span>${esc(account?.name ?? "Account")}</span>${icon("chevron", "lk-caret")}</button>${agent.provider === "cursor" ? "" : `<span class="lk-ident__seg">${esc(modelLabel(agent))}</span>`}${effort ? `<span class="lk-ident__seg">${esc(effort)}</span>` : ""}</span>
-      ${usage ? `<span class="lk-usage" data-low="${usage.left < 20}" title="${usage.label}: ${usage.left}% left">${meter(usage.left)}${usage.left}%</span>` : ""}
+      <span class="lk-ident" title="${esc(identity)}"><button type="button" class="lk-ident__acct" data-do="picker:${agent.id}" data-picker-for="${agent.id}" aria-expanded="${pickerOpen}" aria-label="${esc(account?.name ?? "Account")}. Switch ${PROVIDER_NAME[agent.provider]} account"${hint("Switch account for a new session")}>${glyph(agent.provider)}<span>${esc(PROVIDER_NAME[agent.provider])} · ${esc(account?.name ?? "Account")}</span>${icon("chevron", "lk-caret")}</button><span class="lk-ident__seg">${esc(modelIdentity(agent))}</span><span class="lk-ident__seg">${esc(reasoningIdentity(agent))}</span></span>
+      <span class="lk-usage" data-low="${usage.low}" title="${esc(usage.label)}">${usage.window ? meter(usage.window.left) : ""}${esc(usage.short)}</span>
     </div>
     <div class="lk-agent__meta">${modeBadge(agent.mode)}${statusChip(agent)}</div>
   </div>
@@ -523,6 +557,8 @@ function contextMenu(): string {
 function fleetCard(state: State, a: Agent): string {
   const s = agentState(a);
   const t = AGENT_STATE_TONE[s];
+  const identity = agentIdentity(state, a);
+  const usage = weeklyUsage(accountOf(state, a.account));
   const asks = s === "needs_you" && !a.approval;
   const approval = a.approval
     ? `<div class="lk-approval lk-approval--card"><p class="lk-approval__title">${icon("approvals")} ${esc(a.approval.title)}</p><code>${esc(a.approval.command)}</code><div class="lk-approval__actions"><button type="button" class="lk-btn lk-btn--danger" data-do="deny:${a.id}">Deny</button><button type="button" class="lk-btn lk-btn--primary" data-do="approve:${a.id}">Approve once</button></div></div>`
@@ -530,8 +566,8 @@ function fleetCard(state: State, a: Agent): string {
   return `<article class="lk-card" data-key="c-${a.id}" data-tone="${t}" data-needs="${s === "needs_you"}" aria-label="${esc(a.name)}">
   <p class="lk-card__top"><span class="lk-dot" data-tone="${t}"></span><strong>${esc(accountLabel(state, a.account))}</strong><span class="lk-stage" data-tone="${t}">${AGENT_STATE_TEXT[s]}</span><time>${icon("clock")}${a.minutes ? `${a.minutes} min` : "<1 min"}</time></p>
   <h5 class="lk-card__name">${esc(a.name)}</h5>
-  <p class="lk-card__meta">${glyph(a.provider)}<span>${PROVIDER_NAME[a.provider]} · ${WORKSPACE.name}</span></p>
-  <p class="lk-card__mono lk-mono"><span>${esc(modelLabel(a).toLowerCase())}</span>${icon("branch")}<span class="lk-card__branch">${esc(a.branch)}</span></p>
+  <p class="lk-card__meta" title="${esc(identity)}">${glyph(a.provider)}<span>${esc(identity)}</span></p>
+  <p class="lk-card__mono lk-mono"><span title="${esc(usage.label)}">${esc(usage.detail)}</span>${icon("branch")}<span class="lk-card__branch">${esc(WORKSPACE.name)} · ${esc(a.branch)}</span></p>
   ${approval || `<p class="lk-card__activity"${asks ? ' data-asks="true"' : ""}>${esc(a.activity)}</p>`}
   <p class="lk-card__foot"><span>${a.files} ${a.files === 1 ? "file" : "files"}</span><button type="button" class="lk-btn${asks ? " lk-btn--primary" : ""}" data-do="agent:${a.id}">${asks ? "Reply" : "Open"}${icon("forward")}</button></p>
 </article>`;
@@ -587,7 +623,7 @@ function dashboard(state: State): string {
     .filter(Boolean)
     .join(" · ");
   return `<div class="lk-page lk-scroll" data-scroll-key="dash">
-  <header class="lk-page__head"><div><h3 class="lk-h1">Activity</h3><p>${summary}</p></div>
+  <header class="lk-page__head"><div><h3 class="lk-h1">Activity</h3><p>Simulated workspace · ${summary}</p></div>
     <div class="lk-trend" aria-hidden="true"><small>Last hour</small><span class="lk-trend__bars">${[1, 1, 2, 1, 3, 2, 4, 3, 5, 6].map((h) => `<i data-h="${h}"></i>`).join("")}</span><strong>${12 + state.tick} events</strong></div></header>
   ${needsStrip(state)}
   <section class="lk-board" aria-label="Agent Fleet" data-tour="fleet">
@@ -797,18 +833,22 @@ function threads(): string {
 }
 
 export function accountCard(a: Account, compact = false): string {
-  return `<div class="lk-acct" data-key="acct-${a.id}"><p class="lk-acct__head">${glyph(a.provider)}<strong>${esc(a.name)}</strong><small>${PROVIDER_NAME[a.provider]} · ${esc(a.plan)}</small>${a.isDefault ? `<span class="lk-pill">Default</span>` : ""}</p>${a.windows
-    .slice(0, compact ? 1 : 2)
-    .map(
-      (w) =>
-        `<div class="lk-win"><span>${w.label}</span><strong>${w.left}%</strong> left${meter(w.left)}<small>${w.resets}</small></div>`,
-    )
-    .join("")}</div>`;
+  const windows = compact ? [weeklyWindow(a)].filter((window) => window !== null) : a.windows.slice(0, 2);
+  const usage =
+    compact && windows.length === 0
+      ? '<div class="lk-win" data-unavailable="true"><small>Weekly usage unavailable</small></div>'
+      : windows
+          .map(
+            (w) =>
+              `<div class="lk-win"><span>${esc(w.label)}</span><strong>${w.left}%</strong> left${meter(w.left)}<small>${esc(w.resets)}</small></div>`,
+          )
+          .join("");
+  return `<div class="lk-acct" data-key="acct-${a.id}"><p class="lk-acct__head">${glyph(a.provider)}<strong>${esc(a.name)}</strong><small>${PROVIDER_NAME[a.provider]} · ${esc(a.plan)}</small>${a.isDefault ? `<span class="lk-pill">Default</span>` : ""}</p>${usage}</div>`;
 }
 
 function providers(state: State): string {
   return `<div class="lk-page lk-scroll" data-scroll-key="pv">
-  <header class="lk-page__head"><div><h3 class="lk-h1">Providers ${soon("account-hub")}</h3><p>Claude Code, Codex, Gemini CLI and Cursor, signed in with your own accounts. Add as many as you use.</p></div></header>
+  <header class="lk-page__head"><div><h3 class="lk-h1">Providers ${soon("account-hub")}</h3><p>Sample accounts show how KalCode presents Claude Code, Codex, Gemini CLI and Cursor. The demo does not inspect your provider sessions.</p></div></header>
   <div class="lk-tabs" role="tablist" aria-label="Providers"><button type="button" role="tab" class="lk-tabs__tab" aria-selected="false" disabled>Setup</button><button type="button" role="tab" class="lk-tabs__tab" aria-selected="true">Accounts</button><button type="button" role="tab" class="lk-tabs__tab" aria-selected="false" disabled>Health</button></div>
   ${PROVIDERS.map(
     (p) =>
@@ -857,9 +897,9 @@ function launcherDialog(state: State): string {
       `<p class="lk-label lk-lgroup">${glyph(p)}${PROVIDER_NAME[p]}</p>${state.accounts
         .filter((a) => a.provider === p)
         .map((a) => {
-          const left = a.windows[0]?.left ?? 0;
+          const usage = weeklyUsage(a);
           const on = l.account === a.id;
-          return `<button type="button" role="radio" aria-checked="${on}" class="lk-lrow" data-key="lr-${a.id}" data-do="pick:${a.id}"><span class="lk-radio" aria-hidden="true"></span><span class="lk-lrow__name"><strong>${esc(a.name)}</strong><small>${esc(a.plan)}${a.isDefault ? " · Default" : ""}</small></span>${meter(left)}<span class="lk-lrow__left">${left}% left</span><span class="lk-lrow__state" data-tone="${left < 20 ? "waiting" : "working"}"><span class="lk-dot"></span>${left < 20 ? "Low" : "Ready"}</span></button>`;
+          return `<button type="button" role="radio" aria-checked="${on}" class="lk-lrow" data-key="lr-${a.id}" data-do="pick:${a.id}" aria-label="${esc(`${a.name} · ${a.plan} · ${usage.label}`)}"><span class="lk-radio" aria-hidden="true"></span><span class="lk-lrow__name"><strong>${esc(a.name)}</strong><small>${esc(a.plan)}${a.isDefault ? " · Default" : ""}</small></span>${usage.window ? meter(usage.window.left) : ""}<span class="lk-lrow__left">${esc(usage.short)}</span><span class="lk-lrow__state" data-tone="${usage.low ? "waiting" : "muted"}"><span class="lk-dot"></span>${usage.window ? "Weekly" : "Unavailable"}</span></button>`;
         })
         .join("")}`,
   ).join("");
@@ -881,7 +921,7 @@ function launcherDialog(state: State): string {
   const efforts = EFFORTS[l.provider];
   return `<div class="lk-scrim" data-do="launcher-close"></div>
 <div class="lk-dialog" role="dialog" aria-modal="true" aria-labelledby="lk-launch-title" data-tour="launcher" data-dialog>
-  <header class="lk-dialog__head"><span class="lk-dialog__icon">${icon("bot")}</span><div><h4 id="lk-launch-title">New agent ${soon("provider-terminals")}</h4><p>A real coding agent in its own terminal in <strong>${WORKSPACE.name}</strong>.</p></div><kbd>Esc</kbd></header>
+  <header class="lk-dialog__head"><span class="lk-dialog__icon">${icon("bot")}</span><div><h4 id="lk-launch-title">New agent ${soon("provider-terminals")}</h4><p>A simulated session in <strong>${WORKSPACE.name}</strong>. KalCode launches the real provider terminal.</p></div><kbd>Esc</kbd></header>
   <div class="lk-dialog__body">
     <div role="radiogroup" aria-label="Account" class="lk-lrows">${groups}</div>
     ${suggestion}
@@ -916,8 +956,8 @@ function accountPicker(state: State): string {
     .filter((a) => a.provider === agent.provider)
     .map((a) => {
       const current = a.id === agent.account;
-      const w = a.windows[0];
-      return `<button type="button" class="lk-prow" data-do="picker-pick:${a.id}" aria-pressed="${(picker.choice ?? agent.account) === a.id}">${glyph(a.provider)}<span class="lk-prow__id"><strong>${esc(a.name)}${current ? '<span class="lk-tagsm">Current</span>' : ""}${a.isDefault ? '<span class="lk-tagsm">Default</span>' : ""}</strong><small>${PROVIDER_NAME[a.provider]} · Ready</small></span><span class="lk-prow__quota">${w ? `${meter(w.left)}<small>${w.left}% · ${esc(w.resets)}</small>` : ""}</span></button>`;
+      const usage = weeklyUsage(a);
+      return `<button type="button" class="lk-prow" data-do="picker-pick:${a.id}" aria-pressed="${(picker.choice ?? agent.account) === a.id}" aria-label="${esc(`${a.name} · ${usage.label}`)}">${glyph(a.provider)}<span class="lk-prow__id"><strong>${esc(a.name)}${current ? '<span class="lk-tagsm">Current</span>' : ""}${a.isDefault ? '<span class="lk-tagsm">Default</span>' : ""}</strong><small>${PROVIDER_NAME[a.provider]} · Simulated</small></span><span class="lk-prow__quota">${usage.window ? `${meter(usage.window.left)}<small>${usage.window.left}% weekly · ${esc(usage.window.resets)}</small>` : `<small>${esc(usage.short)}</small>`}</span></button>`;
     })
     .join("");
   const confirm =
@@ -929,7 +969,7 @@ function accountPicker(state: State): string {
 
 function accountsPopover(state: State): string {
   const next = state.accounts.find((a) => a.provider === "claude" && a.isDefault);
-  return `<div class="lk-pop lk-pop--accounts" role="dialog" aria-label="Accounts and usage"><p class="lk-pop__title"><strong>Accounts &amp; usage</strong><small>Your providers, at a glance</small></p><p class="lk-pop__new">New agents: Claude Code · ${esc(next?.name ?? "Personal")}</p><div class="lk-pop__list">${state.accounts.map((a) => accountCard(a, true)).join("")}</div><p class="lk-pop__foot">Usage appears only when reported by your provider.</p><button type="button" class="lk-btn" data-do="go:providers">${icon("providers")}Manage accounts</button></div>`;
+  return `<div class="lk-pop lk-pop--accounts" role="dialog" aria-label="Accounts and usage"><p class="lk-pop__title"><strong>Sample accounts &amp; usage</strong><small>Simulated provider identities</small></p><p class="lk-pop__new">New agents: Claude Code · ${esc(next?.name ?? "Personal")}</p><div class="lk-pop__list">${state.accounts.map((a) => accountCard(a, true)).join("")}</div><p class="lk-pop__foot">Compact summaries show weekly usage only. KalCode reads real usage from your providers.</p><button type="button" class="lk-btn" data-do="go:providers">${icon("providers")}Manage accounts</button></div>`;
 }
 
 function envMenu(state: State): string {

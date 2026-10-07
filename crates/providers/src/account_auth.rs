@@ -1243,6 +1243,9 @@ fn decode_model_item(value: &Value) -> Option<CodexAccountModel> {
     let is_default = value.get("isDefault").and_then(Value::as_bool)?;
     let default_reasoning_effort =
         required_bounded_string(value, "defaultReasoningEffort", 64).ok()?;
+    if !crate::codex::argv::valid_effort_name(&default_reasoning_effort) {
+        return None;
+    }
     let efforts = value.get("supportedReasoningEfforts")?.as_array()?;
     if efforts.len() > MAX_MODEL_EFFORTS {
         return None;
@@ -1251,6 +1254,9 @@ fn decode_model_item(value: &Value) -> Option<CodexAccountModel> {
     let mut seen_efforts = HashSet::new();
     for effort in efforts {
         let reasoning_effort = required_bounded_string(effort, "reasoningEffort", 64).ok()?;
+        if !crate::codex::argv::valid_effort_name(&reasoning_effort) {
+            continue;
+        }
         required_bounded_metadata(effort, "description", 4 * 1024).ok()?;
         if !seen_efforts.insert(reasoning_effort.clone()) {
             return None;
@@ -1543,6 +1549,54 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn model_catalog_omits_effort_tokens_the_launch_adapter_cannot_accept() {
+        assert!(
+            decode_model_item(&model_value(
+                "catalog-future",
+                "codex-future-selector",
+                "Future",
+                true,
+                "future-effort",
+                &["future-effort"],
+            ))
+            .is_some()
+        );
+
+        let invalid = [
+            "UPPER".to_owned(),
+            "future.effort".to_owned(),
+            "e".repeat(33),
+            "high' -c web_search='live".to_owned(),
+        ];
+        for effort in &invalid {
+            assert!(
+                decode_model_item(&model_value(
+                    "catalog-unlaunchable",
+                    "codex-unlaunchable-selector",
+                    "Unlaunchable",
+                    true,
+                    effort,
+                    &[effort],
+                ))
+                .is_none(),
+                "{effort:?} must not be advertised"
+            );
+        }
+        for effort in &invalid {
+            let decoded = decode_model_item(&model_value(
+                "catalog-partly-actionable",
+                "codex-partly-actionable-selector",
+                "Partly actionable",
+                true,
+                "high",
+                &["high", effort],
+            ))
+            .expect("a valid default keeps the model actionable");
+            assert_eq!(decoded.supported_reasoning_efforts, ["high"]);
+        }
     }
 
     #[test]

@@ -16,6 +16,29 @@ KalCode hosts supported provider CLIs in real terminals. Provider-native authent
 
 This table describes integration mechanisms, not certification of every upstream extension or model. Provider policy can disable a native feature; KalCode must show the real limitation and must not fabricate status or availability.
 
+## Exact session identity
+
+The canonical thread summary keeps launch selections (`model`, `effort`) separate from
+provider-reported identity (`activeModel`, `activeEffort`). Structured, authenticated
+provider events supply reported values; a configured alias is never expanded into an
+invented model version. Missing reports remain "controlled by provider". Session surfaces
+use the shared `sessionIdentity` projection and exact account/provider binding, so an
+expired account retains its nickname and reconnect action rather than borrowing another
+account's identity or usage.
+
+Account model catalogs declare their provenance: runtime discovery, documented aliases,
+or unavailable discovery. Only a fresh runtime catalog can establish that an account no
+longer offers a model. Cached choices remain visible while refresh runs and are marked
+stale after expiry or refresh failure. Documented aliases are suggestions, not an
+exhaustive account entitlement list. Model-specific reasoning metadata overrides adapter
+fallbacks, including an explicitly empty set of supported reasoning choices.
+
+Launch preferences are scoped to project, provider and account. Explicit model IDs survive
+even when that model is the provider's current default. A manual terminal rename retains
+ownership even when the saved text is unchanged; task naming never overwrites it.
+Weekly remaining usage is the compact metric. Missing weekly data remains unavailable;
+shorter windows belong in expanded usage details.
+
 ## Squad and queued-agent launches
 
 Squads, Recipes and agent Operations use the same provider-pane adapter as Code's

@@ -240,40 +240,25 @@ fn validate_launch_effort(
     provider: &ProviderId,
     effort: Option<&str>,
 ) -> Result<Option<String>, ExecError> {
-    let Some(effort) = effort.map(str::trim).filter(|effort| !effort.is_empty()) else {
-        return Ok(None);
-    };
-    let effort = effort.to_ascii_lowercase();
-    if effort == "default" {
-        return Ok(None);
-    }
-    let supported = match provider.as_str() {
-        ProviderId::CLAUDE_CODE => kalcode_providers::claude::argv::valid_effort_name(&effort),
-        ProviderId::CODEX => kalcode_providers::codex::argv::valid_effort_name(&effort),
-        ProviderId::GEMINI_CLI => {
-            return Err(ExecError::new(
+    kalcode_providers::interactive::normalize_effort(provider.as_str(), effort).map_err(|_| {
+        match provider.as_str() {
+            ProviderId::GEMINI_CLI => ExecError::new(
                 "effort_not_supported",
                 "Gemini does not expose an effort setting. Remove the effort level and try again.",
-            ));
-        }
-        ProviderId::CURSOR => {
-            return Err(ExecError::new(
+            ),
+            ProviderId::CURSOR => ExecError::new(
                 "effort_not_supported",
                 "Cursor does not expose a separate effort setting. Choose an available model and its native reasoning variant instead.",
-            ));
-        }
-        _ => false,
-    };
-    if !supported {
-        return Err(ExecError::new(
-            "invalid_effort",
-            format!(
-                "{} does not support the requested effort level.",
-                provider_display_name(provider)
             ),
-        ));
-    }
-    Ok(Some(effort))
+            _ => ExecError::new(
+                "invalid_effort",
+                format!(
+                    "{} does not support the requested effort level.",
+                    provider_display_name(provider)
+                ),
+            ),
+        }
+    })
 }
 
 fn spoken_model_key(value: &str) -> String {
@@ -288,19 +273,25 @@ fn validate_launch_model(
     provider: &ProviderId,
     available: &ProviderOption,
     requested: Option<&str>,
+    authoritative_catalog: bool,
 ) -> Result<Option<String>, ExecError> {
     let requested = kalcode_threads::validate::model(requested).map_err(|e| from_core(&e))?;
     let Some(requested) = requested else {
         return Ok(None);
     };
-    if available.models.is_empty() {
+    if !kalcode_providers::catalog::valid_model_selector(provider.as_str(), &requested) {
+        return Err(ExecError::new(
+            "invalid_model",
+            "That model name isn't valid.",
+        ));
+    }
+    if authoritative_catalog && available.models.is_empty() {
         if provider.as_str() == ProviderId::CURSOR {
             return Err(ExecError::new(
                 "cursor_models_unavailable",
                 "Cursor's available models could not be verified. Reconnect Cursor or choose the native default model.",
             ));
         }
-        return Ok(Some(requested));
     }
     if let Some(exact) = available
         .models
@@ -308,17 +299,6 @@ fn validate_launch_model(
         .find(|model| model.id.eq_ignore_ascii_case(&requested))
     {
         return Ok(Some(exact.id.clone()));
-    }
-    if provider.as_str() == ProviderId::CLAUDE_CODE
-        && kalcode_providers::claude::argv::valid_model_name(&requested)
-        && (requested.starts_with("claude-")
-            || requested.split_once('[').is_some_and(|(alias, suffix)| {
-                matches!(alias, "opus" | "sonnet" | "haiku" | "fable") && suffix.ends_with(']')
-            }))
-    {
-        // Claude Code accepts full argv-safe identifiers in addition to its short catalog
-        // aliases. Preserve the exact identifier; the installed provider remains authoritative.
-        return Ok(Some(requested));
     }
     let key = spoken_model_key(&requested);
     let matches = available
@@ -330,6 +310,7 @@ fn validate_launch_model(
         .collect::<Vec<_>>();
     match matches.as_slice() {
         [one] => Ok(Some(one.id.clone())),
+        [] if !authoritative_catalog => Ok(Some(requested)),
         _ => Err(ExecError::new(
             "invalid_model",
             if provider.as_str() == ProviderId::CURSOR {
@@ -1068,12 +1049,19 @@ impl DesktopExecutor {
                 ));
             }
             let mut available = available.clone();
+            let mut authoritative_catalog = false;
             if provider.as_str() == ProviderId::CURSOR && group.model.is_some() {
                 available.models = self.cursor_models.as_ref().ok_or_else(|| {
                     ExecError::new("cursor_models_unavailable", "Cursor model discovery is unavailable. Choose the native default model or reconnect Cursor.")
                 })?(account.as_ref().map(|account| account.id.as_str()))?;
+                authoritative_catalog = true;
             }
-            let model = validate_launch_model(provider, &available, group.model.as_deref())?;
+            let model = validate_launch_model(
+                provider,
+                &available,
+                group.model.as_deref(),
+                authoritative_catalog,
+            )?;
             let idle = CreateIdleThread {
                 provider_id: provider.to_string(),
                 provider_account_id: account.as_ref().map(|a| a.id.clone()),
@@ -1221,7 +1209,7 @@ impl DesktopExecutor {
                     "That provider is not ready. Check Providers and try again.",
                 )
             })?;
-        let model = validate_launch_model(provider_id, available, Some(model))?
+        let model = validate_launch_model(provider_id, available, Some(model), false)?
             .ok_or_else(|| ExecError::new("invalid_model", "Choose a model for those sessions."))?;
         let effort = validate_launch_effort(provider_id, Some(effort))?.ok_or_else(|| {
             ExecError::new(
@@ -1607,7 +1595,7 @@ fn spoken_labels(threads: &[&ThreadSummary]) -> Vec<String> {
     } else {
         threads
             .iter()
-            .map(|t| session_resolver::session_label(t))
+            .map(|t| session_resolver::spoken_session_label(t))
             .collect()
     }
 }
@@ -1635,8 +1623,8 @@ fn local_scene_label(thread: &ThreadSummary) -> String {
         safe(&thread.provider_name),
         thread.account_label.as_deref().and_then(safe),
         safe(&thread.workspace_name),
-        thread.model.as_deref().and_then(safe),
-        thread.effort.as_deref().and_then(safe),
+        session_resolver::session_model_label(thread).and_then(|value| safe(&value)),
+        session_resolver::session_effort_label(thread).and_then(|value| safe(&value)),
         thread.current_activity.as_deref().and_then(safe),
     ]
     .into_iter()
@@ -1656,6 +1644,7 @@ impl DesktopExecutor {
             .threads()?
             .list(None, false)
             .map_err(|e| from_core(&e))?;
+        session_resolver::refresh_session_identity(&self.core, &mut threads);
         threads.sort_by_key(|t| workspace_id.is_none_or(|w| t.workspace_id != w));
         Ok(threads)
     }
@@ -4489,8 +4478,8 @@ mod tests {
                 .all(|id| launched.iter().any(|thread| &thread.id == id))
         );
 
-        // Exact provider model aliases are preserved; unavailable models fail before any group
-        // starts, so a bad later option cannot partially launch the request.
+        // Exact provider aliases and future argv-safe model ids are preserved. Static picker
+        // options are suggestions, not an exhaustive claim about the authenticated provider.
         let gemini = f.account(ProviderId::GEMINI_CLI, "Gemini A", AuthState::Authenticated);
         let modeled = KalVoiceIntent::CreateThreads {
             provider_id: ProviderId::new(ProviderId::GEMINI_CLI),
@@ -4507,21 +4496,27 @@ mod tests {
             thread.provider_account_id.as_deref() == Some(gemini.id.as_str())
                 && thread.model.as_deref() == Some("pro")
         }));
-        let before = launched.len();
-        let invalid = KalVoiceIntent::CreateThreads {
+        let future_exact = KalVoiceIntent::CreateThreads {
             provider_id: ProviderId::new(ProviderId::GEMINI_CLI),
             count: 1,
             workspace_id: None,
             account_query: Some("gemini a".into()),
-            model: Some("ultra".into()),
+            model: Some("gemini-ultra-future-2027".into()),
             effort: None,
             assignments: Vec::new(),
         };
-        assert_eq!(
-            f.run(&invalid, &ctx()).map_err(|error| error.code),
-            Err("invalid_model".into())
+        f.run(&future_exact, &ctx())
+            .expect("the native provider decides a safe future model id");
+        assert!(
+            f.runtime
+                .list(None, false)
+                .expect("threads")
+                .iter()
+                .any(
+                    |thread| thread.provider_account_id.as_deref() == Some(gemini.id.as_str())
+                        && thread.model.as_deref() == Some("gemini-ultra-future-2027")
+                )
         );
-        assert_eq!(f.runtime.list(None, false).expect("threads").len(), before);
 
         let claude = f.account(
             ProviderId::CLAUDE_CODE,
@@ -4708,6 +4703,37 @@ mod tests {
             "cursor_models_unavailable"
         );
         assert_eq!(f.runtime.list(None, false).unwrap().len(), 4);
+    }
+
+    #[test]
+    fn voice_launch_preserves_an_exact_gemini_model_outside_the_alias_catalog() {
+        let f = accounts_fixture();
+        let account = f.account(
+            ProviderId::GEMINI_CLI,
+            "Gemini exact",
+            AuthState::Authenticated,
+        );
+        let intent = KalVoiceIntent::CreateProviderPanes {
+            groups: vec![ProviderPaneRequest {
+                provider_id: Some(ProviderId::new(ProviderId::GEMINI_CLI)),
+                count: 1,
+                account_query: Some("gemini exact".into()),
+                model: Some("gemini-2.5-pro".into()),
+                effort: None,
+                assignments: Vec::new(),
+            }],
+            workspace_id: None,
+        };
+
+        f.run(&intent, &ctx())
+            .expect("the provider adapter decides an exact argv-safe model id");
+        let launched = f.runtime.list(None, false).expect("threads");
+        assert_eq!(launched.len(), 1);
+        assert_eq!(launched[0].model.as_deref(), Some("gemini-2.5-pro"));
+        assert_eq!(
+            launched[0].provider_account_id.as_deref(),
+            Some(account.id.as_str())
+        );
     }
 
     /// "Start a Codex agent" as the first thread operation after launch: provider adapters are
@@ -5517,6 +5543,19 @@ mod tests {
             s.f.executor.find_thread("Authentication").expect("find"),
             Some(s.auth.id.clone())
         );
+    }
+
+    #[test]
+    fn local_scene_labels_distinguish_reported_identity_from_selected_configuration() {
+        let mut thread = sessions().auth;
+        thread.model = Some("requested/model-v1".into());
+        thread.active_model = Some("actual/model-v2".into());
+        thread.effort = Some("high".into());
+        thread.active_effort = None;
+        let label = local_scene_label(&thread);
+        assert!(label.contains("actual/model-v2"));
+        assert!(label.contains("high (selected)"));
+        assert!(!label.contains("requested/model-v1"));
     }
 
     #[test]

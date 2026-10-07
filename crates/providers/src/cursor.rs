@@ -9,6 +9,7 @@ use std::time::Duration;
 use kalcode_contracts::agent::{
     AuthState, InteractiveSupport, MappingFidelity, ModelInfo, PermissionMapping,
     ProviderCapabilities, ProviderError, StatusChannel, ToolAvailability, ToolCapability, ToolKind,
+    safe_model_selector,
 };
 use kalcode_contracts::permissions::PermissionMode;
 
@@ -305,7 +306,7 @@ pub fn parse_models(text: &str) -> Result<Vec<ModelInfo>, ProviderError> {
         };
         let named_row = row.split_once(" - ");
         let (id, name) = named_row.unwrap_or((row, row));
-        if !valid_argument(id)
+        if !safe_model_selector(id)
             || (named_row.is_none() && id.contains(char::is_whitespace))
             || name.chars().any(char::is_control)
         {
@@ -333,13 +334,6 @@ pub fn parse_models(text: &str) -> Result<Vec<ModelInfo>, ProviderError> {
     Ok(models)
 }
 
-fn valid_argument(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 512
-        && !value.starts_with('-')
-        && !value.chars().any(char::is_control)
-}
-
 pub fn interactive_args(
     mode: PermissionMode,
     workspace: &Path,
@@ -357,7 +351,7 @@ pub fn interactive_args(
     }
     for (flag, value) in [("--model", model), ("--resume", resume)] {
         if let Some(value) = value {
-            if !valid_argument(value)
+            if (flag == "--model" && !safe_model_selector(value))
                 || (flag == "--resume" && !kalcode_contracts::ids::is_valid_id(value))
             {
                 return Err(ProviderError::Start(format!(
@@ -527,5 +521,27 @@ mod tests {
             )
             .is_err()
         );
+        for model in ["future+tools", "模型/cursor:exact"] {
+            let args = interactive_args(
+                PermissionMode::Approve,
+                Path::new("work"),
+                Some(model),
+                None,
+            )
+            .expect("exact model");
+            let at = args.iter().position(|arg| arg == "--model").expect("model");
+            assert_eq!(args[at + 1], model);
+        }
+        for model in ["model\u{200b}name", "bidi\u{202e}override"] {
+            assert!(
+                interactive_args(
+                    PermissionMode::Approve,
+                    Path::new("work"),
+                    Some(model),
+                    None,
+                )
+                .is_err()
+            );
+        }
     }
 }

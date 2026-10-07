@@ -2,8 +2,8 @@
 //!
 //! Rules every provider process follows:
 //! - Spawned from an argv vector, never a shell command string. On Windows, a `.cmd`/`.bat`
-//!   shim is replaced by the absolute program it launches (see [`crate::launch`]); only a shim
-//!   KalCode can't read is started through `cmd.exe`, with the hardened environment.
+//!   shim is replaced by the absolute program it launches (see [`crate::launch`]); a shim KalCode
+//!   can't resolve is refused before `cmd.exe` can interpret provider arguments.
 //! - The environment always has `NoDefaultCurrentDirectoryInExePath=1` and a `PATH` of absolute
 //!   folders only ([`crate::env::harden`]), so nothing is looked up in the working directory.
 //! - A sanitized environment (see [`crate::env`]); `env_clear()` first, then the allow-list.
@@ -60,6 +60,10 @@ pub enum OutputLine {
 pub enum ProcessError {
     #[error("the program could not be started: {0}")]
     Spawn(#[source] std::io::Error),
+    #[error(
+        "the provider batch shim could not be resolved safely; reinstall the provider or use its native executable"
+    )]
+    UnresolvedBatchShim,
     #[error("the program did not finish within {0:?}")]
     TimedOut(Duration),
     #[error("the program was canceled for a higher-priority account operation")]
@@ -77,12 +81,15 @@ pub enum ProcessError {
 }
 
 /// Builds the command for a spec. The environment is [`crate::env::harden`]ed again here, and a
-/// `.cmd`/`.bat` shim is replaced by what it launches ([`crate::launch`]), so no caller can
-/// start a provider in a way that lets `cmd.exe` pick a program from the working directory.
-fn command(spec: &ProcessSpec) -> Command {
+/// `.cmd`/`.bat` shim is replaced by what it launches ([`crate::launch`]); unresolved batch shims
+/// fail closed so `cmd.exe` cannot reinterpret an otherwise opaque provider argument.
+fn command(spec: &ProcessSpec) -> Result<Command, ProcessError> {
     let mut env = spec.env.clone();
     crate::env::harden(&mut env);
     let launch = crate::launch::resolve(&spec.program, &env);
+    if launch.kind == crate::launch::LaunchKind::ShimUnresolved {
+        return Err(ProcessError::UnresolvedBatchShim);
+    }
     #[cfg(unix)]
     crate::launch::apply_launch_env(&launch, &mut env);
     let mut command = Command::new(&launch.program);
@@ -95,7 +102,7 @@ fn command(spec: &ProcessSpec) -> Command {
         command.current_dir(cwd);
     }
     platform::configure(&mut command);
-    command
+    Ok(command)
 }
 
 /// Result of a short, bounded run (version and status probes).
@@ -170,7 +177,7 @@ fn run_probe_inner(
     cancellation: Option<&dyn Fn() -> bool>,
 ) -> Result<ProbeOutput, ProcessError> {
     let started = Instant::now();
-    let mut command = command(spec);
+    let mut command = command(spec)?;
     command
         .stdin(Stdio::null())
         .stdout(if capture_stdout {
@@ -400,7 +407,7 @@ impl SupervisedChild {
         spec: &ProcessSpec,
         admission: Option<RegisteredJob>,
     ) -> Result<(Self, Receiver<OutputLine>), ProcessError> {
-        let mut command = command(spec);
+        let mut command = command(spec)?;
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -1089,6 +1096,73 @@ mod tests {
             out.push(line);
         }
         out
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn unresolved_batch_shim_is_refused_before_model_metacharacter_expansion() {
+        let temp = tempfile::tempdir().expect("temp");
+        let marker = temp.path().join("batch-shim-launched");
+        let injected = temp.path().join("metachar-expanded");
+        let shim = temp.path().join("provider.cmd");
+        std::fs::write(
+            &shim,
+            format!(
+                "@echo off\r\necho launched> \"{}\"\r\necho %*\r\n",
+                marker.display()
+            ),
+        )
+        .expect("unresolved shim");
+        let selector = format!("future\"&echo expanded>\"{}\"&rem \"", injected.display());
+        assert!(kalcode_contracts::agent::safe_model_selector(&selector));
+
+        let result = run_probe(
+            &ProcessSpec {
+                program: shim,
+                args: ["--model", selector.as_str()]
+                    .into_iter()
+                    .map(OsString::from)
+                    .collect(),
+                cwd: Some(temp.path().to_path_buf()),
+                env: crate::detect::DetectEnv::from_process()
+                    .provider_env(&crate::env::EnvPolicy::BASE),
+            },
+            Duration::from_secs(5),
+            true,
+            4 * 1024,
+        );
+
+        let error = result.expect_err("unresolved batch shims must fail before spawn");
+        assert!(error.to_string().contains("batch shim"), "{error}");
+        assert!(!marker.exists(), "the unresolved shim executed");
+        assert!(!injected.exists(), "cmd.exe expanded the model selector");
+    }
+
+    #[test]
+    fn resolved_native_launch_preserves_model_selector_as_one_argv_value() {
+        let selector = "future model:\"quoted\"&tools|profile";
+        assert!(kalcode_contracts::agent::safe_model_selector(selector));
+        let executable = std::env::current_exe().expect("test executable");
+        let spec = ProcessSpec {
+            program: executable.clone(),
+            args: ["--model", selector]
+                .into_iter()
+                .map(OsString::from)
+                .collect(),
+            cwd: None,
+            env: crate::detect::DetectEnv::from_process()
+                .provider_env(&crate::env::EnvPolicy::BASE),
+        };
+
+        let command = command(&spec).expect("resolved native command");
+        assert_eq!(command.get_program(), executable.as_os_str());
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [
+                std::ffi::OsStr::new("--model"),
+                std::ffi::OsStr::new(selector)
+            ]
+        );
     }
 
     #[cfg(windows)]

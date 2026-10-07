@@ -1035,6 +1035,9 @@ impl ProviderRuntimeAuthority {
             .accounts
             .get_active_for_provider(account_id, &account.provider_id)
             .map_err(RuntimeAuthError::Account)?;
+        let source = catalog::model_catalog_source(account.provider_id.as_str());
+        let supported_efforts =
+            kalcode_providers::interactive::supported_efforts(account.provider_id.as_str());
         let models = match account.provider_id.as_str() {
             ProviderId::CODEX => self.codex_account_models(account_id, true)?,
             ProviderId::CURSOR => self
@@ -1070,6 +1073,8 @@ impl ProviderRuntimeAuthority {
         Ok(ProviderAccountModelCatalog {
             account_id: account.id,
             provider_id: account.provider_id,
+            source: Some(source),
+            supported_efforts: Some(supported_efforts),
             models,
         })
     }
@@ -3546,6 +3551,14 @@ mod tests {
             .expect("account models");
         assert_eq!(catalog.account_id, fixture.account.id);
         assert_eq!(catalog.provider_id.as_str(), ProviderId::CODEX);
+        assert_eq!(
+            catalog.source,
+            Some(kalcode_contracts::provider_accounts::ProviderModelCatalogSource::Runtime)
+        );
+        assert_eq!(
+            catalog.supported_efforts.as_deref(),
+            Some(kalcode_providers::interactive::supported_efforts(ProviderId::CODEX).as_slice())
+        );
         assert_eq!(catalog.models.len(), 1);
         assert_eq!(catalog.models[0].id, "codex-test-exact");
         assert_eq!(catalog.models[0].default_effort.as_deref(), Some("high"));

@@ -136,6 +136,9 @@ pub struct HookRecord {
     pub event: Option<HookEvent>,
     /// The provider's own session id (for resume).
     pub provider_session_id: Option<String>,
+    /// Provider-confirmed model from a native root-session identity hook.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     pub tool_name: Option<String>,
     pub tool_use_id: Option<String>,
     /// Tool input for classification (PreToolUse, PermissionRequest), or only the path fields
@@ -255,7 +258,12 @@ mod cursor_tests {
         }
         assert!(!valid_model(Some("bad\nmodel")));
         assert!(!valid_model(Some("-model")));
-        assert!(!valid_model(Some("model with spaces")));
+        assert!(!valid_model(Some("gpt-6\u{200b}-hidden")));
+        assert!(!valid_model(Some("gpt-6\u{202e}-hidden")));
+        assert!(valid_model(Some("model with spaces")));
+        assert!(valid_model(Some("模型/精确")));
+        assert!(valid_model(Some(&"m".repeat(512))));
+        assert!(!valid_model(Some(&"m".repeat(513))));
         assert!(!valid_id(Some("session[effort=high]"), MAX_ID_CHARS));
     }
 
@@ -423,6 +431,7 @@ impl HookRecord {
             return Err(RecordError::Invalid);
         }
         if !valid_id(self.provider_session_id.as_deref(), MAX_ID_CHARS)
+            || !valid_model(self.model.as_deref())
             || !valid_id(self.tool_name.as_deref(), MAX_ID_CHARS)
             || !valid_id(self.tool_use_id.as_deref(), MAX_ID_CHARS)
             || !valid_id(self.notification_type.as_deref(), MAX_WORD_CHARS)
@@ -488,6 +497,12 @@ impl HookRecord {
             return Err(RecordError::Invalid);
         }
 
+        // Codex includes its exact active model on every native hook. Outside SessionStart, the
+        // bounded turn id is the shape marker that distinguishes those authenticated Codex hook
+        // records from generic Claude records, whose other native events do not emit a model.
+        let unexpected_model = self.model.is_some()
+            && event != HookEvent::SessionStart
+            && !(HookEvent::CODEX.contains(&event) && self.codex_turn_id.is_some());
         let unexpected = match event {
             HookEvent::SessionStart => {
                 self.notification_type.is_some()
@@ -497,35 +512,40 @@ impl HookRecord {
                     || self.codex_type.is_some()
             }
             HookEvent::UserPromptSubmit => {
-                self.notification_type.is_some()
+                unexpected_model
+                    || self.notification_type.is_some()
                     || self.source.is_some()
                     || self.error_type.is_some()
                     || self.end_reason.is_some()
                     || self.codex_type.is_some()
             }
             HookEvent::Notification => {
-                self.source.is_some()
+                unexpected_model
+                    || self.source.is_some()
                     || self.error_type.is_some()
                     || self.end_reason.is_some()
                     || self.prompt.is_some()
                     || self.codex_type.is_some()
             }
             HookEvent::StopFailure => {
-                self.notification_type.is_some()
+                unexpected_model
+                    || self.notification_type.is_some()
                     || self.source.is_some()
                     || self.end_reason.is_some()
                     || self.prompt.is_some()
                     || self.codex_type.is_some()
             }
             HookEvent::SessionEnd => {
-                self.notification_type.is_some()
+                unexpected_model
+                    || self.notification_type.is_some()
                     || self.source.is_some()
                     || self.error_type.is_some()
                     || self.prompt.is_some()
                     || self.codex_type.is_some()
             }
             HookEvent::CodexNotify => {
-                self.in_subagent
+                unexpected_model
+                    || self.in_subagent
                     || self.notification_type.is_some()
                     || self.source.is_some()
                     || self.error_type.is_some()
@@ -537,7 +557,8 @@ impl HookRecord {
             | HookEvent::PermissionRequest
             | HookEvent::PostToolUse
             | HookEvent::PostToolUseFailure => {
-                self.notification_type.is_some()
+                unexpected_model
+                    || self.notification_type.is_some()
                     || self.source.is_some()
                     || self.error_type.is_some()
                     || self.end_reason.is_some()
@@ -548,7 +569,8 @@ impl HookRecord {
             | HookEvent::SubagentStart
             | HookEvent::SubagentStop
             | HookEvent::Interrupt => {
-                self.notification_type.is_some()
+                unexpected_model
+                    || self.notification_type.is_some()
                     || self.source.is_some()
                     || self.error_type.is_some()
                     || self.end_reason.is_some()
@@ -611,13 +633,13 @@ fn valid_id(value: Option<&str>, max: usize) -> bool {
 }
 
 fn valid_model(value: Option<&str>) -> bool {
-    // Cursor's runtime model slugs may encode parameters (for example [effort=high]).
-    // This value is metadata, never a shell command or session identity.
+    // Provider-owned exact model ids may contain parameters, spaces, or Unicode. They remain one
+    // bounded metadata value and are never reparsed as a command or used as session identity.
     value.is_none_or(|model| {
         !model.is_empty()
-            && model.len() <= 128
+            && model.len() <= 512
             && !model.starts_with('-')
-            && model.bytes().all(|byte| byte.is_ascii_graphic())
+            && clean_text(model, 512) == model
     })
 }
 
@@ -747,7 +769,13 @@ pub fn from_claude_stdin(event: HookEvent, bytes: &[u8]) -> Result<HookRecord, R
         }
     }
     match event {
-        HookEvent::SessionStart => record.source = clean_id(get("source"), MAX_WORD_CHARS),
+        HookEvent::SessionStart => {
+            record.source = clean_id(get("source"), MAX_WORD_CHARS);
+            record.model = get("model")
+                .and_then(Value::as_str)
+                .filter(|model| valid_model(Some(model)))
+                .map(str::to_owned);
+        }
         HookEvent::Notification => {
             record.notification_type = clean_id(get("notification_type"), MAX_WORD_CHARS);
         }
@@ -812,10 +840,10 @@ pub fn from_codex_notify(json_arg: &str) -> Result<HookRecord, RecordError> {
 /// Builds the record for one of Codex's own hooks ([`HookEvent::CODEX`]) from its stdin bytes.
 ///
 /// Codex 0.160 sends Claude-shaped JSON (`session_id`, `turn_id`, `tool_name`, `tool_use_id`,
-/// `tool_input`, `source`), so the Claude filter applies, plus the turn id that correlates a
-/// Stop with the `notify` completion of the same turn. Prompt text and assistant messages are
-/// dropped: Codex's `notify` already carries the turn's durable memory, and these records exist
-/// for status only.
+/// `tool_input`, `source`, `model`), so the Claude filter applies, plus the exact active model and
+/// turn id that correlate a Stop with the `notify` completion of the same turn. Prompt text and
+/// assistant messages are dropped: Codex's `notify` already carries the turn's durable memory,
+/// and these records exist for status and provider-reported runtime identity only.
 pub fn from_codex_hook_stdin(event: HookEvent, bytes: &[u8]) -> Result<HookRecord, RecordError> {
     if !HookEvent::CODEX.contains(&event) {
         return Err(RecordError::Invalid);
@@ -823,8 +851,13 @@ pub fn from_codex_hook_stdin(event: HookEvent, bytes: &[u8]) -> Result<HookRecor
     let mut record = from_claude_stdin(event, bytes)?;
     record.prompt = None;
     record.memory_candidate = None;
+    let value: Value = serde_json::from_slice(bytes).map_err(|_| RecordError::NotAnObject)?;
+    record.model = value
+        .get("model")
+        .and_then(Value::as_str)
+        .filter(|model| valid_model(Some(model)))
+        .map(str::to_owned);
     if event.carries_codex_turn() {
-        let value: Value = serde_json::from_slice(bytes).map_err(|_| RecordError::NotAnObject)?;
         record.codex_turn_id = clean_id(value.get("turn_id"), MAX_ID_CHARS);
     }
     record.validate()?;
@@ -1105,6 +1138,11 @@ mod tests {
             pre.provider_session_id.as_deref(),
             Some("01a1090f-fb6f-77b2-a41e-3b36de532425")
         );
+        assert_eq!(
+            pre.model.as_deref(),
+            Some("gpt-6-astra"),
+            "Codex repeats its exact active model on every native hook"
+        );
 
         let post = from_codex_hook_stdin(
             HookEvent::PostToolUse,
@@ -1140,7 +1178,32 @@ mod tests {
         )
         .unwrap();
         assert_eq!(prompt.prompt, None);
+        assert_eq!(prompt.model.as_deref(), Some("gpt-6-astra"));
         assert!(!serde_json::to_string(&prompt).unwrap().contains("private"));
+
+        let hidden_model = from_codex_hook_stdin(
+            HookEvent::UserPromptSubmit,
+            with(
+                "UserPromptSubmit",
+                json!({"prompt":"private prompt", "model":"gpt-6\u{200b}-hidden"}),
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(
+            hidden_model.model, None,
+            "an invisible model identifier is rejected instead of being altered"
+        );
+
+        let claude_prompt = from_claude_stdin(
+            HookEvent::UserPromptSubmit,
+            with("UserPromptSubmit", json!({"prompt":"private prompt"})).as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(
+            claude_prompt.model, None,
+            "the generic Claude boundary keeps only fields emitted for that native event"
+        );
 
         let start = from_codex_hook_stdin(
             HookEvent::SessionStart,
@@ -1149,6 +1212,11 @@ mod tests {
         .unwrap();
         assert_eq!(start.source.as_deref(), Some("startup"));
         assert_eq!(start.codex_turn_id, None);
+        assert_eq!(
+            serde_json::to_value(&start).unwrap()["model"],
+            "gpt-6-astra",
+            "the provider-confirmed SessionStart model crosses the filtered hook boundary"
+        );
 
         let interrupt = from_codex_hook_stdin(
             HookEvent::Interrupt,
@@ -1173,6 +1241,14 @@ mod tests {
         let mut forged = start;
         forged.codex_turn_id = Some("turn".into());
         assert_eq!(forged.validate(), Err(RecordError::Invalid));
+
+        let mut forged = prompt;
+        forged.codex_turn_id = None;
+        assert_eq!(
+            forged.validate(),
+            Err(RecordError::Invalid),
+            "a non-SessionStart model needs Codex's native turn-scoped hook shape"
+        );
     }
 
     #[test]

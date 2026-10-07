@@ -49,6 +49,7 @@ import { ContentContextMenu } from "../../shell/context/ContentContextMenu.tsx";
 import { MOD_LABEL } from "../../shell/shortcuts.ts";
 import { useKalTidy } from "../code/kaltidy/kalTidyContext.ts";
 import { ApprovalPrompt, usePermissions } from "../permissions/index.ts";
+import { useSessionIdentity } from "../providers/useSessionIdentity.ts";
 import { AccountSwitcher } from "./AccountSwitcher.tsx";
 import {
   buildTimeline,
@@ -261,20 +262,14 @@ export function ThreadDetail({ threadId, archived, onArchived, onUnarchived, onR
         <dl className={styles.meta}>
           <div>
             <dt>Provider</dt>
-            <dd>
-              <ProviderGlyph provider={thread.providerId} size="xs" />
-              {thread.providerName}
-              {thread.model ? ` · ${thread.model}` : ""}
-              {" · "}
-              <AccountSwitcher
-                thread={thread}
-                archived={archived}
-                onRebound={(next) => {
-                  detail.setThread(next);
-                  void detail.reload();
-                }}
-              />
-            </dd>
+            <ThreadProviderIdentity
+              thread={thread}
+              archived={archived}
+              onRebound={(next) => {
+                detail.setThread(next);
+                void detail.reload();
+              }}
+            />
           </div>
           <div>
             <dt>Workspace</dt>
@@ -395,6 +390,31 @@ export function ThreadDetail({ threadId, archived, onArchived, onUnarchived, onR
         }}
       />
     </article>
+  );
+}
+
+function ThreadProviderIdentity({
+  thread,
+  archived,
+  onRebound,
+}: {
+  thread: ThreadSummary;
+  archived: boolean;
+  onRebound: (thread: ThreadSummary) => void;
+}) {
+  const identity = useSessionIdentity(thread);
+  return (
+    <dd data-testid="thread-provider-identity" title={identity.detail}>
+      <ProviderGlyph provider={thread.providerId} size="xs" />
+      {identity.providerName} · {identity.model.label}
+      {identity.effort.source !== "unavailable" ? ` · ${identity.effort.label}` : ""}
+      {" · "}
+      <AccountSwitcher
+        thread={{ ...thread, accountLabel: identity.accountName }}
+        archived={archived}
+        onRebound={onRebound}
+      />
+    </dd>
   );
 }
 

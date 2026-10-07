@@ -21,11 +21,17 @@
 //! in-memory test transport is `apps/desktop/src/ipc/memory/sessionResolve.ts`; both are
 //! checked against `session_resolver_cases.json`.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use kalcode_contracts::provider_accounts::ProviderAccount;
 use kalcode_contracts::sessions::{
     MAX_SESSION_CHOICES, MAX_SESSION_QUERY_CHARS, SessionCandidate, SessionMatchTier,
     SessionResolution,
 };
 use kalcode_contracts::threads::{ThreadRuntimeKind, ThreadSummary};
+use kalcode_core::Core;
+use kalcode_providers::accounts::AccountStore;
 
 /// Product nouns constrain the runtime before names or task context are matched.
 /// Provider names alone do not prove that a session is a coding terminal.
@@ -45,6 +51,55 @@ pub struct ResolveContext<'a> {
     pub focused_thread_id: Option<&'a str>,
     /// The session the previous command resolved to ("it" when nothing is focused).
     pub last_target_id: Option<&'a str>,
+}
+
+/// Refreshes owner-visible session identity from canonical authorities. Known provider ids use
+/// the adapter catalog's product name; future adapters retain their thread snapshot. Account
+/// expiry and archival do not erase metadata, so [`AccountStore::get`] deliberately reads those
+/// retained records. A missing or cross-provider account leaves the historical snapshot intact
+/// and never substitutes a provider default or another account.
+pub fn refresh_session_identity(core: &Arc<Core>, threads: &mut [ThreadSummary]) {
+    for thread in threads.iter_mut() {
+        thread.provider_name = session_provider_name(thread);
+    }
+    let store = AccountStore::new(Arc::clone(core));
+    let mut accounts: HashMap<String, Option<ProviderAccount>> = HashMap::new();
+    for thread in threads {
+        let Some(account_id) = thread.provider_account_id.clone() else {
+            continue;
+        };
+        let account = accounts
+            .entry(account_id.clone())
+            .or_insert_with(|| store.get(&account_id).ok());
+        if let Some(account) = account.as_ref() {
+            apply_account_label(thread, account);
+        }
+    }
+}
+
+/// Canonical adapter product name for a known provider id, with the bounded thread snapshot as
+/// the forward-compatible fallback for providers added after this build.
+pub fn session_provider_name(thread: &ThreadSummary) -> String {
+    kalcode_providers::catalog::specs()
+        .into_iter()
+        .find(|spec| spec.provider_id == thread.provider_id.as_str())
+        .map(|spec| spec.display_name.to_owned())
+        .unwrap_or_else(|| {
+            let snapshot = thread.provider_name.trim();
+            if snapshot.is_empty() {
+                thread.provider_id.as_str().to_owned()
+            } else {
+                snapshot.to_owned()
+            }
+        })
+}
+
+fn apply_account_label(thread: &mut ThreadSummary, account: &ProviderAccount) {
+    if thread.provider_account_id.as_deref() == Some(account.id.as_str())
+        && thread.provider_id == account.provider_id
+    {
+        thread.account_label = Some(account.display_name.clone());
+    }
 }
 
 /// Words that mean "the session I'm on".
@@ -276,7 +331,7 @@ impl<'a> Entry<'a> {
     fn new(t: &'a ThreadSummary) -> Self {
         let name = normalize(&t.name);
         let name_tokens = words(&name);
-        let mut qualifiers = words(&normalize(&t.provider_name));
+        let mut qualifiers = words(&normalize(&session_provider_name(t)));
         qualifiers.extend(words(&normalize(t.provider_id.as_str())));
         if let Some(label) = &t.account_label {
             qualifiers.extend(words(&normalize(label)));
@@ -287,8 +342,8 @@ impl<'a> Entry<'a> {
         task_context.extend(qualifiers.iter().cloned());
         for value in [
             Some(t.workspace_name.as_str()),
-            t.model.as_deref(),
-            t.effort.as_deref(),
+            session_model(t),
+            session_effort(t),
             t.current_activity.as_deref(),
             t.branch.as_deref(),
         ]
@@ -437,14 +492,81 @@ fn not_found(message: &str) -> SessionResolution {
     }
 }
 
-/// "Name · Provider · Account" (the account part only when the thread has one).
-pub fn session_label(t: &ThreadSummary) -> String {
-    match t.account_label.as_deref().map(str::trim) {
-        Some(account) if !account.is_empty() => {
-            format!("{} \u{b7} {} \u{b7} {account}", t.name, t.provider_name)
-        }
-        _ => format!("{} \u{b7} {}", t.name, t.provider_name),
+fn reported_or_selected<'a>(
+    active: Option<&'a str>,
+    configured: Option<&'a str>,
+) -> Option<&'a str> {
+    active
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| configured.map(str::trim).filter(|value| !value.is_empty()))
+}
+
+/// Exact provider-reported active model, or the configured selection only while active identity
+/// is unknown. Callers that present the fallback must label it as selected.
+pub fn session_model(thread: &ThreadSummary) -> Option<&str> {
+    reported_or_selected(thread.active_model.as_deref(), thread.model.as_deref())
+}
+
+/// Exact provider-reported active effort, or the configured selection only while active identity
+/// is unknown. Callers that present the fallback must label it as selected.
+pub fn session_effort(thread: &ThreadSummary) -> Option<&str> {
+    reported_or_selected(thread.active_effort.as_deref(), thread.effort.as_deref())
+}
+
+fn identity_label(active: Option<&str>, configured: Option<&str>) -> Option<String> {
+    if let Some(active) = active.map(str::trim).filter(|value| !value.is_empty()) {
+        return Some(active.to_owned());
     }
+    configured
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|configured| format!("{configured} (selected)"))
+}
+
+/// Display label for the active model, or an explicitly marked selected fallback.
+pub fn session_model_label(thread: &ThreadSummary) -> Option<String> {
+    identity_label(thread.active_model.as_deref(), thread.model.as_deref())
+}
+
+/// Display label for active reasoning effort, or an explicitly marked selected fallback.
+pub fn session_effort_label(thread: &ThreadSummary) -> Option<String> {
+    identity_label(thread.active_effort.as_deref(), thread.effort.as_deref())
+}
+
+fn available_identity_parts(t: &ThreadSummary) -> Vec<String> {
+    let mut parts = vec![t.name.clone(), session_provider_name(t)];
+    if let Some(account) = t
+        .account_label
+        .as_deref()
+        .map(str::trim)
+        .filter(|account| !account.is_empty())
+    {
+        parts.push(account.to_owned());
+    }
+    parts.extend(session_model_label(t));
+    parts.extend(session_effort_label(t));
+    parts
+}
+
+/// Complete exact session identity. Launch selections are marked `selected` until the provider
+/// reports the active value; unknown runtime choices are explicitly provider-controlled.
+pub fn session_label(t: &ThreadSummary) -> String {
+    let mut parts = available_identity_parts(t);
+    if session_model_label(t).is_none() {
+        parts.push("Model controlled by provider".to_owned());
+    }
+    if session_effort_label(t).is_none() {
+        parts.push("Reasoning controlled by provider".to_owned());
+    }
+    parts.join(" \u{b7} ")
+}
+
+/// Concise spoken identity for a list or clarification. Unknown runtime choices stay omitted so
+/// speech names useful distinguishing facts without reciting availability explanations.
+pub fn spoken_session_label(t: &ThreadSummary) -> String {
+    let parts = available_identity_parts(t);
+    parts.join(" \u{b7} ")
 }
 
 pub fn candidate(t: &ThreadSummary) -> SessionCandidate {
@@ -452,8 +574,12 @@ pub fn candidate(t: &ThreadSummary) -> SessionCandidate {
         thread_id: t.id.clone(),
         name: t.name.clone(),
         provider_id: t.provider_id.clone(),
-        provider_name: t.provider_name.clone(),
+        provider_name: session_provider_name(t),
         account_label: t.account_label.clone(),
+        model: t.model.clone(),
+        active_model: t.active_model.clone(),
+        effort: t.effort.clone(),
+        active_effort: t.active_effort.clone(),
         workspace_id: t.workspace_id.clone(),
         workspace_name: t.workspace_name.clone(),
         status: t.status,
@@ -484,8 +610,8 @@ fn ambiguous(mut matches: Vec<&Entry<'_>>, ctx: &ResolveContext<'_>) -> SessionR
     }
 }
 
-/// Names each choice by the first thing that tells them apart: the name, then the account,
-/// the provider, the workspace. `None` when nothing does.
+/// Names each choice by the first thing that tells them apart: the name, account, provider,
+/// active-or-selected model, active-or-selected effort, then workspace. `None` when nothing does.
 fn describe(choices: &[&ThreadSummary]) -> Option<Vec<String>> {
     let distinct = |keys: &[String]| {
         let mut seen: Vec<&String> = Vec::with_capacity(keys.len());
@@ -501,7 +627,7 @@ fn describe(choices: &[&ThreadSummary]) -> Option<Vec<String>> {
         return Some(names);
     }
     type Field = fn(&ThreadSummary) -> Option<(&'static str, String)>;
-    let fields: [Field; 3] = [
+    let fields: [Field; 5] = [
         |t| {
             t.account_label
                 .as_deref()
@@ -509,7 +635,9 @@ fn describe(choices: &[&ThreadSummary]) -> Option<Vec<String>> {
                 .filter(|a| !a.is_empty())
                 .map(|a| ("on", a.to_owned()))
         },
-        |t| Some(("on", t.provider_name.clone())),
+        |t| Some(("on", session_provider_name(t))),
+        |t| session_model_label(t).map(|model| ("with model", model)),
+        |t| session_effort_label(t).map(|effort| ("with reasoning", effort)),
         |t| Some(("in", t.workspace_name.clone())),
     ];
     for field in fields {
@@ -651,7 +779,8 @@ fn within_distance(a: &str, b: &str, max: usize) -> bool {
 #[tauri::command(async)]
 pub fn session_resolve(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,
-    state: crate::runtime_coordinator::RuntimeState<crate::thread_commands::ThreadsState>,
+    app: tauri::State<'_, crate::AppState>,
+    threads_state: crate::runtime_coordinator::RuntimeState<crate::thread_commands::ThreadsState>,
     panes: crate::runtime_coordinator::RuntimeState<
         crate::provider_pane_commands::ProviderPanesState,
     >,
@@ -673,10 +802,11 @@ pub fn session_resolve(
             .into());
         }
     }
-    let mut threads = state
+    let mut threads = threads_state
         .runtime()?
         .list(None, false)
         .map_err(|e| e.log_and_convert("session_resolve"))?;
+    refresh_session_identity(app.core()?, &mut threads);
     for thread in &mut threads {
         panes.stamp_runtime_kind(thread);
     }

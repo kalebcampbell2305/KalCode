@@ -94,6 +94,7 @@ impl Normalizer {
                     AgentEvent::SessionStarted {
                         provider_session_id: session_id,
                         model,
+                        effort: None,
                     },
                     status(ThreadStatus::Active, None),
                 ]

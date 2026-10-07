@@ -179,6 +179,9 @@ struct OpenTool {
     started: bool,
     /// The provider turn the call belongs to, when the provider names it (Codex).
     turn: Option<String>,
+    /// Whether a Codex child agent opened this call. Child completion must never close root tools,
+    /// including a malformed child payload that repeats the root turn id.
+    in_subagent: bool,
 }
 
 #[derive(Debug, Default)]
@@ -223,6 +226,9 @@ struct LifecycleState {
     claude_submit_tracking_failed: bool,
     codex_pending_submits: usize,
     codex_seen_turn_ids: HashSet<String>,
+    /// Root turns superseded by a newer prompt but not yet completed. Their late activity hooks
+    /// are stale, while their eventual Stop/Interrupt still has to consume its submit exactly once.
+    codex_superseded_turn_ids: HashSet<String>,
     codex_tracking_failed: bool,
     /// A Codex turn whose completion was reported (Stop) and that then kept working, because
     /// another Stop hook continued it. Its next completion must not consume another submit.
@@ -243,6 +249,9 @@ struct LifecycleState {
     cursor_tracking_failed: bool,
     cursor_start_seen: bool,
     cursor_model: Option<String>,
+    /// Last provider-confirmed model for the root native session. This is runtime truth, not
+    /// the model KalCode requested when it launched the provider.
+    provider_model: Option<String>,
     cursor_input: super::cursor_input::CursorInput,
     title_input: super::cursor_input::CursorInput,
     handoff_readiness: HandoffReadiness,
@@ -336,8 +345,13 @@ impl Shared {
 
     /// The provider session id isn't known yet (a new Codex pane learns it from `notify`).
     pub(crate) fn forget_session_id(&self) {
-        if self.provider_id == "cursor" {
-            lock(&self.lifecycle).cursor_start_seen = false;
+        {
+            let mut lifecycle = lock(&self.lifecycle);
+            lifecycle.provider_model = None;
+            lifecycle.cursor_model = None;
+            if self.provider_id == "cursor" {
+                lifecycle.cursor_start_seen = false;
+            }
         }
         lock(&self.provider_session_id).take();
         self.session_started_emitted.store(false, Ordering::SeqCst);
@@ -508,8 +522,11 @@ impl Shared {
             self.observe_input_write_locked(&mut lifecycle, data);
         }
         let submitted = self.title_submissions(&mut lifecycle, data, protocol_reply);
+        let should_drain =
+            self.queue_native_identity_invalidation_locked(&mut lifecycle, &submitted);
         drop(lifecycle);
         self.submit_titles(submitted);
+        self.drain_events(should_drain);
         Ok(())
     }
 
@@ -519,7 +536,7 @@ impl Shared {
         data: &[u8],
         protocol_reply: bool,
     ) -> Vec<String> {
-        if protocol_reply || self.titles.is_none() {
+        if protocol_reply {
             return Vec::new();
         }
         if lifecycle.handoff_readiness == HandoffReadiness::ProviderPrompt {
@@ -532,6 +549,47 @@ impl Shared {
             .into_iter()
             .filter_map(|submission| submission.text)
             .collect()
+    }
+
+    fn is_native_model_command(submission: &str) -> bool {
+        let command = submission.trim();
+        if command.contains(['\r', '\n']) {
+            return false;
+        }
+        command
+            .strip_prefix("/model")
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with([' ', '\t']))
+    }
+
+    fn queue_native_identity_invalidation_locked(
+        &self,
+        lifecycle: &mut LifecycleState,
+        submissions: &[String],
+    ) -> bool {
+        if !submissions
+            .iter()
+            .any(|submission| Self::is_native_model_command(submission))
+        {
+            return false;
+        }
+        if lifecycle.provider_model.is_none() && lifecycle.cursor_model.is_none() {
+            return false;
+        }
+        let Some(provider_session_id) = lock(&self.provider_session_id).clone() else {
+            return false;
+        };
+        lifecycle.provider_model = None;
+        lifecycle.cursor_model = None;
+        // The provider owns its native model picker. Until its next structured report, the old
+        // active model is no longer truthful and the newly selected value is unknown.
+        self.queue_events_locked(
+            lifecycle,
+            [AgentEvent::SessionStarted {
+                provider_session_id,
+                model: None,
+                effort: None,
+            }],
+        )
     }
 
     fn submit_titles(&self, prompts: Vec<String>) {
@@ -843,6 +901,7 @@ impl Shared {
                             OpenTool {
                                 started: true,
                                 turn: None,
+                                in_subagent: false,
                             },
                         );
                     }
@@ -899,6 +958,7 @@ impl Shared {
                             OpenTool {
                                 started: false,
                                 turn: None,
+                                in_subagent: false,
                             },
                         );
                     }
@@ -1002,7 +1062,11 @@ impl Shared {
     }
 
     /// Status events. Returns the events to emit (pure except for session state).
-    fn status_events(&self, record: &HookRecord) -> Vec<AgentEvent> {
+    fn status_events(
+        &self,
+        lifecycle: &mut LifecycleState,
+        record: &HookRecord,
+    ) -> Vec<AgentEvent> {
         let Some(event) = record.event else {
             return Vec::new();
         };
@@ -1013,6 +1077,11 @@ impl Shared {
         match event {
             HookEvent::SessionStart => {
                 let mut events = Vec::new();
+                // Nested provider agents have their own model/session metadata. They must never
+                // claim or replace the identity of the root coding session represented here.
+                if record.in_subagent {
+                    return events;
+                }
                 let Some(id) = &record.provider_session_id else {
                     return events;
                 };
@@ -1020,7 +1089,34 @@ impl Shared {
                 if !accepted {
                     return events;
                 }
-                events.extend(started);
+                let first_identity = started.is_some();
+                events.extend(
+                    started
+                        .into_iter()
+                        .map(|started_event| match started_event {
+                            AgentEvent::SessionStarted {
+                                provider_session_id,
+                                ..
+                            } => AgentEvent::SessionStarted {
+                                provider_session_id,
+                                model: record.model.clone(),
+                                effort: None,
+                            },
+                            other => other,
+                        }),
+                );
+                let model_changed = record.model.is_some()
+                    && record.model.as_ref() != lifecycle.provider_model.as_ref();
+                if model_changed {
+                    lifecycle.provider_model.clone_from(&record.model);
+                    if !first_identity {
+                        events.push(AgentEvent::SessionStarted {
+                            provider_session_id: id.clone(),
+                            model: record.model.clone(),
+                            effort: None,
+                        });
+                    }
+                }
                 if matches!(
                     record.source.as_deref(),
                     None | Some("startup" | "resume" | "clear")
@@ -1174,6 +1270,7 @@ impl Shared {
                     OpenTool {
                         started: true,
                         turn: turn.map(str::to_owned),
+                        in_subagent: record.in_subagent,
                     },
                 );
             } else {
@@ -1196,15 +1293,16 @@ impl Shared {
         events
     }
 
-    /// Closes the open calls of `turn` (every open call when the turn is unknown).
-    fn close_turn_tools(&self, turn: Option<&str>, summary: &str) -> Vec<AgentEvent> {
+    fn close_tools_where(
+        &self,
+        summary: &str,
+        mut matches: impl FnMut(&OpenTool) -> bool,
+    ) -> Vec<AgentEvent> {
         let mut state = lock(&self.state);
         let ids: Vec<String> = state
             .open_tools
             .iter()
-            .filter(|(_, tool)| {
-                turn.is_none() || tool.turn.is_none() || tool.turn.as_deref() == turn
-            })
+            .filter(|(_, tool)| matches(tool))
             .map(|(id, _)| id.clone())
             .collect();
         ids.into_iter()
@@ -1217,6 +1315,25 @@ impl Shared {
                 }
             })
             .collect()
+    }
+
+    /// Closes the root calls of `turn` (every open call when the turn is unknown). Unbound calls
+    /// belong to the root provider lifecycle and are included for compatibility with older hooks.
+    fn close_turn_tools(&self, turn: Option<&str>, summary: &str) -> Vec<AgentEvent> {
+        self.close_tools_where(summary, |tool| {
+            turn.is_none() || tool.turn.is_none() || tool.turn.as_deref() == turn
+        })
+    }
+
+    /// Closes only child-owned calls exactly bound to the child's turn. A missing or root-reused
+    /// turn id cannot close unbound or root-owned tools.
+    fn close_subagent_turn_tools(&self, turn: Option<&str>, summary: &str) -> Vec<AgentEvent> {
+        let Some(turn) = turn else {
+            return Vec::new();
+        };
+        self.close_tools_where(summary, |tool| {
+            tool.in_subagent && tool.turn.as_deref() == Some(turn)
+        })
     }
 
     fn accept_codex_notify_locked(
@@ -1270,33 +1387,48 @@ impl Shared {
         if lifecycle.codex_seen_turn_ids.contains(turn_id) {
             return events;
         }
-        let remembered = lifecycle.codex_seen_turn_ids.len() < MAX_CODEX_SEEN_TURNS;
-        if remembered {
-            lifecycle.codex_seen_turn_ids.insert(turn_id.to_owned());
-        } else {
-            lifecycle.codex_tracking_failed = true;
-        }
-        lifecycle.codex_turn_ended = Some((turn_id.to_owned(), std::time::Instant::now()));
-        if !self.session_started_emitted.swap(true, Ordering::SeqCst) {
-            events.push(AgentEvent::SessionStarted {
-                provider_session_id: provider_session_id.to_owned(),
-                model: None,
-            });
-        }
-        // A late completion of an older turn (a queued prompt already started the next one)
-        // is bookkeeping only: the agent is working on the newer turn.
         let current = lifecycle
             .codex_turn
             .as_deref()
             .is_none_or(|current| current == turn_id);
+        let newer_turn_active = lifecycle.codex_turn.as_deref().is_some_and(|current| {
+            current != turn_id && !lifecycle.codex_seen_turn_ids.contains(current)
+        });
+        let remembered = lifecycle.codex_seen_turn_ids.len() < MAX_CODEX_SEEN_TURNS;
+        if remembered {
+            lifecycle.codex_seen_turn_ids.insert(turn_id.to_owned());
+            lifecycle.codex_superseded_turn_ids.remove(turn_id);
+        } else {
+            lifecycle.codex_tracking_failed = true;
+        }
+        if current {
+            lifecycle.codex_turn_ended = Some((turn_id.to_owned(), std::time::Instant::now()));
+        }
+        if !self.session_started_emitted.swap(true, Ordering::SeqCst) {
+            events.push(AgentEvent::SessionStarted {
+                provider_session_id: provider_session_id.to_owned(),
+                model: None,
+                effort: None,
+            });
+        }
+        // A late completion of an older turn (a queued prompt already started the next one)
+        // is bookkeeping only: the agent is working on the newer turn.
         if current {
             events.push(AgentEvent::TurnCompleted { ok: true });
         }
+        let readiness_before = lifecycle.handoff_readiness;
         let readiness_after = |readiness: HandoffReadiness| {
-            if current {
-                readiness
-            } else {
+            if !current
+                && matches!(
+                    readiness_before,
+                    HandoffReadiness::Unverified | HandoffReadiness::ProviderPrompt
+                )
+            {
+                readiness_before
+            } else if newer_turn_active {
                 HandoffReadiness::Busy
+            } else {
+                readiness
             }
         };
         if lifecycle.codex_tracking_failed || !remembered {
@@ -1336,6 +1468,61 @@ impl Shared {
     /// arriving after the PermissionRequest for the same command keeps NEEDS YOU). Codex handoff
     /// readiness stays with its submit accounting and turn completion; a native approval prompt
     /// blocks automated input until the tool it asked about runs or the turn ends.
+    fn accept_codex_subagent_hook_locked(
+        &self,
+        lifecycle: &mut LifecycleState,
+        record: &HookRecord,
+    ) -> Vec<AgentEvent> {
+        let turn = record.codex_turn_id.as_deref();
+        match record.event {
+            Some(HookEvent::UserPromptSubmit | HookEvent::PermissionRequest) => {
+                self.status_events(lifecycle, record)
+            }
+            Some(HookEvent::PreToolUse) => {
+                let early = record.tool_use_id.as_ref().and_then(|id| {
+                    lifecycle
+                        .codex_finished_early
+                        .iter()
+                        .position(|finished| finished == id)
+                });
+                if let Some(index) = early {
+                    lifecycle.codex_finished_early.remove(index);
+                    Vec::new()
+                } else {
+                    self.observe_tool_start_in(record, turn, true)
+                }
+            }
+            Some(HookEvent::PostToolUse | HookEvent::PostToolUseFailure) => {
+                let (open, conflicting) =
+                    record.tool_use_id.as_ref().map_or((false, false), |id| {
+                        lock(&self.state)
+                            .open_tools
+                            .get(id)
+                            .map_or((false, false), |tool| {
+                                let owned = tool.in_subagent && tool.turn.as_deref() == turn;
+                                (owned, !owned)
+                            })
+                    });
+                if conflicting {
+                    // A malformed child payload may repeat a root or sibling tool id. It cannot
+                    // close that call or report its filesystem effects as belonging to this child.
+                    return Vec::new();
+                }
+                let events = self.status_events(lifecycle, record);
+                if !open && let Some(id) = record.tool_use_id.clone() {
+                    if lifecycle.codex_finished_early.len() >= MAX_OPEN_TOOLS {
+                        lifecycle.codex_finished_early.pop_front();
+                    }
+                    lifecycle.codex_finished_early.push_back(id);
+                }
+                events
+            }
+            Some(HookEvent::Stop) => self.close_subagent_turn_tools(turn, "Not run"),
+            Some(HookEvent::Interrupt) => self.close_subagent_turn_tools(turn, "Interrupted"),
+            _ => Vec::new(),
+        }
+    }
+
     fn accept_codex_hook_locked(
         &self,
         lifecycle: &mut LifecycleState,
@@ -1344,28 +1531,52 @@ impl Shared {
         let Some(event) = record.event else {
             return Vec::new();
         };
+        if event == HookEvent::SessionStart && record.in_subagent {
+            return Vec::new();
+        }
         // Bound to this pane's Codex thread: the first hook of a new pane names it.
         let Some(session_id) = record.provider_session_id.as_deref() else {
             return Vec::new();
         };
+        // Nested Codex agents report their own model. They may contribute activity to an already
+        // bound root session, but must never claim a pane or replace its runtime identity.
+        if record.in_subagent && lock(&self.provider_session_id).as_deref() != Some(session_id) {
+            return Vec::new();
+        }
         let (accepted, started) = self.observe_session_id(session_id, true);
         if !accepted {
             return Vec::new();
         }
-        let mut events: Vec<AgentEvent> = started.into_iter().collect();
+        if record.in_subagent {
+            // Child hooks share the authenticated root session but carry independent turn ids
+            // and models. Preserve their tool/status activity without letting them mutate root
+            // turn ordering, completion accounting, handoff readiness, or runtime identity.
+            return self.accept_codex_subagent_hook_locked(lifecycle, record);
+        }
+        let first_identity = started.is_some();
+        let root_boundary_observed = lifecycle.codex_turn.is_some()
+            || lifecycle.codex_pending_submits > 0
+            || lifecycle.input_pending
+            || !lock(&self.pending).is_empty();
         let turn = record.codex_turn_id.as_deref();
         let command = record
             .tool_input
             .as_ref()
             .and_then(|input| input.get("command"))
             .map(Value::to_string);
+        let mut events = Vec::new();
+        let ordering_failed_before = lifecycle.codex_tracking_failed;
 
         if let Some(turn_id) = turn
             && lifecycle.codex_seen_turn_ids.contains(turn_id)
         {
             // A hook of a turn that already ended. Only a tool request well after its end is
             // real work (another Stop hook continued the turn); anything else arrived late.
-            let continued = matches!(event, HookEvent::PreToolUse | HookEvent::PermissionRequest)
+            let continued = lifecycle
+                .codex_turn
+                .as_deref()
+                .is_none_or(|current| current == turn_id)
+                && matches!(event, HookEvent::PreToolUse | HookEvent::PermissionRequest)
                 && lifecycle
                     .codex_turn_ended
                     .as_ref()
@@ -1374,7 +1585,9 @@ impl Shared {
                     });
             if !continued {
                 match event {
-                    HookEvent::PostToolUse => events.extend(self.status_events(record)),
+                    HookEvent::PostToolUse | HookEvent::PostToolUseFailure => {
+                        events.extend(self.status_events(lifecycle, record));
+                    }
                     HookEvent::Stop => events.extend(self.close_turn_tools(turn, "Not run")),
                     _ => {}
                 }
@@ -1385,12 +1598,88 @@ impl Shared {
             lifecycle.handoff_readiness = HandoffReadiness::Busy;
             lifecycle.codex_turn = Some(turn_id.to_owned());
         } else if let Some(turn_id) = turn
+            && lifecycle.codex_superseded_turn_ids.contains(turn_id)
+            && !matches!(event, HookEvent::Stop | HookEvent::Interrupt)
+        {
+            // A newer root prompt made this turn's activity stale, but did not complete it.
+            // Preserve post-tool cleanup; Stop/Interrupt below remains authoritative for the
+            // old turn's pending-submit accounting.
+            if matches!(
+                event,
+                HookEvent::PostToolUse | HookEvent::PostToolUseFailure
+            ) {
+                events.extend(self.status_events(lifecycle, record));
+            }
+            return events;
+        } else if let Some(turn_id) = turn
             && lifecycle.codex_turn.as_deref() != Some(turn_id)
             && !matches!(event, HookEvent::Stop | HookEvent::Interrupt)
         {
-            // A turn starts (its prompt hook, or the first hook that names it).
-            lifecycle.codex_turn = Some(turn_id.to_owned());
-            lifecycle.codex_permission = None;
+            if !ordering_failed_before {
+                if event == HookEvent::UserPromptSubmit
+                    && let Some(superseded) = lifecycle.codex_turn.as_deref()
+                    && !lifecycle.codex_seen_turn_ids.contains(superseded)
+                    && !lifecycle.codex_superseded_turn_ids.contains(superseded)
+                {
+                    // A root prompt is the forward turn boundary. Retire the previous turn before
+                    // advancing so one of its delayed async tool hooks cannot move identity backward.
+                    if lifecycle.codex_superseded_turn_ids.len() < MAX_CODEX_SEEN_TURNS {
+                        lifecycle
+                            .codex_superseded_turn_ids
+                            .insert(superseded.to_owned());
+                    } else {
+                        lifecycle.codex_tracking_failed = true;
+                    }
+                }
+                // A turn starts (its prompt hook, or the first hook that names it). Once bounded
+                // ordering tracking has failed, a different turn is activity only: it cannot
+                // replace the last identity whose order was proven.
+                lifecycle.codex_turn = Some(turn_id.to_owned());
+                lifecycle.codex_permission = None;
+            }
+        }
+
+        // Every accepted root turn hook reports the exact active model. Apply it only after the
+        // stale/completed-turn checks, and before status/tool events so their durable snapshots
+        // inherit this identity. SessionStart has no turn id and is authoritative only while the
+        // pane is pristine; it can otherwise arrive late and overwrite a newer root-turn model.
+        let current_turn = turn.is_some()
+            && lifecycle
+                .codex_turn
+                .as_deref()
+                .is_none_or(|current| Some(current) == turn);
+        let initial_session =
+            event == HookEvent::SessionStart && (first_identity || !root_boundary_observed);
+        let reported_model = if current_turn || initial_session {
+            record.model.clone()
+        } else {
+            None
+        };
+        events.extend(
+            started
+                .into_iter()
+                .map(|started_event| match started_event {
+                    AgentEvent::SessionStarted {
+                        provider_session_id,
+                        ..
+                    } if reported_model.is_some() => AgentEvent::SessionStarted {
+                        provider_session_id,
+                        model: reported_model.clone(),
+                        effort: None,
+                    },
+                    other => other,
+                }),
+        );
+        if reported_model.is_some() && reported_model.as_ref() != lifecycle.provider_model.as_ref()
+        {
+            lifecycle.provider_model.clone_from(&reported_model);
+            if !first_identity {
+                events.push(AgentEvent::SessionStarted {
+                    provider_session_id: session_id.to_owned(),
+                    model: reported_model,
+                    effort: None,
+                });
+            }
         }
 
         match event {
@@ -1417,7 +1706,9 @@ impl Shared {
                     events.push(Self::ready());
                 }
             }
-            HookEvent::UserPromptSubmit => events.extend(self.status_events(record)),
+            HookEvent::UserPromptSubmit => {
+                events.extend(self.status_events(lifecycle, record));
+            }
             HookEvent::PreToolUse => {
                 let early = record.tool_use_id.as_ref().and_then(|id| {
                     lifecycle
@@ -1440,7 +1731,7 @@ impl Shared {
             HookEvent::PermissionRequest => {
                 lifecycle.handoff_readiness = HandoffReadiness::ProviderPrompt;
                 lifecycle.codex_permission = Some((turn.map(str::to_owned), command));
-                events.extend(self.status_events(record));
+                events.extend(self.status_events(lifecycle, record));
             }
             HookEvent::PostToolUse => {
                 let open = record
@@ -1453,7 +1744,7 @@ impl Shared {
                     lifecycle.handoff_readiness = HandoffReadiness::Busy;
                 }
                 if open {
-                    events.extend(self.status_events(record));
+                    events.extend(self.status_events(lifecycle, record));
                     if answered {
                         // The person answered Codex's prompt and the tool ran: WORKING, even
                         // when an earlier call of the turn never reported its end (a sandboxed
@@ -1511,14 +1802,17 @@ impl Shared {
                     });
                 }
                 let fresh = turn.is_some_and(|turn_id| {
-                    if lifecycle.codex_seen_turn_ids.len() < MAX_CODEX_SEEN_TURNS {
-                        lifecycle.codex_seen_turn_ids.insert(turn_id.to_owned());
-                    } else {
+                    if lifecycle.codex_seen_turn_ids.len() >= MAX_CODEX_SEEN_TURNS {
                         lifecycle.codex_tracking_failed = true;
+                        return false;
                     }
-                    lifecycle.codex_turn_ended =
-                        Some((turn_id.to_owned(), std::time::Instant::now()));
-                    true
+                    lifecycle.codex_superseded_turn_ids.remove(turn_id);
+                    let inserted = lifecycle.codex_seen_turn_ids.insert(turn_id.to_owned());
+                    if inserted && current {
+                        lifecycle.codex_turn_ended =
+                            Some((turn_id.to_owned(), std::time::Instant::now()));
+                    }
+                    inserted
                 });
                 if fresh && lifecycle.codex_reopened_turn.take().is_none() {
                     // The interrupted turn answered its submit.
@@ -1527,10 +1821,25 @@ impl Shared {
                 }
                 // Codex may put the interrupted prompt back in its composer: automated input
                 // waits for the next verified turn boundary.
-                lifecycle.handoff_readiness = if current {
+                let newer_turn_active = turn.is_some_and(|turn_id| {
+                    lifecycle.codex_turn.as_deref().is_some_and(|current| {
+                        current != turn_id && !lifecycle.codex_seen_turn_ids.contains(current)
+                    })
+                });
+                let readiness_before = lifecycle.handoff_readiness;
+                lifecycle.handoff_readiness = if lifecycle.codex_tracking_failed {
                     HandoffReadiness::Unverified
-                } else {
+                } else if current {
+                    HandoffReadiness::Unverified
+                } else if matches!(
+                    readiness_before,
+                    HandoffReadiness::Unverified | HandoffReadiness::ProviderPrompt
+                ) {
+                    readiness_before
+                } else if newer_turn_active || lifecycle.codex_pending_submits > 0 {
                     HandoffReadiness::Busy
+                } else {
+                    HandoffReadiness::Ready
                 };
             }
             _ => {}
@@ -1548,6 +1857,7 @@ impl Shared {
         match record.event {
             Some(HookEvent::SessionStart)
                 if self.provider_id == "claude-code"
+                    && !record.in_subagent
                     && matches!(
                         record.source.as_deref(),
                         None | Some("startup" | "resume" | "clear")
@@ -1638,6 +1948,7 @@ impl Shared {
             AgentEvent::SessionStarted {
                 provider_session_id: id.to_owned(),
                 model: None,
+                effort: None,
             }
         });
         (true, event)
@@ -1691,6 +2002,7 @@ impl Shared {
                 } => AgentEvent::SessionStarted {
                     provider_session_id,
                     model: cursor.model.clone(),
+                    effort: None,
                 },
                 other => other,
             })
@@ -1703,6 +2015,7 @@ impl Shared {
                 events.push(AgentEvent::SessionStarted {
                     provider_session_id: id.to_owned(),
                     model: cursor.model.clone(),
+                    effort: None,
                 });
             }
         }
@@ -1860,7 +2173,7 @@ impl Shared {
             } else if self.provider_id == "codex" {
                 self.accept_codex_hook_locked(&mut lifecycle, &record)
             } else {
-                let events = self.status_events(&record);
+                let events = self.status_events(&mut lifecycle, &record);
                 self.observe_handoff_lifecycle_locked(&mut lifecycle, &record);
                 events
             };
@@ -2146,8 +2459,11 @@ impl Shared {
             self.observe_input_write_locked(&mut lifecycle, data);
         }
         let submitted = self.title_submissions(&mut lifecycle, data, protocol_reply);
+        let should_drain =
+            self.queue_native_identity_invalidation_locked(&mut lifecycle, &submitted);
         drop(lifecycle);
         self.submit_titles(submitted);
+        self.drain_events(should_drain);
         Ok(())
     }
 }
@@ -2908,7 +3224,7 @@ mod tests {
         assert_eq!(s.handoff_readiness(), Err(HandoffDeliveryError::Unverified));
         s.handle(event("sessionStart", "native-session", "turn-1"));
         assert!(drain(&rx).iter().any(|event| matches!(event,
-            AgentEvent::SessionStarted { provider_session_id, model }
+            AgentEvent::SessionStarted { provider_session_id, model, .. }
             if provider_session_id == "native-session" && model.as_deref() == Some("future-9-thinking"))));
         assert!(s.handoff_readiness().is_ok());
         {
@@ -2979,6 +3295,58 @@ mod tests {
             Ok(()),
             "native /model consumes no model turn and must not offset later prompt acknowledgement"
         );
+    }
+
+    #[test]
+    fn native_model_submission_clears_reported_identity_until_the_provider_reports_again() {
+        let (shared, rx) = shared_for(
+            "claude-code",
+            DecisionRouting::ProviderPrompt,
+            SessionLimits::default(),
+        );
+        let provider_session_id = lock(&shared.provider_session_id)
+            .clone()
+            .expect("provider session");
+        shared.handle(record(
+            HookEvent::SessionStart,
+            json!({
+                "session_id": provider_session_id,
+                "source": "startup",
+                "model": "claude-opus-active-a"
+            }),
+        ));
+        drain(&rx);
+
+        let first = {
+            let mut lifecycle = lock(&shared.lifecycle);
+            shared.observe_input_write_locked(&mut lifecycle, b"/mo");
+            let submitted = shared.title_submissions(&mut lifecycle, b"/mo", false);
+            shared.queue_native_identity_invalidation_locked(&mut lifecycle, &submitted)
+        };
+        shared.drain_events(first);
+        assert!(drain(&rx).is_empty());
+
+        let second = {
+            let mut lifecycle = lock(&shared.lifecycle);
+            shared.observe_input_write_locked(&mut lifecycle, b"del\r");
+            let submitted = shared.title_submissions(&mut lifecycle, b"del\r", false);
+            shared.queue_native_identity_invalidation_locked(&mut lifecycle, &submitted)
+        };
+        shared.drain_events(second);
+        assert_eq!(
+            drain(&rx),
+            [AgentEvent::SessionStarted {
+                provider_session_id,
+                model: None,
+                effort: None,
+            }],
+            "the old active model is cleared without guessing the native picker result"
+        );
+        assert_eq!(lock(&shared.lifecycle).provider_model, None);
+        for ordinary in ["/models", "explain /model", "/model\nthen do work"] {
+            assert!(!Shared::is_native_model_command(ordinary), "{ordinary:?}");
+        }
+        assert!(Shared::is_native_model_command("/model claude-sonnet-next"));
     }
 
     #[test]
@@ -3116,7 +3484,8 @@ mod tests {
             [
                 AgentEvent::SessionStarted {
                     provider_session_id: provider_session_id.clone(),
-                    model: None
+                    model: None,
+                    effort: None,
                 },
                 AgentEvent::Status {
                     status: ThreadStatus::Idle,
@@ -3286,6 +3655,604 @@ mod tests {
     }
 
     #[test]
+    fn root_session_metadata_reports_model_changes_and_subagents_cannot_claim_identity() {
+        let (s, rx) = shared_for(
+            "claude-code",
+            DecisionRouting::ProviderPrompt,
+            SessionLimits::default(),
+        );
+        s.forget_session_id();
+        let session_id = new_id();
+
+        s.handle(record(
+            HookEvent::SessionStart,
+            json!({
+                "session_id": session_id,
+                "source": "startup",
+                "model": "subagent-model",
+                "agent_id": "child-agent"
+            }),
+        ));
+        assert!(
+            drain(&rx).is_empty(),
+            "a subagent must not claim or overwrite its parent terminal identity"
+        );
+        assert_eq!(lock(&s.provider_session_id).as_deref(), None);
+
+        s.handle(record(
+            HookEvent::SessionStart,
+            json!({
+                "session_id": session_id,
+                "source": "startup",
+                "model": "root-model-a"
+            }),
+        ));
+        let started = drain(&rx);
+        assert!(started.iter().any(|event| {
+            let wire = serde_json::to_value(event).expect("event wire");
+            wire["kind"] == "session_started"
+                && wire["model"] == "root-model-a"
+                && wire.get("effort").is_some_and(serde_json::Value::is_null)
+        }));
+
+        s.handle(record(
+            HookEvent::SessionStart,
+            json!({
+                "session_id": session_id,
+                "source": "compact",
+                "model": "root-model-b"
+            }),
+        ));
+        let switched = drain(&rx);
+        assert_eq!(
+            switched
+                .iter()
+                .filter(|event| {
+                    let wire = serde_json::to_value(event).expect("event wire");
+                    wire["kind"] == "session_started" && wire["model"] == "root-model-b"
+                })
+                .count(),
+            1,
+            "a validated native model switch updates the existing provider session"
+        );
+    }
+
+    #[test]
+    fn codex_root_session_metadata_reports_native_model_changes() {
+        let (s, rx) = shared_for(
+            "codex",
+            DecisionRouting::ProviderPrompt,
+            SessionLimits::default(),
+        );
+        s.forget_session_id();
+        let session_id = new_id();
+
+        s.handle(codex_hook(
+            HookEvent::UserPromptSubmit,
+            json!({
+                "session_id": session_id,
+                "turn_id": "child-before-root",
+                "prompt": "private child prompt",
+                "model": "subagent-model",
+                "agent_id": "child-agent"
+            }),
+        ));
+        assert!(drain(&rx).is_empty());
+        assert_eq!(
+            lock(&s.provider_session_id).as_deref(),
+            None,
+            "a subagent hook cannot claim the root Codex identity"
+        );
+
+        s.handle(codex_hook(
+            HookEvent::SessionStart,
+            json!({
+                "session_id": session_id,
+                "source": "startup",
+                "model": "gpt-6-astra"
+            }),
+        ));
+        let started = drain(&rx);
+        assert!(started.iter().any(|event| matches!(
+            event,
+            AgentEvent::SessionStarted { provider_session_id, model, effort: None }
+                if provider_session_id == &session_id
+                    && model.as_deref() == Some("gpt-6-astra")
+        )));
+
+        s.handle(codex_hook(
+            HookEvent::UserPromptSubmit,
+            json!({
+                "session_id": session_id,
+                "turn_id": "root-turn-a",
+                "prompt": "private first root prompt",
+                "model": "gpt-6-astra"
+            }),
+        ));
+        s.handle(codex_hook(
+            HookEvent::Stop,
+            json!({
+                "session_id": session_id,
+                "turn_id": "root-turn-a",
+                "model": "gpt-6-astra"
+            }),
+        ));
+        drain(&rx);
+
+        s.handle(codex_hook(
+            HookEvent::UserPromptSubmit,
+            json!({
+                "session_id": session_id,
+                "turn_id": "root-turn-b",
+                "prompt": "private root prompt",
+                "model": "gpt-6.1-sol"
+            }),
+        ));
+        assert_eq!(
+            drain(&rx)
+                .iter()
+                .filter(|event| matches!(
+                    event,
+                    AgentEvent::SessionStarted { provider_session_id, model, effort: None }
+                        if provider_session_id == &session_id
+                            && model.as_deref() == Some("gpt-6.1-sol")
+                ))
+                .count(),
+            1,
+            "the next root prompt reports Codex's native model switch exactly once"
+        );
+
+        s.handle(codex_hook(
+            HookEvent::UserPromptSubmit,
+            json!({
+                "session_id": session_id,
+                "turn_id": "root-turn-a",
+                "prompt": "delayed private first prompt",
+                "model": "gpt-6-astra"
+            }),
+        ));
+        assert!(
+            drain(&rx)
+                .iter()
+                .all(|event| !matches!(event, AgentEvent::SessionStarted { .. })),
+            "an asynchronous hook from a completed older turn cannot roll identity backward"
+        );
+        assert_eq!(
+            lock(&s.lifecycle).provider_model.as_deref(),
+            Some("gpt-6.1-sol")
+        );
+
+        s.handle(codex_hook(
+            HookEvent::UserPromptSubmit,
+            json!({
+                "session_id": session_id,
+                "turn_id": "child-turn-c",
+                "prompt": "private child prompt",
+                "model": "subagent-model",
+                "agent_id": "child-agent"
+            }),
+        ));
+        assert!(
+            drain(&rx)
+                .iter()
+                .all(|event| !matches!(event, AgentEvent::SessionStarted { .. })),
+            "a subagent model must not overwrite the root Codex identity"
+        );
+        assert_eq!(
+            lock(&s.lifecycle).provider_model.as_deref(),
+            Some("gpt-6.1-sol")
+        );
+    }
+
+    #[test]
+    fn codex_subagent_tools_do_not_mutate_or_complete_the_root_turn() {
+        let (s, rx) = shared_for(
+            "codex",
+            DecisionRouting::ProviderPrompt,
+            SessionLimits::default(),
+        );
+        s.forget_session_id();
+        let session_id = new_id();
+        s.handle(codex_hook(
+            HookEvent::SessionStart,
+            json!({
+                "session_id": session_id,
+                "source": "startup",
+                "model": "gpt-6-astra"
+            }),
+        ));
+        drain(&rx);
+        lock(&s.lifecycle).codex_pending_submits = 1;
+        s.handle(codex_hook(
+            HookEvent::UserPromptSubmit,
+            json!({
+                "session_id": session_id,
+                "turn_id": "root-turn-r",
+                "prompt": "private root prompt",
+                "model": "gpt-6.1-sol"
+            }),
+        ));
+        drain(&rx);
+
+        s.handle(codex_hook(
+            HookEvent::PreToolUse,
+            json!({
+                "session_id": session_id,
+                "turn_id": "root-turn-r",
+                "model": "gpt-6.1-sol",
+                "tool_name": "Bash",
+                "tool_use_id": "root-tool-r",
+                "tool_input": {"command": "cargo check"}
+            }),
+        ));
+        drain(&rx);
+        s.handle(codex_hook(
+            HookEvent::UserPromptSubmit,
+            json!({
+                "session_id": session_id,
+                "turn_id": "child-turn-s",
+                "model": "child-model-a",
+                "agent_id": "child-agent",
+                "prompt": "private child prompt"
+            }),
+        ));
+        assert!(drain(&rx).iter().any(|event| matches!(
+            event,
+            AgentEvent::Status {
+                status: ThreadStatus::Active,
+                ..
+            }
+        )));
+
+        s.handle(codex_hook(
+            HookEvent::PostToolUse,
+            json!({
+                "session_id": session_id,
+                "turn_id": "root-turn-r",
+                "model": "child-model-a",
+                "agent_id": "child-agent",
+                "tool_name": "Bash",
+                "tool_use_id": "root-tool-r",
+                "tool_input": {"command": "cargo check"}
+            }),
+        ));
+        assert!(
+            drain(&rx).is_empty(),
+            "a child post hook cannot close or attribute effects to a root tool"
+        );
+        assert!(lock(&s.state).open_tools.contains_key("root-tool-r"));
+
+        s.handle(codex_hook(
+            HookEvent::PreToolUse,
+            json!({
+                "session_id": session_id,
+                "turn_id": "child-turn-s",
+                "model": "child-model-a",
+                "agent_id": "child-agent",
+                "tool_name": "Bash",
+                "tool_use_id": "child-tool-s",
+                "tool_input": {"command": "cargo test"}
+            }),
+        ));
+        let started = drain(&rx);
+        assert!(started.iter().any(|event| matches!(
+            event,
+            AgentEvent::ToolRequested { tool_call_id, .. } if tool_call_id == "child-tool-s"
+        )));
+        assert!(
+            started
+                .iter()
+                .all(|event| !matches!(event, AgentEvent::SessionStarted { .. }))
+        );
+
+        s.handle(codex_hook(
+            HookEvent::Stop,
+            json!({
+                "session_id": session_id,
+                "turn_id": "child-turn-s",
+                "model": "child-model-a",
+                "agent_id": "child-agent"
+            }),
+        ));
+        let stopped = drain(&rx);
+        assert!(stopped.iter().any(|event| matches!(
+            event,
+            AgentEvent::ToolCompleted { tool_call_id, ok: false, .. }
+                if tool_call_id == "child-tool-s"
+        )));
+        assert!(
+            stopped
+                .iter()
+                .all(|event| !matches!(event, AgentEvent::TurnCompleted { .. }))
+        );
+        assert!(lock(&s.state).open_tools.contains_key("root-tool-r"));
+
+        for payload in [
+            json!({
+                "session_id": session_id,
+                "turn_id": "root-turn-r",
+                "model": "child-model-a",
+                "agent_id": "child-agent"
+            }),
+            json!({
+                "session_id": session_id,
+                "agent_id": "child-agent"
+            }),
+        ] {
+            s.handle(codex_hook(HookEvent::Stop, payload));
+            assert!(
+                drain(&rx).is_empty(),
+                "a child stop cannot close root or unbound tools"
+            );
+            assert!(lock(&s.state).open_tools.contains_key("root-tool-r"));
+        }
+        let lifecycle = lock(&s.lifecycle);
+        assert_eq!(lifecycle.codex_turn.as_deref(), Some("root-turn-r"));
+        assert_eq!(lifecycle.provider_model.as_deref(), Some("gpt-6.1-sol"));
+        assert_eq!(lifecycle.codex_pending_submits, 1);
+    }
+
+    #[test]
+    fn delayed_codex_session_start_cannot_replace_identity_observed_at_the_root_prompt() {
+        let (s, rx) = shared_for(
+            "codex",
+            DecisionRouting::ProviderPrompt,
+            SessionLimits::default(),
+        );
+        s.forget_session_id();
+        let session_id = new_id();
+
+        s.handle(codex_hook(
+            HookEvent::UserPromptSubmit,
+            json!({
+                "session_id": session_id,
+                "turn_id": "root-turn-b",
+                "prompt": "private root prompt",
+                "model": "gpt-6.1-sol"
+            }),
+        ));
+        assert!(drain(&rx).iter().any(|event| matches!(
+            event,
+            AgentEvent::SessionStarted { provider_session_id, model, effort: None }
+                if provider_session_id == &session_id
+                    && model.as_deref() == Some("gpt-6.1-sol")
+        )));
+
+        s.handle(codex_hook(
+            HookEvent::SessionStart,
+            json!({
+                "session_id": session_id,
+                "source": "startup",
+                "model": "gpt-6-astra"
+            }),
+        ));
+        assert!(
+            drain(&rx)
+                .iter()
+                .all(|event| !matches!(event, AgentEvent::SessionStarted { .. })),
+            "an asynchronous startup hook cannot replace newer root-turn identity"
+        );
+        assert_eq!(
+            lock(&s.lifecycle).provider_model.as_deref(),
+            Some("gpt-6.1-sol")
+        );
+    }
+
+    #[test]
+    fn delayed_codex_tool_hook_from_a_superseded_prompt_cannot_roll_identity_backward() {
+        let (s, rx) = shared_for(
+            "codex",
+            DecisionRouting::ProviderPrompt,
+            SessionLimits::default(),
+        );
+        s.forget_session_id();
+        let session_id = new_id();
+        s.handle(codex_hook(
+            HookEvent::SessionStart,
+            json!({
+                "session_id": session_id,
+                "source": "startup",
+                "model": "gpt-6-astra"
+            }),
+        ));
+        drain(&rx);
+
+        for (turn_id, model) in [
+            ("root-turn-a", "gpt-6-astra"),
+            ("root-turn-b", "gpt-6.1-sol"),
+        ] {
+            s.handle(codex_hook(
+                HookEvent::UserPromptSubmit,
+                json!({
+                    "session_id": session_id,
+                    "turn_id": turn_id,
+                    "prompt": "private root prompt",
+                    "model": model
+                }),
+            ));
+            drain(&rx);
+        }
+        assert_eq!(
+            lock(&s.lifecycle).provider_model.as_deref(),
+            Some("gpt-6.1-sol")
+        );
+
+        s.handle(codex_hook(
+            HookEvent::PreToolUse,
+            json!({
+                "session_id": session_id,
+                "turn_id": "root-turn-a",
+                "model": "gpt-6-astra",
+                "tool_name": "Bash",
+                "tool_use_id": "late-tool-a",
+                "tool_input": {"command": "cargo test"}
+            }),
+        ));
+        assert!(
+            drain(&rx).is_empty(),
+            "a delayed tool hook from the superseded prompt is stale"
+        );
+        assert_eq!(
+            lock(&s.lifecycle).provider_model.as_deref(),
+            Some("gpt-6.1-sol")
+        );
+    }
+
+    #[test]
+    fn old_codex_turn_cannot_reopen_after_a_newer_root_prompt() {
+        let (s, rx) = shared_for(
+            "codex",
+            DecisionRouting::ProviderPrompt,
+            SessionLimits::default(),
+        );
+        s.forget_session_id();
+        let session_id = new_id();
+        s.handle(codex_hook(
+            HookEvent::SessionStart,
+            json!({
+                "session_id": session_id,
+                "source": "startup",
+                "model": "gpt-6-astra"
+            }),
+        ));
+        drain(&rx);
+        s.handle(codex_hook(
+            HookEvent::UserPromptSubmit,
+            json!({
+                "session_id": session_id,
+                "turn_id": "root-turn-a",
+                "prompt": "private first prompt",
+                "model": "gpt-6-astra"
+            }),
+        ));
+        s.handle(codex_hook(
+            HookEvent::Stop,
+            json!({
+                "session_id": session_id,
+                "turn_id": "root-turn-a",
+                "model": "gpt-6-astra"
+            }),
+        ));
+        drain(&rx);
+        s.handle(codex_hook(
+            HookEvent::UserPromptSubmit,
+            json!({
+                "session_id": session_id,
+                "turn_id": "root-turn-b",
+                "prompt": "private newer prompt",
+                "model": "gpt-6.1-sol"
+            }),
+        ));
+        drain(&rx);
+        if let Some((_, ended)) = lock(&s.lifecycle).codex_turn_ended.as_mut() {
+            *ended -= CODEX_HOOK_REORDER_WINDOW;
+        }
+
+        s.handle(codex_hook(
+            HookEvent::PreToolUse,
+            json!({
+                "session_id": session_id,
+                "turn_id": "root-turn-a",
+                "model": "gpt-6-astra",
+                "tool_name": "Bash",
+                "tool_use_id": "late-reopen-a",
+                "tool_input": {"command": "cargo test"}
+            }),
+        ));
+        assert!(
+            drain(&rx).is_empty(),
+            "an ended turn cannot reopen after a newer root prompt became current"
+        );
+        let lifecycle = lock(&s.lifecycle);
+        assert_eq!(lifecycle.codex_turn.as_deref(), Some("root-turn-b"));
+        assert_eq!(lifecycle.provider_model.as_deref(), Some("gpt-6.1-sol"));
+    }
+
+    #[test]
+    fn codex_tool_hook_updates_identity_before_tool_events_and_completed_turns_cannot_rollback() {
+        let (s, rx) = shared_for(
+            "codex",
+            DecisionRouting::ProviderPrompt,
+            SessionLimits::default(),
+        );
+        s.forget_session_id();
+        let session_id = new_id();
+        s.handle(codex_hook(
+            HookEvent::SessionStart,
+            json!({
+                "session_id": session_id,
+                "source": "startup",
+                "model": "gpt-6-astra"
+            }),
+        ));
+        drain(&rx);
+
+        s.handle(codex_hook(
+            HookEvent::PreToolUse,
+            json!({
+                "session_id": session_id,
+                "turn_id": "root-turn-b",
+                "model": "gpt-6.1-sol",
+                "tool_name": "Bash",
+                "tool_use_id": "tool-b",
+                "tool_input": {"command": "cargo test"}
+            }),
+        ));
+        let events = drain(&rx);
+        let identity = events
+            .iter()
+            .position(|event| {
+                matches!(
+                    event,
+                    AgentEvent::SessionStarted { model, .. }
+                        if model.as_deref() == Some("gpt-6.1-sol")
+                )
+            })
+            .expect("model switch event");
+        let tool = events
+            .iter()
+            .position(|event| {
+                matches!(
+                    event,
+                    AgentEvent::ToolRequested { tool_call_id, .. } if tool_call_id == "tool-b"
+                )
+            })
+            .expect("tool request event");
+        assert!(
+            identity < tool,
+            "durable tool identity must observe model B"
+        );
+
+        s.handle(codex_hook(
+            HookEvent::Stop,
+            json!({
+                "session_id": session_id,
+                "turn_id": "root-turn-b",
+                "model": "gpt-6.1-sol"
+            }),
+        ));
+        drain(&rx);
+        s.handle(codex_hook(
+            HookEvent::UserPromptSubmit,
+            json!({
+                "session_id": session_id,
+                "turn_id": "root-turn-b",
+                "prompt": "delayed older prompt",
+                "model": "gpt-6-astra"
+            }),
+        ));
+        assert!(
+            drain(&rx)
+                .iter()
+                .all(|event| !matches!(event, AgentEvent::SessionStarted { .. }))
+        );
+        assert_eq!(
+            lock(&s.lifecycle).provider_model.as_deref(),
+            Some("gpt-6.1-sol")
+        );
+    }
+
+    #[test]
     fn codex_new_session_latches_the_first_valid_thread_id() {
         let (s, rx) = shared_for(
             "codex",
@@ -3350,6 +4317,7 @@ mod tests {
                 AgentEvent::SessionStarted {
                     provider_session_id,
                     model: None,
+                    effort: None,
                 },
                 AgentEvent::TurnCompleted { ok: true },
             ]
@@ -3464,6 +4432,7 @@ mod tests {
                 AgentEvent::SessionStarted {
                     provider_session_id: provider_session_id.clone(),
                     model: None,
+                    effort: None,
                 },
                 AgentEvent::TurnCompleted { ok: true },
             ]
@@ -3481,6 +4450,126 @@ mod tests {
             "later completions cannot recover exhausted correlation state"
         );
         assert!(lifecycle.codex_tracking_failed);
+    }
+
+    #[test]
+    fn codex_completed_turn_cap_keeps_the_superseded_identity_guard() {
+        let (s, rx) = shared_for(
+            "codex",
+            DecisionRouting::ProviderPrompt,
+            SessionLimits::default(),
+        );
+        s.forget_session_id();
+        let session_id = new_id();
+        s.handle(codex_hook(
+            HookEvent::SessionStart,
+            json!({"session_id": session_id, "source": "startup", "model": "model-a"}),
+        ));
+        for (turn_id, model) in [("turn-a", "model-a"), ("turn-b", "model-b")] {
+            s.handle(codex_hook(
+                HookEvent::UserPromptSubmit,
+                json!({
+                    "session_id": session_id,
+                    "turn_id": turn_id,
+                    "prompt": "private root prompt",
+                    "model": model
+                }),
+            ));
+        }
+        drain(&rx);
+        lock(&s.lifecycle).codex_seen_turn_ids = (0..MAX_CODEX_SEEN_TURNS)
+            .map(|index| format!("seen-{index}"))
+            .collect();
+
+        s.handle(codex_hook(
+            HookEvent::Stop,
+            json!({"session_id": session_id, "turn_id": "turn-a", "model": "model-a"}),
+        ));
+        assert!(
+            lock(&s.lifecycle)
+                .codex_superseded_turn_ids
+                .contains("turn-a"),
+            "failed settlement must preserve the stale-turn identity guard"
+        );
+        s.handle(codex_hook(
+            HookEvent::PreToolUse,
+            json!({
+                "session_id": session_id,
+                "turn_id": "turn-a",
+                "model": "model-a",
+                "tool_name": "Bash",
+                "tool_use_id": "late-a",
+                "tool_input": {"command": "cargo test"}
+            }),
+        ));
+        assert!(drain(&rx).is_empty());
+        let lifecycle = lock(&s.lifecycle);
+        assert!(lifecycle.codex_tracking_failed);
+        assert_eq!(lifecycle.codex_turn.as_deref(), Some("turn-b"));
+        assert_eq!(lifecycle.provider_model.as_deref(), Some("model-b"));
+        drop(lifecycle);
+        assert_eq!(s.handoff_readiness(), Err(HandoffDeliveryError::Unverified));
+    }
+
+    #[test]
+    fn codex_superseded_turn_cap_freezes_untracked_identity_order() {
+        let (s, rx) = shared_for(
+            "codex",
+            DecisionRouting::ProviderPrompt,
+            SessionLimits::default(),
+        );
+        s.forget_session_id();
+        let session_id = new_id();
+        s.handle(codex_hook(
+            HookEvent::SessionStart,
+            json!({"session_id": session_id, "source": "startup", "model": "model-a"}),
+        ));
+        s.handle(codex_hook(
+            HookEvent::UserPromptSubmit,
+            json!({
+                "session_id": session_id,
+                "turn_id": "turn-a",
+                "prompt": "private first prompt",
+                "model": "model-a"
+            }),
+        ));
+        drain(&rx);
+        lock(&s.lifecycle).codex_superseded_turn_ids = (0..MAX_CODEX_SEEN_TURNS)
+            .map(|index| format!("superseded-{index}"))
+            .collect();
+
+        s.handle(codex_hook(
+            HookEvent::UserPromptSubmit,
+            json!({
+                "session_id": session_id,
+                "turn_id": "turn-b",
+                "prompt": "private newer prompt",
+                "model": "model-b"
+            }),
+        ));
+        drain(&rx);
+        s.handle(codex_hook(
+            HookEvent::PreToolUse,
+            json!({
+                "session_id": session_id,
+                "turn_id": "turn-a",
+                "model": "model-a",
+                "tool_name": "Bash",
+                "tool_use_id": "untracked-a",
+                "tool_input": {"command": "cargo test"}
+            }),
+        ));
+        assert!(
+            drain(&rx)
+                .iter()
+                .all(|event| !matches!(event, AgentEvent::SessionStarted { .. }))
+        );
+        let lifecycle = lock(&s.lifecycle);
+        assert!(lifecycle.codex_tracking_failed);
+        assert_eq!(lifecycle.codex_turn.as_deref(), Some("turn-b"));
+        assert_eq!(lifecycle.provider_model.as_deref(), Some("model-b"));
+        drop(lifecycle);
+        assert_eq!(s.handoff_readiness(), Err(HandoffDeliveryError::Unverified));
     }
 
     fn codex_shared() -> (Arc<Shared>, mpsc::Receiver<AgentEvent>) {
@@ -4071,13 +5160,116 @@ mod tests {
             matches!(events.as_slice(), [AgentEvent::ToolCompleted { tool_call_id, .. }] if tool_call_id == "a")
         );
         assert!(lock(&s.state).open_tools.contains_key("b"));
+        assert_eq!(lock(&s.lifecycle).codex_pending_submits, 1);
         assert_eq!(s.handoff_readiness(), Err(HandoffDeliveryError::ReadyBusy));
         s.handle(codex_hook(
             HookEvent::Stop,
             json!({"session_id": thread, "turn_id": "t2"}),
         ));
         assert_eq!(turn_completions(&drain(&rx)), 1);
+        assert_eq!(lock(&s.lifecycle).codex_pending_submits, 0);
         assert_eq!(s.handoff_readiness(), Ok(()));
+    }
+
+    #[test]
+    fn codex_reversed_completion_and_duplicate_interrupt_settle_each_submit_once() {
+        let (s, rx) = codex_shared();
+        let thread = "01a1090f-fb6f-77b2-a41e-3b36de532426";
+        s.record_codex_submit_locked(&mut lock(&s.lifecycle));
+        s.record_codex_submit_locked(&mut lock(&s.lifecycle));
+        for turn_id in ["t1", "t2"] {
+            s.handle(codex_hook(
+                HookEvent::UserPromptSubmit,
+                json!({"session_id": thread, "turn_id": turn_id}),
+            ));
+        }
+        drain(&rx);
+
+        s.handle(codex_hook(
+            HookEvent::Stop,
+            json!({"session_id": thread, "turn_id": "t2"}),
+        ));
+        s.handle(HookRecord {
+            event: Some(HookEvent::CodexNotify),
+            provider_session_id: Some(thread.into()),
+            codex_type: Some("agent-turn-complete".into()),
+            codex_turn_id: Some("t2".into()),
+            ..HookRecord::default()
+        });
+        assert_eq!(turn_completions(&drain(&rx)), 1);
+        let ended = lock(&s.lifecycle)
+            .codex_turn_ended
+            .clone()
+            .expect("current turn ended");
+        assert_eq!(ended.0, "t2");
+        assert_eq!(lock(&s.lifecycle).codex_pending_submits, 1);
+        assert_eq!(s.handoff_readiness(), Err(HandoffDeliveryError::ReadyBusy));
+
+        for event in [HookEvent::Interrupt, HookEvent::Interrupt, HookEvent::Stop] {
+            s.handle(codex_hook(
+                event,
+                json!({"session_id": thread, "turn_id": "t1"}),
+            ));
+        }
+        s.handle(HookRecord {
+            event: Some(HookEvent::CodexNotify),
+            provider_session_id: Some(thread.into()),
+            codex_type: Some("agent-turn-complete".into()),
+            codex_turn_id: Some("t1".into()),
+            ..HookRecord::default()
+        });
+        assert_eq!(turn_completions(&drain(&rx)), 0);
+        let lifecycle = lock(&s.lifecycle);
+        assert_eq!(lifecycle.codex_pending_submits, 0);
+        assert_eq!(lifecycle.codex_turn_ended.as_ref(), Some(&ended));
+        drop(lifecycle);
+        assert_eq!(s.handoff_readiness(), Ok(()));
+    }
+
+    #[test]
+    fn older_codex_settlement_preserves_a_newer_interrupts_unverified_prompt() {
+        let (s, rx) = codex_shared();
+        let thread = "01a1090f-fb6f-77b2-a41e-3b36de532427";
+        s.record_codex_submit_locked(&mut lock(&s.lifecycle));
+        s.record_codex_submit_locked(&mut lock(&s.lifecycle));
+        for turn_id in ["t1", "t2"] {
+            s.handle(codex_hook(
+                HookEvent::UserPromptSubmit,
+                json!({"session_id": thread, "turn_id": turn_id}),
+            ));
+        }
+        drain(&rx);
+
+        s.handle(codex_hook(
+            HookEvent::Interrupt,
+            json!({"session_id": thread, "turn_id": "t2"}),
+        ));
+        drain(&rx);
+        let ended = lock(&s.lifecycle)
+            .codex_turn_ended
+            .clone()
+            .expect("interrupted current turn ended");
+        assert_eq!(ended.0, "t2");
+        assert_eq!(lock(&s.lifecycle).codex_pending_submits, 1);
+        assert_eq!(s.handoff_readiness(), Err(HandoffDeliveryError::Unverified));
+
+        s.handle(codex_hook(
+            HookEvent::Stop,
+            json!({"session_id": thread, "turn_id": "t1"}),
+        ));
+        s.handle(HookRecord {
+            event: Some(HookEvent::CodexNotify),
+            provider_session_id: Some(thread.into()),
+            codex_type: Some("agent-turn-complete".into()),
+            codex_turn_id: Some("t1".into()),
+            ..HookRecord::default()
+        });
+        drain(&rx);
+        let lifecycle = lock(&s.lifecycle);
+        assert_eq!(lifecycle.codex_pending_submits, 0);
+        assert_eq!(lifecycle.codex_turn_ended.as_ref(), Some(&ended));
+        drop(lifecycle);
+        assert_eq!(s.handoff_readiness(), Err(HandoffDeliveryError::Unverified));
     }
 
     #[test]

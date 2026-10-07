@@ -87,7 +87,15 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("../migrations/0025_terminal_directory.sql"),
     },
     SQUADS_MIGRATION,
+    THREAD_RUNTIME_IDENTITY_MIGRATION,
 ];
+
+/// Provider-confirmed active model/effort, distinct from durable launch intent.
+pub const THREAD_RUNTIME_IDENTITY_MIGRATION: Migration = Migration {
+    version: 27,
+    name: "thread_runtime_identity",
+    sql: include_str!("../migrations/0027_thread_runtime_identity.sql"),
+};
 
 /// Reusable Squad templates and launch relationships to canonical Operations.
 pub const SQUADS_MIGRATION: Migration = Migration {
@@ -699,7 +707,8 @@ mod tests {
         let profile = tempfile::tempdir().expect("profile");
         let database_path = profile.path().join("kalcode.db");
         let backup_dir = profile.path().join("backups");
-        let schema25 = &MIGRATIONS[..MIGRATIONS.len() - 1];
+        let schema25 = &MIGRATIONS[..25];
+        let schema26 = &MIGRATIONS[..26];
         assert_eq!(schema25.last().map(|migration| migration.version), Some(25));
 
         let mut conn = open(&database_path).expect("schema 25 database");
@@ -776,7 +785,7 @@ mod tests {
             )
             .expect("operations revision");
 
-        let outcome = migrate(&mut conn, MIGRATIONS, Some(&backup_dir)).expect("upgrade to 26");
+        let outcome = migrate(&mut conn, schema26, Some(&backup_dir)).expect("upgrade to 26");
         assert_eq!((outcome.from_version, outcome.to_version), (25, 26));
         let backup_path = outcome.backup.expect("pre-26 backup");
         assert!(backup_path.is_file());
@@ -829,7 +838,7 @@ mod tests {
 
         let mut reopened = open(&database_path).expect("reopen migrated database");
         let reopen =
-            migrate(&mut reopened, MIGRATIONS, Some(&backup_dir)).expect("idempotent reopen");
+            migrate(&mut reopened, schema26, Some(&backup_dir)).expect("idempotent reopen");
         assert!(!reopen.applied_any());
         assert!(reopen.backup.is_none());
         assert_eq!(
@@ -868,7 +877,7 @@ mod tests {
         let recovery_path = profile.path().join("recovered.db");
         fs::copy(&backup_path, &recovery_path).expect("stage backup recovery");
         let mut recovered = open(&recovery_path).expect("open recovered backup");
-        let recovery = migrate(&mut recovered, MIGRATIONS, None).expect("migrate recovered backup");
+        let recovery = migrate(&mut recovered, schema26, None).expect("migrate recovered backup");
         assert_eq!((recovery.from_version, recovery.to_version), (25, 26));
         assert_eq!(
             row_values(&recovered, "workspaces", WORKSPACE_ID),
@@ -897,6 +906,160 @@ mod tests {
                 )
                 .expect("recovered operations revision"),
             state_before
+        );
+    }
+
+    #[test]
+    fn runtime_identity_migration_preserves_launch_intent_with_backup_reopen_and_recovery() {
+        let profile = tempfile::tempdir().expect("profile");
+        let database_path = profile.path().join("kalcode.db");
+        let backup_dir = profile.path().join("backups");
+        let mut conn = open(&database_path).expect("open");
+        migrate(&mut conn, &MIGRATIONS[..26], None).expect("schema 26");
+        conn.execute_batch(
+            "INSERT INTO workspaces (
+               id, name, root_path, created_at, last_opened_at
+             ) VALUES ('w', 'Workspace', 'C:/repo', 't', 't');
+             INSERT INTO threads (
+               id, name, provider_id, provider_name, model, effort, workspace_id,
+               workspace_name, cwd, permission_mode, status, provider_session_id,
+               created_at, last_activity_at
+             ) VALUES (
+               't', 'Thread', 'codex', 'Codex', 'configured-model', 'high', 'w',
+               'Workspace', 'C:/repo', 'approve', 'idle', 'historical-session', 't', 't'
+             );",
+        )
+        .expect("schema 26 row");
+
+        let outcome = migrate(&mut conn, MIGRATIONS, Some(&backup_dir)).expect("upgrade to 27");
+        assert_eq!((outcome.from_version, outcome.to_version), (26, 27));
+        let backup_path = outcome.backup.expect("pre-27 backup");
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'index' AND name = 'events_thread_type_seq_idx'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("history index"),
+            1,
+            "sequence-bounded history uses a per-thread event index"
+        );
+        let query_plan = conn
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                 SELECT MAX(seq) FROM events
+                 WHERE thread_id = 't' AND type = 'thread.runtime_identity_changed'
+                   AND seq <= 1000",
+            )
+            .expect("prepare history plan")
+            .query_map([], |row| row.get::<_, String>(3))
+            .expect("history plan")
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .expect("collect history plan");
+        assert!(
+            query_plan
+                .iter()
+                .any(|detail| detail.contains("events_thread_type_seq_idx")),
+            "identity lookup must use the bounded thread/type/sequence index: {query_plan:?}"
+        );
+        let identity = conn
+            .query_row(
+                "SELECT model, effort, active_model, active_effort FROM threads WHERE id = 't'",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                    ))
+                },
+            )
+            .expect("identity columns");
+        assert_eq!(
+            identity,
+            (
+                Some("configured-model".into()),
+                Some("high".into()),
+                None,
+                None
+            ),
+            "migration preserves launch intent and does not label historical state as active"
+        );
+
+        conn.execute(
+            "UPDATE threads SET active_model = ?1, active_effort = 'XHigh' WHERE id = 't'",
+            ["m".repeat(512)],
+        )
+        .expect("write observed identity");
+        assert!(
+            conn.execute(
+                "UPDATE threads SET active_model = ?1 WHERE id = 't'",
+                ["🙂".repeat(129)],
+            )
+            .is_err(),
+            "the durable bound is 512 UTF-8 bytes, not 512 Unicode scalars"
+        );
+        drop(conn);
+
+        let mut reopened = open(&database_path).expect("reopen migrated database");
+        let reopen = migrate(&mut reopened, MIGRATIONS, Some(&backup_dir))
+            .expect("idempotent schema 27 reopen");
+        assert!(!reopen.applied_any());
+        assert!(reopen.backup.is_none());
+        assert_eq!(
+            reopened
+                .query_row(
+                    "SELECT length(active_model), active_effort FROM threads WHERE id = 't'",
+                    [],
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+                )
+                .expect("reopened identity"),
+            (512, "XHigh".into())
+        );
+        drop(reopened);
+
+        let backup = open_read_only(&backup_path).expect("open pre-27 backup");
+        assert_eq!(schema_version(&backup).expect("backup schema"), 26);
+        assert_eq!(
+            backup
+                .query_row(
+                    "SELECT model, effort FROM threads WHERE id = 't'",
+                    [],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .expect("backup launch intent"),
+            ("configured-model".into(), "high".into())
+        );
+        drop(backup);
+
+        let recovered_path = profile.path().join("recovered.db");
+        fs::copy(&backup_path, &recovered_path).expect("restore pre-27 backup clone");
+        let mut recovered = open(&recovered_path).expect("open recovered backup");
+        let recovery = migrate(&mut recovered, MIGRATIONS, None).expect("upgrade recovered clone");
+        assert_eq!((recovery.from_version, recovery.to_version), (26, 27));
+        assert_eq!(
+            recovered
+                .query_row(
+                    "SELECT model, effort, active_model, active_effort FROM threads WHERE id = 't'",
+                    [],
+                    |row| {
+                        Ok((
+                            row.get::<_, Option<String>>(0)?,
+                            row.get::<_, Option<String>>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                            row.get::<_, Option<String>>(3)?,
+                        ))
+                    },
+                )
+                .expect("recovered identity"),
+            (
+                Some("configured-model".into()),
+                Some("high".into()),
+                None,
+                None
+            )
         );
     }
 

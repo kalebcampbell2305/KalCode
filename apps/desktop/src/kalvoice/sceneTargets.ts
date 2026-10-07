@@ -38,7 +38,9 @@ export interface VoiceSceneTarget {
   providerAccountId?: string | null;
   accountLabel?: string | null;
   model?: string | null;
+  modelSource?: "provider" | "configured" | "unavailable";
   effort?: string | null;
+  effortSource?: "provider" | "configured" | "unavailable";
   branch?: string | null;
   paneId?: string | null;
   updatedAt?: string | null;
@@ -167,6 +169,15 @@ function readableProvider(providerId: string | null | undefined): string | null 
     .join(" ");
 }
 
+function selectorLabel(
+  value: string | null | undefined,
+  source: VoiceSceneTarget["modelSource"] | VoiceSceneTarget["effortSource"],
+): string | null {
+  const exact = value?.trim();
+  if (!exact) return null;
+  return source === "configured" ? `${exact} (selected)` : exact;
+}
+
 /** A concise, privacy-bounded chooser row that keeps duplicate object names distinguishable. */
 export function sceneChoiceLabel(target: VoiceSceneTarget): string {
   const title = target.title.trim();
@@ -176,6 +187,8 @@ export function sceneChoiceLabel(target: VoiceSceneTarget): string {
     target.workspaceName,
     target.providerName ?? readableProvider(target.providerId),
     target.accountLabel,
+    selectorLabel(target.model, target.modelSource),
+    selectorLabel(target.effort, target.effortSource),
     target.subtitle,
   ].flatMap((value) => {
     const text = value?.trim();

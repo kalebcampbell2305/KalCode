@@ -102,7 +102,7 @@ import { useKalTidyClosedPanes } from "./kaltidy/closedPanes.ts";
 import { type AgentLaunchSpec, NewAgentDialog } from "./NewAgentDialog.tsx";
 import { BADGES } from "./organization/model.ts";
 import { type Organization, useOrganization } from "./organization/useOrganization.ts";
-import { boundLaunchAccount, readLaunchMemory, rememberLaunch } from "./panes/agentLaunch.ts";
+import { boundLaunchAccount, readLaunchMemory, rememberedLaunch, rememberLaunch } from "./panes/agentLaunch.ts";
 import { isPaneProvider, PANE_PROVIDERS, type PaneProviderId } from "./panes/paneChannel.ts";
 import { paneStatus, providerIdentity } from "./panes/paneLabels.ts";
 import {
@@ -914,9 +914,23 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       usable: (account) => (accountSessions?.states.get(account.id)?.health ?? accountSessionState(account)).usable,
       modelsOf: (providerId, accountId) => {
         const discovered = accountSessions?.states.get(accountId)?.models;
-        if (discovered?.status === "available") return discovered.items;
-        if (providerId === "cursor") return null;
+        if (discovered?.status === "available" || discovered?.status === "stale") return discovered.items;
         return providerModels?.get(providerId) ?? null;
+      },
+      modelCatalogOf: (providerId, accountId) => {
+        const discovered = accountSessions?.states.get(accountId)?.models;
+        if (discovered) {
+          return {
+            models:
+              discovered.status === "available" || discovered.status === "stale" || discovered.items.length > 0
+                ? discovered.items
+                : null,
+            source: discovered.source,
+            supportedEfforts: discovered.supportedEfforts,
+            status: discovered.status,
+          };
+        }
+        return { models: providerModels?.get(providerId) ?? null };
       },
     }),
     [workspace.id, providerPanes.offered, accountSessions, providerModels],
@@ -958,9 +972,20 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
             openAgentLauncher(spec.providerId, null, spec.count - started);
             return;
           }
-          const remembered = readLaunchMemory().byProvider[spec.providerId];
+          const remembered = rememberedLaunch(
+            readLaunchMemory(),
+            workspace.id,
+            spec.providerId,
+            spec.providerAccountId ?? "",
+          );
+          const accountModels = spec.providerAccountId
+            ? accountSessions?.states.get(spec.providerAccountId)?.models?.items
+            : undefined;
           const modelName =
-            (spec.model ? providerModels?.get(spec.providerId)?.find((m) => m.id === spec.model)?.displayName : null) ??
+            (spec.model
+              ? (accountModels?.find((m) => m.id === spec.model)?.displayName ??
+                providerModels?.get(spec.providerId)?.find((m) => m.id === spec.model)?.displayName)
+              : null) ??
             (remembered?.model === spec.model ? remembered?.modelName : null) ??
             null;
           rememberLaunch({
@@ -991,6 +1016,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       openAgentLauncher,
       launchAgents,
       providerModels,
+      accountSessions,
       workspace.id,
     ],
   );
