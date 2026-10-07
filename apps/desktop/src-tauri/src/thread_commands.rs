@@ -2632,9 +2632,12 @@ mod tests {
         let id = status.id.clone();
         let providers = ProviderRegistry::new();
 
-        sync_cached_provider_statuses(&providers, vec![status.clone()], &[id.clone()], |status| {
-            Some(Arc::new(CapabilitySpy::from_status(status)))
-        });
+        sync_cached_provider_statuses(
+            &providers,
+            vec![status.clone()],
+            std::slice::from_ref(&id),
+            |status| Some(Arc::new(CapabilitySpy::from_status(status))),
+        );
 
         assert!(providers.get(&id).is_some());
         assert_eq!(
