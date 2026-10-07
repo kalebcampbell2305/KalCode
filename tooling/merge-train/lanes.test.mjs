@@ -16,6 +16,7 @@ import {
   planLanes,
   releaseRecordResolver,
   riskZones,
+  stackOrder,
 } from "./train.mjs";
 
 const temps = [];
@@ -272,6 +273,7 @@ describe("merge lanes", { concurrency: true }, () => {
       assert.ok(!trainBranches(env).includes(lower.branch), `${lower.branch} deleted`);
     }
     assert.ok(coordinator.log.some((l) => /^main lock held \d+ ms$/.test(l)));
+    assert.ok(!coordinator.log.some((l) => l.startsWith("stacking")), "an all-green stack keeps queue order");
     const status = await coordinator.status();
     const byNumber = Object.fromEntries(status.prs.map((p) => [p.number, p]));
     for (const n of [1, 2, 3, 4, 5]) assert.equal(byNumber[n].state, "MERGED");
@@ -306,6 +308,123 @@ describe("merge lanes", { concurrency: true }, () => {
     assert.equal(isAncestor(env.origin, four, main), false);
     assert.equal(env.provider.prs.get(4).queued, false, "the culprit was isolated and ejected");
     assert.equal(env.provider.prs.get(3).queued, false, "#3 left the queue by landing");
+  });
+
+  test("stackOrder: clean lanes form the bottom, recently-red lanes go on top, ties keep queue order", () => {
+    const lanes = [{ numbers: [1] }, { numbers: [2, 3] }, { numbers: [4] }, { numbers: [5] }];
+    const none = stackOrder(lanes, () => false);
+    assert.deepEqual(none.lanes, lanes, "no red: exactly queue order");
+    assert.deepEqual([none.moved, none.jumped], [[], []]);
+    const some = stackOrder(lanes, (n) => n === 3 || n === 4);
+    assert.deepEqual(
+      some.lanes.map((l) => l.numbers),
+      [[1], [5], [2, 3], [4]],
+    );
+    assert.deepEqual(
+      some.moved.map((l) => l.numbers),
+      [[2, 3], [4]],
+    );
+    assert.deepEqual(
+      some.jumped.map((l) => l.numbers),
+      [[5]],
+    );
+    const alreadyOnTop = stackOrder(lanes, (n) => n === 5);
+    assert.deepEqual(alreadyOnTop.lanes, lanes);
+    assert.deepEqual(alreadyOnTop.moved, [], "a red lane already last moves nothing");
+  });
+
+  test("a lane attributed red in one round stacks above a clean lane the next, which lands without it", async () => {
+    const env = setup();
+    const three = openPr(env, 3, { "crates/threads/src/runtime.rs": "// three\n" });
+    const four = openPr(env, 4, { "crates/contracts/src/agent_state.rs": "// four\n" });
+    const one = openPr(env, 1, { "feature-1/a.txt": "one\n" });
+    let sleeps = 0;
+    const train = makeTrain(env, cloneOf(env, "coordinator"), {
+      sleep: async () => {
+        sleeps++;
+      },
+    });
+    // Queue order: the lane [#3 #4] first, so #1 stacks on it.
+    const first = await train.buildAll();
+    assert.deepEqual(
+      first.levels.map((l) => nums(l.included)),
+      [
+        [3, 4],
+        [3, 4, 1],
+      ],
+    );
+    env.provider.gates.set(first.levels[0].sha, "failure");
+    env.provider.gates.set(first.levels[1].sha, "failure");
+    env.provider.autoGate = () => "pending";
+
+    // Round 1 attributes the red to the lane (bisect); round 2 follows with no wait and re-stacks #1 on main.
+    await train.run({ maxRounds: 2 });
+    assert.ok(train.log.includes("stacking recently-red lane [#3 #4] above [#1]"), train.log.join("\n"));
+    assert.equal(sleeps, 1, "the rebuild happened in the round right after attribution, before any wait");
+    const second = await train.buildAll();
+    assert.deepEqual(
+      second.levels.map((l) => nums(l.included)),
+      [[1], [1, 3]],
+      "the clean lane is the bottom level; the red lane (bisected) is on top",
+    );
+    assert.deepEqual(
+      second.levels.map((l) => l.action),
+      ["reused", "reused"],
+      "built by round 2 of run()",
+    );
+
+    // #1's level goes green while the red lane's is still gating: #1 lands alone.
+    env.provider.gates.set(second.levels[0].sha, "success");
+    const result = await train.run({ maxRounds: 1 });
+    assert.equal(result.landed.length, 1);
+    const main = originMain(env);
+    assert.ok(isAncestor(env.origin, one, main), "#1 landed without the red lane");
+    assert.equal(isAncestor(env.origin, three, main), false);
+    assert.equal(isAncestor(env.origin, four, main), false);
+    assert.equal(env.provider.prs.get(3).queued, true, "the red lane keeps its place in the queue");
+  });
+
+  test("a red lane that goes green again returns to queue order", async () => {
+    const env = setup();
+    openPr(env, 10, { "feature-10/a.txt": "ten\n" });
+    let moveMain = false;
+    const train = makeTrain(env, cloneOf(env, "coordinator"), {
+      hooks: {
+        beforeLandPush: () => {
+          if (moveMain) pushMain(env, { "other.txt": "moved\n" });
+          moveMain = false;
+        },
+      },
+    });
+    env.provider.autoGate = () => "failure";
+    await train.run({ maxRounds: 1 });
+    assert.equal(env.provider.prs.get(10).queued, false, "#10 ejected");
+
+    // The author fixes and resubmits #10; another agent queues #11 after it.
+    openPr(env, 10, { "feature-10/a.txt": "ten, fixed\n" }, { from: "refs/heads/pr-10^0" });
+    await env.provider.addLabel(10);
+    openPr(env, 11, { "feature-11/b.txt": "eleven\n" });
+    env.provider.autoGate = () => "pending";
+    const stacked = await train.buildAll();
+    assert.deepEqual(
+      stacked.levels.map((l) => nums(l.included)),
+      [[11], [11, 10]],
+    );
+    assert.ok(train.log.includes("stacking recently-red lane [#10] above [#11]"));
+
+    // Its level gates green, but main moves before it can land: #10 is green again, not landed.
+    env.provider.gates.set(stacked.levels[1].sha, "success");
+    moveMain = true;
+    const result = await train.run({ maxRounds: 1 });
+    assert.equal(result.landed.length, 0);
+    const mark = train.log.length;
+    const back = await train.buildAll();
+    assert.deepEqual(
+      back.levels.map((l) => nums(l.included)),
+      [[10], [10, 11]],
+      "queue order again on the new main",
+    );
+    assert.ok(!train.log.slice(mark).some((l) => l.startsWith("stacking")));
   });
 
   test("a lower level that lands keeps the deeper levels valid: they fast-forward on their exact gated tree", async () => {
