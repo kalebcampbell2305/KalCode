@@ -37,6 +37,8 @@ export function createGateReport({
           finishedAt: now(),
           exitCode: Number.isInteger(result.exitCode) ? result.exitCode : null,
           ...(result.fingerprint ? { fingerprint: result.fingerprint } : {}),
+          // Failed once, passed on its automatic rerun (never the failure text: that is check output).
+          ...(result.flaky ? { flaky: true } : {}),
           ...(result.reusedFrom ? { reusedFrom: result.reusedFrom, reboundTo: head } : {}),
         });
       write();

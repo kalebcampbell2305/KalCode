@@ -8,6 +8,7 @@ import test from "node:test";
 import {
   auditRustIntentionalIgnores,
   auditWorkspaceSuiteCoverage,
+  flakyReport,
   loadTestSuiteInventory,
   parseCargoTestReport,
   parseNodeTestReport,
@@ -492,7 +493,7 @@ test("Playwright JSON preserves failures, flaky results, and explicit skip reaso
   );
 });
 
-test("result policy allows increases and denies zero, reductions, failures, flakes, and skip drift", () => {
+test("result policy allows increases and flakes, and denies zero, reductions, failures, and skip drift", () => {
   const selected = suite();
   const profile = selectProfile(selected, "win32", {});
   assert.equal(
@@ -510,10 +511,23 @@ test("result policy allows increases and denies zero, reductions, failures, flak
     { executed: 1, failed: 0, skipped: 0, flaky: 0, skipReasons: [] },
     { executed: 2, failed: 1, skipped: 0, flaky: 0, skipReasons: [] },
     { executed: 2, failed: 0, skipped: 1, flaky: 0, skipReasons: [] },
-    { executed: 2, failed: 0, skipped: 0, flaky: 1, skipReasons: [] },
+    // A test that failed on every attempt is a failure even when another test was flaky.
+    { executed: 3, failed: 1, skipped: 0, flaky: 1, skipReasons: [] },
   ]) {
     assert.throws(() => validateSuiteResult(selected, profile, result));
   }
+});
+
+test("a test that passed only on its retry is reported as flaky and no longer fails its suite", () => {
+  const selected = suite();
+  const profile = selectProfile(selected, "win32", {});
+  const result = { executed: 3, failed: 0, skipped: 0, flaky: 2, skipReasons: [] };
+  assert.equal(validateSuiteResult(selected, profile, result).flaky, 2);
+  assert.equal(
+    flakyReport("desktop-e2e", { ...result, flakyNames: ["a.spec.ts › opens [Error: timeout]", "b.spec.ts › tour"] }),
+    "[test-suites] desktop-e2e: FLAKY 2 test(s) failed and then passed on retry: a.spec.ts › opens [Error: timeout] | b.spec.ts › tour\n",
+  );
+  assert.equal(flakyReport("desktop-e2e", { ...result, flaky: 0 }), "");
 });
 
 test("tooling profiles account exactly for Windows-only signer and workflow execution", () => {

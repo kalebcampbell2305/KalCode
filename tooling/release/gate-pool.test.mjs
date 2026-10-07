@@ -14,6 +14,7 @@ import {
 import { runGatePool } from "./lifecycle/gate-pool.mjs";
 import { createGateCapacity } from "./lifecycle/gate-pressure.mjs";
 import { createGateReport } from "./lifecycle/gate-report.mjs";
+import { makeGit } from "./lifecycle/git.mjs";
 import { loadPolicy } from "./lifecycle/policy.mjs";
 
 const gate = (id) => ({
@@ -318,7 +319,7 @@ test("real six-process acceptance proves four overlapping checks on this machine
   const fixture = join(root, "worker.mjs");
   writeFileSync(
     fixture,
-    `import {writeFileSync,existsSync} from 'node:fs';import {join} from 'node:path';\nconst [root,id]=process.argv.slice(2);writeFileSync(join(root,id+'.start'),String(Date.now()));\nif(Number(id)<4){const until=Date.now()+10000;while(![0,1,2,3].every(i=>existsSync(join(root,i+'.start')))){if(Date.now()>until)throw Error('four workers did not overlap');await new Promise(r=>setTimeout(r,20));}}\nawait new Promise(r=>setTimeout(r,150));writeFileSync(join(root,id+'.end'),String(Date.now()));process.exit(id==='1'?7:0);`,
+    `import {writeFileSync,existsSync} from 'node:fs';import {join} from 'node:path';\nconst [root,id]=process.argv.slice(2);if(!existsSync(join(root,id+'.start')))writeFileSync(join(root,id+'.start'),String(Date.now()));\nif(Number(id)<4){const until=Date.now()+10000;while(![0,1,2,3].every(i=>existsSync(join(root,i+'.start')))){if(Date.now()>until)throw Error('four workers did not overlap');await new Promise(r=>setTimeout(r,20));}}\nawait new Promise(r=>setTimeout(r,150));writeFileSync(join(root,id+'.end'),String(Date.now()));process.exit(id==='1'?7:0);`,
   );
   const plan = Array.from({ length: 6 }, (_, id) => ({
     ...gate(String(id)),
@@ -328,6 +329,7 @@ test("real six-process acceptance proves four overlapping checks on this machine
   assert.equal(outcome.status, "FAIL");
   assert.equal(outcome.results.filter(({ state }) => state === "pass").length, 5);
   assert.equal(outcome.results[1].exitCode, 7);
+  assert.equal(outcome.results[1].rerun, true, "the real failure failed its one rerun too");
   const starts = [0, 1, 2, 3].map((id) => Number(readFileSync(join(root, `${id}.start`), "utf8")));
   const ends = [0, 1, 2, 3].map((id) => Number(readFileSync(join(root, `${id}.end`), "utf8")));
   assert.ok(Math.max(...starts) < Math.min(...ends), "four actual child checks overlapped");
@@ -370,4 +372,231 @@ test("a gate whose checks refreshed tracked QA screenshots still gets its receip
     /tracked source changed: apps\/desktop\/src\/App\.tsx/,
   );
   assert.equal(receiptDrift({ ...git([]), rev: () => "b".repeat(40) }, g), "HEAD moved");
+});
+
+// A load-sensitive flake must not cost a whole gate cycle: a failed check runs once more, alone.
+const check = (id, extra = {}) => ({
+  id,
+  run: [`${id}-cmd`],
+  env: {},
+  unsetEnv: [],
+  requires: [],
+  state: "selected",
+  ...extra,
+});
+
+test("only a check whose own commands ran and failed is rerun", async () => {
+  const { shouldRerun } = await import("./lifecycle/gate.mjs");
+  assert.equal(shouldRerun({ state: "fail", ran: true }), true);
+  assert.equal(shouldRerun({ state: "fail", ran: true }, { aborted: true }), false, "a cancelled gate");
+  assert.equal(shouldRerun({ state: "fail", ran: true, timedOut: true }), false, "a hang would spend its budget again");
+  assert.equal(shouldRerun({ state: "fail", why: "source changed before check: x" }), false, "a refusal never ran");
+  assert.equal(shouldRerun({ state: "fail", why: "missing tool: cargo deny --version" }), false);
+  assert.equal(shouldRerun({ state: "pass", ran: true }), false);
+});
+
+test("a failure signature names the verdict and the first failing test, and notices cannot inject commands", async () => {
+  const { failureSignature, githubNotice } = await import("./lifecycle/gate.mjs");
+  const why = "node apps/desktop/scripts/cargo.mjs test --workspace exited 101";
+  const output =
+    "running 3 tests\ntest result: ok. 3 passed; 0 failed\ntest threads::usage_waits ... FAILED\nthread 'x' panicked at src/a.rs:1\n";
+  assert.equal(failureSignature({ why }, output), `${why}; first failure: test threads::usage_waits ... FAILED`);
+  assert.equal(
+    failureSignature(
+      { why: "pnpm test:ui exited 1" },
+      "\u001b[31m  ✘  3 [chromium] › home.spec.ts:9:3 › demo opens\u001b[39m",
+    ),
+    "pnpm test:ui exited 1; first failure: ✘  3 [chromium] › home.spec.ts:9:3 › demo opens",
+  );
+  assert.equal(failureSignature({ why }, ""), why);
+  assert.equal(
+    githubNotice("Flaky gate check: rust", "50% failed\n::error::forged"),
+    "::notice title=Flaky gate check%3A rust::50%25 failed%0A::error::forged",
+  );
+});
+
+test("a check that fails once and passes its rerun passes as FLAKY with a notice naming its first failure", async () => {
+  const lines = [];
+  const calls = [];
+  const exec = async (command, { output } = {}) => {
+    calls.push(command);
+    if (command === "rust-cmd" && calls.filter((call) => call === "rust-cmd").length === 1) {
+      output?.("test threads::usage_waits ... FAILED\n");
+      return 101;
+    }
+    return 0;
+  };
+  const outcome = await runGates([check("rust"), check("biome")], {
+    jobs: 2,
+    exec,
+    log: (line) => lines.push(line),
+    baseEnv: { GITHUB_ACTIONS: "true" },
+  });
+  assert.equal(outcome.status, "PASS");
+  const rust = outcome.results.find(({ id }) => id === "rust");
+  assert.equal(rust.state, "pass");
+  assert.equal(rust.flaky, true);
+  assert.equal(rust.firstFailure, "rust-cmd exited 101; first failure: test threads::usage_waits ... FAILED");
+  assert.equal(calls.filter((command) => command === "rust-cmd").length, 2, "only the failed check ran again");
+  assert.equal(calls.filter((command) => command === "biome-cmd").length, 1);
+  const text = lines.join("\n");
+  assert.match(text, /RERUN rust: failed once \(rust-cmd exited 101/);
+  assert.match(text, /FLAKY rust: passed on its rerun/);
+  assert.ok(
+    lines.includes(
+      "::notice title=Flaky gate check%3A rust::rust failed once, then passed on its automatic rerun. First failure: rust-cmd exited 101; first failure: test threads::usage_waits ... FAILED",
+    ),
+    text,
+  );
+});
+
+test("a check that fails on every attempt still fails, after exactly one rerun", async () => {
+  let runs = 0;
+  const lines = [];
+  const outcome = await runGates([check("desktop-ui")], {
+    jobs: 1,
+    exec: async () => {
+      runs++;
+      return 1;
+    },
+    log: (line) => lines.push(line),
+    baseEnv: {},
+  });
+  assert.equal(outcome.status, "FAIL");
+  assert.equal(runs, 2);
+  assert.equal(outcome.results[0].state, "fail");
+  assert.equal(outcome.results[0].rerun, true);
+  assert.equal(outcome.results[0].flaky, undefined);
+  assert.ok(!lines.some((line) => line.startsWith("::notice")), "no notice for a real failure");
+});
+
+test("refusals and timeouts are never rerun", async () => {
+  let runs = 0;
+  const refused = await runGates([check("rust")], {
+    jobs: 1,
+    evidence: { run: async (gate) => ({ id: gate.id, state: "fail", why: "source changed before check: a.rs" }) },
+    exec: async () => {
+      runs++;
+      return 0;
+    },
+  });
+  assert.equal(refused.results[0].state, "fail");
+  assert.equal(runs, 0);
+  let now = 0;
+  const timed = await runGates([check("rust", { timeoutMs: 1000 })], {
+    jobs: 1,
+    now: () => now,
+    exec: async () => {
+      runs++;
+      now += 2000;
+      return "timed-out";
+    },
+    baseEnv: {},
+  });
+  assert.equal(timed.results[0].state, "fail");
+  assert.match(timed.results[0].why, /timed out/);
+  assert.equal(runs, 1);
+});
+
+function candidateRepo(t) {
+  const root = mkdtempSync(join(tmpdir(), "kc-gate-rerun-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const git = makeGit(root);
+  git.run(["init", "-q"]);
+  git.run(["config", "core.autocrlf", "false"]);
+  writeFileSync(join(root, "bindings.ts"), "export type A = 1;\n");
+  writeFileSync(join(root, "lib.rs"), "fn a() {}\n");
+  git.run(["add", "."]);
+  git.run(["-c", "user.name=gate", "-c", "user.email=gate@example.invalid", "commit", "-q", "-m", "candidate"]);
+  return { root, git, head: git.rev("HEAD") };
+}
+
+const evidenceFor = (git, root, head, plan) =>
+  prepareCheckEvidence(
+    git,
+    { clean: true, head, plan },
+    { version: 1 },
+    { toolchain: { complete: true }, environment: { KALCODE_GATE_EVIDENCE_DIR: join(root, ".cache") } },
+  );
+
+test("a rerun starts from the exact candidate: tracked source the failed attempt rewrote is restored", async (t) => {
+  const { root, git, head } = candidateRepo(t);
+  const plan = [check("rust")];
+  const evidence = evidenceFor(git, root, head, plan);
+  let runs = 0;
+  const lines = [];
+  const outcome = await runGates(plan, {
+    jobs: 1,
+    evidence,
+    log: (line) => lines.push(line),
+    baseEnv: {},
+    exec: async () => {
+      runs++;
+      // The first attempt fails half way and leaves regenerated bindings behind (the bindings cascade).
+      if (runs === 1) {
+        writeFileSync(join(root, "bindings.ts"), "export type A = 2;\n");
+        return 101;
+      }
+      assert.equal(readFileSync(join(root, "bindings.ts"), "utf8"), "export type A = 1;\n", "rerun saw the candidate");
+      return 0;
+    },
+  });
+  assert.equal(runs, 2);
+  assert.equal(outcome.status, "PASS", lines.join("\n"));
+  assert.equal(outcome.results[0].flaky, true);
+  assert.match(
+    outcome.results[0].firstFailure,
+    /source changed during check: bindings\.ts \(after rust-cmd exited 101\)/,
+  );
+  assert.match(lines.join("\n"), /restored 1 tracked file\(s\) the failed attempt rewrote/);
+  assert.equal(evidence.stillExact(), true);
+});
+
+test("a rerun that rewrites source again still fails", async (t) => {
+  const { root, git, head } = candidateRepo(t);
+  const plan = [check("rust")];
+  let runs = 0;
+  const outcome = await runGates(plan, {
+    jobs: 1,
+    evidence: evidenceFor(git, root, head, plan),
+    baseEnv: {},
+    exec: async () => {
+      runs++;
+      writeFileSync(join(root, "bindings.ts"), "export type A = 2;\n");
+      return 0;
+    },
+  });
+  assert.equal(runs, 2);
+  assert.equal(outcome.status, "FAIL");
+  assert.match(outcome.results[0].why, /source changed during check: bindings\.ts/);
+});
+
+test("a check sharing the workspace never resets files under other checks; an uncommitted tree is never touched", async (t) => {
+  const { rerunFromCandidate } = await import("./lifecycle/gate.mjs");
+  const { root, git, head } = candidateRepo(t);
+  const plan = [check("desktop-ui")];
+  const evidence = evidenceFor(git, root, head, plan);
+  writeFileSync(join(root, "lib.rs"), "fn changed() {}\n");
+  const refused = rerunFromCandidate(plan[0], evidence);
+  assert.equal(refused.ok, false);
+  assert.match(refused.why, /other checks share it/);
+  assert.equal(readFileSync(join(root, "lib.rs"), "utf8"), "fn changed() {}\n");
+  // No evidence means the gate started from an uncommitted tree: those changes are the user's.
+  assert.deepEqual(rerunFromCandidate(check("rust"), null), { ok: true, how: "" });
+  assert.equal(readFileSync(join(root, "lib.rs"), "utf8"), "fn changed() {}\n");
+});
+
+test("the gate report marks a flaky check without recording its failure text", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "kc-gate-report-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const report = createGateReport({
+    directory: root,
+    head: "a".repeat(40),
+    base: "b".repeat(40),
+    plan: [check("rust")],
+  });
+  report.finish({ id: "rust", state: "pass", exitCode: 0, flaky: true, firstFailure: "secret output line" });
+  const text = readFileSync(report.path, "utf8");
+  assert.equal(JSON.parse(text).checks[0].flaky, true);
+  assert.ok(!text.includes("secret output line"));
 });

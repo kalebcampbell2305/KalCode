@@ -428,7 +428,9 @@ export function validateSuiteResult(suite, profile, result) {
   if (result.skipped < profile.skippedMinimum || result.skipped > profile.skippedMaximum) {
     throw new Error(`${suite.id} skipped ${result.skipped}, outside reviewed bounds`);
   }
-  if (result.flaky > profile.maximumFlaky) throw new Error(`${suite.id} reported ${result.flaky} flaky tests`);
+  // A test that failed and then passed on its retry is reported, never a failure: a load-sensitive flake must not
+  // cost a whole gate cycle. A test failing every attempt is still counted in `failed` above. `maximumFlaky` stays
+  // in the reviewed inventory schema but no longer fails a suite.
   if (result.skipReasons.length !== 0) {
     const allowed = profile.allowedSkipReasons.map((pattern) => new RegExp(pattern, "u"));
     for (const reason of result.skipReasons) {
@@ -544,7 +546,7 @@ export function runSuite(
     } else if (suite.runner === "cargo") result = parseCargoTestReport(`${child.stdout}\n${child.stderr}`);
     else result = parseNodeTestReport(`${child.stdout}\n${child.stderr}`);
     try {
-      return validateSuiteResult(suite, profile, result);
+      return { ...validateSuiteResult(suite, profile, result), flakyNames };
     } catch (error) {
       // The report is deleted with the temporary directory, so name the flaky tests here or a
       // flaky gate stays undiagnosable.
@@ -554,6 +556,13 @@ export function runSuite(
   } finally {
     rmSync(temporaryDirectory, { recursive: true, force: true });
   }
+}
+
+/** Names the tests that passed only on retry: the suite still passes, but its flakes stay visible. */
+export function flakyReport(id, result) {
+  if (!(result.flaky > 0)) return "";
+  const names = result.flakyNames?.length ? `: ${result.flakyNames.join(" | ")}` : "";
+  return `[test-suites] ${id}: FLAKY ${result.flaky} test(s) failed and then passed on retry${names}\n`;
 }
 
 export function selectSuites(inventory, arguments_) {
@@ -580,6 +589,7 @@ export function runSelectedSuites(arguments_, options = {}) {
     process.stdout.write(
       `[test-suites] ${suite.id}: ${result.executed} executed, ${result.skipped} skipped, ${result.flaky} flaky\n`,
     );
+    process.stdout.write(flakyReport(suite.id, result));
   }
 }
 

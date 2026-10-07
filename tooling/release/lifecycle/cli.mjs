@@ -146,6 +146,8 @@ export async function lifecycleMain(argv, io = {}) {
       const drift = receiptDrift(git, g);
       log(`gate FAIL: ${drift ? `source identity changed (${drift})` : "required check evidence is incomplete"}`);
     }
+    for (const result of outcome.results.filter((entry) => entry.flaky))
+      log(`gate: FLAKY ${result.id} failed once and passed on its rerun (first failure: ${result.firstFailure})`);
     if (opts.json) log(JSON.stringify({ status: outcome.status, results: outcome.results, receipt }, null, 2));
     log(
       `gate ${outcome.status}${receipt ? ` (receipt for ${g.head.slice(0, 12)})` : outcome.status === "PASS" ? (only ? " (no receipt: --only ran a subset)" : " (no receipt: uncommitted changes)") : ""}`,
