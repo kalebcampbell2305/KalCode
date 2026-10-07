@@ -142,6 +142,48 @@ describe("UtilityDock", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("1 row changed.");
   });
 
+  it("closes the previous SQLite handle on a new pick and the current one on unmount", async () => {
+    const user = userEvent.setup();
+    const open = new Set<string>();
+    const closed: string[] = [];
+    let picks = 0;
+    let cancelNextPick = false;
+    const api = new MemoryUtilityApi({
+      sqlitePick: async () => {
+        if (cancelNextPick) return null;
+        // Mirrors the native limit: the ninth concurrent handle is refused.
+        if (open.size >= 8) throw new Error("Close a database first: at most 8 can be open at once.");
+        picks += 1;
+        const id = `db-${picks}`;
+        open.add(id);
+        return { id, displayName: `work-${picks}.db`, workspaceId: null, bytes: 4096, objects: [] };
+      },
+      sqliteClose: async (dbId) => {
+        open.delete(dbId);
+        closed.push(dbId);
+      },
+    });
+    const { unmount } = render(<UtilityDock api={api} />);
+
+    await user.click(screen.getByRole("tab", { name: "SQLite" }));
+    for (let pick = 1; pick <= 9; pick += 1) {
+      await user.click(screen.getByRole("button", { name: "Choose database" }));
+      await waitFor(() => expect(screen.getByText(new RegExp(`work-${pick}[.]db`))).toBeVisible());
+    }
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(closed).toEqual(["db-1", "db-2", "db-3", "db-4", "db-5", "db-6", "db-7", "db-8"]);
+    expect([...open]).toEqual(["db-9"]);
+
+    // A cancelled pick keeps the current database open.
+    cancelNextPick = true;
+    await user.click(screen.getByRole("button", { name: "Choose database" }));
+    expect(screen.getByText(/work-9\.db/)).toBeVisible();
+
+    unmount();
+    await waitFor(() => expect(open.size).toBe(0));
+    expect(closed.at(-1)).toBe("db-9");
+  });
+
   it("shows the terminal integration dependency without a dead action", async () => {
     const user = userEvent.setup();
     render(<UtilityDock api={new MemoryUtilityApi()} />);
