@@ -21,9 +21,11 @@ fn require_main(window: &WebviewWindow) -> Result<(), IpcError> {
 
 #[tauri::command(async)]
 pub fn remote_status(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     window: WebviewWindow,
     state: RuntimeState<RemoteState>,
 ) -> Result<RemoteStatus, IpcError> {
+    _runtime_access.revalidate()?;
     require_main(&window)?;
     state.revalidate()?;
     Ok(state.status())
@@ -31,10 +33,12 @@ pub fn remote_status(
 
 #[tauri::command(async)]
 pub fn remote_set_enabled(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     window: WebviewWindow,
     state: RuntimeState<RemoteState>,
     enabled: bool,
 ) -> Result<RemoteStatus, IpcError> {
+    _runtime_access.revalidate()?;
     require_main(&window)?;
     state.revalidate()?;
     state.set_enabled(enabled)
@@ -42,9 +46,11 @@ pub fn remote_set_enabled(
 
 #[tauri::command(async)]
 pub fn remote_pair_start(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     window: WebviewWindow,
     state: RuntimeState<RemoteState>,
 ) -> Result<RemoteStatus, IpcError> {
+    _runtime_access.revalidate()?;
     require_main(&window)?;
     state.revalidate()?;
     state.pair_start()
@@ -52,9 +58,11 @@ pub fn remote_pair_start(
 
 #[tauri::command(async)]
 pub fn remote_pair_cancel(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     window: WebviewWindow,
     state: RuntimeState<RemoteState>,
 ) -> Result<RemoteStatus, IpcError> {
+    _runtime_access.revalidate()?;
     require_main(&window)?;
     state.revalidate()?;
     Ok(state.pair_cancel())
@@ -62,10 +70,12 @@ pub fn remote_pair_cancel(
 
 #[tauri::command(async)]
 pub fn remote_device_revoke(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     window: WebviewWindow,
     state: RuntimeState<RemoteState>,
     device_id: String,
 ) -> Result<RemoteStatus, IpcError> {
+    _runtime_access.revalidate()?;
     require_main(&window)?;
     state.revalidate()?;
     state.revoke(&device_id)
