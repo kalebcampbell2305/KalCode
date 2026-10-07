@@ -38,6 +38,8 @@ use kalcode_providers::interactive::{
     TitleSink,
 };
 use kalcode_pty::{CoalesceConfig, OutputCoalescer};
+use kalcode_threads::runtime::interrupted_by_application_exit;
+use kalcode_threads::store::ThreadRow;
 use kalcode_threads::{CreateIdleThread, ThreadRuntime};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{Manager, State, Webview};
@@ -269,6 +271,14 @@ impl ProviderPanesState {
         } else {
             ThreadRuntimeKind::Headless
         });
+        summary.restart_recoverable = Some(
+            interactive
+                && summary.archived_at.is_none()
+                && interrupted_by_application_exit(
+                    summary.status,
+                    summary.current_activity.as_deref(),
+                ),
+        );
     }
 
     /// Starts the bridge when the feature is visible for this build, and registers the
@@ -554,6 +564,109 @@ fn pane_create_failure(status: ThreadStatus, error: Option<&ThreadError>) -> Opt
     })
 }
 
+struct PaneLaunchConfig {
+    provider_id: String,
+    provider_account_id: Option<String>,
+    workspace_id: String,
+    model: Option<String>,
+    effort: Option<String>,
+    permission_mode: PermissionMode,
+    name: Option<String>,
+    cwd: Option<PathBuf>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn pane_launch_config(
+    provider_id: String,
+    provider_account_id: Option<String>,
+    workspace_id: String,
+    model: Option<String>,
+    effort: Option<String>,
+    permission_mode: PermissionMode,
+    name: Option<String>,
+    duplicate_source: Option<&ThreadRow>,
+    context_source: Option<&ThreadRow>,
+    switch_account_id: Option<&str>,
+) -> PaneLaunchConfig {
+    if let Some(source) = duplicate_source {
+        return PaneLaunchConfig {
+            provider_id: source.provider_id.to_string(),
+            provider_account_id: switch_account_id
+                .map(str::to_owned)
+                .or_else(|| source.provider_account_id.clone()),
+            workspace_id: source.workspace_id.clone(),
+            model: source.model.clone(),
+            effort: source.effort.clone(),
+            permission_mode: source.permission_mode,
+            name: None,
+            cwd: Some(PathBuf::from(&source.cwd)),
+        };
+    }
+    PaneLaunchConfig {
+        provider_id,
+        provider_account_id,
+        workspace_id,
+        model,
+        effort,
+        permission_mode,
+        // A recovery fallback carries the task label into the new session. Every launch and
+        // provider setting above remains the newly selected request's value.
+        name: context_source.map(|source| source.name.clone()).or(name),
+        cwd: context_source.map(|source| PathBuf::from(&source.cwd)),
+    }
+}
+
+fn context_source_unavailable() -> IpcError {
+    KalError::validation(
+        "pane_context_source_unavailable",
+        "That coding agent's workspace context is no longer available. Choose another agent.",
+    )
+    .to_ipc()
+}
+
+fn validate_pane_source_choice(
+    duplicate_source_thread_id: Option<&str>,
+    context_source_thread_id: Option<&str>,
+) -> Result<(), IpcError> {
+    if duplicate_source_thread_id.is_some() && context_source_thread_id.is_some() {
+        return Err(KalError::validation(
+            "pane_context_source_conflict",
+            "Choose either Duplicate or Continue with context, not both.",
+        )
+        .to_ipc());
+    }
+    Ok(())
+}
+
+fn resolve_context_source(
+    core: &kalcode_core::Core,
+    panes: &ProviderPanesState,
+    thread_id: Option<&str>,
+    workspace_id: &str,
+) -> Result<Option<ThreadRow>, IpcError> {
+    let Some(thread_id) = thread_id else {
+        return Ok(None);
+    };
+    validate_thread_id(thread_id)?;
+    if !panes
+        .is_interactive_thread(thread_id)
+        .map_err(|error| error.log_and_convert("provider_pane_context_source"))?
+    {
+        return Err(context_source_unavailable());
+    }
+    let row = match core.read(|conn| kalcode_threads::store::get(conn, thread_id)) {
+        Ok(row) => row,
+        Err(error) if error.code == "thread_not_found" => {
+            return Err(context_source_unavailable());
+        }
+        Err(error) => return Err(error.log_and_convert("provider_pane_context_source")),
+    };
+    if row.archived_at.is_some() || row.workspace_id != workspace_id {
+        return Err(context_source_unavailable());
+    }
+    Ok(Some(row))
+}
+
 /// Creates a thread whose provider runs interactively in a pane. Plan, Approve and Auto only at
 /// creation, as for `thread_create` (Bypass and Custom are set afterwards, with confirmation).
 #[tauri::command(async)]
@@ -571,6 +684,7 @@ pub fn provider_pane_create(
     permission_mode: PermissionMode,
     name: Option<String>,
     source_thread_id: Option<String>,
+    context_source_thread_id: Option<String>,
     switch_account_id: Option<String>,
 ) -> Result<ThreadSummary, IpcError> {
     _runtime_access.revalidate()?;
@@ -596,6 +710,10 @@ pub fn provider_pane_create(
         )
         .to_ipc());
     }
+    validate_pane_source_choice(
+        source_thread_id.as_deref(),
+        context_source_thread_id.as_deref(),
+    )?;
     // Only durable launch configuration crosses to the new runtime. Resolve it from the
     // source row, never the renderer's cached identity, conversation or provider session id.
     let source = source_thread_id
@@ -626,6 +744,12 @@ pub fn provider_pane_create(
             Ok(row)
         })
         .transpose()?;
+    let context_source = resolve_context_source(
+        app.core()?,
+        &panes,
+        context_source_thread_id.as_deref(),
+        &workspace_id,
+    )?;
     if switch_account_id.is_some() && source.is_none() {
         return Err(KalError::validation(
             "pane_switch_source_required",
@@ -633,35 +757,23 @@ pub fn provider_pane_create(
         )
         .to_ipc());
     }
-    let (provider_id, provider_account_id, workspace_id, model, effort, permission_mode, name) =
-        if let Some(source) = &source {
-            (
-                source.provider_id.to_string(),
-                switch_account_id
-                    .clone()
-                    .or_else(|| source.provider_account_id.clone()),
-                source.workspace_id.clone(),
-                source.model.clone(),
-                source.effort.clone(),
-                source.permission_mode,
-                None,
-            )
-        } else {
-            (
-                provider_id,
-                provider_account_id,
-                workspace_id,
-                model,
-                effort,
-                permission_mode,
-                name,
-            )
-        };
+    let config = pane_launch_config(
+        provider_id,
+        provider_account_id,
+        workspace_id,
+        model,
+        effort,
+        permission_mode,
+        name,
+        source.as_ref(),
+        context_source.as_ref(),
+        switch_account_id.as_deref(),
+    );
     let account = crate::thread_commands::resolve_creation_account(
         app.core()?,
-        &provider_id,
-        &workspace_id,
-        provider_account_id.as_deref(),
+        &config.provider_id,
+        &config.workspace_id,
+        config.provider_account_id.as_deref(),
         None,
     )
     .map_err(|e| e.log_and_convert("provider_pane_create_account"))?;
@@ -677,26 +789,22 @@ pub fn provider_pane_create(
         )
         .to_ipc());
     }
-    let effort = pane_effort(&provider_id, effort)?;
+    let effort = pane_effort(&config.provider_id, config.effort)?;
     threads.ensure_providers(app.core.as_ref());
     let runtime = threads.runtime()?;
     let mut thread = create_pane_thread(runtime, &panes.sessions_dir, |thread_id| {
         let request = CreateIdleThread {
-            provider_id,
+            provider_id: config.provider_id,
             provider_account_id: account.as_ref().map(|account| account.id.clone()),
             account_label: account.map(|account| account.display_name),
-            workspace_id,
-            model,
+            workspace_id: config.workspace_id,
+            model: config.model,
             effort,
-            permission_mode,
-            name,
+            permission_mode: config.permission_mode,
+            name: config.name,
         };
-        match source {
-            Some(source) => runtime.create_idle_with_id_in_directory(
-                thread_id,
-                request,
-                PathBuf::from(source.cwd),
-            ),
+        match config.cwd {
+            Some(cwd) => runtime.create_idle_with_id_in_directory(thread_id, request, cwd),
             None => runtime.create_idle_with_id(thread_id, request),
         }
     })
@@ -1036,6 +1144,309 @@ pub fn drop_views(webview: &Webview) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_core(path: &Path) -> Arc<kalcode_core::Core> {
+        Arc::new(
+            kalcode_core::Core::open(kalcode_core::CoreConfig {
+                paths: kalcode_core::Paths::new(path),
+                app_version: "0.0.0-test".into(),
+                channel: kalcode_core::flags::BuildChannel::Development,
+            })
+            .expect("core"),
+        )
+    }
+
+    fn insert_source(
+        core: &kalcode_core::Core,
+        root: &Path,
+        workspace_id: &str,
+        mode: PermissionMode,
+        archived: bool,
+    ) -> ThreadRow {
+        let id = kalcode_contracts::ids::new_id();
+        let cwd = root.join(&id);
+        std::fs::create_dir_all(&cwd).expect("source cwd");
+        let provider_id = ProviderId::new(ProviderId::CLAUDE_CODE);
+        let cwd = cwd.to_string_lossy().into_owned();
+        core.write_with_events(|tx| {
+            kalcode_threads::store::insert_thread(
+                tx,
+                &kalcode_threads::store::NewThreadRow {
+                    id: &id,
+                    name: "Repair checkout flow",
+                    provider_id: &provider_id,
+                    provider_name: "Claude Code",
+                    model: Some("source-model"),
+                    effort: Some("low"),
+                    provider_account_id: None,
+                    account_label: None,
+                    workspace_id,
+                    workspace_name: "Workspace",
+                    cwd: &cwd,
+                    permission_mode: mode,
+                    now: "2026-10-05T00:00:00Z",
+                },
+            )?;
+            kalcode_threads::store::set_permission_mode(
+                tx,
+                &id,
+                mode,
+                (mode == PermissionMode::Custom).then_some("source-custom-profile"),
+            )?;
+            kalcode_threads::store::set_provider_session(
+                tx,
+                &id,
+                "source-provider-session",
+                Some("source-model"),
+            )?;
+            if archived {
+                tx.execute(
+                    "UPDATE threads SET archived_at = '2026-10-05T00:01:00Z' WHERE id = ?1",
+                    [&id],
+                )?;
+            }
+            Ok(((), Vec::new()))
+        })
+        .expect("insert source");
+        core.read(|conn| kalcode_threads::store::get(conn, &id))
+            .expect("source row")
+    }
+
+    fn summary_fixture(id: String) -> ThreadSummary {
+        ThreadSummary {
+            can_move_workspace: Some(true),
+            id,
+            name: "Agent".into(),
+            provider_id: ProviderId::new(ProviderId::CODEX),
+            provider_name: "Codex".into(),
+            model: None,
+            effort: None,
+            provider_account_id: None,
+            account_label: None,
+            workspace_id: kalcode_contracts::ids::new_id(),
+            workspace_name: "Workspace".into(),
+            permission_mode: PermissionMode::Approve,
+            status: ThreadStatus::Interrupted,
+            current_activity: Some(kalcode_threads::runtime::SHUTDOWN_ACTIVITY.into()),
+            created_at: String::new(),
+            last_activity_at: String::new(),
+            pending_approvals: 0,
+            unread_messages: 0,
+            files_changed: Some(0),
+            branch: None,
+            error: None,
+            archived_at: None,
+            resumable: false,
+            restart_recoverable: Some(false),
+            resume_has_pending_input: false,
+            permission_profile_id: None,
+            runtime_kind: None,
+            terminal_id: None,
+            worktree_id: None,
+        }
+    }
+
+    fn pane_state(sessions_dir: PathBuf) -> ProviderPanesState {
+        ProviderPanesState {
+            routes: PaneRoutes::default(),
+            enabled: true,
+            bridge: None,
+            panes: Arc::new(PaneRegistry::new()),
+            glue: Arc::new(Glue::default()),
+            views: Mutex::new(HashMap::new()),
+            next_view: AtomicU64::new(1),
+            unavailable: None,
+            sessions_dir,
+            routing: DEFAULT_DECISION_ROUTING,
+        }
+    }
+
+    #[test]
+    fn pane_context_and_duplicate_sources_are_mutually_exclusive() {
+        let error = validate_pane_source_choice(Some("duplicate"), Some("context"))
+            .expect_err("source modes conflict");
+        assert_eq!(error.code, "pane_context_source_conflict");
+        validate_pane_source_choice(Some("duplicate"), None).expect("duplicate only");
+        validate_pane_source_choice(None, Some("context")).expect("context only");
+    }
+
+    #[test]
+    fn pane_context_source_must_be_durable_open_interactive_and_same_workspace() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let core = test_core(&dir.path().join("data"));
+        let sessions = dir.path().join("sessions");
+        let panes = pane_state(sessions.clone());
+        let workspace_id = kalcode_contracts::ids::new_id();
+
+        let missing = kalcode_contracts::ids::new_id();
+        assert_eq!(
+            resolve_context_source(&core, &panes, Some(&missing), &workspace_id)
+                .expect_err("missing source")
+                .code,
+            "pane_context_source_unavailable"
+        );
+
+        let headless = insert_source(
+            &core,
+            dir.path(),
+            &workspace_id,
+            PermissionMode::Approve,
+            false,
+        );
+        assert_eq!(
+            resolve_context_source(&core, &panes, Some(&headless.id), &workspace_id)
+                .expect_err("headless source")
+                .code,
+            "pane_context_source_unavailable"
+        );
+
+        let archived = insert_source(
+            &core,
+            dir.path(),
+            &workspace_id,
+            PermissionMode::Approve,
+            true,
+        );
+        mark_interactive(&sessions, &archived.id).expect("mark archived pane");
+        assert_eq!(
+            resolve_context_source(&core, &panes, Some(&archived.id), &workspace_id)
+                .expect_err("archived source")
+                .code,
+            "pane_context_source_unavailable"
+        );
+
+        let other_workspace = kalcode_contracts::ids::new_id();
+        let cross_workspace = insert_source(
+            &core,
+            dir.path(),
+            &other_workspace,
+            PermissionMode::Approve,
+            false,
+        );
+        mark_interactive(&sessions, &cross_workspace.id).expect("mark cross-workspace pane");
+        assert_eq!(
+            resolve_context_source(&core, &panes, Some(&cross_workspace.id), &workspace_id)
+                .expect_err("cross-workspace source")
+                .code,
+            "pane_context_source_unavailable"
+        );
+    }
+
+    #[test]
+    fn pane_context_copies_only_name_and_cwd_into_explicit_fresh_settings() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let core = test_core(&dir.path().join("data"));
+        let sessions = dir.path().join("sessions");
+        let panes = pane_state(sessions.clone());
+        let workspace_id = kalcode_contracts::ids::new_id();
+        let source = insert_source(
+            &core,
+            dir.path(),
+            &workspace_id,
+            PermissionMode::Custom,
+            false,
+        );
+        mark_interactive(&sessions, &source.id).expect("mark custom pane");
+        let source = resolve_context_source(&core, &panes, Some(&source.id), &workspace_id)
+            .expect("resolve context")
+            .expect("context row");
+        assert_eq!(source.permission_mode, PermissionMode::Custom);
+        assert_eq!(
+            source.permission_profile_id.as_deref(),
+            Some("source-custom-profile")
+        );
+        assert_eq!(
+            source.provider_session_id.as_deref(),
+            Some("source-provider-session")
+        );
+
+        let config = pane_launch_config(
+            ProviderId::CODEX.into(),
+            Some("selected-account".into()),
+            workspace_id.clone(),
+            Some("selected-model".into()),
+            Some("max".into()),
+            PermissionMode::Auto,
+            Some("ignored new name".into()),
+            None,
+            Some(&source),
+            None,
+        );
+        assert_eq!(config.provider_id, ProviderId::CODEX);
+        assert_eq!(
+            config.provider_account_id.as_deref(),
+            Some("selected-account")
+        );
+        assert_eq!(config.workspace_id, workspace_id);
+        assert_eq!(config.model.as_deref(), Some("selected-model"));
+        assert_eq!(config.effort.as_deref(), Some("max"));
+        assert_eq!(config.permission_mode, PermissionMode::Auto);
+        assert_eq!(config.name.as_deref(), Some("Repair checkout flow"));
+        assert_eq!(config.cwd.as_deref(), Some(Path::new(&source.cwd)));
+    }
+
+    #[test]
+    fn pane_creation_always_allocates_a_fresh_nonresumed_identity() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let core = test_core(&dir.path().join("data"));
+        let runtime = ThreadRuntime::new(
+            core,
+            Arc::new(kalcode_threads::ProviderRegistry::new()),
+            Arc::new(kalcode_threads::registry::NoWorkspaces),
+            Arc::new(kalcode_contracts::permissions::AskUnlessReadGate),
+        )
+        .expect("runtime");
+        let source_id = kalcode_contracts::ids::new_id();
+        let created = create_pane_thread(&runtime, &dir.path().join("sessions"), |id| {
+            assert_ne!(id, source_id);
+            Ok(summary_fixture(id.to_owned()))
+        })
+        .expect("fresh pane");
+        assert_ne!(created.id, source_id);
+        assert!(!created.resumable);
+        assert_eq!(created.terminal_id, None);
+        assert_eq!(created.worktree_id, None);
+    }
+
+    #[test]
+    fn restart_recovery_is_only_stamped_for_application_interrupted_provider_panes() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let sessions = dir.path().join("sessions");
+        let state = pane_state(sessions.clone());
+
+        let mut headless = summary_fixture(kalcode_contracts::ids::new_id());
+        state.stamp_runtime_kind(&mut headless);
+        assert_eq!(headless.runtime_kind, Some(ThreadRuntimeKind::Headless));
+        assert_eq!(headless.restart_recoverable, Some(false));
+
+        let mut pane = summary_fixture(kalcode_contracts::ids::new_id());
+        mark_interactive(&sessions, &pane.id).expect("mark interactive pane");
+        state.stamp_runtime_kind(&mut pane);
+        assert_eq!(pane.runtime_kind, Some(ThreadRuntimeKind::InteractivePty));
+        assert_eq!(
+            pane.restart_recoverable,
+            Some(true),
+            "provider-native resumability is independently gated by the UI"
+        );
+
+        pane.current_activity = Some(kalcode_threads::runtime::RECOVERED_ACTIVITY.into());
+        state.stamp_runtime_kind(&mut pane);
+        assert_eq!(pane.restart_recoverable, Some(true));
+
+        pane.current_activity = Some(kalcode_threads::runtime::STOPPED_ACTIVITY.into());
+        state.stamp_runtime_kind(&mut pane);
+        assert_eq!(pane.restart_recoverable, Some(false));
+
+        pane.current_activity = Some(kalcode_threads::runtime::SHUTDOWN_ACTIVITY.into());
+        pane.status = ThreadStatus::Failed;
+        state.stamp_runtime_kind(&mut pane);
+        assert_eq!(pane.restart_recoverable, Some(false));
+
+        pane.status = ThreadStatus::Interrupted;
+        pane.archived_at = Some("2026-10-05T00:00:00Z".into());
+        state.stamp_runtime_kind(&mut pane);
+        assert_eq!(pane.restart_recoverable, Some(false));
+    }
 
     #[test]
     fn failed_launch_returns_its_error_but_a_queued_terminal_remains_valid() {

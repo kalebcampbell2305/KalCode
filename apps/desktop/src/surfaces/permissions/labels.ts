@@ -132,7 +132,9 @@ export function statusText(view: ApprovalView): string {
     case "denied":
       return view.resolvedDecision ? RESOLVED_LABELS[view.resolvedDecision] : view.status;
     case "expired":
-      return `Expired: ${EXPIRE_REASONS[view.expireReason ?? ""] ?? "it can no longer be approved"}`;
+      // No reason: a short-lived Environment Doctor or Utility Dock request outlived its window.
+      if (view.expireReason == null) return "Expired: its approval window passed";
+      return `Expired: ${EXPIRE_REASONS[view.expireReason] ?? "it can no longer be approved"}`;
   }
 }
 

@@ -58,8 +58,10 @@
   color: var(--color-text);
 }
 
-.defaultNote::before {
-  content: "";
+/* The rail: an aria-hidden element (first in the note, PermissionsSettings.tsx), not ::before:
+   axe's colour-contrast check reports "incomplete" for any text under an absolute pseudo-element
+   with a background. */
+.defaultNoteRail {
   position: absolute;
   left: 0;
   top: 0;

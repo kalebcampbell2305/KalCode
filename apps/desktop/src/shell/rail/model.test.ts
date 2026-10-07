@@ -157,18 +157,15 @@ describe("labels", () => {
         now,
       ),
     ).toBe("Fix login, permission required, 1h");
-    expect(
-      threadLabel(
-        {
-          id: "t",
-          name: "Old",
-          status: "interrupted",
-          lastActivityAt: "2026-09-25T11:58:00.000Z",
-          pendingApprovals: 0,
-        },
-        now,
-      ),
-    ).toBe("Old, idle (stopped, resumable), 2m");
+    const stopped = {
+      id: "t",
+      name: "Old",
+      status: "interrupted" as const,
+      lastActivityAt: "2026-09-25T11:58:00.000Z",
+      pendingApprovals: 0,
+    };
+    expect(threadLabel({ ...stopped, resumable: false }, now)).toBe("Old, idle (stopped, historical), 2m");
+    expect(threadLabel({ ...stopped, resumable: true }, now)).toBe("Old, idle (stopped, resumable), 2m");
   });
 
   it("makes initials from names", () => {

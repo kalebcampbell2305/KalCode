@@ -354,7 +354,8 @@
       "platforms": ["win32"],
       "unavailable": "the native desktop E2E harness is Windows-only (WebView2); CI runs it on windows-latest",
       "exclusive": ["cargo-build", "desktop-dist"],
-      "run": ["pnpm --filter @kalcode/desktop build:e2e", "pnpm --filter @kalcode/desktop test:e2e"]
+      "unsetEnv": ["KALCODE_E2E_EXE"],
+      "run": ["pnpm --filter @kalcode/desktop build:e2e", "node tooling/test-suites.mjs --suite desktop-native-e2e"]
     },
     {
       "id": "pnpm-audit",

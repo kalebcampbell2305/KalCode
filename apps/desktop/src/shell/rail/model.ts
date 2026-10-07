@@ -215,8 +215,10 @@ export function badgeLabel(entry: Pick<WorkspaceRailEntry, "working" | "needsYou
 
 /** Accessible name of a thread row: name, status words, time. */
 export function threadLabel(thread: RailThread, now: number = Date.now()): string {
-  const info = displayStatusOf(thread.status);
-  return `${thread.name}, ${statusWords(thread.status)}${info.qualifier === "stopped_resumable" ? " (stopped, resumable)" : ""}, ${relativeTime(thread.lastActivityAt, now)}`;
+  const info = displayStatusOf(thread.status, { resumable: thread.resumable === true });
+  const qualifier =
+    thread.status === "interrupted" && info.qualifierLabel ? ` (${info.qualifierLabel.replace(" · ", ", ")})` : "";
+  return `${thread.name}, ${statusWords(thread.status)}${qualifier}, ${relativeTime(thread.lastActivityAt, now)}`;
 }
 
 export function statusWords(status: ThreadStatus): string {

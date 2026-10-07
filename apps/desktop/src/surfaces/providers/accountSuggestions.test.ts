@@ -159,3 +159,22 @@ it.each([
     condition,
   );
 });
+
+it("ignores another model's weekly limit but honours it for that model (#284)", () => {
+  const fableLow = usage("a", 0, {
+    windows: [
+      { id: "weekly", label: "Weekly", remainingPercent: 80, resetsAt: null },
+      { id: "weekly_fable", label: "Weekly Fable", remainingPercent: 2, resetsAt: null },
+    ],
+  });
+  const readings = [fableLow, usage("b", 90)];
+  for (const model of ["claude-sonnet-4-6", "claude-opus-4-6"])
+    expect(suggest(undefined, readings, { ...thread, model } as ThreadSummary)).toBeNull();
+  const fable = suggest(undefined, readings, { ...thread, model: "claude-fable-1" } as ThreadSummary);
+  expect(fable?.condition).toBe("low");
+  expect(fable?.reason).toBe("A has 2% left in its weekly fable limit.");
+});
+
+it("reports a positive fraction under 1% as <1%, never 0% (#284)", () => {
+  expect(suggest(undefined, [usage("a", 0.4), usage("b", 80)])?.reason).toBe("A has <1% left in its weekly limit.");
+});

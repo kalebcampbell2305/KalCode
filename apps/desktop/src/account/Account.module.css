@@ -34,8 +34,10 @@
   width: min(46rem, 100%);
 }
 
-.card::before {
-  content: "";
+/* The card's lit top hairline. This, the circuit's connectors and the featured plan's edge are
+   aria-hidden elements (AccountGate.tsx, AccountOnboarding.tsx), not ::before: axe's colour-contrast
+   check reports "incomplete" for any text under an absolute pseudo-element with a background. */
+.cardEdge {
   position: absolute;
   top: -1px;
   right: 8%;
@@ -80,8 +82,8 @@
   text-transform: uppercase;
 }
 
-.circuit li::before {
-  content: "";
+/* The connector to the previous step: first in each step's <li>. */
+.circuitLink {
   position: absolute;
   top: 0.5rem;
   right: 50%;
@@ -90,15 +92,15 @@
   background: var(--color-border-strong);
 }
 
-.circuit li:first-child::before {
+.circuit li:first-child > .circuitLink {
   display: none;
 }
 .circuit li[data-state="done"],
 .circuit li[data-state="current"] {
   color: var(--color-accent-text);
 }
-.circuit li[data-state="done"]::before,
-.circuit li[data-state="current"]::before {
+.circuit li[data-state="done"] > .circuitLink,
+.circuit li[data-state="current"] > .circuitLink {
   background: var(--color-border-lit);
 }
 
@@ -255,7 +257,7 @@
   background: var(--color-surface-2);
   box-shadow: var(--shadow-panel);
 }
-.plan > div:first-child {
+.plan > div:first-of-type {
   flex: 1;
 }
 .plan {
@@ -273,8 +275,7 @@
   box-shadow: var(--shadow-lit);
 }
 /* A lit top edge marks the recommended plan, matching the card's own lit hairline. */
-.plan[data-featured="true"]::before {
-  content: "";
+.plan[data-featured="true"] > .featuredEdge {
   position: absolute;
   top: -1px;
   right: 12%;
@@ -450,4 +451,7 @@
   color: var(--color-text-muted);
   font-size: var(--type-small);
   text-align: center;
+}
+.planNote + .actions {
+  margin-top: var(--space-3);
 }

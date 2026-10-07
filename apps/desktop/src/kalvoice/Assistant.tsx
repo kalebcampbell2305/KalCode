@@ -81,6 +81,8 @@ export function ResultView() {
           : "Needs attention";
   return (
     <div className={styles.result} data-tone={tone}>
+      {/* The tone rail on an inert element, not ::before (see Assistant.module.css). */}
+      <span className={styles.resultRail} aria-hidden="true" />
       <Icon className={styles.resultIcon} aria-hidden="true" />
       <div className={styles.resultText}>
         <p className={styles.resultTitle}>{title}</p>

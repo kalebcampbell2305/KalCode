@@ -641,6 +641,7 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
                     onOpenAgent={openAgent}
                     onReturn={beginReturn}
                     returning={busy === "return"}
+                    returnLocked={busy !== null}
                   />
                 ))}
               </div>
@@ -660,6 +661,7 @@ function HandoffRecordRow({
   onOpenAgent,
   onReturn,
   returning,
+  returnLocked,
 }: {
   record: HandoffRecord;
   /** Its findings were already returned to the sender. */
@@ -669,6 +671,8 @@ function HandoffRecordRow({
   onOpenAgent: (threadId: string, workspaceId: string) => void;
   onReturn: (record: HandoffRecord) => void;
   returning: boolean;
+  /** A preview, send or return is in flight: starting another would replace its result. */
+  returnLocked: boolean;
 }) {
   const { client } = useRuntime();
   const id = useId();
@@ -816,6 +820,7 @@ function HandoffRecordRow({
               variant="ghost"
               icon={<RotateCcw />}
               busy={returning}
+              disabled={returnLocked}
               aria-label={`Return findings to ${record.sourceName}`}
               onClick={() => onReturn(record)}
             >

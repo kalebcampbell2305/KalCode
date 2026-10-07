@@ -468,6 +468,8 @@ function ModelsRow() {
           const note = modelProgressNote(item, model);
           return (
             <li key={model.id} className={styles.model} data-state={state} data-active={active || undefined}>
+              {/* The lit rail on an inert element, not ::before (see KalVoiceSettings.module.css). */}
+              {active ? <span className={styles.activeRail} aria-hidden="true" /> : null}
               <div className={styles.modelText}>
                 <p className={styles.modelName}>
                   {model.displayName}

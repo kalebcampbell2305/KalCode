@@ -11,6 +11,9 @@ use crate::local_reasoning::LocalActionGrounding;
 
 use super::*;
 
+/// Hang guard for loopback socket I/O with an in-process fixture server: never a latency assertion.
+const IO_GUARD: Duration = Duration::from_secs(30);
+
 fn absolute_fixture_paths() -> (PathBuf, PathBuf, PathBuf) {
     #[cfg(windows)]
     {
@@ -260,9 +263,7 @@ fn one_shot_server(
     let port = listener.local_addr().expect("address").port();
     let task = thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("accept");
-        stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .expect("timeout");
+        stream.set_read_timeout(Some(IO_GUARD)).expect("timeout");
         let mut request = Vec::new();
         let mut buffer = [0_u8; 4096];
         loop {
@@ -315,13 +316,12 @@ fn loopback_transport_authenticates_and_accepts_only_json() {
     .expect("response");
     let (endpoint, server) = one_shot_server(KEY, "200 OK", "application/json", response);
     let body = build_request(&request(), &candidates(), 128).expect("body");
-    let stream =
-        TcpStream::connect_timeout(&endpoint.into(), Duration::from_secs(2)).expect("connect");
+    let stream = TcpStream::connect_timeout(&endpoint.into(), IO_GUARD).expect("connect");
     stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
+        .set_read_timeout(Some(IO_GUARD))
         .expect("read timeout");
     stream
-        .set_write_timeout(Some(Duration::from_secs(2)))
+        .set_write_timeout(Some(IO_GUARD))
         .expect("write timeout");
 
     assert_eq!(post_interpretation(Box::new(stream), KEY, &body), Ok(None));
@@ -333,8 +333,7 @@ fn loopback_transport_rejects_non_json_and_oversized_responses() {
     static KEY: &str = "test-local-bearer-value";
     let body = build_request(&request(), &candidates(), 128).expect("body");
     let (endpoint, server) = one_shot_server(KEY, "200 OK", "text/plain", b"no".to_vec());
-    let stream =
-        TcpStream::connect_timeout(&endpoint.into(), Duration::from_secs(2)).expect("connect");
+    let stream = TcpStream::connect_timeout(&endpoint.into(), IO_GUARD).expect("connect");
     assert_eq!(
         post_interpretation(Box::new(stream), KEY, &body),
         Err(LlamaWorkerError::InvalidResponse)
@@ -343,8 +342,7 @@ fn loopback_transport_rejects_non_json_and_oversized_responses() {
 
     let oversized = vec![b'x'; MAX_HTTP_RESPONSE_BYTES as usize + 1];
     let (endpoint, server) = one_shot_server(KEY, "200 OK", "application/json", oversized);
-    let stream =
-        TcpStream::connect_timeout(&endpoint.into(), Duration::from_secs(2)).expect("connect");
+    let stream = TcpStream::connect_timeout(&endpoint.into(), IO_GUARD).expect("connect");
     assert!(matches!(
         post_interpretation(Box::new(stream), KEY, &body),
         Err(LlamaWorkerError::InvalidResponse | LlamaWorkerError::Transport)

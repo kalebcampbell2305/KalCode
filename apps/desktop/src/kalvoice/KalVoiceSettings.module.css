@@ -156,8 +156,10 @@
   background: var(--color-surface-selected);
 }
 
-.model[data-active]::before {
-  content: "";
+/* An aria-hidden element rendered only on the model in use (first in the row,
+   KalVoiceSettings.tsx), not ::before: axe's colour-contrast check reports "incomplete" for the
+   row's text under an absolute pseudo-element with a background. */
+.model[data-active] > .activeRail {
   position: absolute;
   top: var(--space-2);
   bottom: var(--space-2);

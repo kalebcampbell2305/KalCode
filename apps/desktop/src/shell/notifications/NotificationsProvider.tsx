@@ -1,4 +1,4 @@
-import type { Notification, NotificationMark, NotificationPage } from "@kalcode/protocol";
+import type { EventEnvelope, Notification, NotificationMark, NotificationPage } from "@kalcode/protocol";
 import { useToast } from "@kalcode/ui/components";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { isCommandUnavailable, type KalCodeError, toKalCodeError } from "../../ipc/errors.ts";
@@ -17,6 +17,15 @@ const REFRESH_DEBOUNCE_MS = 300;
 /** Events after which the list is re-read: new notifications, and answered approvals (their
  *  permission notices are marked read natively, without an event of their own). */
 const REFRESH_TYPES = new Set(["notification.created", "approval.approved", "approval.denied", "approval.expired"]);
+
+/** Whether `event` can change the list. A thread leaving `waiting_for_permission` is when the
+ *  native center settles its permission notice once every request is answered. */
+function refreshesList(event: EventEnvelope): boolean {
+  return (
+    REFRESH_TYPES.has(event.type) ||
+    (event.type === "thread.status_changed" && event.payload.from === "waiting_for_permission")
+  );
+}
 
 export interface NotificationsValue {
   state: LoadState;
@@ -156,7 +165,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   // Re-read after each new `notification.created` or answered approval (coalesced).
-  const newestSeq = useMemo(() => events.find((e) => REFRESH_TYPES.has(e.type))?.seq ?? 0, [events]);
+  const newestSeq = useMemo(() => events.find(refreshesList)?.seq ?? 0, [events]);
   useEffect(() => {
     if (lifecycle.seenSeq === null) {
       lifecycle.seenSeq = newestSeq;

@@ -9,6 +9,7 @@ import {
   auditRustIntentionalIgnores,
   auditWorkspaceSuiteCoverage,
   flakyReport,
+  detectWindowsSessionZero,
   loadTestSuiteInventory,
   parseCargoTestReport,
   parseNodeTestReport,
@@ -21,6 +22,7 @@ import {
   selectSuites,
   validateInventory,
   validateSuiteResult,
+  WINDOWS_SESSION_ZERO_PROFILE_ENV,
 } from "./test-suites.mjs";
 
 const inventory = loadTestSuiteInventory();
@@ -619,10 +621,157 @@ test("website skip profiles require reviewed counts and runtime reasons", () => 
   );
 });
 
-test("native E2E is explicitly blocked where no reviewed harness exists", () => {
+test("native E2E permits only the four reviewed Session 0 skips and keeps interactive runs skip-free", () => {
   const native = inventory.suites.find(({ id }) => id === "desktop-native-e2e");
   assert.throws(() => selectProfile(native, "darwin", {}), /BLOCKED.*native Mac harness/);
-  assert.equal(selectProfile(native, "win32", {}).minimumExecuted, 24);
+  const interactive = selectProfile(native, "win32", {});
+  assert.equal(interactive.minimumExecuted, 24);
+  assert.equal(interactive.skippedMinimum, 0);
+  assert.equal(interactive.skippedMaximum, 0);
+
+  const service = selectProfile(native, "win32", { KALCODE_TEST_WINDOWS_SESSION_0: "1" });
+  assert.equal(service.minimumExecuted, 24);
+  assert.equal(service.skippedMinimum, 4);
+  assert.equal(service.skippedMaximum, 4);
+  const reason = "skipped: session 0 has no interactive desktop; run in an interactive session";
+  const reviewed = {
+    executed: 27,
+    failed: 0,
+    skipped: 4,
+    flaky: 0,
+    skipReasons: Array(4).fill(reason),
+  };
+  assert.doesNotThrow(() => validateSuiteResult(native, service, reviewed));
+  for (const skipped of [3, 5]) {
+    assert.throws(
+      () =>
+        validateSuiteResult(native, service, {
+          ...reviewed,
+          skipped,
+          skipReasons: Array(skipped).fill(reason),
+        }),
+      /reviewed bounds/,
+    );
+  }
+  assert.throws(
+    () =>
+      validateSuiteResult(native, service, {
+        ...reviewed,
+        skipReasons: [reason, reason, reason, "Build the native E2E app first: target/e2e/release/kalcode.exe"],
+      }),
+    /unreviewed skip reason/,
+  );
+  assert.throws(
+    () => validateSuiteResult(native, interactive, { ...reviewed, skipped: 1, skipReasons: [reason] }),
+    /reviewed bounds/,
+  );
+});
+
+test("the Windows Session 0 probe is bounded to this process and fails closed", () => {
+  let invocation;
+  const spawn = (file, args, options) => {
+    invocation = { file, args, options };
+    return { status: 0, signal: null, error: null, stdout: "0\r\n" };
+  };
+  assert.equal(detectWindowsSessionZero({ platform: "win32", pid: 4242, spawn }), true);
+  assert.equal(invocation.file, "powershell.exe");
+  assert.deepEqual(invocation.args.slice(0, 3), ["-NoProfile", "-NonInteractive", "-Command"]);
+  assert.match(invocation.args.at(-1), /Get-Process -Id 4242 -ErrorAction Stop/);
+  assert.equal(invocation.options.timeout, 2_000);
+  assert.equal(invocation.options.maxBuffer, 1_024);
+  assert.equal(invocation.options.windowsHide, true);
+
+  assert.equal(
+    detectWindowsSessionZero({
+      platform: "win32",
+      pid: 4242,
+      spawn: () => ({ status: 0, signal: null, error: null, stdout: "1" }),
+    }),
+    false,
+  );
+  assert.equal(
+    detectWindowsSessionZero({
+      platform: "win32",
+      pid: 4242,
+      spawn: () => {
+        throw new Error("probe unavailable");
+      },
+    }),
+    false,
+  );
+  assert.equal(
+    detectWindowsSessionZero({
+      platform: "linux",
+      pid: 4242,
+      spawn: () => {
+        throw new Error("must not probe");
+      },
+    }),
+    false,
+  );
+});
+
+test("the native runner ignores inherited session markers and never passes its derived marker to tests", () => {
+  const native = inventory.suites.find(({ id }) => id === "desktop-native-e2e");
+  const reason = "skipped: session 0 has no interactive desktop; run in an interactive session";
+  const temporaryParent = mkdtempSync(join(tmpdir(), "kalcode-native-profile-"));
+  const execute = ({ sessionZeroProbe, skipped = [], environment = {} }) => {
+    let childEnvironment;
+    const result = runSuite(native, {
+      platform: "win32",
+      environment,
+      sessionZeroProbe,
+      temporaryParent,
+      spawn: (_file, _args, options) => {
+        childEnvironment = options.env;
+        writeFileSync(
+          options.env.PLAYWRIGHT_JSON_OUTPUT_FILE,
+          JSON.stringify(playwrightReport({ expected: skipped.length === 0 ? 31 : 27, skipped })),
+        );
+        return { status: 0, signal: null, error: null, stdout: "", stderr: "" };
+      },
+    });
+    return { childEnvironment, result };
+  };
+
+  try {
+    const interactive = execute({
+      sessionZeroProbe: () => false,
+      environment: {
+        KEEP: "yes",
+        [WINDOWS_SESSION_ZERO_PROFILE_ENV]: "spoofed",
+        kalcode_test_windows_session_0: "also-spoofed",
+      },
+    });
+    assert.equal(interactive.result.executed, 31);
+    assert.equal(interactive.childEnvironment.KEEP, "yes");
+    assert.equal(
+      Object.keys(interactive.childEnvironment).some((name) => name.toUpperCase() === WINDOWS_SESSION_ZERO_PROFILE_ENV),
+      false,
+    );
+
+    const service = execute({ sessionZeroProbe: () => true, skipped: Array(4).fill(reason) });
+    assert.equal(service.result.executed, 27);
+    assert.equal(service.result.skipped, 4);
+    assert.equal(
+      Object.keys(service.childEnvironment).some((name) => name.toUpperCase() === WINDOWS_SESSION_ZERO_PROFILE_ENV),
+      false,
+    );
+
+    assert.throws(
+      () =>
+        execute({
+          sessionZeroProbe: () => {
+            throw new Error("probe unavailable");
+          },
+          skipped: Array(4).fill(reason),
+          environment: { [WINDOWS_SESSION_ZERO_PROFILE_ENV]: "spoofed" },
+        }),
+      /reviewed bounds/,
+    );
+  } finally {
+    rmSync(temporaryParent, { recursive: true, force: true });
+  }
 });
 
 test("suite selection is explicit and cannot silently omit an unknown suite", () => {

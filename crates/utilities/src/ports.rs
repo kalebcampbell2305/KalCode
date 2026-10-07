@@ -176,8 +176,12 @@ pub fn tool_name() -> Option<&'static str> {
 fn split_endpoint(text: &str) -> Option<(String, u16)> {
     let (addr, port) = text.rsplit_once(':')?;
     let port: u16 = port.parse().ok()?;
-    let addr = addr.trim_start_matches('[').trim_end_matches(']');
-    Some((addr.to_owned(), port))
+    // `ss` prints a scoped IPv6 address as `[fe80::1]%eth0`: drop the bracket before the zone.
+    let addr = match addr.strip_prefix('[') {
+        Some(rest) => rest.replacen(']', "", 1),
+        None => addr.to_owned(),
+    };
+    Some((addr, port))
 }
 
 fn is_wildcard_remote(text: &str) -> bool {
@@ -731,6 +735,17 @@ Active Connections
         assert_eq!(ports.len(), 2);
         assert_eq!(ports[0].command.as_deref(), Some("node"));
         assert_eq!(ports[1].local_address, "*");
+    }
+
+    #[test]
+    fn ss_scoped_ipv6_addresses_lose_their_bracket_and_zone() {
+        let ss = "udp   UNCONN 0      0      [fe80::1c2:3ff:fe4d:5e6f]%eth0:546        [::]:*    users:((\"dhclient\",pid=900,fd=6))
+";
+        let ports = parse_ss(ss);
+        assert_eq!(ports.len(), 1);
+        assert_eq!(ports[0].local_address, "fe80::1c2:3ff:fe4d:5e6f");
+        assert_eq!(ports[0].port, 546);
+        assert_eq!(ports[0].pid, Some(900));
     }
 
     fn process(pid: u32, name: &str, owner: ProcessOwner, workspace: Option<&str>) -> ProcessInfo {

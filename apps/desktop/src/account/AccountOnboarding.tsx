@@ -21,10 +21,12 @@ export interface AccountOnboardingActions {
   startEmail(email: string): Promise<void>;
   startSocial(provider: SocialProvider): Promise<void>;
   pollEmail(): Promise<void>;
+  /** Also leaves an unfinished checkout and goes back to plan choice. */
   cancelAuth(): Promise<void>;
   activateFree(): Promise<void>;
   checkout(tier: PurchasableTier, interval: BillingInterval): Promise<void>;
   retry(): Promise<void>;
+  logout(): Promise<void>;
 }
 
 export interface AccountOnboardingProps {
@@ -78,6 +80,8 @@ function AccountCircuit({ phase }: { phase: AccountSnapshot["phase"] }) {
     <ol className={styles.circuit} aria-label="Account setup progress">
       {FLOW.map((label, index) => (
         <li key={label} data-state={index < current ? "done" : index === current ? "current" : "next"}>
+          {/* Decoration on inert elements, not pseudo-elements (see Account.module.css). */}
+          <span className={styles.circuitLink} aria-hidden="true" />
           <span className={styles.circuitNode} aria-hidden="true">
             {index < current ? <Check /> : <Circle />}
           </span>
@@ -97,6 +101,11 @@ export function AccountOnboarding({ snapshot, busy, error, actions }: AccountOnb
   const pollWhenBack = useRef({ busy, pollEmail: actions.pollEmail });
   pollWhenBack.current = { busy, pollEmail: actions.pollEmail };
   const emailPending = snapshot.phase === "email_pending";
+  // The email form closes once the link is sent; a failed request keeps it (and the address).
+  const signedOut = snapshot.phase === "signed_out";
+  useEffect(() => {
+    if (!signedOut) setMode(null);
+  }, [signedOut]);
   useEffect(() => {
     if (!emailPending) return;
     const onFocus = () => {
@@ -110,12 +119,12 @@ export function AccountOnboarding({ snapshot, busy, error, actions }: AccountOnb
     const normalized = email.trim().toLowerCase();
     if (!normalized || busy) return;
     await actions.startEmail(normalized);
-    setMode(null);
   };
 
   return (
     <main className={styles.screen} aria-labelledby="account-title">
       <section className={styles.card}>
+        <span className={styles.cardEdge} aria-hidden="true" />
         <header className={styles.header}>
           <Mark size={44} className={styles.mark} />
           <AccountCircuit phase={snapshot.phase} />
@@ -228,6 +237,7 @@ export function AccountOnboarding({ snapshot, busy, error, actions }: AccountOnb
                 const price = planPrice(plan, billing);
                 return (
                   <article className={styles.plan} key={plan.tier} data-featured={plan.popular || undefined}>
+                    {plan.popular ? <span className={styles.featuredEdge} aria-hidden="true" /> : null}
                     <div>
                       {plan.popular ? <p className={styles.popular}>Most popular</p> : null}
                       <p className={styles.stage}>{plan.stage}</p>
@@ -255,18 +265,32 @@ export function AccountOnboarding({ snapshot, busy, error, actions }: AccountOnb
               })}
             </div>
             <p className={styles.planNote}>{UNLIMITED_NOTE}</p>
+            <div className={styles.actions}>
+              <Button variant="ghost" disabled={busy} onClick={() => void actions.logout()}>
+                Sign out
+              </Button>
+            </div>
           </div>
         ) : snapshot.phase === "confirming_plan" ? (
           <div className={styles.center} role="status" aria-busy={busy || undefined}>
             <ShieldCheck className={styles.heroIcon} aria-hidden="true" />
-            <p className={styles.eyebrow}>Checkout complete</p>
+            <p className={styles.eyebrow}>Checkout</p>
             <h1 id="account-title">Confirming plan</h1>
-            <p>Stay here while KalCode checks the confirmed payment and signed plan from the server.</p>
-            {error?.retryable ? (
-              <Button variant="primary" busy={busy} onClick={() => void actions.retry()}>
-                Check again
+            <p>Finish paying in your browser, then come back. KalCode unlocks your plan once the server confirms it.</p>
+            <div className={styles.actions}>
+              {error?.retryable ? (
+                <Button variant="primary" busy={busy} onClick={() => void actions.retry()}>
+                  Check again
+                </Button>
+              ) : null}
+              {/* Closed the checkout without paying: pick Free or another plan instead. */}
+              <Button variant="ghost" disabled={busy} onClick={() => void actions.cancelAuth()}>
+                Choose a different plan
               </Button>
-            ) : null}
+              <Button variant="ghost" disabled={busy} onClick={() => void actions.logout()}>
+                Sign out
+              </Button>
+            </div>
           </div>
         ) : (
           <div className={styles.center}>

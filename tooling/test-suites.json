@@ -207,11 +207,20 @@
       "profiles": [
         {
           "platforms": ["win32"],
-          "environment": {},
+          "environment": { "KALCODE_TEST_WINDOWS_SESSION_0": "absent" },
           "minimumExecuted": 24,
           "skippedMinimum": 0,
           "skippedMaximum": 0,
           "allowedSkipReasons": [],
+          "maximumFlaky": 0
+        },
+        {
+          "platforms": ["win32"],
+          "environment": { "KALCODE_TEST_WINDOWS_SESSION_0": "present" },
+          "minimumExecuted": 24,
+          "skippedMinimum": 4,
+          "skippedMaximum": 4,
+          "allowedSkipReasons": ["^skipped: session 0 has no interactive desktop; run in an interactive session$"],
           "maximumFlaky": 0
         }
       ],

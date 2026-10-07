@@ -6,6 +6,7 @@
 import type { PaneContent, PaneDirection, PaneLayout, PaneNode, SplitAxis } from "@kalcode/protocol";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { arrangeTask, TASK_LABELS, type TaskLayout, tidyLayout, withCompanions } from "./adaptiveCanvas.ts";
+import { clearPendingLayout, hydratePendingLayout, readPendingLayout, writePendingLayout } from "./layoutWriteAhead.ts";
 import {
   activateTab,
   addTab,
@@ -42,11 +43,12 @@ import {
 
 /** How long after the last change the layout is written to the store. */
 export const SAVE_DEBOUNCE_MS = 400;
-/** First retry delay after a failed layout load; doubles per attempt up to 30 s. */
+/** First retry delay after a failed layout load; doubles per attempt up to 30 seconds. */
 export const LOAD_RETRY_MS = 1000;
 /** One keyboard resize step, in pixels. */
 export const RESIZE_STEP_PX = 32;
 const CLOSED_KEPT = 12;
+const LOAD_RETRY_MAX_MS = 30_000;
 
 export interface PaneStore {
   load(): Promise<PaneLayout | null>;
@@ -69,9 +71,24 @@ export interface PaneControllerOptions {
 
 export type SaveState = "idle" | "saving" | "saved" | "error";
 
+type LayoutResetResult = { ok: true; layout: PaneLayout } | { ok: false; cause: unknown };
+
+interface InFlightLayoutReset {
+  token: symbol;
+  latestLayout: PaneLayout;
+  writeAheadId: string | null;
+  completion: Promise<LayoutResetResult>;
+}
+
 export interface PaneController {
   layout: PaneLayout;
   ready: boolean;
+  /** A failed canonical load leaves the fallback shell usable but blocks writes until retry succeeds. */
+  loadError: string | null;
+  retryLoad(): Promise<void>;
+  resettingSavedLayout: boolean;
+  /** Explicitly replaces an unreadable canonical layout with the usable desk currently on screen. */
+  resetSavedLayout(): Promise<void>;
   saveState: SaveState;
   focusedPaneId: string | null;
   /** Incremented when the focused pane's content should take keyboard focus. */
@@ -132,6 +149,121 @@ function savedFocus(scope: string): string | null {
   }
 }
 
+function browserLocations(layout: PaneLayout): Map<string, string | null> {
+  const locations = new Map<string, string | null>();
+  for (const leaf of leaves(layout.root)) {
+    for (const content of leaf.tabs) {
+      if (content.kind === "browser") locations.set(content.browserId, content.url);
+    }
+  }
+  for (const content of layout.dock) {
+    if (content.kind === "browser") locations.set(content.browserId, content.url);
+  }
+  return locations;
+}
+
+function browserLocationsChanged(previous: PaneLayout, next: PaneLayout): boolean {
+  const before = browserLocations(previous);
+  const after = browserLocations(next);
+  if (before.size !== after.size) return true;
+  for (const [browserId, url] of after) {
+    if (!before.has(browserId) || before.get(browserId) !== url) return true;
+  }
+  return false;
+}
+
+function contentsByKey(layout: PaneLayout): Map<string, PaneContent> {
+  const contents = new Map<string, PaneContent>();
+  for (const leaf of leaves(layout.root)) {
+    for (const content of leaf.tabs) contents.set(contentKey(content), content);
+  }
+  for (const content of layout.dock) contents.set(contentKey(content), content);
+  return contents;
+}
+
+function replaceContent(layout: PaneLayout, key: string, replacement: PaneContent): PaneLayout {
+  const replaceNode = (node: PaneNode): PaneNode => {
+    if (node.kind === "leaf") {
+      return {
+        ...node,
+        tabs: node.tabs.map((content) => (contentKey(content) === key ? replacement : content)),
+      };
+    }
+    return { ...node, children: node.children.map(replaceNode) };
+  };
+  return {
+    ...layout,
+    root: replaceNode(layout.root),
+    dock: layout.dock.map((content) => (contentKey(content) === key ? replacement : content)),
+  };
+}
+
+/** Replay safe content intent onto a desk that may contain unseen panes and a different topology. */
+function reconcileUnconfirmedLayout(baseline: PaneLayout, current: PaneLayout, authoritative: PaneLayout): PaneLayout {
+  if (JSON.stringify(authoritative) === JSON.stringify(baseline)) return current;
+
+  const before = contentsByKey(baseline);
+  const after = contentsByKey(current);
+  const removed = new Set([...before.keys()].filter((key) => !after.has(key)));
+  let next = authoritative;
+
+  const currentPaneIds = new Set(leaves(current.root).map((leaf) => leaf.paneId));
+  const closedLeafKeys = new Set<string>();
+  for (const baselineLeaf of leaves(baseline.root)) {
+    if (currentPaneIds.has(baselineLeaf.paneId)) continue;
+    for (const content of baselineLeaf.tabs) {
+      const key = contentKey(content);
+      if (removed.has(key)) closedLeafKeys.add(key);
+    }
+  }
+  for (const authoritativeLeaf of leaves(next.root)) {
+    if (
+      authoritativeLeaf.tabs.length > 0 &&
+      authoritativeLeaf.tabs.every((content) => closedLeafKeys.has(contentKey(content)))
+    ) {
+      next = closePane(next, authoritativeLeaf.paneId).layout;
+    }
+  }
+
+  next = removeContents(next, removed);
+
+  for (const [key, content] of after) {
+    const previous = before.get(key);
+    const added = previous === undefined;
+    const browserChanged = previous?.kind === "browser" && content.kind === "browser" && previous.url !== content.url;
+    if (!added && !browserChanged) continue;
+
+    const existing = contentsByKey(next).get(key);
+    if (existing) {
+      if (content.kind === "browser") next = replaceContent(next, key, content);
+      continue;
+    }
+
+    const currentIsDocked = current.dock.some((entry) => contentKey(entry) === key);
+    if (currentIsDocked) {
+      const candidate = { ...next, dock: [...next.dock, content] };
+      if (validateLayout(candidate) === null) next = candidate;
+      continue;
+    }
+
+    const currentLocation = findContent(current, key);
+    const targetPaneId =
+      currentLocation && findLeaf(next, currentLocation.paneId)
+        ? currentLocation.paneId
+        : (leaves(next.root)[0]?.paneId ?? null);
+    if (!targetPaneId) continue;
+    const withTab = addTab(next, targetPaneId, content, false);
+    if (findContent(withTab, key)) {
+      next = withTab;
+      continue;
+    }
+    const dockFallback = { ...next, dock: [...next.dock, content] };
+    if (validateLayout(dockFallback) === null) next = dockFallback;
+  }
+
+  return next;
+}
+
 export function usePaneController({
   scope,
   store,
@@ -142,8 +274,8 @@ export function usePaneController({
 }: PaneControllerOptions): PaneController {
   const [layout, setLayout] = useState<PaneLayout>(() => initial());
   const [ready, setReady] = useState(false);
-  // False until a load succeeds: a failed load must never write the default over a saved layout.
-  const [persisting, setPersisting] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [resettingSavedLayout, setResettingSavedLayout] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [focusedPaneId, setFocusedPaneId] = useState<string | null>(null);
   const [focusRequest, setFocusRequest] = useState({ paneId: "", n: 0 });
@@ -166,57 +298,29 @@ export function usePaneController({
   const lastSaved = useRef<string | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadedScope = useRef<string | null>(null);
-  const pendingSave = useRef<{ scope: string; layout: PaneLayout; store: PaneStore } | null>(null);
+  const pendingSave = useRef<{
+    scope: string;
+    layout: PaneLayout;
+    store: PaneStore;
+    writeAheadId: string | null;
+  } | null>(null);
+  const lastEnqueued = useRef<{ scope: string; serialized: string } | null>(null);
   const saveChain = useRef(Promise.resolve());
   const writesInFlight = useRef(0);
-
-  // Load this workspace's layout (or build the default).
-  // biome-ignore lint/correctness/useExhaustiveDependencies: flush is stable; reload only for a different workspace.
-  useEffect(() => {
-    let cancelled = false;
-    let retry: ReturnType<typeof setTimeout> | null = null;
-    loadedScope.current = null;
-    setReady(false);
-    setPersisting(false);
-    const show = (next: PaneLayout) => {
-      setLayout(next);
-      const remembered = savedFocus(scope);
-      setFocusedPaneId(
-        remembered && findLeaf(next, remembered)
-          ? remembered
-          : (next.maximizedPaneId ?? leaves(next.root)[0]?.paneId ?? null),
-      );
-      setUndo(null);
-      setClosed([]);
-      loadedScope.current = scope;
-      setReady(true);
-    };
-    const load = (attempt: number) => {
-      storeRef.current.load().then(
-        (stored) => {
-          if (cancelled) return;
-          const valid = stored && validateLayout(stored) === null ? stored : null;
-          lastSaved.current = stored ? JSON.stringify(stored) : null;
-          // A retry that finds nothing saved keeps what the user arranged meanwhile.
-          if (attempt === 0 || valid) show(valid ?? initialRef.current());
-          setPersisting(true);
-        },
-        () => {
-          if (cancelled) return;
-          // A failed load (runtime not ready, database error) is not "nothing saved": show the
-          // default without saving it, and retry until the saved layout can be read.
-          if (attempt === 0) show(initialRef.current());
-          retry = setTimeout(() => load(attempt + 1), Math.min(LOAD_RETRY_MS * 2 ** attempt, 30_000));
-        },
-      );
-    };
-    load(0);
-    return () => {
-      cancelled = true;
-      if (retry) clearTimeout(retry);
-      void flush();
-    };
-  }, [scope]);
+  const writeAheadId = useRef<string | null>(null);
+  const loadGeneration = useRef(0);
+  const retryNowRef = useRef<() => Promise<void>>(() => Promise.resolve());
+  const cancelRetryRef = useRef<() => void>(() => undefined);
+  const resetsInFlight = useRef(new Map<string, InFlightLayoutReset>());
+  const failedResetErrors = useRef(new Map<string, Error>());
+  const loadErrorRef = useRef(loadError);
+  loadErrorRef.current = loadError;
+  const unconfirmedLayoutChange = useRef(false);
+  const unconfirmedFocusedPaneId = useRef<string | null>(null);
+  const unconfirmedFocusedContentKey = useRef<string | null>(null);
+  const unconfirmedBaseline = useRef<PaneLayout | null>(null);
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
 
   const flush = useCallback(async () => {
     if (saveTimer.current) {
@@ -229,35 +333,277 @@ export function usePaneController({
     const current = pending.layout;
     const serialized = JSON.stringify(current);
     if (validateLayout(current) !== null) return;
+    const enqueued = { scope: pending.scope, serialized };
+    lastEnqueued.current = enqueued;
     writesInFlight.current++;
     setSaveState("saving");
     try {
       const write = saveChain.current.then(() => pending.store.save(current));
       saveChain.current = write.catch(() => undefined);
       await write;
+      if (pending.writeAheadId) clearPendingLayout(pending.scope, pending.writeAheadId);
       if (loadedScope.current === pending.scope) {
         lastSaved.current = serialized;
+        if (writeAheadId.current === pending.writeAheadId) writeAheadId.current = null;
         setSaveState("saved");
       }
     } catch {
       if (loadedScope.current === pending.scope) setSaveState("error");
     } finally {
+      if (lastEnqueued.current === enqueued) lastEnqueued.current = null;
       writesInFlight.current--;
     }
   }, []);
 
+  const loadScope = useCallback(
+    async (targetScope: string, preserveVisible = false): Promise<"loaded" | "failed" | "reset-failed" | "stale"> => {
+      const generation = ++loadGeneration.current;
+      const targetStore = storeRef.current;
+      const pending = readPendingLayout(targetScope);
+      const fallback = pending?.layout ?? initialRef.current();
+      loadedScope.current = null;
+      pendingSave.current = null;
+      writeAheadId.current = pending?.id ?? null;
+      if (!preserveVisible) {
+        unconfirmedLayoutChange.current = false;
+        unconfirmedFocusedPaneId.current = null;
+        unconfirmedFocusedContentKey.current = null;
+        unconfirmedBaseline.current = fallback;
+        latest.current = fallback;
+        setLayout(fallback);
+        setLoadError(null);
+        setResettingSavedLayout(resetsInFlight.current.has(targetScope));
+        setReady(false);
+        setSaveState("idle");
+        const focus = savedFocus(targetScope);
+        setFocusedPaneId(
+          focus && findLeaf(fallback, focus)
+            ? focus
+            : (fallback.maximizedPaneId ?? leaves(fallback.root)[0]?.paneId ?? null),
+        );
+        setUndo(null);
+        setClosed([]);
+      }
+      const retainedResetError = failedResetErrors.current.get(targetScope) ?? null;
+      let resetFailed = retainedResetError !== null;
+      try {
+        if (retainedResetError) throw retainedResetError;
+        const pendingReset = resetsInFlight.current.get(targetScope);
+        const resetResult = pendingReset ? await pendingReset.completion : null;
+        if (generation !== loadGeneration.current || targetScope !== scopeRef.current) return "stale";
+        if (resetResult && !resetResult.ok) {
+          resetFailed = true;
+          throw resetResult.cause;
+        }
+        const stored = resetResult?.ok ? resetResult.layout : await targetStore.load();
+        if (generation !== loadGeneration.current || targetScope !== scopeRef.current) return "stale";
+        const canonical = stored && validateLayout(stored) === null ? stored : initialRef.current();
+        const canonicalSerialized = stored ? JSON.stringify(stored) : null;
+        const recovered = pending && !resetResult ? hydratePendingLayout(pending.layout, canonical) : null;
+        const authoritative = recovered ?? canonical;
+        const replayLayoutChanges = preserveVisible && unconfirmedLayoutChange.current;
+        const baseline = unconfirmedBaseline.current;
+        let next =
+          replayLayoutChanges && baseline
+            ? reconcileUnconfirmedLayout(baseline, latest.current, authoritative)
+            : authoritative;
+        if (!replayLayoutChanges && pending && canonicalSerialized === JSON.stringify(recovered)) {
+          clearPendingLayout(targetScope, pending.id);
+          writeAheadId.current = null;
+          next = canonical;
+        }
+        lastSaved.current = canonicalSerialized;
+        if (replayLayoutChanges && JSON.stringify(next) !== JSON.stringify(authoritative)) {
+          const previousWriteAheadId = writeAheadId.current;
+          writeAheadId.current = writePendingLayout(targetScope, next);
+          if (!writeAheadId.current && previousWriteAheadId) clearPendingLayout(targetScope, previousWriteAheadId);
+          pendingSave.current = {
+            scope: targetScope,
+            layout: next,
+            store: targetStore,
+            writeAheadId: writeAheadId.current,
+          };
+          if (browserLocationsChanged(authoritative, next)) void flush();
+        }
+        latest.current = next;
+        setLayout(next);
+        const remembered = savedFocus(targetScope);
+        const requestedFocus = preserveVisible ? unconfirmedFocusedPaneId.current : null;
+        const requestedContentFocus = preserveVisible ? unconfirmedFocusedContentKey.current : null;
+        const mappedContentFocus = requestedContentFocus ? findContent(next, requestedContentFocus)?.paneId : null;
+        setFocusedPaneId(
+          requestedFocus && findLeaf(next, requestedFocus)
+            ? requestedFocus
+            : mappedContentFocus
+              ? mappedContentFocus
+              : remembered && findLeaf(next, remembered)
+                ? remembered
+                : (next.maximizedPaneId ?? leaves(next.root)[0]?.paneId ?? null),
+        );
+        setUndo(null);
+        if (!replayLayoutChanges) setClosed([]);
+        loadedScope.current = targetScope;
+        unconfirmedLayoutChange.current = false;
+        unconfirmedFocusedPaneId.current = null;
+        unconfirmedFocusedContentKey.current = null;
+        unconfirmedBaseline.current = null;
+        setLoadError(null);
+        setReady(true);
+        return "loaded";
+      } catch (cause) {
+        if (generation !== loadGeneration.current || targetScope !== scopeRef.current) return "stale";
+        loadedScope.current = null;
+        lastSaved.current = null;
+        const message =
+          cause instanceof Error && cause.message.trim() ? cause.message : "The saved desk could not be loaded.";
+        setLoadError(message);
+        setReady(true);
+        return resetFailed ? "reset-failed" : "failed";
+      }
+    },
+    [flush],
+  );
+
+  const retryLoad = useCallback(() => {
+    const targetScope = scopeRef.current;
+    if (loadError === null || resetsInFlight.current.has(targetScope)) return Promise.resolve();
+    failedResetErrors.current.delete(targetScope);
+    return retryNowRef.current();
+  }, [loadError]);
+
+  const resetSavedLayout = useCallback(async () => {
+    const targetScope = scopeRef.current;
+    if (resetsInFlight.current.has(targetScope) || !loadErrorRef.current || loadedScope.current === targetScope) return;
+    const targetStore = storeRef.current;
+    const fallback = latest.current;
+    if (validateLayout(fallback) !== null) {
+      setLoadError("The saved desk could not be reset because the visible pane arrangement is invalid.");
+      return;
+    }
+
+    const resetToken = Symbol(targetScope);
+    let settleReset!: (result: LayoutResetResult) => void;
+    const resetEntry: InFlightLayoutReset = {
+      token: resetToken,
+      latestLayout: fallback,
+      writeAheadId: writeAheadId.current,
+      completion: new Promise<LayoutResetResult>((resolve) => {
+        settleReset = resolve;
+      }),
+    };
+    resetsInFlight.current.set(targetScope, resetEntry);
+    failedResetErrors.current.delete(targetScope);
+    setResettingSavedLayout(true);
+    cancelRetryRef.current();
+    const generation = ++loadGeneration.current;
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
+    loadedScope.current = null;
+    pendingSave.current = null;
+    writesInFlight.current++;
+    setSaveState("saving");
+    try {
+      let persisted = fallback;
+      for (;;) {
+        const write = saveChain.current.then(() => targetStore.save(persisted));
+        saveChain.current = write.catch(() => undefined);
+        await write;
+        const latestReset = resetEntry.latestLayout;
+        if (JSON.stringify(latestReset) === JSON.stringify(persisted)) break;
+        persisted = latestReset;
+      }
+      const serialized = JSON.stringify(persisted);
+
+      if (resetEntry.writeAheadId) clearPendingLayout(targetScope, resetEntry.writeAheadId);
+      if (targetScope === scopeRef.current && writeAheadId.current === resetEntry.writeAheadId)
+        writeAheadId.current = null;
+      failedResetErrors.current.delete(targetScope);
+      settleReset({ ok: true, layout: persisted });
+      if (generation !== loadGeneration.current || targetScope !== scopeRef.current) return;
+      lastSaved.current = serialized;
+      loadedScope.current = targetScope;
+      unconfirmedLayoutChange.current = false;
+      unconfirmedFocusedPaneId.current = null;
+      unconfirmedFocusedContentKey.current = null;
+      unconfirmedBaseline.current = null;
+      setLoadError(null);
+      setSaveState("saved");
+      setReady(true);
+    } catch (cause) {
+      const detail = cause instanceof Error && cause.message.trim() ? ` ${cause.message}` : "";
+      const resetError = new Error(`The saved desk could not be reset.${detail}`);
+      failedResetErrors.current.set(targetScope, resetError);
+      settleReset({ ok: false, cause: resetError });
+      if (generation !== loadGeneration.current || targetScope !== scopeRef.current) return;
+      loadedScope.current = null;
+      lastSaved.current = null;
+      setSaveState("error");
+      setLoadError(resetError.message);
+      setReady(true);
+    } finally {
+      writesInFlight.current--;
+      if (resetsInFlight.current.get(targetScope)?.token === resetToken) resetsInFlight.current.delete(targetScope);
+      if (targetScope === scopeRef.current) setResettingSavedLayout(resetsInFlight.current.has(targetScope));
+    }
+  }, []);
+
+  // Load this workspace's layout (or its write-ahead preview) without letting a failed read write a fallback.
+  useEffect(() => {
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let retryAttempt = 0;
+    const clearRetry = () => {
+      if (retryTimer) clearTimeout(retryTimer);
+      retryTimer = null;
+    };
+    const run = async (preserveVisible: boolean): Promise<void> => {
+      const result = await loadScope(scope, preserveVisible);
+      if (cancelled || result !== "failed") return;
+      const delay = Math.min(LOAD_RETRY_MS * 2 ** retryAttempt, LOAD_RETRY_MAX_MS);
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        retryAttempt = Math.min(retryAttempt + 1, 5);
+        void run(true);
+      }, delay);
+    };
+    retryNowRef.current = async () => {
+      clearRetry();
+      retryAttempt = 0;
+      await run(true);
+    };
+    cancelRetryRef.current = clearRetry;
+    void run(false);
+    return () => {
+      cancelled = true;
+      clearRetry();
+      cancelRetryRef.current = () => undefined;
+      retryNowRef.current = () => Promise.resolve();
+      loadGeneration.current++;
+      const pendingFlush = flush();
+      loadedScope.current = null;
+      void pendingFlush;
+    };
+  }, [scope, loadScope, flush]);
+
   // Save debounced after every change once loaded.
   useEffect(() => {
-    if (!ready || !persisting || loadedScope.current !== scope) return;
+    if (!ready || loadError !== null || loadedScope.current !== scope) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = null;
     if (JSON.stringify(layout) === lastSaved.current && writesInFlight.current === 0) {
       pendingSave.current = null;
       return;
     }
-    pendingSave.current = { scope, layout, store: storeRef.current };
+    const serialized = JSON.stringify(layout);
+    if (lastEnqueued.current?.scope === scope && lastEnqueued.current.serialized === serialized) {
+      pendingSave.current = null;
+      return;
+    }
+    pendingSave.current = { scope, layout, store: storeRef.current, writeAheadId: writeAheadId.current };
     saveTimer.current = setTimeout(() => void flush(), SAVE_DEBOUNCE_MS);
-  }, [layout, ready, persisting, scope, flush]);
+  }, [layout, ready, loadError, scope, flush]);
 
   // Whatever is pending is written when the canvas goes away (navigation, workspace switch).
   useEffect(
@@ -273,13 +619,13 @@ export function usePaneController({
   const effectiveFocus = focusValid ? focusedPaneId : (panes[0]?.paneId ?? null);
 
   useEffect(() => {
-    if (!ready || loadedScope.current !== scope || !effectiveFocus) return;
+    if (!ready || loadError !== null || loadedScope.current !== scope || !effectiveFocus) return;
     try {
       localStorage.setItem(focusKey(scope), effectiveFocus);
     } catch {
       /* Layout persistence remains native when browser storage is unavailable. */
     }
-  }, [ready, scope, effectiveFocus]);
+  }, [ready, loadError, scope, effectiveFocus]);
 
   const announce = useCallback((text: string) => setMessage((m) => ({ text, n: m.n + 1 })), []);
 
@@ -291,18 +637,59 @@ export function usePaneController({
 
   const apply = useCallback(
     (next: PaneLayout, announcement?: string) => {
-      if (next === latest.current) return false;
+      const previous = latest.current;
+      if (next === previous) return false;
       if (validateLayout(next) !== null) return false;
+      const pendingReset = resetsInFlight.current.get(scopeRef.current);
+      if (pendingReset) {
+        const previousWriteAheadId = pendingReset.writeAheadId;
+        pendingReset.latestLayout = next;
+        pendingReset.writeAheadId = writePendingLayout(scopeRef.current, next);
+        if (!pendingReset.writeAheadId && previousWriteAheadId)
+          clearPendingLayout(scopeRef.current, previousWriteAheadId);
+        writeAheadId.current = pendingReset.writeAheadId;
+        unconfirmedLayoutChange.current = true;
+      } else if (loadedScope.current === scopeRef.current) {
+        const previousWriteAheadId = writeAheadId.current;
+        if (JSON.stringify(next) === lastSaved.current && writesInFlight.current === 0) {
+          if (saveTimer.current) clearTimeout(saveTimer.current);
+          saveTimer.current = null;
+          pendingSave.current = null;
+          if (previousWriteAheadId) clearPendingLayout(scopeRef.current, previousWriteAheadId);
+          writeAheadId.current = null;
+        } else {
+          writeAheadId.current = writePendingLayout(scopeRef.current, next);
+          // If storage is unavailable or the bounded record is too large, an older layout must not
+          // masquerade as the latest crash-recovery state on the next start.
+          if (!writeAheadId.current && previousWriteAheadId) clearPendingLayout(scopeRef.current, previousWriteAheadId);
+          pendingSave.current = {
+            scope: scopeRef.current,
+            layout: next,
+            store: storeRef.current,
+            writeAheadId: writeAheadId.current,
+          };
+          // The write-ahead record intentionally omits Browser URLs. Checkpoint a navigation through
+          // the canonical native store now; a generic layout edit keeps the normal debounce. A hard
+          // kill before that native commit cannot guarantee recovery of a new private Browser URL.
+          if (browserLocationsChanged(previous, next)) void flush();
+        }
+      } else unconfirmedLayoutChange.current = true;
       latest.current = next;
       setLayout(next);
       setUndo(null);
       if (announcement) announce(announcement);
       return true;
     },
-    [announce],
+    [announce, flush],
   );
 
   const focusPane = useCallback((paneId: string, moveKeyboardFocus = true) => {
+    if (loadedScope.current !== scopeRef.current) {
+      unconfirmedFocusedPaneId.current = paneId;
+      const pane = findLeaf(latest.current, paneId);
+      const active = pane?.tabs[pane.activeTab];
+      unconfirmedFocusedContentKey.current = active ? contentKey(active) : null;
+    }
     setFocusedPaneId(paneId);
     if (moveKeyboardFocus) setFocusRequest((f) => ({ paneId, n: f.n + 1 }));
   }, []);
@@ -320,6 +707,10 @@ export function usePaneController({
     () => ({
       layout,
       ready,
+      loadError,
+      retryLoad,
+      resettingSavedLayout,
+      resetSavedLayout,
       saveState,
       focusedPaneId: effectiveFocus,
       focusRequest,
@@ -604,6 +995,10 @@ export function usePaneController({
     [
       layout,
       ready,
+      loadError,
+      retryLoad,
+      resettingSavedLayout,
+      resetSavedLayout,
       saveState,
       effectiveFocus,
       focusRequest,

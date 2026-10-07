@@ -1,5 +1,7 @@
 # Campaign plan — Advanced systems (ADV)
 
+> Historical close behavior superseded on 2026-10-05: closing stops the owned session and stays closed after restart; docking/hiding keeps it running. See [Smart Resume ownership](../PROCESS_CONTINUITY.md#session-truth-and-ownership). The Z7-14 receipts below describe the earlier behavior.
+
 ## Active owner extension — 2026-09-25
 
 This extension governs current priorities. Historical proposals below remain design history;

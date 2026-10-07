@@ -48,7 +48,9 @@ export function DoctorPage({ api, workspaceId }: DoctorPageProps) {
 
   // During a run only its status moves: poll just the run, slower while nothing changes (and while
   // the window is hidden), and re-read the fix log and ignored list once when it ends.
-  const runningId = snapshot?.status === "running" ? snapshot.id : null;
+  // A cancelled run stays active until its in-flight checks return; keep polling until it has
+  // finished so the findings of the checks that completed are loaded.
+  const runningId = snapshot && snapshot.finishedAt === null ? snapshot.id : null;
   useEffect(() => {
     if (!runningId) return;
     let disposed = false;
@@ -59,7 +61,7 @@ export function DoctorPage({ api, workspaceId }: DoctorPageProps) {
       try {
         const latest = await api.last();
         if (disposed) return;
-        if (latest?.status !== "running") {
+        if (!latest || latest.finishedAt !== null) {
           await refresh();
           return;
         }
@@ -161,7 +163,8 @@ export function DoctorPage({ api, workspaceId }: DoctorPageProps) {
     try {
       await api.ignore({
         findingCode: finding.code,
-        scope: workspaceId ? { kind: "workspace", workspaceId } : { kind: "global" },
+        // A finding outside the project (tools, system, providers) is ignored everywhere.
+        scope: finding.workspaceId ? { kind: "workspace", workspaceId: finding.workspaceId } : { kind: "global" },
         ignored: true,
       });
       setNotice("Finding ignored. You can restore it from Environment Doctor settings.");

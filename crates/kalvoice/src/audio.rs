@@ -656,6 +656,9 @@ mod mic {
 
         use super::*;
 
+        /// Hang guard for test-only thread handshakes: never a latency assertion.
+        const HANG_GUARD: Duration = Duration::from_secs(30);
+
         #[test]
         fn a_microphone_that_never_starts_fails_without_blocking_the_press() {
             let (release_tx, release_rx) = mpsc::channel::<()>();
@@ -702,7 +705,7 @@ mod mic {
                     .send(matches!(result, Err(CaptureError::Interrupted)))
                     .unwrap();
             });
-            entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            entered_rx.recv_timeout(HANG_GUARD).unwrap();
             cancelled.store(true, Ordering::SeqCst);
             let settled = settled_rx.recv_timeout(Duration::from_millis(250));
             // Always release and join the fixture, even on the regression's failing path.
@@ -743,13 +746,13 @@ mod mic {
                 )
                 .err()
             });
-            entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            entered_rx.recv_timeout(HANG_GUARD).unwrap();
             cancelled.store(true, Ordering::SeqCst);
             let result = waiter.join().unwrap();
             let blocked = matches!(CapturePermit::acquire(&OCCUPIED), Err(CaptureError::Busy));
             drop(release_tx);
-            dropped_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-            let deadline = Instant::now() + Duration::from_secs(2);
+            dropped_rx.recv_timeout(HANG_GUARD).unwrap();
+            let deadline = Instant::now() + HANG_GUARD;
             while OCCUPIED.load(Ordering::SeqCst) && Instant::now() < deadline {
                 std::thread::yield_now();
             }

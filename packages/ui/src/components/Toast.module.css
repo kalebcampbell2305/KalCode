@@ -44,8 +44,10 @@
   height: 1rem;
 }
 
-/* A lit bar on the leading edge in the toast's tone: what kind of news, before reading it. */
-.toast::before {
+/* A lit bar on the leading edge in the toast's tone: what kind of news, before reading it. An
+   aria-hidden element (first in the toast, Toast.tsx), not ::before: axe's colour-contrast check
+   reports "incomplete" for the toast's text under an absolute pseudo-element with a background. */
+.toast > .toneBar {
   position: absolute;
   top: var(--space-3);
   bottom: var(--space-3);
@@ -54,10 +56,9 @@
   border-radius: var(--radius-full);
   background: var(--color-accent);
   box-shadow: 0 0 10px var(--color-glow);
-  content: "";
 }
 
-.success::before {
+.success > .toneBar {
   background: var(--status-working);
   box-shadow: 0 0 10px var(--status-working-soft);
 }
@@ -74,7 +75,7 @@
     var(--glow-failed);
 }
 
-.danger::before {
+.danger > .toneBar {
   background: var(--status-failed);
   box-shadow: 0 0 10px var(--status-failed-soft);
 }

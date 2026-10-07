@@ -674,6 +674,7 @@ export function createRailMemory(options: RailMemoryOptions): RailMemory {
               id: t.id,
               name: t.name,
               status: t.status,
+              resumable: t.resumable,
               lastActivityAt: t.lastActivityAt,
               pendingApprovals: t.pendingApprovals,
             }),
@@ -968,6 +969,7 @@ export function createRailMemory(options: RailMemoryOptions): RailMemory {
           providerId: t.providerId,
           providerName: t.providerName,
           status: t.status,
+          resumable: t.resumable,
           lastActivityAt: event.occurredAt,
         });
       }
@@ -1012,6 +1014,7 @@ export function createRailMemory(options: RailMemoryOptions): RailMemory {
     providerId: t.providerId,
     providerName: t.providerName,
     status: t.status,
+    resumable: t.resumable,
     lastActivityAt: t.lastActivityAt,
   });
 

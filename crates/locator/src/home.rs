@@ -153,16 +153,17 @@ pub fn thread_item(thread: &ThreadSummary) -> RecentWorkItem {
         provider_id: Some(thread.provider_id.clone()),
         provider_name: Some(thread.provider_name.clone()),
         status: Some(thread.status),
+        resumable: Some(thread.resumable),
         last_activity_at: thread.last_activity_at.clone(),
     }
 }
 
-/// Threads that can be picked up again: stopped (interrupted) or paused, or failed with a
-/// provider session to resume.
+/// Threads that can be picked up again: paused threads, plus interrupted or failed threads with
+/// a provider session to resume.
 pub fn is_resumable(thread: &ThreadSummary) -> bool {
     match thread.status {
-        ThreadStatus::Interrupted | ThreadStatus::Paused => true,
-        ThreadStatus::Failed => thread.resumable,
+        ThreadStatus::Paused => true,
+        ThreadStatus::Interrupted | ThreadStatus::Failed => thread.resumable,
         _ => false,
     }
 }

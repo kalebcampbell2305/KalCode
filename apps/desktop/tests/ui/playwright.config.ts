@@ -1,4 +1,8 @@
 import { defineConfig, devices } from "@playwright/test";
+import { lowerLocalPriority } from "../../../../tooling/local-priority.mjs";
+
+// Local runs yield the CPU to the gate (tooling/local-priority.mjs); CI is unchanged.
+lowerLocalPriority();
 
 /**
  * UI tests run the desktop frontend in a browser against the in-memory transport

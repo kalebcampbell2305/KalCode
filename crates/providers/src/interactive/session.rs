@@ -2480,6 +2480,9 @@ mod tests {
     use serde_json::json;
     use std::sync::Condvar;
 
+    /// Hang guard for test-only thread handshakes: never a latency assertion.
+    const HANG_GUARD: Duration = Duration::from_secs(30);
+
     #[derive(Clone, Copy)]
     enum GateEvent {
         ToolRequested,
@@ -2533,7 +2536,7 @@ mod tests {
         }
 
         fn wait_entered(&self) {
-            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            let deadline = std::time::Instant::now() + HANG_GUARD;
             let mut gate = lock(&self.gate);
             while !gate.entered {
                 let remaining = deadline.saturating_duration_since(std::time::Instant::now());
@@ -4137,7 +4140,7 @@ mod tests {
             let s = s.clone();
             std::thread::spawn(move || s.on_exit(0, false))
         };
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + HANG_GUARD;
         while !s.ended.load(Ordering::SeqCst) {
             assert!(
                 std::time::Instant::now() < deadline,
@@ -4349,7 +4352,7 @@ mod tests {
 
     fn approval_request(rx: &mpsc::Receiver<AgentEvent>) -> (String, NormalizedAction) {
         loop {
-            match rx.recv_timeout(Duration::from_secs(5)).expect("event") {
+            match rx.recv_timeout(HANG_GUARD).expect("event") {
                 AgentEvent::ApprovalRequired { request_id, action } => return (request_id, action),
                 _ => continue,
             }

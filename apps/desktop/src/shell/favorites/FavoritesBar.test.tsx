@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useShortcuts } from "../shortcuts.ts";
 import { FavoriteButton } from "./FavoriteActions.tsx";
 import { FavoritesBar } from "./FavoritesBar.tsx";
 import { type FavoriteEntry, type FavoriteTarget, favoriteKey } from "./model.ts";
@@ -103,6 +104,25 @@ describe("favorites strip", () => {
     expect(saved().find((item) => item.title === "Global")?.scopeId).toBeNull();
     await waitFor(() => expect(screen.getByRole("button", { name: "One" })).toHaveFocus());
     expect(mocks.open).not.toHaveBeenCalled();
+  });
+
+  it("reorders with Alt+Arrow without also running global Back or Forward", async () => {
+    seed([entry("one", "One"), entry("two", "Two")]);
+    const back = vi.fn();
+    const forward = vi.fn();
+    function WithShortcuts() {
+      useShortcuts({ openPalette: () => undefined, toggleSidebar: () => undefined, back, forward });
+      return <FavoritesBar />;
+    }
+    render(<WithShortcuts />);
+    const user = userEvent.setup();
+    screen.getByRole("button", { name: "One" }).focus();
+    await user.keyboard("{Alt>}{ArrowRight}{/Alt}");
+    await waitFor(() => expect(screen.getByRole("button", { name: "One" })).toHaveFocus());
+    await user.keyboard("{Alt>}{ArrowLeft}{/Alt}");
+    expect(saved().map((item) => item.title)).toEqual(["One", "Two"]);
+    expect(back).not.toHaveBeenCalled();
+    expect(forward).not.toHaveBeenCalled();
   });
 
   it("supports drag reorder without opening or editing the target", () => {

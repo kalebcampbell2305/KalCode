@@ -11,11 +11,13 @@ import { useThreadSummaries } from "../../surfaces/dashboard/data/DashboardData.
 import { useNow } from "../../surfaces/dashboard/useNow.ts";
 import { accountFullLabel, accountName, sortAccounts } from "../../surfaces/providers/accountIdentity.ts";
 import {
-  type AccountUsageState,
+  isReportedPercent,
   LOW_USAGE_PERCENT,
   primaryUsageLabel,
   resetsIn,
-  type UsageWindow,
+  usageAbsenceLabel,
+  usageFill,
+  usagePercent,
   usageSummary,
   useAccountUsage,
 } from "../../surfaces/providers/accountUsage.ts";
@@ -354,17 +356,6 @@ export function AccountUsageCenter() {
 
 type AccountModel = ReturnType<typeof useProviderAccounts>;
 
-function percentLeft(window: UsageWindow): number {
-  return Math.max(0, Math.min(100, Math.round(window.remainingPercent)));
-}
-
-/** Why there is no number: never a guess, always the canonical state's own words. */
-function usageAbsence(usage: AccountUsageState): string {
-  if (usage.status === "checking") return "Checking usage…";
-  if (usage.status === "unavailable") return "Usage unavailable";
-  return "Usage not checked";
-}
-
 function AccountEntry({
   account,
   model,
@@ -400,13 +391,15 @@ function AccountEntry({
     ? accountCenterHealthStatus(canonical.health)
     : accountCenterStatus(account, model.checking.has(account.id), model.validationErrors.get(account.id));
   const label = accountName(account);
-  const known = (usage.status === "fresh" || usage.status === "stale") && usage.windows.length > 0;
+  // Only provider-reported percentages render; malformed windows never show as a number or bar.
+  const windows = usage.windows.filter((window) => isReportedPercent(window.remainingPercent));
+  const known = (usage.status === "fresh" || usage.status === "stale") && windows.length > 0;
   const low = known && usageSummary(usage).low;
   const signedIn = account.authenticationState === "authenticated";
   // Sign-in is the one next step for a signed-out browser-auth account: right in the row.
   const canSignIn = !signedIn && isBrowserAuthProvider(account.providerId);
   const signingIn = model.activeLogin?.accountId === account.id;
-  // "Usage not checked" beside Sign in would only repeat the status; say what the action doesn't.
+  // "Usage not checked yet" beside Sign in would only repeat the status; say what the action doesn't.
   const showAbsence = !known && !(canSignIn && usage.status === "not_checked");
   return (
     <section
@@ -458,7 +451,7 @@ function AccountEntry({
               data-checking={usage.status === "checking" || undefined}
               title={usage.reason ?? undefined}
             >
-              {usageAbsence(usage)}
+              {usageAbsenceLabel(usage)}
             </span>
           )}
           {canSignIn &&
@@ -492,17 +485,17 @@ function AccountEntry({
       )}
       {known && (
         <ul className={styles.windows} aria-label={`${label} usage`}>
-          {usage.windows.map((window) => {
-            const left = percentLeft(window);
+          {windows.map((window) => {
+            const left = window.remainingPercent;
             const reset = resetsIn(window.resetsAt, now);
             return (
               <li key={window.id} className={styles.window} data-tone={left < LOW_USAGE_PERCENT ? "low" : undefined}>
                 <span className={styles.windowLabel}>{window.label}</span>
                 <span className={styles.windowValue}>
-                  <strong>{left}%</strong> left
+                  <strong>{usagePercent(left)}%</strong> left
                 </span>
                 <span className={styles.windowTrack} aria-hidden="true">
-                  <span className={styles.windowFill} style={{ "--fill": `${left}%` } as CSSProperties} />
+                  <span className={styles.windowFill} style={{ "--fill": `${usageFill(left)}%` } as CSSProperties} />
                 </span>
                 <span className={styles.windowReset}>{reset ?? "Reset time not reported"}</span>
               </li>
@@ -525,7 +518,7 @@ function AccountEntry({
               <dd>
                 {known && usage.checkedAt
                   ? `Updated ${formatRelative(usage.checkedAt, now)}`
-                  : [usageAbsence(usage), usage.reason].filter(Boolean).join(" · ")}
+                  : [usageAbsenceLabel(usage), usage.reason].filter(Boolean).join(" · ")}
               </dd>
             </div>
             <div>

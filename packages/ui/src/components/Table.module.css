@@ -143,8 +143,10 @@
   background: var(--color-surface-selected);
 }
 
-.row[data-selected]::before {
-  content: "";
+/* The selected row's rail: an aria-hidden element rendered only while selected (first in the row,
+   Table.tsx), not ::before: axe's colour-contrast check reports "incomplete" for the row's text
+   under an absolute pseudo-element with a background. */
+.row[data-selected] > .selectedRail {
   position: absolute;
   left: 0;
   top: var(--space-1);

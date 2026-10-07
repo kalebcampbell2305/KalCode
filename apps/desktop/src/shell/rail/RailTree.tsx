@@ -311,6 +311,8 @@ export function RailTree({
                     .filter(Boolean)
                     .join(", ")}
                 >
+                  {/* The active edge on an inert element, not ::before (see Rail.module.css). */}
+                  {active ? <span className={styles.activeEdge} aria-hidden="true" /> : null}
                   {caret}
                   <span className={styles.tile} aria-hidden="true">
                     {initials(entry.name)}

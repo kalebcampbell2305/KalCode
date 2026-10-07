@@ -14,6 +14,14 @@ import type { CSSProperties } from "react";
  */
 export const MINIMUM_CONTRAST = 4.5;
 
+/** Terminal text size at the default interface text size, in pixels. */
+const FONT_SIZE = 13;
+
+/** Terminal font size for an interface text scale, in whole pixels so glyph cells stay crisp. */
+export function terminalFontSize(scale: number): number {
+  return Math.round(FONT_SIZE * scale);
+}
+
 const MONO_FALLBACK = "ui-monospace, Consolas, monospace";
 let monoFontCache: string | null = null;
 

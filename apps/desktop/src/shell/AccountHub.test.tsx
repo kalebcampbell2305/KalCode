@@ -31,12 +31,15 @@ afterEach(() => vi.unstubAllGlobals());
 
 interface MountOptions {
   collapsed?: boolean;
+  /** The local Profile name (Settings → Profile). */
   displayName?: string;
+  /** The KalCode account's display name. */
+  accountName?: string;
   tier?: AccountTier;
 }
 
 /** The Stable shell signed in as owner@example.com (Free unless `tier` says otherwise). */
-async function mount({ collapsed = false, displayName, tier }: MountOptions = {}) {
+async function mount({ collapsed = false, displayName, accountName, tier }: MountOptions = {}) {
   const transport = createMemoryTransport("account-ready", { detectDelayMs: 0 });
   const client = new KalCodeClient(transport);
   const boot = await client.boot();
@@ -47,7 +50,10 @@ async function mount({ collapsed = false, displayName, tier }: MountOptions = {}
   const accounts = new AccountClient({
     async invoke(command, args) {
       accountCalls.push(command);
-      const result = await transport.invoke<Record<string, unknown>>(command, args);
+      let result = await transport.invoke<Record<string, unknown>>(command, args);
+      if (accountName && command === "account_status" && result.account) {
+        result = { ...result, account: { ...(result.account as Record<string, unknown>), displayName: accountName } };
+      }
       return tier && command === "account_status" && result.tier ? { ...result, tier } : result;
     },
   });
@@ -97,7 +103,7 @@ describe("planLabel", () => {
 
 describe("Account Hub", () => {
   it("shows the avatar initials, name and plan at the foot of the sidebar", async () => {
-    const { hub } = await mount({ displayName: "Ada Lovelace" });
+    const { hub } = await mount({ accountName: "Ada Lovelace" });
     const primary = screen.getByRole("navigation", { name: "Primary" });
     expect(primary).toContainElement(hub);
     expect(hub).toHaveAccessibleName("Account: Ada Lovelace, Free plan");
@@ -224,7 +230,8 @@ describe("Account Hub", () => {
 describe("KalCode account display name", () => {
   it("is edited in Account & plan and the hub shows it at once, ahead of a local name", async () => {
     const { user, hub } = await mount({ displayName: "Local Name" });
-    expect(hub).toHaveAccessibleName("Account: Local Name, Free plan");
+    // Without an account name the hub uses the email's local part, as the panel's hint says.
+    expect(hub).toHaveAccessibleName("Account: owner, Free plan");
     await user.click(hub);
     await user.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: "Account & plan" }));
     const panel = await screen.findByRole("region", { name: "KalCode account" });
@@ -239,5 +246,10 @@ describe("KalCode account display name", () => {
     await user.type(field, "Kaleb{Enter}");
     await waitFor(() => expect(hub).toHaveAccessibleName("Account: Kaleb, Free plan"));
     expect(await within(panel).findByRole("status")).toHaveTextContent("Saved");
+    // Clearing it goes back to the email's local part, never the local Profile name.
+    await user.clear(field);
+    await user.click(within(panel).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(hub).toHaveAccessibleName("Account: owner, Free plan"));
+    expect(panel).toHaveTextContent("Until you set one, KalCode uses “owner”.");
   });
 });

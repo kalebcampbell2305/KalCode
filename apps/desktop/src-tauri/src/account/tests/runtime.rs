@@ -2355,6 +2355,76 @@ fn pending_checkout_is_never_reused_for_a_different_interval() {
     );
 }
 
+#[test]
+fn an_unfinished_checkout_can_go_back_to_plan_choice_across_launches() {
+    let api = Arc::new(FakeApi::default());
+    let store = Arc::new(TestStore::default());
+    let first_launch = runtime(api.clone(), store.clone());
+    sign_in_unactivated(&first_launch, &api);
+    queue_checkout_url(&api);
+    first_launch
+        .start_checkout(PaidTier::Pro, BillingInterval::Month)
+        .expect("monthly checkout");
+
+    // The checkout tab was closed without paying; the next launch still waits on it.
+    let relaunched_api = Arc::new(FakeApi::default());
+    relaunched_api
+        .accounts
+        .lock()
+        .expect("queue")
+        .push_back(Ok(api_account(false)));
+    let relaunched = runtime(relaunched_api.clone(), store.clone());
+    assert_eq!(
+        relaunched.bootstrap().expect("bootstrap").phase,
+        AccountPhase::ConfirmingPlan
+    );
+
+    let back = relaunched.cancel_auth().expect("back to plans");
+    assert_eq!(back.phase, AccountPhase::AuthenticatedUnactivated);
+    assert_eq!(
+        back.account.as_ref().map(|a| a.id.as_str()),
+        Some(ACCOUNT_ID)
+    );
+    assert_eq!(
+        relaunched.authority(),
+        AccountAuthority::AuthenticatedUnactivated
+    );
+    let stored = AccountSessionStore::new(store.as_ref())
+        .expect("store")
+        .load()
+        .expect("load")
+        .expect("session kept");
+    assert!(stored.session().is_some());
+    assert!(stored.checkout().is_none());
+
+    // Another plan or interval is now a fresh checkout, not "checkout in progress".
+    queue_checkout_url(&relaunched_api);
+    relaunched
+        .start_checkout(PaidTier::Pro, BillingInterval::Year)
+        .expect("yearly checkout after going back");
+    assert_eq!(
+        *relaunched_api.checkout_intervals.lock().expect("intervals"),
+        vec![BillingInterval::Year]
+    );
+    let first = api.checkout_request_ids.lock().expect("ids")[0].clone();
+    let second = relaunched_api.checkout_request_ids.lock().expect("ids")[0].clone();
+    assert_ne!(first, second);
+
+    // A third launch starts from plan choice once the person goes back again.
+    relaunched.cancel_auth().expect("back again");
+    let third_api = Arc::new(FakeApi::default());
+    third_api
+        .accounts
+        .lock()
+        .expect("queue")
+        .push_back(Ok(api_account(false)));
+    let third = runtime(third_api, store);
+    assert_eq!(
+        third.bootstrap().expect("bootstrap").phase,
+        AccountPhase::AuthenticatedUnactivated
+    );
+}
+
 fn named_account(display_name: Option<&str>) -> ApiAccount {
     ApiAccount {
         display_name: display_name.map(str::to_owned),

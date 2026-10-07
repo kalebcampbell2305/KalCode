@@ -1,4 +1,8 @@
 import { defineConfig, devices } from "@playwright/test";
+import { lowerLocalPriority } from "../../../../tooling/local-priority.mjs";
+
+// Local runs yield the CPU to the gate (tooling/local-priority.mjs); CI is unchanged.
+lowerLocalPriority();
 
 /**
  * Component test for DiffView in a real browser: axe (WCAG 2.2 AA, both themes, both layouts,

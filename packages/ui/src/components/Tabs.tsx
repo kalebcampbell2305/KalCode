@@ -22,8 +22,14 @@ export const TabsList = forwardRef<HTMLDivElement, TabsListProps>(function TabsL
 });
 
 export const TabsTrigger = forwardRef<HTMLButtonElement, ComponentPropsWithoutRef<typeof Radix.Trigger>>(
-  function TabsTrigger({ className, ...rest }, ref) {
-    return <Radix.Trigger ref={ref} className={cx(styles.trigger, className)} {...rest} />;
+  function TabsTrigger({ className, children, ...rest }, ref) {
+    return (
+      <Radix.Trigger ref={ref} className={cx(styles.trigger, className)} {...rest}>
+        {children}
+        {/* The line variant's underline on an inert element, not ::after (see Tabs.module.css). */}
+        <span className={styles.underline} aria-hidden="true" />
+      </Radix.Trigger>
+    );
   },
 );
 
