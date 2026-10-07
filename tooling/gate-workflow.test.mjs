@@ -99,7 +99,8 @@ test("main reuses only an exact successful candidate on a trusted gate host", {
     ["split-pc2-wrong-runner", { pc2: { runner_name: "kalcode-win-gate-w1" } }, false],
     // The second PC's second runner is equally trusted; any other name is not.
     ["split-pc2-second-runner", { pc2: { runner_name: "kalcode-win-gate-2b" } }, true],
-    ["split-pc2-unknown-runner", { pc2: { runner_name: "kalcode-win-gate-2c" } }, false],
+    ["split-pc2-third-runner", { pc2: { runner_name: "kalcode-win-gate-2c" } }, true],
+    ["split-pc2-unknown-runner", { pc2: { runner_name: "kalcode-win-gate-2e" } }, false],
     ["split-pc2-other-sha", { pc2: { head_sha: "b".repeat(40) } }, false],
     ["split-pc2-skipped-check", { pc2: { steps: [{ name: "Gate", conclusion: "skipped" }] } }, false],
     // A two-job build-PC half needs its native job green on a pool worker too.
@@ -140,8 +141,13 @@ test("main reuses only an exact successful candidate on a trusted gate host", {
       false,
     ],
     [
+      "pc2-fourth-runner",
+      { job: { runner_name: "kalcode-win-gate-2d", labels: ["self-hosted", "Windows", "kalcode-gate-pc2"] } },
+      true,
+    ],
+    [
       "pc2-unknown-runner",
-      { job: { runner_name: "kalcode-win-gate-2c", labels: ["self-hosted", "Windows", "kalcode-gate-pc2"] } },
+      { job: { runner_name: "kalcode-win-gate-2e", labels: ["self-hosted", "Windows", "kalcode-gate-pc2"] } },
       false,
     ],
   ];
@@ -345,7 +351,7 @@ test("the second PC's half is self-contained and gates the same exact candidate"
   const plan = script(pc2Steps[names.indexOf("Plan change-based gate")]);
   assert.match(
     plan,
-    /'kalcode-win-gate-2' \{ 0 \} 'kalcode-win-gate-2b' \{ 1 \} default \{ throw 'Unknown second-PC gate worker' \}/,
+    /'kalcode-win-gate-2' \{ 0 \} 'kalcode-win-gate-2b' \{ 1 \} 'kalcode-win-gate-2c' \{ 2 \} 'kalcode-win-gate-2d' \{ 3 \} default \{ throw 'Unknown second-PC gate worker' \}/,
   );
   assert.match(plan, /trailers:key=Merge-Train-Base,valueonly/);
   assert.match(plan, /Checkout does not match the immutable event SHA/);
@@ -389,6 +395,15 @@ test("each second-PC runner gets its own port block, and no other runner is acce
     second.stdout,
     /KALCODE_E2E_PORT=4711 KALCODE_E2E_MAIL_PORT=4712 KALCODE_E2E_INSPECTOR_PORT=9721 KALCODE_UI_TEST_PORT=1811 KALCODE_E2E_CDP_PORT=39353/,
   );
+  const third = run("kalcode-win-gate-2c");
+  assert.equal(third.status, 0, third.stderr);
+  assert.match(
+    third.stdout,
+    /KALCODE_E2E_PORT=4731 KALCODE_E2E_MAIL_PORT=4732 KALCODE_E2E_INSPECTOR_PORT=9741 KALCODE_UI_TEST_PORT=1831 KALCODE_E2E_CDP_PORT=39373/,
+  );
+  const fourth = run("kalcode-win-gate-2d");
+  assert.equal(fourth.status, 0, fourth.stderr);
+  assert.match(fourth.stdout, /KALCODE_E2E_PORT=4751 .*KALCODE_E2E_CDP_PORT=39393/);
   const unknown = run("kalcode-win-gate-w1");
   assert.notEqual(unknown.status, 0);
   assert.match(unknown.stderr + unknown.stdout, /Unknown second-PC gate worker/);
@@ -506,7 +521,7 @@ test("every Windows gate job runs on the second PC, without the build PC's pool 
   const plan = script(steps[names.indexOf("Plan change-based gate")]);
   assert.match(
     plan,
-    /'kalcode-win-gate-2' \{ 0 \} 'kalcode-win-gate-2b' \{ 1 \} default \{ throw 'Unknown second-PC gate worker' \}/,
+    /'kalcode-win-gate-2' \{ 0 \} 'kalcode-win-gate-2b' \{ 1 \} 'kalcode-win-gate-2c' \{ 2 \} 'kalcode-win-gate-2d' \{ 3 \} default \{ throw 'Unknown second-PC gate worker' \}/,
   );
   assert.match(plan, /KALCODE_GATE_LOCK_DIR=C:\\ProgramData\\KalCodePC2\\locks/);
   for (const port of ["4691", "4692", "9701", "1791", "39333"]) assert.ok(plan.includes(port), `fixed port ${port}`);

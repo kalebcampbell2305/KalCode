@@ -20,13 +20,18 @@
 #
 # Usage (elevated PowerShell on KALEBSLAPTOP; setup-gate-runner.ps1 must sit next to this script):
 #   powershell -NoProfile -ExecutionPolicy Bypass -File add-gate-runner-pc2.ps1
+# More runners (owner, 2026-10-07: every gate runs on this PC): -RunnerName kalcode-win-gate-2c (or -2d); the
+# account and root follow the name (kalcode-ci-2c, C:\kalcode-ci-2c) unless given.
 param(
     [string]$RegistrationToken = '',
-    [string]$Account = 'kalcode-ci-2b',
-    [string]$Root = 'C:\kalcode-ci-2b',
     [string]$RunnerName = 'kalcode-win-gate-2b',
+    [string]$Account = '',
+    [string]$Root = '',
     [string]$Label = 'kalcode-gate-pc2-pending'
 )
+$suffix = $RunnerName -replace '^kalcode-win-gate-', ''
+if (-not $Account) { $Account = "kalcode-ci-$suffix" }
+if (-not $Root) { $Root = "C:\kalcode-ci-$suffix" }
 $ErrorActionPreference = 'Stop'
 $repo = 'kalebcampbell2305/KalCode'
 $result = [ordered]@{ schema = 'kalcode-pc2-second-gate-runner/v1'; at = [DateTime]::UtcNow.ToString('o'); host = $env:COMPUTERNAME
@@ -38,7 +43,7 @@ try {
     $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { Refuse 'windows_uac_required' }
     if ($env:COMPUTERNAME -ne 'KALEBSLAPTOP') { Refuse 'wrong_host' }
-    if ($RunnerName -notin @('kalcode-win-gate-2b')) { Refuse 'runner_name_not_accepted_by_gate_yml' }
+    if ($RunnerName -notin @('kalcode-win-gate-2b', 'kalcode-win-gate-2c', 'kalcode-win-gate-2d')) { Refuse 'runner_name_not_accepted_by_gate_yml' }
     $setup = Join-Path $PSScriptRoot 'setup-gate-runner.ps1'
     if (-not (Test-Path -LiteralPath $setup)) { Refuse 'setup_gate_runner_ps1_missing_next_to_this_script' }
     foreach ($tool in 'node', 'npm', 'git') { if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { Refuse "missing_$tool" } }
@@ -84,7 +89,7 @@ try {
     # Every account that runs those jobs may create and open lock files; nothing else is stored here.
     $locks = 'C:\ProgramData\KalCodePC2\locks'
     New-Item -ItemType Directory -Force -Path $locks | Out-Null
-    $lockAccounts = @('kalcode-ci', $Account)
+    $lockAccounts = @('kalcode-ci', 'kalcode-ci-2b', 'kalcode-ci-2c', 'kalcode-ci-2d', $Account)
     $qa = Get-CimInstance Win32_Service -Filter "Name LIKE 'actions.runner.%kalcode-win-desktop-qa'" -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($qa -and $qa.StartName -match '^\.\\(.+)$') { $lockAccounts += $Matches[1] }
     foreach ($name in ($lockAccounts | Select-Object -Unique)) {
