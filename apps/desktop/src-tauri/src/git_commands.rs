@@ -93,7 +93,7 @@ pub(crate) fn workspace_root_in(
 
 /// Resolves the folder a Git command runs in: the workspace, or one of its KalCode worktrees.
 /// Handles are then scoped to that folder's id.
-fn target_root(
+pub(crate) fn target_root(
     state: &AppState,
     workspace_id: &str,
     worktree_id: Option<&str>,

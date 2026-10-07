@@ -97,7 +97,7 @@ impl NotificationsState {
         }
     }
 
-    fn get(&self, app: &AppState) -> Result<&Arc<NotificationCenter>, IpcError> {
+    pub(crate) fn get(&self, app: &AppState) -> Result<&Arc<NotificationCenter>, IpcError> {
         app.core()?;
         self.center.as_ref().ok_or_else(|| {
             KalError::internal(

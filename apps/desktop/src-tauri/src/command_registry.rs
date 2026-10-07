@@ -262,4 +262,10 @@ pub(crate) const COMMANDS: &[&str] = &[
     // Z7-W3: notification center.
     "notification_list",
     "notification_mark",
+    // KalCode Remote (Settings › Remote).
+    "remote_status",
+    "remote_set_enabled",
+    "remote_pair_start",
+    "remote_pair_cancel",
+    "remote_device_revoke",
 ];

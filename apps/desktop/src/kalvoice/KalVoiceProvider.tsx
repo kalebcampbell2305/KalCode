@@ -41,6 +41,7 @@ import {
   paneCanvasListening,
 } from "../shell/panes/paneCommands.ts";
 import { useOptionalSearch } from "../shell/rail/search/SearchProvider.tsx";
+import { announceClosedPane } from "../surfaces/code/kaltidy/closedPanes.ts";
 import { useKalTidy } from "../surfaces/code/kaltidy/kalTidyContext.ts";
 import { isCodingAgent } from "../surfaces/dashboard/data/agents.ts";
 import { usePermissions } from "../surfaces/permissions/index.ts";
@@ -1607,12 +1608,24 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
         case "request_resolved":
           applyResponse(signal.response);
           return;
+        case "remote_acted":
+          // A paired KalCode Remote device acted here: close the panes of the agents it removed
+          // and show the agents it launched, as if the same action ran in this window.
+          for (const id of signal.closedAgentIds) announceClosedPane({ kind: "agent", id });
+          if (signal.directive?.kind === "open_provider_panes") {
+            runDirective(signal.directive, {
+              requestId: "remote",
+              signal: sceneLifetime.current.signal,
+              report: () => undefined,
+            });
+          }
+          return;
         default:
           break;
       }
       dispatch({ type: "signal", signal });
     },
-    [client, talk, applyResponse, beginRequest, refreshStatus, toast, status],
+    [client, talk, applyResponse, runDirective, beginRequest, refreshStatus, toast, status],
   );
 
   const onSignalRef = useRef(onSignal);

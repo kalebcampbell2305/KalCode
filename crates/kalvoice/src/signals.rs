@@ -9,7 +9,7 @@ use ts_rs::TS;
 use crate::latency::StageTimings;
 use crate::models::SpeechModelInfo;
 use crate::orchestrator::RequestStage;
-use crate::orchestrator::{KalVoiceResponse, ProviderChoice};
+use crate::orchestrator::{KalVoiceResponse, ProviderChoice, UiDirective};
 use crate::prefs::KalVoicePreferences;
 use crate::shortcuts::ReservedShortcut;
 use crate::voice::VoiceResult;
@@ -248,6 +248,13 @@ pub enum KalVoiceSignal {
     /// A command that waited for approval finished.
     RequestResolved {
         response: KalVoiceResponse,
+    },
+    /// A paired KalCode Remote device acted on this workstation. The window shows the agents it
+    /// launched (`directive`, only `open_provider_panes`) and closes the panes of the agents it
+    /// removed, exactly as when the same action runs here.
+    RemoteActed {
+        directive: Option<UiDirective>,
+        closed_agent_ids: Vec<String>,
     },
     /// A spoken reply started or ended.
     Speaking {

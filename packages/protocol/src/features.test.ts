@@ -39,6 +39,7 @@ const EVERY_FEATURE: Record<FeatureId, true> = {
   host_key_verification: true,
   safe_restore: true,
   automation_kill_switch: true,
+  remote: true,
 };
 
 const PUBLIC_PLANS: readonly EntitlementTier[] = ["free", "pro", "max", "max2x"];

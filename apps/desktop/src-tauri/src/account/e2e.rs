@@ -28,6 +28,9 @@ pub const FIXTURE_READY_VALUE: &str = "ready-v1";
 pub const FIXTURE_KALVOICE_VALUE: &str = "kalvoice-under-limit-v1";
 /// A signed MAX authority: features placed on MAX (agent handoff since the 2026-10-04 pricing).
 pub const FIXTURE_MAX_VALUE: &str = "max-v1";
+/// A signed OWNER authority: features the desktop narrows to OWNER (KalCode Remote until its
+/// mobile app ships).
+pub const FIXTURE_OWNER_VALUE: &str = "owner-v1";
 pub const FIXTURE_MARKER_FILENAME: &str = ".kalcode-account-e2e-v1";
 pub const FIXTURE_MARKER_CONTENT: &str = "kalcode-account-e2e-v1\n";
 pub const FIXTURE_DIRECTORY_PREFIX: &str = "kalcode-e2e-";
@@ -49,6 +52,12 @@ const PRO_USAGE_RECEIPT: &str = "eyJhbGciOiJFZERTQSIsImtpZCI6InRlc3QtdmVjdG9ycy0
 const MAX_FIXTURE_KEY_ID: &str = "e2e-fixture-max-1";
 const MAX_FIXTURE_PUBLIC_KEY: &str = "r9biCz9oi4nWVZKD6Emmp0GIBl-y6SoAFTNDCHLnAnQ";
 const MAX_TOKEN: &str = "eyJhbGciOiJFZERTQSIsImtpZCI6ImUyZS1maXh0dXJlLW1heC0xIiwidHlwIjoia2FsY29kZS1lbnRpdGxlbWVudC52MSJ9.eyJ2ZXJzaW9uIjoxLCJhY2NvdW50SWQiOiIwYjZmMWMxZS01YTM5LTRkMGMtOWEwZi0yYjFmN2Q5ZTRjMTEiLCJ0aWVyIjoibWF4IiwidW5yZXN0cmljdGVkIjpmYWxzZSwiZmVhdHVyZXMiOlsibXVsdGlBZ2VudFdvcmtmbG93cyIsImFkdmFuY2VkTWlzc2lvbnMiXSwibGltaXRzIjp7ImthbHZvaWNlUmVxdWVzdHNQZXJNb250aCI6NTAwLCJvcGVuVGVybWluYWxzIjpudWxsLCJwYXJhbGxlbEFnZW50cyI6bnVsbCwid29ya3NwYWNlcyI6bnVsbCwicHJvdmlkZXJBY2NvdW50cyI6MTIsImJyYWluc3Rvcm1zUGVyTW9udGgiOm51bGwsImxhdW5jaFJlY2lwZXMiOm51bGwsImV4dGVybmFsSW50ZWdyYXRpb25zIjoyNSwib3BlcmF0aW9uc0hpc3RvcnlEYXlzIjozNjUsInF1ZXVlZFRhc2tzIjpudWxsfSwiaXNzdWVkQXQiOjE3OTAwMDAwMDAsImV4cGlyZXNBdCI6MTc5MDYwNDgwMCwia2V5SWQiOiJlMmUtZml4dHVyZS1tYXgtMSJ9.WVqqWd0aKVDfBxjnbTy7Ep4286dIGCFLeFoSPFt0Y9jEPp8KvXwCE0e-e62ImS0Ce4M_PCPf9bzjjRgP-vtnDQ";
+/// The OWNER fixture has its own throwaway key too (private half discarded; generated 2026-10-06
+/// for KalCode Remote's owner-only gate).
+const OWNER_FIXTURE_KEY_ID: &str = "e2e-fixture-owner-1";
+const OWNER_FIXTURE_PUBLIC_KEY: &str = "lzv5HCUlQ9u1JOAHSvkJq3Kcyqj4TfKxihkDsGVXS2o";
+const OWNER_TOKEN: &str = "eyJhbGciOiJFZERTQSIsImtpZCI6ImUyZS1maXh0dXJlLW93bmVyLTEiLCJ0eXAiOiJrYWxjb2RlLWVudGl0bGVtZW50LnYxIn0.eyJ2ZXJzaW9uIjoxLCJhY2NvdW50SWQiOiIwYjZmMWMxZS01YTM5LTRkMGMtOWEwZi0yYjFmN2Q5ZTRjMTEiLCJ0aWVyIjoib3duZXIiLCJ1bnJlc3RyaWN0ZWQiOnRydWUsImZlYXR1cmVzIjpbXSwibGltaXRzIjp7fSwiaXNzdWVkQXQiOjE3OTAwMDAwMDAsImV4cGlyZXNBdCI6MTc5MDYwNDgwMCwia2V5SWQiOiJlMmUtZml4dHVyZS1vd25lci0xIn0.E9ac4gRf_2f1XmL8h-WWZ5PjUzfhg0ytQn_dKqHVy2KmcbTwAgQ0FXQ3A4eIPKLKiIjPwXvQVTzQmO6ZMHR5Cw";
+const OWNER_USAGE_RECEIPT: &str = "eyJhbGciOiJFZERTQSIsImtpZCI6ImUyZS1maXh0dXJlLW93bmVyLTEiLCJ0eXAiOiJrYWxjb2RlLXVzYWdlLnYxIn0.eyJ2ZXJzaW9uIjoxLCJhY2NvdW50SWQiOiIwYjZmMWMxZS01YTM5LTRkMGMtOWEwZi0yYjFmN2Q5ZTRjMTEiLCJ0aWVyIjoib3duZXIiLCJ1c2VkIjo0MSwiYWxsb3dhbmNlIjpudWxsLCJwZXJpb2RTdGFydCI6IjIwMjYtMDktMTBUMDg6MDA6MDAuMDAwWiIsInJlc2V0c0F0IjoiMjAyNi0xMC0xMFQwODowMDowMC4wMDBaIiwiaXNzdWVkQXQiOjE3OTAwMDAwMDAsImV4cGlyZXNBdCI6MTc5MDI1OTIwMCwia2V5SWQiOiJlMmUtZml4dHVyZS1vd25lci0xIn0.n3yVENYnjUNaS_eJ_zsYJodrgbNtZ_JP7EdqUpzrxkNf5A0pCBEVrzOtlE877lnSV6xE7kvQsG3HMbS1tlEqCg";
 const MAX_USAGE_RECEIPT: &str = "eyJhbGciOiJFZERTQSIsImtpZCI6ImUyZS1maXh0dXJlLW1heC0xIiwidHlwIjoia2FsY29kZS11c2FnZS52MSJ9.eyJ2ZXJzaW9uIjoxLCJhY2NvdW50SWQiOiIwYjZmMWMxZS01YTM5LTRkMGMtOWEwZi0yYjFmN2Q5ZTRjMTEiLCJ0aWVyIjoibWF4IiwidXNlZCI6NDEsImFsbG93YW5jZSI6NTAwLCJwZXJpb2RTdGFydCI6IjIwMjYtMDktMTBUMDg6MDA6MDAuMDAwWiIsInJlc2V0c0F0IjoiMjAyNi0xMC0xMFQwODowMDowMC4wMDBaIiwiaXNzdWVkQXQiOjE3OTAwMDAwMDAsImV4cGlyZXNBdCI6MTc5MDI1OTIwMCwia2V5SWQiOiJlMmUtZml4dHVyZS1tYXgtMSJ9.OfNO_qTaong1WgHZSEhmdZ33z9l3iFdR8tfS3UfBycqFMh7rksqYG4TWdCkCA5e-3l6lGn0V9nkf7wQBInP_DA";
 
 const PRODUCTION_SENTINELS: &[&str] = &[
@@ -116,6 +125,8 @@ fn fixture_mode_from_environment(
         FixtureMode::KalVoiceUnderLimit
     } else if mode == OsStr::new(FIXTURE_MAX_VALUE) {
         FixtureMode::Max
+    } else if mode == OsStr::new(FIXTURE_OWNER_VALUE) {
+        FixtureMode::Owner
     } else {
         return Err(error(
             "fixture_opt_in_invalid",
@@ -140,6 +151,7 @@ enum FixtureMode {
     Ready,
     KalVoiceUnderLimit,
     Max,
+    Owner,
 }
 
 fn validate_fixture_directory(
@@ -278,6 +290,7 @@ fn fixture_verifier() -> Verifier {
     Verifier::from_keys([
         ("test-vectors-1", TEST_PUBLIC_KEY),
         (MAX_FIXTURE_KEY_ID, MAX_FIXTURE_PUBLIC_KEY),
+        (OWNER_FIXTURE_KEY_ID, OWNER_FIXTURE_PUBLIC_KEY),
     ])
     .expect("checked-in E2E fixture public keys must remain valid")
 }
@@ -287,12 +300,16 @@ fn build_runtime(mode: FixtureMode) -> Arc<AccountRuntime> {
     let api = Arc::new(E2eAccountApi {
         kalvoice_under_limit: mode == FixtureMode::KalVoiceUnderLimit,
         max: mode == FixtureMode::Max,
+        owner: mode == FixtureMode::Owner,
         ..E2eAccountApi::default()
     });
     let store = Arc::new(MemorySecretStore::default());
     if matches!(
         mode,
-        FixtureMode::Ready | FixtureMode::KalVoiceUnderLimit | FixtureMode::Max
+        FixtureMode::Ready
+            | FixtureMode::KalVoiceUnderLimit
+            | FixtureMode::Max
+            | FixtureMode::Owner
     ) {
         api.activated.store(true, Ordering::SeqCst);
         let session = SessionSecret::new(SESSION_TOKEN.into(), 1_893_456_000)
@@ -366,6 +383,7 @@ struct E2eAccountApi {
     logouts: AtomicUsize,
     kalvoice_under_limit: bool,
     max: bool,
+    owner: bool,
 }
 
 #[derive(Default)]
@@ -535,7 +553,9 @@ impl AccountApi for E2eAccountApi {
             return Err(ApiError::Local("e2e_account_not_activated"));
         }
         Ok(EntitlementResponse {
-            token: if self.max {
+            token: if self.owner {
+                OWNER_TOKEN.into()
+            } else if self.max {
                 MAX_TOKEN.into()
             } else if self.kalvoice_under_limit {
                 PRO_TOKEN.into()
@@ -547,18 +567,20 @@ impl AccountApi for E2eAccountApi {
 
     fn usage(&self, bearer: &str) -> Result<UsageResponse, ApiError> {
         Self::authorize(bearer)?;
-        let (used, allowance, receipt) = if self.max {
-            (41, 500, MAX_USAGE_RECEIPT)
+        let (used, allowance, receipt) = if self.owner {
+            (41, None, OWNER_USAGE_RECEIPT)
+        } else if self.max {
+            (41, Some(500), MAX_USAGE_RECEIPT)
         } else if self.kalvoice_under_limit {
-            (41, 150, PRO_USAGE_RECEIPT)
+            (41, Some(150), PRO_USAGE_RECEIPT)
         } else {
-            (25, 25, FREE_USAGE_RECEIPT)
+            (25, Some(25), FREE_USAGE_RECEIPT)
         };
         Ok(UsageResponse {
             usage: AccountUsageSnapshot {
                 billing_interval: None,
                 used,
-                allowance: Some(allowance),
+                allowance,
                 period_start: "2026-09-10T08:00:00.000Z".into(),
                 resets_at: "2026-10-10T08:00:00.000Z".into(),
             },
@@ -724,6 +746,16 @@ mod tests {
         assert!(runtime.acquire_active_lease().is_ok());
         assert_eq!(runtime.usage().expect("signed usage").used, 41);
         assert_eq!(runtime.usage().expect("signed usage").allowance, Some(150));
+    }
+
+    #[test]
+    fn owner_fixture_bootstraps_signed_owner_authority() {
+        let runtime = build_runtime(FixtureMode::Owner);
+        let snapshot = runtime.bootstrap().expect("OWNER fixture bootstrap");
+        assert_eq!(snapshot.phase, AccountPhase::Ready);
+        assert_eq!(snapshot.tier, Some(AccountTier::Owner));
+        assert!(runtime.acquire_active_lease().is_ok());
+        assert_eq!(runtime.usage().expect("signed usage").allowance, None);
     }
 
     #[test]
