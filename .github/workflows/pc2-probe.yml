@@ -1,9 +1,10 @@
 name: PC2 extra gate runners bootstrap (throwaway)
 
-# Throwaway branch only (never merged). Registers kalcode-win-gate-2c and -2d on the second PC as extra
-# runner instances of this gate account, outside any runner's _work tree, with the holding label
-# kalcode-gate-pc2-pending (activated only once gate.yml on main accepts their names, #382). They run
-# detached until the next reboot; the owner's one-time elevated add-gate-runner-pc2.ps1 makes them services.
+# Throwaway branch only (never merged). Owner 2026-10-07: every gate runs on the second PC. The gate
+# accounts' runners (2, 2b) are busy, so this runs on that PC's idle QA runner and registers
+# kalcode-win-gate-2c and -2d as runner instances of THIS account (kalcode-qa) under C:\kalcode-ci-2c
+# and C:\kalcode-ci-2d, after giving the account the per-user toolchain the gate needs (rustup stable
+# MSVC + rustfmt/clippy, pnpm as pinned). They run detached in this signed-in session until a reboot.
 
 on:
   push:
@@ -14,9 +15,43 @@ permissions:
 
 jobs:
   bootstrap:
-    runs-on: [self-hosted, Windows, kalcode-gate-pc2]
-    timeout-minutes: 20
+    runs-on: [self-hosted, Windows, kalcode-desktop-qa]
+    timeout-minutes: 40
     steps:
+      - name: Toolchain for this account
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = 'Stop'
+          "Account $env:USERNAME on $env:COMPUTERNAME"
+          $cargoBin = Join-Path $env:USERPROFILE '.cargo\bin'
+          if (-not (Test-Path -LiteralPath (Join-Path $cargoBin 'rustup.exe'))) {
+            $init = Join-Path $env:RUNNER_TEMP 'rustup-init.exe'
+            Invoke-WebRequest -UseBasicParsing -Uri 'https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe' -OutFile $init
+            & $init -y --no-modify-path --profile minimal --default-toolchain stable --component rustfmt --component clippy
+            if ($LASTEXITCODE) { throw "rustup-init failed ($LASTEXITCODE)" }
+          }
+          $env:PATH = "$cargoBin;$env:PATH"
+          & rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          if ($LASTEXITCODE) { throw "rustup toolchain install failed ($LASTEXITCODE)" }
+          # Persist for runner processes started from this account.
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+          if (-not $userPath -or ($userPath -split ';') -notcontains $cargoBin) {
+            [Environment]::SetEnvironmentVariable('Path', ((@($cargoBin) + @($userPath -split ';' | Where-Object { $_ })) -join ';'), 'User')
+          }
+          & rustc --version; & cargo --version
+          & node --version; if ($LASTEXITCODE) { throw 'node is not available to this account' }
+          $npmPrefix = Join-Path $env:APPDATA 'npm'
+          $env:PATH = "$npmPrefix;$env:PATH"
+          $pnpm = (& pnpm --version 2>$null)
+          if ($pnpm -ne '10.33.2') { & npm install -g pnpm@10.33.2; if ($LASTEXITCODE) { throw 'pnpm install failed' } }
+          if (-not $userPath -or ($userPath -split ';') -notcontains $npmPrefix) {
+            $now = [Environment]::GetEnvironmentVariable('Path', 'User')
+            [Environment]::SetEnvironmentVariable('Path', ((@($npmPrefix) + @($now -split ';' | Where-Object { $_ })) -join ';'), 'User')
+          }
+          "pnpm $(& pnpm --version)"; & git --version
+          $link = Get-Command link.exe -ErrorAction SilentlyContinue
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (Test-Path $vswhere) { "MSVC: " + (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath) } else { '::warning::vswhere not found' }
       - name: Register and start kalcode-win-gate-2c and -2d
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
@@ -24,33 +59,28 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           if (-not $env:REG_TOKEN) { throw 'No registration token secret' }
-          # RUNNER_WORKSPACE = <runner>\_work\<repo>; the runner's own folder holds bin\, externals\ and .env.
+          # RUNNER_WORKSPACE = <runner>\_work\<repo>; the runner's own folder holds bin\, externals\ and config.cmd.
           $runnerRoot = Split-Path -Parent (Split-Path -Parent $env:RUNNER_WORKSPACE)
-          $accountRoot = Split-Path -Parent $runnerRoot
-          "Host runner $env:RUNNER_NAME as $env:USERNAME; runner root $runnerRoot; account root $accountRoot"
+          "Host runner $env:RUNNER_NAME as $env:USERNAME; runner root $runnerRoot"
           if (-not (Test-Path -LiteralPath (Join-Path $runnerRoot 'config.cmd'))) { throw "No runner install at $runnerRoot" }
           # A child must not inherit this job's runner identity.
           Get-ChildItem Env: | Where-Object { $_.Name -match '^(RUNNER_|ACTIONS_|GITHUB_)' } | ForEach-Object { Remove-Item -LiteralPath ("Env:" + $_.Name) }
+          $env:PATH = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
           $files = '.runner', '.credentials', '.credentials_rsaparams', '.service'
           foreach ($name in 'kalcode-win-gate-2c', 'kalcode-win-gate-2d') {
-            $dir = Join-Path $accountRoot ('runner-' + ($name -replace '^kalcode-win-gate-', ''))
+            $dir = 'C:\kalcode-ci-' + ($name -replace '^kalcode-win-gate-', '') + '\runner'
             $listener = { @(Get-CimInstance Win32_Process -Filter "Name='Runner.Listener.exe'" | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($dir + '\', [StringComparison]::OrdinalIgnoreCase) }) }
             $running = & $listener
             if ($running.Count -gt 0) { "$name already running (pid $($running[0].ProcessId))"; continue }
-            if (Test-Path -LiteralPath $dir) {
-              "$name stale folder (no listener): " + ((Get-ChildItem -Force -LiteralPath $dir | ForEach-Object Name) -join ' ')
-              foreach ($f in $files) { Remove-Item -Force -LiteralPath (Join-Path $dir $f) -ErrorAction SilentlyContinue }
-            }
             New-Item -ItemType Directory -Force -Path $dir | Out-Null
             & robocopy.exe $runnerRoot $dir /E /NFL /NDL /NJH /NJS /NP /XD _work _diag /XF .runner .credentials .credentials_rsaparams .service | Out-Null
             if ($LASTEXITCODE -ge 8) { throw "copy failed for $name ($LASTEXITCODE)" }
             foreach ($f in $files) { Remove-Item -Force -LiteralPath (Join-Path $dir $f) -ErrorAction SilentlyContinue }
             Push-Location $dir
             try {
-              & .\config.cmd --unattended --replace --url https://github.com/kalebcampbell2305/KalCode --token $env:REG_TOKEN --name $name --labels kalcode-gate-pc2-pending --work _work
+              & .\config.cmd --unattended --replace --url https://github.com/kalebcampbell2305/KalCode --token $env:REG_TOKEN --name $name --labels kalcode-gate-pc2 --work _work
               if ($LASTEXITCODE) {
                 "config refused; folder now: " + ((Get-ChildItem -Force -LiteralPath $dir | ForEach-Object Name) -join ' ')
-                Get-ChildItem -Force -LiteralPath (Join-Path $dir 'bin') -Filter '.*' -ErrorAction SilentlyContinue | ForEach-Object { "bin has " + $_.Name }
                 throw "config failed for $name ($LASTEXITCODE)"
               }
             } finally { Pop-Location }
