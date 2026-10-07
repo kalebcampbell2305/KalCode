@@ -1,0 +1,3 @@
+# Runtime state written by freeze.ps1 next to itself; never commit it.
+frozen-pids.txt
+frozen-pids.txt.resumed-*
