@@ -1478,6 +1478,74 @@ fn native_browser_url(
     read_native().filter(safe_runtime_url)
 }
 
+/// What the native child is doing now: whether its main frame is loading, and its URL.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+struct NativeLoadState {
+    loading: bool,
+    url: Option<url::Url>,
+}
+
+/// Reads `WKWebView.isLoading` and `WKWebView.URL` on macOS.
+///
+/// wry 0.55.1 tells Tauri about a macOS page only from `didCommitNavigation` and
+/// `didFinishNavigation`, and it asks the navigation handler about every frame's navigation. So
+/// a main-frame load that fails before it commits (an unreachable `http://localhost:3000/`, a DNS
+/// or TLS failure) never reports Finished, and an iframe's navigation (an embedded video, a
+/// payment or sign-in frame) reaches `on_navigation` as if it were the page, with no page-load
+/// event after it. Either left the pane loading forever with the iframe's address shown and
+/// saved. WebKit's own answer is authoritative: `isLoading` is the main frame's load and `URL` is
+/// the page's address. `URL` is nil until a navigation commits, so it is read as an `Option`
+/// here, never through wry's unwrapping `url()`.
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+fn native_load_state(child: &Webview) -> Option<NativeLoadState> {
+    use objc2_web_kit::WKWebView;
+
+    let (sender, receiver) = std::sync::mpsc::sync_channel::<(bool, Option<String>)>(1);
+    child
+        .with_webview(move |platform| {
+            // SAFETY: on macOS Tauri's platform webview is the live WKWebView, borrowed for this
+            // main-thread closure. Both properties are plain reads; a nil URL stays `None`.
+            let answer = unsafe {
+                let view: &WKWebView = &*platform.inner().cast::<WKWebView>();
+                let url = view
+                    .URL()
+                    .and_then(|url| url.absoluteString())
+                    .map(|url| url.to_string());
+                (view.isLoading(), url)
+            };
+            let _ = sender.send(answer);
+        })
+        .ok()?;
+    let (loading, url) = receiver
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .ok()?;
+    Some(NativeLoadState {
+        loading,
+        url: url.and_then(|url| url::Url::parse(&url).ok()),
+    })
+}
+
+/// Windows reports every main-frame load's end (WebView2 `NavigationCompleted`, failed or not)
+/// and never routes iframe navigations to `on_navigation`: the recorded events are the state.
+#[cfg(not(target_os = "macos"))]
+fn native_load_state(_child: &Webview) -> Option<NativeLoadState> {
+    None
+}
+
+/// Lets the native webview's own answer correct the event-recorded state. Without an answer the
+/// record is unchanged; an address the Browser may not show is never adopted.
+fn apply_native_load_state(record: &mut BrowserRecord, native: Option<NativeLoadState>) {
+    let Some(native) = native else {
+        return;
+    };
+    record.loading = native.loading;
+    if let Some(url) = native.url.filter(safe_runtime_url) {
+        record.url = url.to_string();
+    }
+}
+
 /// Read when `kalcode://browser-state` says a pane moved, and polled as a backstop (750 ms, backing
 /// off while nothing changes) per visible Browser pane, so it stays off the main thread; the native
 /// URL read still hops to the main thread on its own.
@@ -1509,6 +1577,7 @@ pub fn browser_info(
         ))
         .ok_or_else(|| unavailable("browser_not_found", "That browser pane is not open."))?;
     let current_url = native_browser_url(NATIVE_URL_QUERY_IS_SAFE, || child.url().ok());
+    let native = native_load_state(&child);
     let mut records = views.lock();
     let record = records
         .get_mut(&browser_id)
@@ -1517,6 +1586,7 @@ pub fn browser_info(
     if let Some(url) = current_url {
         record.url = url.to_string();
     }
+    apply_native_load_state(record, native);
     Ok(BrowserState::from_record(&browser_id, record))
 }
 
@@ -2353,6 +2423,60 @@ mod tests {
             .collect();
         assert_eq!(calls.len(), 1, "unguarded child URL reads: {calls:?}");
         assert!(calls[0].contains("native_browser_url(NATIVE_URL_QUERY_IS_SAFE"));
+    }
+
+    #[test]
+    fn native_load_state_ends_a_stranded_load_and_restores_the_page_address() {
+        // macOS: an iframe navigation reached `on_navigation`, which recorded the frame's address
+        // and raised loading; no page-load event follows a frame load or a failed first load.
+        let mut framed = record("https://player.example.net/embed/clip");
+        framed.loading = true;
+        let page = url::Url::parse("https://example.com/watch").unwrap();
+        apply_native_load_state(
+            &mut framed,
+            Some(NativeLoadState {
+                loading: false,
+                url: Some(page.clone()),
+            }),
+        );
+        assert!(!framed.loading);
+        assert_eq!(framed.url, page.to_string());
+
+        // A first load that failed before committing: WebKit has no URL and is not loading.
+        let mut unreachable = record("http://localhost:3000/");
+        unreachable.loading = true;
+        apply_native_load_state(
+            &mut unreachable,
+            Some(NativeLoadState {
+                loading: false,
+                url: None,
+            }),
+        );
+        assert!(!unreachable.loading);
+        assert_eq!(unreachable.url, "http://localhost:3000/");
+
+        // A main-frame load still in progress keeps showing as loading.
+        apply_native_load_state(
+            &mut unreachable,
+            Some(NativeLoadState {
+                loading: true,
+                url: None,
+            }),
+        );
+        assert!(unreachable.loading);
+
+        // No native answer (Windows, or the probe timed out) leaves the recorded state alone,
+        // and an address the Browser may not show is never adopted.
+        apply_native_load_state(&mut unreachable, None);
+        assert!(unreachable.loading);
+        apply_native_load_state(
+            &mut unreachable,
+            Some(NativeLoadState {
+                loading: false,
+                url: Some(url::Url::parse("file:///etc/passwd").unwrap()),
+            }),
+        );
+        assert_eq!(unreachable.url, "http://localhost:3000/");
     }
 
     #[test]
