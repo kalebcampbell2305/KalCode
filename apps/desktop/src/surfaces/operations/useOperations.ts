@@ -32,7 +32,15 @@ export function useOperations(client: OperationsApi, enabled = true): Operations
   const [errorState, setError] = useState<{ owner: object; value: Error } | null>(null);
   const [refreshingOwner, setRefreshingOwner] = useState<object | null>(null);
   const lifecycle = useMemo(
-    () => ({ client, active: false, generation: 0, request: 0, inFlight: null as Promise<void> | null }),
+    () => ({
+      client,
+      active: false,
+      generation: 0,
+      request: 0,
+      inFlight: null as Promise<void> | null,
+      /** One fresh read queued behind the read in flight, for a manual refresh that joined it. */
+      followUp: null as Promise<void> | null,
+    }),
     [client],
   );
   const live = useRef(lifecycle);
@@ -43,12 +51,14 @@ export function useOperations(client: OperationsApi, enabled = true): Operations
     if (!enabled) {
       lifecycle.generation += 1;
       lifecycle.inFlight = null;
+      lifecycle.followUp = null;
       setRefreshingOwner((owner) => (owner === lifecycle ? null : owner));
     }
     return () => {
       lifecycle.active = false;
       lifecycle.generation += 1;
       lifecycle.inFlight = null;
+      lifecycle.followUp = null;
     };
   }, [enabled, lifecycle]);
 
@@ -57,7 +67,21 @@ export function useOperations(client: OperationsApi, enabled = true): Operations
       if (!lifecycle.active) return Promise.resolve();
       // Only a manual refresh shows as refreshing; joining a background poll in flight still does.
       if (manual) setRefreshingOwner(lifecycle);
-      if (lifecycle.inFlight) return lifecycle.inFlight;
+      if (lifecycle.inFlight) {
+        if (!manual) return lifecycle.inFlight;
+        // A manual refresh follows an action (Cancel, Run now, Hold...). The read in flight may
+        // have started before that action committed, so its answer can predate it: read once more
+        // after it lands. Refreshes that arrive meanwhile share that one follow-up read.
+        if (!lifecycle.followUp) {
+          const generation = lifecycle.generation;
+          const followUp: Promise<void> = lifecycle.inFlight.then(() => {
+            if (lifecycle.followUp === followUp) lifecycle.followUp = null;
+            return lifecycle.generation === generation ? load(true) : undefined;
+          });
+          lifecycle.followUp = followUp;
+        }
+        return lifecycle.followUp;
+      }
       const generation = lifecycle.generation;
       const request = ++lifecycle.request;
       const current = () =>
@@ -89,7 +113,8 @@ export function useOperations(client: OperationsApi, enabled = true): Operations
         })
         .finally(() => {
           if (lifecycle.inFlight === promise) lifecycle.inFlight = null;
-          if (current()) setRefreshingOwner(null);
+          // A queued follow-up read keeps the manual refresh showing until it lands.
+          if (current() && !lifecycle.followUp) setRefreshingOwner(null);
         });
       lifecycle.inFlight = promise;
       return promise;
