@@ -428,18 +428,11 @@ fn verify_app_identity(app: &Path, expected_version: &str) -> Result<String, ()>
     ) {
         return Err(());
     }
-    let architectures = checked(
-        Command::new("/usr/bin/lipo")
-            .arg("-archs")
-            .arg(app_executable(app)),
-    )?;
-    if std::str::from_utf8(&architectures.stdout)
-        .map_err(|_| ())?
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .as_slice()
-        != ["arm64"]
-    {
+    // Read from the Mach-O header, never `/usr/bin/lipo`: that is an xcrun shim that fails on Macs
+    // without Xcode or the Command Line Tools, which would refuse every update there.
+    let architectures =
+        kalcode_updater::macho::architectures(&app_executable(app)).map_err(|_| ())?;
+    if !kalcode_updater::macho::is_exactly_arm64(&architectures) {
         return Err(());
     }
     Ok(format!("{:x}", Sha256::digest(requirement.as_bytes())))
