@@ -174,6 +174,8 @@ ${reuse}`,
         GH_TOKEN: "fixture-only",
         GITHUB_API_URL: "https://example.invalid",
         GITHUB_REPOSITORY: "fixture/repo",
+        // The main-push path: never the job's own event (a pull_request gate runs this suite too).
+        GITHUB_EVENT_NAME: "push",
         GITHUB_SHA: sha,
         GITHUB_RUN_ID: "456",
         GITHUB_OUTPUT: output,
