@@ -175,8 +175,7 @@ impl SquadsStore {
                     |row| row.get(0),
                 )?;
                 if !exists {
-                    let count: i64 =
-                        tx.query_row("SELECT COUNT(*) FROM squad_recipes", [], |row| row.get(0))?;
+                    let count = crate::recipes::count_all_recipes(tx)?;
                     if let Some(limit) = limit {
                         limit.admit(count)?;
                     }

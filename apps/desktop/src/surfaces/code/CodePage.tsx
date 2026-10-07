@@ -28,6 +28,7 @@ import {
   CircleX,
   Equal,
   LayoutGrid,
+  LayoutTemplate,
   ListChecks,
   Minimize2,
   PlugZap,
@@ -43,6 +44,7 @@ import { type FormEvent, memo, type ReactNode, useEffect, useId, useRef, useStat
 import { toKalCodeError } from "../../ipc/errors.ts";
 import { formatShortcut } from "../../platform/keyboard.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
+import { useOptionalRecipeLibrary } from "../../runtime/recipes/RecipeLaunchProvider.tsx";
 import { useWorkspaces, useWorkspaceVisible, WorkspaceScope } from "../../runtime/WorkspaceProvider.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
 import { TASK_DESCRIPTIONS, TASK_LABELS, TASK_LAYOUTS } from "../../shell/panes/adaptiveCanvas.ts";
@@ -330,6 +332,18 @@ function ToolbarPlaceholder() {
   );
 }
 
+/** Opens the Recipe library: saved working desks that launch in one click. */
+function RecipesButton() {
+  const recipes = useOptionalRecipeLibrary();
+  if (!recipes) return null;
+  const { library } = recipes;
+  return (
+    <Tooltip content="Recipes: launch a saved desk">
+      <IconButton size="sm" label="Recipes" icon={<LayoutTemplate />} onClick={() => library.open()} />
+    </Tooltip>
+  );
+}
+
 const Toolbar = memo(function Toolbar({ api, available }: { api: CodeCanvasApi; available: boolean }) {
   const { client } = useRuntime();
   const { controller, shells, background, providerPanes } = api;
@@ -511,6 +525,7 @@ const Toolbar = memo(function Toolbar({ api, available }: { api: CodeCanvasApi; 
         </DropdownMenu>
       </SplitControl>
       <BrowserButton controller={controller} />
+      <RecipesButton />
       <WidgetsMenu controller={controller} />
       <RunTestsButton controller={controller} organization={api.organization} />
       <KalTidyActions />

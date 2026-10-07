@@ -29,6 +29,7 @@ import {
   Globe,
   LayoutDashboard,
   LayoutPanelLeft,
+  LayoutTemplate,
   PenLine,
   PowerOff,
   RotateCcw,
@@ -49,6 +50,8 @@ import {
   voiceThreadEffort,
 } from "../../kalvoice/useVoiceScene.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
+import { sortRecipes } from "../../runtime/recipes/model.ts";
+import { useOptionalRecipeLibrary, useOptionalRecipeRequest } from "../../runtime/recipes/RecipeLaunchProvider.tsx";
 import { usePaneFocusRequests } from "../../runtime/uiIntents.tsx";
 import { useWorkspaces, useWorkspaceVisible } from "../../runtime/WorkspaceProvider.tsx";
 import { defaultShell, describeTerminalStatus, tabLabels } from "../../runtime/workspaceState.ts";
@@ -1665,6 +1668,14 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
           ? { handled: true, message: `Arranged the available panes. No pane yet for ${selected.missing.join(", ")}.` }
           : { handled: true };
       }
+      if (command.kind === "open-desk") {
+        // Agent panes render before the next refresh lists them (same as open-provider-panes).
+        const agentIds = command.contents.flatMap((content) => (content.kind === "agent" ? [content.agentId] : []));
+        for (const id of agentIds) if (!paneById.has(id)) pendingAgents.current.add(id);
+        if (agentIds.length > 0) void providerPanes.refresh();
+        // The canvas arranges the layout itself (runCommand).
+        return null;
+      }
       if (command.kind === "open-provider-panes") {
         const threadIds = [...new Set(command.threadIds.filter((threadId) => threadId.trim().length > 0))];
         if (threadIds.length === 0) return { handled: false, message: "No provider panes were created." };
@@ -2047,6 +2058,12 @@ function EmptyPane({
   onShow: (content: PaneContent) => void;
 }) {
   const agents = providerPanes.enabled;
+  const requestRecipe = useOptionalRecipeRequest();
+  const recipeLibrary = useOptionalRecipeLibrary();
+  const recipes = sortRecipes(recipeLibrary?.recipes ?? []);
+  const pinned = recipes.filter((recipe) => recipe.pinned);
+  // One pinned (or one total) Recipe launches directly; otherwise choose from the library.
+  const single = pinned.length === 1 ? pinned[0] : recipes.length === 1 ? recipes[0] : undefined;
   return (
     <div className={styles.emptyPane}>
       <div className={styles.emptyInner}>
@@ -2077,6 +2094,16 @@ function EmptyPane({
           <Button variant="ghost" size="sm" icon={<Globe />} onClick={() => onShow(browserContent())}>
             <span className={styles.buttonLabel}>Open Browser</span>
           </Button>
+          {recipes.length > 0 && recipeLibrary && requestRecipe ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={<LayoutTemplate />}
+              onClick={() => (single ? void requestRecipe({ recipeId: single.id }) : recipeLibrary.library.open())}
+            >
+              <span className={styles.buttonLabel}>Launch a Recipe</span>
+            </Button>
+          ) : null}
         </div>
         {background.length > 0 ? (
           <div className={styles.emptyGroup}>

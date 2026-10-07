@@ -250,7 +250,9 @@ export type PaneCommand =
   | { kind: "collapse" }
   | { kind: "reopen" }
   | { kind: "preset"; preset: BuiltinPreset }
-  | { kind: "even" };
+  | { kind: "even" }
+  /** Opens a Launch Recipe's started parts together (see `arrangeDesk`); focuses the first. */
+  | { kind: "open-desk"; contents: PaneContent[]; preset: BuiltinPreset | null };
 
 export type PaneCommandResult = { handled: true; message?: string } | { handled: false; message: string };
 

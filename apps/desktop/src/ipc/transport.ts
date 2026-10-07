@@ -2,6 +2,7 @@ import type { AgentEvent, EventEnvelope, KalVoiceSignal } from "@kalcode/protoco
 import type { DoctorInvoke } from "./doctor";
 import type { HandoffsCommandName } from "./handoffs";
 import type { OperationsCommandName } from "./operations";
+import type { LaunchRecipesCommandName } from "./recipes";
 import type { SquadsCommandName } from "./squads";
 import type { UtilityCommandName } from "./utilities";
 
@@ -18,6 +19,7 @@ export type CommandName =
   | HandoffsCommandName
   | OperationsCommandName
   | SquadsCommandName
+  | LaunchRecipesCommandName
   | "boot"
   | "window_ready"
   | "settings_get"

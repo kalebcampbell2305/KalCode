@@ -66,6 +66,7 @@ import { createPanesMemory, type PaneControls } from "./memory/panes.ts";
 import { createPermissionMemory, type PermissionMemory } from "./memory/permissions.ts";
 import { createProviderAccountsMemory } from "./memory/providerAccounts.ts";
 import { createRailMemory } from "./memory/rail.ts";
+import { createRecipesMemory } from "./memory/recipes.ts";
 import { createRemoteMemory } from "./memory/remote.ts";
 import { sessionResolveHandler } from "./memory/sessionResolve.ts";
 import { createSquadsMemory, type ORION_FIXTURE } from "./memory/squads.ts";
@@ -538,6 +539,7 @@ export function createMemoryTransport(
     info: (threadId) => panes.handlers.provider_pane_info({ threadId }) as import("@kalcode/protocol").PaneInfo | null,
     deliver: (threadId, instanceId, text) => panes.deliverHandoff(threadId, instanceId, text),
   });
+  const recipes = createRecipesMemory({ requireCore });
   const squads = createSquadsMemory({
     requireCore,
     operations: operations.agents,
@@ -615,6 +617,7 @@ export function createMemoryTransport(
     ...panes.handlers,
     ...handoffs,
     ...squads.handlers,
+    ...recipes.handlers,
     ...rail.handlers,
     ...layouts.handlers,
     ...notificationsMemory.handlers,

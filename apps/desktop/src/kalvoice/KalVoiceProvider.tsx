@@ -9,6 +9,7 @@ import type {
   PanelAnchor,
   PanelView,
   SizeClass,
+  SquadLaunch,
   TalkTarget,
   UiCommand,
   UiDirective,
@@ -31,6 +32,7 @@ import { type KalCodeError, toKalCodeError } from "../ipc/errors.ts";
 import { OperationsClient } from "../ipc/operations.ts";
 import { DESKTOP_PLATFORM } from "../platform/keyboard.ts";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
+import { useOptionalRecipeRequest } from "../runtime/recipes/RecipeLaunchProvider.tsx";
 import { useUiIntents } from "../runtime/uiIntents.tsx";
 import { useWorkspaces } from "../runtime/WorkspaceProvider.tsx";
 import { type Destination, useNavigation } from "../shell/navigation.tsx";
@@ -547,8 +549,17 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   const threadsIntent = useOptionalThreadsIntent();
   const kalTidy = useKalTidy();
   // The UI side of a command's result (the native side already did the work).
-  const surfaces = useRef({ workspaces, permissions, toast, uiIntents, threadsIntent, kalTidy });
-  surfaces.current = { workspaces, permissions, toast, uiIntents, threadsIntent, kalTidy };
+  const requestRecipe = useOptionalRecipeRequest();
+  const surfaces = useRef({
+    workspaces,
+    permissions,
+    toast,
+    uiIntents,
+    threadsIntent,
+    kalTidy,
+    requestRecipe,
+  });
+  surfaces.current = { workspaces, permissions, toast, uiIntents, threadsIntent, kalTidy, requestRecipe };
 
   /** Composer directives act on a thread's own message box, which lives in Threads. */
   const composerDeps = useCallback(
@@ -668,13 +679,26 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           break;
         case "launch_squad":
         case "launch_recipe": {
-          const launch =
+          const startSquad = () =>
             directive.kind === "launch_squad"
               ? client.squads.launch(directive.query, directive.workspaceId, scope.requestId, null)
               : client.squads.launchRecipe(directive.query, directive.workspaceId, scope.requestId, null);
+          // Launch Recipes (saved desks) win over Squad recipes; a missing match falls back unchanged.
+          const launch: Promise<SquadLaunch | null> =
+            directive.kind === "launch_recipe"
+              ? (async () => {
+                  // The same canonical action as every button (exact id or unique name, never a guess).
+                  const request = surfaces.current.requestRecipe;
+                  if (!request) return startSquad();
+                  const result = await request({ query: directive.query }, { quiet: true });
+                  if (result.missing) return startSquad();
+                  if (!scope.signal.aborted) scope.report({ ok: result.ok, message: result.message });
+                  return null;
+                })()
+              : startSquad();
           void launch.then(
             async (result) => {
-              if (scope.signal.aborted) return;
+              if (scope.signal.aborted || !result) return;
               const count = result.members.length;
               scope.report({
                 ok: true,
