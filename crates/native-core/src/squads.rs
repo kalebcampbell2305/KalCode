@@ -324,151 +324,22 @@ impl SquadsStore {
                 }
 
                 let definition = load_squad(tx, squad_id)?;
-                require_workspace(tx, workspace_id)?;
-                let mut launch_members = definition.members.clone();
-                serialize_overlapping_ownership(&mut launch_members)?;
-                validate_dependency_graph(&launch_members)?;
-                admit_queue(tx, launch_members.len(), queue_limit)?;
-
-                let launch_id = new_id();
-                let created_at = now_rfc3339();
                 let goal = goal_override
                     .clone()
                     .unwrap_or_else(|| definition.goal.clone());
-                tx.execute(
-                    "INSERT INTO squad_launches (
-                       id, request_id, request_fingerprint, squad_id, name, goal,
-                       workspace_id, created_at
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                    params![
-                        launch_id,
-                        request_id,
-                        fingerprint,
-                        definition.id,
-                        definition.name,
-                        goal,
+                let (launch_id, _) = insert_launch(
+                    tx,
+                    &request_id,
+                    &fingerprint,
+                    LaunchPlan {
+                        snapshot_id: &definition.id,
+                        name: &definition.name,
+                        goal: &goal,
                         workspace_id,
-                        created_at
-                    ],
-                )?;
-
-                let operation_ids: HashMap<&str, String> = launch_members
-                    .iter()
-                    .map(|member| (member.key.as_str(), new_id()))
-                    .collect();
-                let dependency_positions = dependency_positions(&launch_members)?;
-                let position_start: i64 = tx.query_row(
-                    "SELECT COALESCE(MAX(position) + 1, 0) FROM operations
-                     WHERE status IN ('queued', 'paused', 'blocked')",
-                    [],
-                    |row| row.get(0),
-                )?;
-
-                for (member_position, member) in launch_members.iter().enumerate() {
-                    let member_position =
-                        i64::try_from(member_position).map_err(|_| corrupt())?;
-                    let position = position_start
-                        + dependency_positions
-                            .get(member.key.as_str())
-                            .copied()
-                            .ok_or_else(corrupt)?;
-                    let operation_id = operation_ids
-                        .get(member.key.as_str())
-                        .ok_or_else(corrupt)?;
-                    let dependencies: Vec<String> = member
-                        .depends_on
-                        .iter()
-                        .map(|key| operation_ids.get(key.as_str()).cloned().ok_or_else(corrupt))
-                        .collect::<Result<_>>()?;
-                    let prompt = member_prompt(&goal, member)?;
-                    let spec = normalize_squad_member_spec(OperationSpec {
-                        name: member.name.clone(),
-                        workspace_id: workspace_id.to_owned(),
-                        kind: OperationKind::Agent,
-                        command: None,
-                        prompt,
-                        provider_id: Some(member.provider_id.clone()),
-                        provider_account_id: Some(member.provider_account_id.clone()),
-                        model: Some(member.model.clone()),
-                        effort: Some(member.effort.clone()),
-                        dependencies,
-                        priority: 0,
-                        lane: OperationLane::Next,
-                        environment: OperationEnvironmentKind::Local,
-                        urls: Vec::new(),
-                        env_keys: Vec::new(),
-                    })?;
-                    let account = provider_account(tx, member)?;
-                    let (status, current_action, attention_reason, moment_kind, moment_message) =
-                        match account.as_ref() {
-                            Some((_, auth)) if auth != "not_authenticated" => {
-                                ("queued", None, None, "queued", "Added by a Squad launch.")
-                            }
-                            _ => (
-                                "blocked",
-                                Some("Reconnect provider account"),
-                                Some(
-                                    "This Squad member's selected provider account is unavailable. Reconnect it or assign another account.",
-                                ),
-                                "blocked",
-                                "Blocked because the selected provider account is unavailable.",
-                            ),
-                        };
-                    let account_label = account.map(|item| item.0);
-                    tx.execute(
-                        "INSERT INTO operations (
-                           id, workspace_id, name, kind, command, prompt, provider_id,
-                           provider_account_id, model, effort, dependencies, priority, lane,
-                           environment, urls, env_keys, source, status, account_label, created_at,
-                           current_action, attention_reason, position
-                         ) VALUES (
-                           ?1, ?2, ?3, 'agent', NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'next',
-                           'local', '[]', '[]', 'operations', ?11, ?12, ?13, ?14, ?15, ?16
-                         )",
-                        params![
-                            operation_id,
-                            spec.workspace_id,
-                            spec.name,
-                            spec.prompt,
-                            spec.provider_id,
-                            spec.provider_account_id,
-                            spec.model,
-                            spec.effort,
-                            serde_json::to_string(&spec.dependencies)?,
-                            spec.priority,
-                            status,
-                            account_label,
-                            created_at,
-                            current_action,
-                            attention_reason,
-                            position
-                        ],
-                    )?;
-                    tx.execute(
-                        "INSERT INTO operation_moments (id, operation_id, at, kind, message)
-                         VALUES (?1, ?2, ?3, ?4, ?5)",
-                        params![new_id(), operation_id, created_at, moment_kind, moment_message],
-                    )?;
-                    tx.execute(
-                        "INSERT INTO squad_launch_members (
-                           launch_id, member_key, role, manager_key, operation_id,
-                           owned_paths, worktree, position
-                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                        params![
-                            launch_id,
-                            member.key,
-                            member.role,
-                            member.manager_key,
-                            operation_id,
-                            serde_json::to_string(&member.owned_paths)?,
-                            member.worktree,
-                            member_position
-                        ],
-                    )?;
-                }
-                tx.execute(
-                    "UPDATE operations_state SET revision = revision + 1 WHERE singleton = 1",
-                    [],
+                        members: definition.members.clone(),
+                        prompt: &member_prompt,
+                    },
+                    queue_limit,
                 )?;
                 Ok((load_launch(tx, &launch_id)?, Vec::new()))
             })
@@ -584,6 +455,244 @@ impl SquadsStore {
             operations,
         })
     }
+}
+
+/// Inputs shared by a template launch and an ad-hoc launch (an Agent Handoff Chain).
+pub(crate) struct LaunchPlan<'a> {
+    /// Snapshot identity recorded on the launch; never a foreign key to a template.
+    pub(crate) snapshot_id: &'a str,
+    pub(crate) name: &'a str,
+    pub(crate) goal: &'a str,
+    pub(crate) workspace_id: &'a str,
+    pub(crate) members: Vec<SquadMemberDefinition>,
+    pub(crate) prompt: &'a dyn Fn(&str, &SquadMemberDefinition) -> Result<Option<String>>,
+}
+
+/// Atomically records one launch and one ordinary Agent Operation per member, inside the
+/// caller's transaction. Returns the launch id and each member key's Operation id.
+pub(crate) fn insert_launch(
+    tx: &Connection,
+    request_id: &str,
+    fingerprint: &str,
+    plan: LaunchPlan<'_>,
+    queue_limit: Option<PlanLimit>,
+) -> Result<(String, HashMap<String, String>)> {
+    require_workspace(tx, plan.workspace_id)?;
+    let mut launch_members = plan.members;
+    serialize_overlapping_ownership(&mut launch_members)?;
+    validate_dependency_graph(&launch_members)?;
+    admit_queue(tx, launch_members.len(), queue_limit)?;
+
+    let launch_id = new_id();
+    let created_at = now_rfc3339();
+    tx.execute(
+        "INSERT INTO squad_launches (
+           id, request_id, request_fingerprint, squad_id, name, goal,
+           workspace_id, created_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            launch_id,
+            request_id,
+            fingerprint,
+            plan.snapshot_id,
+            plan.name,
+            plan.goal,
+            plan.workspace_id,
+            created_at
+        ],
+    )?;
+
+    let operation_ids: HashMap<String, String> = launch_members
+        .iter()
+        .map(|member| (member.key.clone(), new_id()))
+        .collect();
+    let dependency_positions = dependency_positions(&launch_members)?;
+    let position_start = next_queue_position(tx)?;
+
+    for (member_position, member) in launch_members.iter().enumerate() {
+        let position = position_start
+            + dependency_positions
+                .get(member.key.as_str())
+                .copied()
+                .ok_or_else(corrupt)?;
+        let operation_id = operation_ids.get(member.key.as_str()).ok_or_else(corrupt)?;
+        let dependencies: Vec<String> = member
+            .depends_on
+            .iter()
+            .map(|key| operation_ids.get(key.as_str()).cloned().ok_or_else(corrupt))
+            .collect::<Result<_>>()?;
+        let prompt = (plan.prompt)(plan.goal, member)?;
+        insert_member_operation(
+            tx,
+            MemberOperation {
+                launch_id: &launch_id,
+                workspace_id: plan.workspace_id,
+                operation_id,
+                member,
+                member_key: &member.key,
+                prompt,
+                dependencies,
+                queue_position: position,
+                member_position: i64::try_from(member_position).map_err(|_| corrupt())?,
+                created_at: &created_at,
+                moment: "Added by a Squad launch.",
+            },
+        )?;
+    }
+    bump_operations_revision(tx)?;
+    Ok((launch_id, operation_ids))
+}
+
+pub(crate) fn next_queue_position(tx: &Connection) -> Result<i64> {
+    Ok(tx.query_row(
+        "SELECT COALESCE(MAX(position) + 1, 0) FROM operations
+         WHERE status IN ('queued', 'paused', 'blocked')",
+        [],
+        |row| row.get(0),
+    )?)
+}
+
+pub(crate) fn bump_operations_revision(tx: &Connection) -> Result<()> {
+    tx.execute(
+        "UPDATE operations_state SET revision = revision + 1 WHERE singleton = 1",
+        [],
+    )?;
+    Ok(())
+}
+
+/// One member Operation plus its launch-member row.
+pub(crate) struct MemberOperation<'a> {
+    pub(crate) launch_id: &'a str,
+    pub(crate) workspace_id: &'a str,
+    pub(crate) operation_id: &'a str,
+    pub(crate) member: &'a SquadMemberDefinition,
+    /// Unique within the launch; a retried chain step uses `<key>~<attempt>`.
+    pub(crate) member_key: &'a str,
+    pub(crate) prompt: Option<String>,
+    pub(crate) dependencies: Vec<String>,
+    pub(crate) queue_position: i64,
+    pub(crate) member_position: i64,
+    pub(crate) created_at: &'a str,
+    pub(crate) moment: &'a str,
+}
+
+pub(crate) fn insert_member_operation(tx: &Connection, input: MemberOperation<'_>) -> Result<()> {
+    let MemberOperation {
+        launch_id,
+        workspace_id,
+        operation_id,
+        member,
+        member_key,
+        prompt,
+        dependencies,
+        queue_position,
+        member_position,
+        created_at,
+        moment,
+    } = input;
+    let spec = normalize_squad_member_spec(OperationSpec {
+        name: member.name.clone(),
+        workspace_id: workspace_id.to_owned(),
+        kind: OperationKind::Agent,
+        command: None,
+        prompt,
+        provider_id: Some(member.provider_id.clone()),
+        provider_account_id: Some(member.provider_account_id.clone()),
+        model: Some(member.model.clone()),
+        effort: Some(member.effort.clone()),
+        dependencies,
+        priority: 0,
+        lane: OperationLane::Next,
+        environment: OperationEnvironmentKind::Local,
+        urls: Vec::new(),
+        env_keys: Vec::new(),
+    })?;
+    let account = provider_account(tx, member)?;
+    let (status, current_action, attention_reason, moment_kind, moment_message) = match account
+        .as_ref()
+    {
+        Some((_, auth)) if auth != "not_authenticated" => ("queued", None, None, "queued", moment),
+        _ => (
+            "blocked",
+            Some("Reconnect provider account"),
+            Some(
+                "This Squad member's selected provider account is unavailable. Reconnect it or assign another account.",
+            ),
+            "blocked",
+            "Blocked because the selected provider account is unavailable.",
+        ),
+    };
+    let account_label = account.map(|item| item.0);
+    tx.execute(
+        "INSERT INTO operations (
+           id, workspace_id, name, kind, command, prompt, provider_id,
+           provider_account_id, model, effort, dependencies, priority, lane,
+           environment, urls, env_keys, source, status, account_label, created_at,
+           current_action, attention_reason, position
+         ) VALUES (
+           ?1, ?2, ?3, 'agent', NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'next',
+           'local', '[]', '[]', 'operations', ?11, ?12, ?13, ?14, ?15, ?16
+         )",
+        params![
+            operation_id,
+            spec.workspace_id,
+            spec.name,
+            spec.prompt,
+            spec.provider_id,
+            spec.provider_account_id,
+            spec.model,
+            spec.effort,
+            serde_json::to_string(&spec.dependencies)?,
+            spec.priority,
+            status,
+            account_label,
+            created_at,
+            current_action,
+            attention_reason,
+            queue_position
+        ],
+    )?;
+    tx.execute(
+        "INSERT INTO operation_moments (id, operation_id, at, kind, message)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            new_id(),
+            operation_id,
+            created_at,
+            moment_kind,
+            moment_message
+        ],
+    )?;
+    tx.execute(
+        "INSERT INTO squad_launch_members (
+           launch_id, member_key, role, manager_key, operation_id,
+           owned_paths, worktree, position
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            launch_id,
+            member_key,
+            member.role,
+            member.manager_key,
+            operation_id,
+            serde_json::to_string(&member.owned_paths)?,
+            member.worktree,
+            member_position
+        ],
+    )?;
+    Ok(())
+}
+
+/// Normalizes and validates an inline member set exactly like a saved Squad template.
+pub(crate) fn normalize_inline(definition: SquadDefinition) -> Result<SquadDefinition> {
+    normalize_squad(definition)
+}
+
+pub(crate) fn fingerprint_of(kind: &str, payload: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(kind.as_bytes());
+    digest.update([0]);
+    digest.update(payload.as_bytes());
+    format!("{:x}", digest.finalize())
 }
 
 fn normalize_squad(mut definition: SquadDefinition) -> Result<SquadDefinition> {
@@ -1216,14 +1325,16 @@ fn load_launches(conn: &Connection) -> Result<Vec<SquadLaunch>> {
     let ids = {
         let mut stmt = conn.prepare(
             "SELECT l.id FROM squad_launches l
-             WHERE EXISTS (
+             WHERE l.id NOT IN (SELECT launch_id FROM chains) AND (EXISTS (
                SELECT 1 FROM squad_launch_members lm
                JOIN operations o ON o.id = lm.operation_id
                WHERE lm.launch_id = l.id
                  AND o.status IN ('queued', 'starting', 'running', 'paused', 'blocked')
              ) OR l.id IN (
-               SELECT id FROM squad_launches ORDER BY created_at DESC, id DESC LIMIT ?1
-             )
+               SELECT id FROM squad_launches
+               WHERE id NOT IN (SELECT launch_id FROM chains)
+               ORDER BY created_at DESC, id DESC LIMIT ?1
+             ))
              ORDER BY l.created_at DESC, l.id DESC",
         )?;
         stmt.query_map([MAX_RECENT_LAUNCHES], |row| row.get::<_, String>(0))?

@@ -5,6 +5,7 @@
 //! workspaces with their terminal sessions. The Tauri shell (`apps/desktop/src-tauri`) is a
 //! thin layer that exposes [`runtime::Core`] over IPC.
 
+pub mod chains;
 pub mod confirm;
 pub mod db;
 pub mod error;

@@ -29,6 +29,10 @@ CREATE TABLE chain_steps (
   skipped       INTEGER NOT NULL DEFAULT 0 CHECK (skipped IN (0, 1)),
   skip_reason   TEXT CHECK (skip_reason IS NULL OR length(CAST(skip_reason AS BLOB)) BETWEEN 1 AND 512),
   report        TEXT CHECK (report IS NULL OR (json_valid(report) AND json_type(report) = 'object')),
+  -- Absolute path of the structured report the current attempt was asked to write.
+  report_path   TEXT CHECK (report_path IS NULL OR length(report_path) BETWEEN 1 AND 4096),
+  -- The current attempt's provider turn ended without a report: the step needs the person.
+  awaiting_report INTEGER NOT NULL DEFAULT 0 CHECK (awaiting_report IN (0, 1)),
   PRIMARY KEY (launch_id, step_key)
 ) STRICT, WITHOUT ROWID;
 
