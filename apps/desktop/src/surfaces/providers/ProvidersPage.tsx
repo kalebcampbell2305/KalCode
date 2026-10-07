@@ -244,7 +244,10 @@ function ProviderSection({
   // CLI's own standalone login (what detection checks) is a different profile KalCode doesn't use.
   const managed = isBrowserAuthProvider(status.id);
   const runtimeReady = providerRuntimeReady(status);
-  const auth = managed ? (runtimeReady ? managedSignInLabel(accounts) : null) : authLabel(status);
+  // Account truth is independent from launch readiness. Keep a known managed-account session
+  // visible while an installed CLI is outdated, even though that CLI cannot launch threads.
+  const showManagedAccountState = runtimeReady || detection?.state === "outdated";
+  const auth = managed ? (showManagedAccountState ? managedSignInLabel(accounts) : null) : authLabel(status);
   const managedRuntime = managedRuntimeLabel(status);
 
   const setup: KeyValueItem[] = [
@@ -265,7 +268,7 @@ function ProviderSection({
   if (managedRuntime) {
     setup.push({ key: "managed-runtime", label: "KalCode runtime", value: <StatusValue label={managedRuntime} /> });
   }
-  if (managed && runtimeReady) {
+  if (managed && showManagedAccountState) {
     const signedIn = accounts?.some((account) => account.authenticationState === "authenticated") ?? false;
     setup.push({
       key: "auth",
