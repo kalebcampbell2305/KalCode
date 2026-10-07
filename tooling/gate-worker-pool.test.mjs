@@ -50,4 +50,19 @@ if (process.platform === "win32") {
     assert.equal(result.status, 0, result.stderr || result.error?.message);
     assert.match(result.stdout, /PASS: worker plans/);
   });
+  test("Gate leases: own-slot previous job replaced, other slots kept, pre-boot stale, After removes only its own", () => {
+    // Temp lease directory and injected process lookups only; the real pool and processes are untouched.
+    const result = spawnSync(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-File",
+        fileURLToPath(new URL("./runners/windows/test-gate-worker-leases.ps1", import.meta.url)),
+      ],
+      { encoding: "utf8", windowsHide: true, timeout: 30_000 },
+    );
+    assert.equal(result.status, 0, result.stderr || result.stdout || result.error?.message);
+    assert.match(result.stdout, /PASS: gate leases/);
+  });
 }
