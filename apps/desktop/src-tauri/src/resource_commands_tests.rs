@@ -2166,6 +2166,93 @@ fn a_persons_follow_up_on_a_scheduled_thread_is_never_held_for_cpu_load() {
     busy.shutdown();
 }
 
+/// Owner rule (AGENTS.md, Resource Governor): user-requested work is never held because CPU is
+/// high. Queue "Run now" is the person's explicit request, so its agent is admitted like one they
+/// start (`LaunchOrigin::User`) and starts at once under a pinned CPU, while the scheduler's own
+/// start of the same kind of operation still yields.
+#[test]
+fn run_now_on_a_queued_operation_is_not_held_for_cpu_load() {
+    use kalcode_contracts::threads::ThreadStatus;
+
+    let (quiet, busy) = (healthy_governor(), cpu_saturated_governor());
+    let machine = MachineAdmission::new(&quiet, &busy);
+    let temp = tempfile::tempdir().expect("temp");
+    let core = Arc::new(
+        kalcode_core::Core::open(kalcode_core::CoreConfig {
+            paths: kalcode_core::Paths::new(temp.path()),
+            app_version: "0.0.0-test".into(),
+            channel: kalcode_core::flags::BuildChannel::Development,
+        })
+        .expect("core"),
+    );
+    let root = temp.path().join("repo");
+    std::fs::create_dir_all(&root).expect("repo");
+    let workspace_id = kalcode_contracts::ids::new_id();
+    let registry = Arc::new(kalcode_threads::ProviderRegistry::new());
+    registry.register(on_machine(&machine, ProviderId::CODEX));
+    let runtime = kalcode_threads::ThreadRuntime::new(
+        core,
+        registry,
+        Arc::new(OneWorkspace(kalcode_threads::ResolvedWorkspace {
+            id: workspace_id.clone(),
+            name: "Fixture".into(),
+            root,
+        })),
+        Arc::new(kalcode_contracts::permissions::AskUnlessReadGate),
+    )
+    .expect("runtime");
+    let request = |prompt: &str| kalcode_threads::CreateThread {
+        provider_id: ProviderId::CODEX.into(),
+        provider_account_id: None,
+        account_label: None,
+        workspace_id: workspace_id.clone(),
+        model: None,
+        effort: None,
+        permission_mode: PermissionMode::Approve,
+        prompt: prompt.into(),
+        name: None,
+    };
+    machine.pin_cpu();
+
+    let scheduled = runtime
+        .create_reviewed_for_operation_with_origin(
+            &kalcode_contracts::ids::new_id(),
+            request("scheduled"),
+            None,
+            LaunchOrigin::Background,
+        )
+        .expect("scheduled operation waits");
+    assert_eq!(scheduled.status, ThreadStatus::WaitingForDependency);
+
+    let started = Instant::now();
+    let run_now = runtime
+        .create_reviewed_for_operation_with_origin(
+            &kalcode_contracts::ids::new_id(),
+            request("run now"),
+            None,
+            LaunchOrigin::User,
+        )
+        .expect("Run now starts");
+    assert_eq!(
+        run_now.status,
+        ThreadStatus::Active,
+        "Run now was held for CPU load: {:?}",
+        run_now.current_activity
+    );
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert_eq!(busy.running_work_for_test().agents, 1, "only Run now runs");
+
+    runtime
+        .stop(&scheduled.id)
+        .expect("stop the waiting operation");
+    runtime
+        .stop(&run_now.id)
+        .expect("stop the Run now operation");
+    runtime.shutdown();
+    quiet.shutdown();
+    busy.shutdown();
+}
+
 /// A scheduled session's own turns keep yielding to CPU load, for every provider, until the
 /// person takes it over: from then on its turns use their policy and start at once.
 #[test]

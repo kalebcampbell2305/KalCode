@@ -1192,14 +1192,26 @@ impl ThreadRuntime {
         request: CreateThread,
         review_id: Option<&str>,
     ) -> Result<ThreadSummary> {
-        validate::thread_id(operation_id)?;
-        self.create_reviewed_with_id(
+        self.create_reviewed_for_operation_with_origin(
+            operation_id,
             request,
             review_id,
-            Some(operation_id),
-            None,
             LaunchOrigin::Background,
         )
+    }
+
+    /// Operations launch with an explicit admission origin. User-started Squads use `User`, so
+    /// normal CPU load never becomes an artificial coding-agent concurrency limit; scheduled
+    /// Operations retain `Background` and yield to interactive work.
+    pub fn create_reviewed_for_operation_with_origin(
+        &self,
+        operation_id: &str,
+        request: CreateThread,
+        review_id: Option<&str>,
+        origin: LaunchOrigin,
+    ) -> Result<ThreadSummary> {
+        validate::thread_id(operation_id)?;
+        self.create_reviewed_with_id(request, review_id, Some(operation_id), None, origin)
     }
 
     /// Creates a reviewed thread with a caller-chosen id whose session runs in `cwd` (an
