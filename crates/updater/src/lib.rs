@@ -732,7 +732,44 @@ pub fn verify_signature_for_metadata(
         1 if metadata.target == UpdateTarget::WindowsX86_64
             && metadata.format == ArtifactFormat::Nsis =>
         {
-            verify_updater_signature(bytes, signature_base64, public_key_base64, expected_version)
+            // Schema-1 feeds predate signed bindings, so older signatures carry only `version:`.
+            // When the signature does carry `target:` or `channel:`, the unsigned feed must not
+            // relabel it (for example a dev build served as stable).
+            let (public_key, signature) = decode_updater_signature(
+                signature_base64,
+                public_key_base64,
+                expected_version,
+                None,
+            )?;
+            for (prefix, expected, code, message) in [
+                (
+                    "target:",
+                    metadata.target.as_str(),
+                    "update_signature_target_mismatch",
+                    "The update signature does not match this platform.",
+                ),
+                (
+                    "channel:",
+                    metadata.channel.as_str(),
+                    "update_signature_channel_mismatch",
+                    "The update signature does not match this update channel.",
+                ),
+            ] {
+                let signed = signature
+                    .trusted_comment()
+                    .split('\t')
+                    .filter_map(|field| field.strip_prefix(prefix))
+                    .collect::<Vec<_>>();
+                if !signed.is_empty() && signed.as_slice() != [expected] {
+                    return Err(UpdateError::new(code, message));
+                }
+            }
+            public_key.verify(bytes, &signature, false).map_err(|_| {
+                UpdateError::new(
+                    "update_signature_invalid",
+                    "The update signature is invalid.",
+                )
+            })
         }
         2 if metadata.format.supports(metadata.target) => {
             verify_updater_signature_for_target_and_channel(
