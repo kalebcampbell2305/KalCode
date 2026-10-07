@@ -309,7 +309,7 @@ test.describe("the side dock", () => {
     const running = await memory(page, (m) => m.runningProcessCount());
     await pane(page, 1).getByRole("button", { name: "Actions for pane 2" }).click();
     await page.getByRole("menuitem", { name: "Move to the dock" }).click();
-    const dock = page.getByRole("complementary", { name: "Dock" });
+    const dock = page.getByRole("complementary", { name: "Dock", exact: true });
     await expect(dock).toBeVisible();
     await expect(panes(page)).toHaveCount(1);
     expect(await memory(page, (m) => m.runningProcessCount())).toBe(running);
@@ -350,7 +350,7 @@ test.describe("content from other surfaces", () => {
     await providerPane.getByRole("button", { name: /Actions for pane/ }).click();
     await page.getByRole("menuitem", { name: "Move to the dock", exact: true }).click();
     await expect(provider).toBeHidden();
-    await expect(page.getByRole("complementary", { name: "Dock" })).toBeVisible();
+    await expect(page.getByRole("complementary", { name: "Dock", exact: true })).toBeVisible();
     await page
       .getByRole("navigation", { name: "Primary" })
       .getByRole("button", { name: "Activity", exact: true })
@@ -360,7 +360,7 @@ test.describe("content from other surfaces", () => {
     await card.click({ position: { x: 6, y: 6 } });
     await expect(page.getByRole("heading", { level: 1, name: "kalcode-site" })).toBeVisible();
     await expect(provider).toBeVisible();
-    await expect(page.getByRole("complementary", { name: "Dock" })).toHaveCount(0);
+    await expect(page.getByRole("complementary", { name: "Dock", exact: true })).toHaveCount(0);
     await expect(page.locator("[data-pane-id][data-focused] [data-provider-pane]")).toHaveCount(1);
   });
 });

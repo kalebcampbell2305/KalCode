@@ -155,8 +155,7 @@
   color: var(--color-text);
 }
 
-.tab::after {
-  content: "";
+.tabIndicator {
   position: absolute;
   right: var(--space-2);
   bottom: -1px;
@@ -171,7 +170,7 @@
     transform var(--dur-fast) var(--ease-out);
 }
 
-.tab[aria-selected="true"]::after {
+.tab[aria-selected="true"] .tabIndicator {
   opacity: 1;
   transform: none;
 }
@@ -466,7 +465,7 @@
 @media (prefers-reduced-motion: reduce) {
   :root:not([data-motion="full"]) .dock,
   :root:not([data-motion="full"]) .tab,
-  :root:not([data-motion="full"]) .tab::after,
+  :root:not([data-motion="full"]) .tabIndicator,
   :root:not([data-motion="full"]) .close,
   :root:not([data-motion="full"]) .railTab {
     transition: none;
@@ -479,7 +478,7 @@
 
 :root[data-motion="reduced"] .dock,
 :root[data-motion="reduced"] .tab,
-:root[data-motion="reduced"] .tab::after,
+:root[data-motion="reduced"] .tabIndicator,
 :root[data-motion="reduced"] .close,
 :root[data-motion="reduced"] .railTab {
   transition: none;

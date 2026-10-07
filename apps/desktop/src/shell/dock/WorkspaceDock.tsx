@@ -620,6 +620,7 @@ export function WorkspaceDock({ workspaceId }: { workspaceId: string | null }) {
                           </span>
                         ) : null}
                         {pinned ? <Pin className={styles.pin} aria-hidden="true" /> : null}
+                        <span className={styles.tabIndicator} aria-hidden="true" />
                       </button>
                     </ObjectContextMenu>
                     {closable ? (
