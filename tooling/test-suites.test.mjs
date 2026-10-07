@@ -27,23 +27,29 @@ import {
 
 const inventory = loadTestSuiteInventory();
 
+test("tooling registers signed provider compatibility publication regressions", () => {
+  const tooling = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
+  assert.ok(tooling.scripts.test.includes('"provider-compatibility/*.test.mjs"'));
+});
+
 test("the registered Rust release gate includes the production speech engine and exact target ignore counts", () => {
   const rust = inventory.suites.find(({ id }) => id === "rust-workspace");
   assert.deepEqual(rust.command, ["cargo", "test", "--workspace", "--features", "kalcode-desktop/kalvoice-whisper"]);
   // The official Cursor installation probe is intentionally opt-in on every platform; so are the
-  // real-Codex hook probes (AI quota) and the PTY/process-scan benchmarks (#238, #239).
+  // real-Codex hook probes (AI quota), immutable managed-runtime certification (explicit native
+  // fixture; executed on both supported platforms), and PTY/process-scan benchmarks (#238, #239).
   for (const [platform, expected] of [
     // The netstat CPU benchmark only compiles on Windows.
-    ["win32", 36],
-    ["darwin", 35],
+    ["win32", 37],
+    ["darwin", 36],
     // The pinned runtime and local-reasoning probes only compile on Windows x64/Mac ARM64.
-    ["linux", 32],
+    ["linux", 33],
   ]) {
     const profile = selectProfile(rust, platform, {});
     assert.equal(profile.skippedMinimum, expected);
     assert.equal(profile.skippedMaximum, expected);
   }
-  assert.equal(inventory.rustIntentionalIgnores.length, 36);
+  assert.equal(inventory.rustIntentionalIgnores.length, 37);
 });
 
 test("the registered Vitest command writes and validates its real JSON report", () => {
