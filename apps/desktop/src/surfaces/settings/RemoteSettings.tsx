@@ -1,5 +1,5 @@
 import { Badge, Button, Panel, Skeleton, useToast } from "@kalcode/ui/components";
-import { Copy, QrCode, ShieldCheck, Smartphone, Tablet, X } from "lucide-react";
+import { Copy, ExternalLink, QrCode, ShieldCheck, Smartphone, Tablet, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useOptionalAccount } from "../../account/AccountProvider.tsx";
 import { planTier } from "../../ipc/account.ts";
@@ -7,12 +7,20 @@ import { toKalCodeError } from "../../ipc/errors.ts";
 import { REMOTE_CHANGED_EVENT, type RemoteDevice, type RemoteStatus } from "../../ipc/remote.ts";
 import { formatRelative } from "../../runtime/describeEvent.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
+import { createBrowserBridge } from "../browser/browserBridge.ts";
 import styles from "./RemoteSettings.module.css";
-import { countdown, deviceDetail, isTablet, remoteSummary, remoteVisible } from "./remoteModel.ts";
+import {
+  countdown,
+  deviceDetail,
+  isTablet,
+  REMOTE_APP_STORE_URL,
+  remoteSummary,
+  remoteVisible,
+} from "./remoteModel.ts";
 
 const PAIRED_DATE = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
 
-/** Settings › Remote, shown only where the account can use KalCode Remote (OWNER for now). */
+/** Settings › Remote, shown only where the account can use KalCode Remote (MAX and up). */
 export function RemoteSettingsGate() {
   const { info } = useRuntime();
   const tier = planTier(useOptionalAccount()?.snapshot);
@@ -220,6 +228,17 @@ function PairingCard({
       () => toast.show({ tone: "danger", title: "Couldn't copy the link", description: "Scan the code instead." }),
     );
   };
+  const getApp = () => {
+    void createBrowserBridge()
+      .openExternal(REMOTE_APP_STORE_URL)
+      .catch(() =>
+        toast.show({
+          tone: "danger",
+          title: "Couldn't open the App Store",
+          description: "Search the App Store for KalCode Remote.",
+        }),
+      );
+  };
   return (
     <section className={styles.pairing} aria-label="Pair a device">
       <div className={styles.qrTile}>
@@ -237,6 +256,10 @@ function PairingCard({
           <li>Open KalCode Remote on your phone or tablet.</li>
           <li>Tap Scan pairing code and point the camera here.</li>
         </ol>
+        <button type="button" className={styles.getApp} onClick={getApp}>
+          Get KalCode Remote for iPhone and iPad
+          <ExternalLink aria-hidden />
+        </button>
         <div className={styles.expiry} aria-live="off">
           Code expires in <span className={styles.timer}>{countdown(pairing.expiresAt, now)}</span> · single use
         </div>

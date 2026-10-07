@@ -8,13 +8,19 @@ interface Flag {
   visible: boolean;
 }
 
+/** KalCode Remote for iPhone and iPad on the App Store. */
+export const REMOTE_APP_STORE_URL = "https://apps.apple.com/app/id6819834499";
+
+/** The plans that include Remote: its MAX placement, plus OWNER. Mirrors native `remote::tier_allows`. */
+const REMOTE_TIERS: ReadonlySet<AccountTier> = new Set(["max", "max2x", "owner"]);
+
 /**
- * Settings › Remote appears only where the account can use it: the build ships it and the tier
- * is OWNER. Flip with native `remote::tier_allows` when the iOS app is in TestFlight/App Store.
+ * Settings › Remote appears only where the account can use it: the build ships it and the plan
+ * includes it (MAX and up).
  */
 export function remoteVisible(features: readonly Flag[] | undefined, tier: AccountTier): boolean {
   const built = features?.some((f) => f.id === "remote" && f.visible && f.state !== "gated") ?? false;
-  return built && tier === "owner";
+  return built && REMOTE_TIERS.has(tier);
 }
 
 export type RemoteTone = "off" | "listening" | "failed";

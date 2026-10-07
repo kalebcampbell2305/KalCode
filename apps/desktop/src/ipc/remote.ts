@@ -29,7 +29,7 @@ export interface RemoteDevice {
 }
 
 export interface RemoteStatus {
-  /** This account may use Remote (OWNER only until the mobile app ships). */
+  /** This account may use Remote (MAX and up). */
   available: boolean;
   enabled: boolean;
   listening: boolean;

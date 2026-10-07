@@ -53,11 +53,8 @@ const OPERATIONS_EVERY: Duration = Duration::from_secs(5);
 /// Time-based Needs You items (stalled agents) are re-derived at least this often.
 const RECHECK_EVERY: Duration = Duration::from_secs(60);
 
-/// Whether this account may use Remote right now.
-///
-/// OWNER ONLY FOR NOW: flip `tier_allows` to the MAX placement
-/// (`FeatureId::Remote.placement()`) when the iOS app is in TestFlight/App Store. Showing the
-/// feature to MAX before the app can be installed would be untruthful.
+/// Whether this account may use Remote right now: the build ships it and the plan includes it
+/// (`FeatureId::Remote.placement()`, MAX and up).
 pub fn entitled(app: &AppHandle) -> bool {
     let built = app
         .state::<AppState>()
@@ -73,9 +70,16 @@ pub fn entitled(app: &AppHandle) -> bool {
             .is_some_and(|account| tier_allows(account.snapshot().plan_tier()))
 }
 
-/// The plans that include Remote today (see [`entitled`]).
+/// The plans that include Remote (see [`entitled`]): its MAX placement, plus OWNER.
 pub fn tier_allows(tier: PlanTier) -> bool {
-    matches!(tier, PlanTier::Owner)
+    let rank = match tier {
+        PlanTier::Free => 0,
+        PlanTier::Pro => 1,
+        PlanTier::Max => 2,
+        PlanTier::Max2x => 3,
+        PlanTier::Owner => return true,
+    };
+    FeatureId::Remote.placement().included_in(rank)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -91,7 +95,7 @@ struct Settings {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteStatus {
-    /// This account may use Remote (OWNER only for now).
+    /// This account's plan includes Remote (MAX and up).
     pub available: bool,
     pub enabled: bool,
     pub listening: bool,
@@ -885,17 +889,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_owner_may_use_remote_until_the_mobile_app_ships() {
-        assert!(tier_allows(PlanTier::Owner));
-        for tier in [
-            PlanTier::Free,
-            PlanTier::Pro,
-            PlanTier::Max,
-            PlanTier::Max2x,
-        ] {
+    fn remote_follows_its_max_placement() {
+        for tier in [PlanTier::Max, PlanTier::Max2x, PlanTier::Owner] {
+            assert!(tier_allows(tier), "{tier:?}");
+        }
+        for tier in [PlanTier::Free, PlanTier::Pro] {
             assert!(!tier_allows(tier), "{tier:?}");
         }
-        // Its plan placement is still MAX (what MAX gets once the gate flips).
         assert_eq!(
             FeatureId::Remote.placement(),
             kalcode_contracts::app::FeaturePlacement::Max

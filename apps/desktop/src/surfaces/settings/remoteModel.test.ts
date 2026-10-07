@@ -15,10 +15,10 @@ const base: RemoteStatus = {
 };
 
 describe("Remote settings model", () => {
-  it("shows Remote only to OWNER while the mobile app is unreleased", () => {
+  it("shows Remote to MAX and up, where the plan includes it", () => {
     const shipped = [{ id: "remote", state: "available", visible: true }];
-    expect(remoteVisible(shipped, "owner")).toBe(true);
-    for (const tier of ["free", "pro", "max", "max2x"] as const) expect(remoteVisible(shipped, tier)).toBe(false);
+    for (const tier of ["max", "max2x", "owner"] as const) expect(remoteVisible(shipped, tier)).toBe(true);
+    for (const tier of ["free", "pro"] as const) expect(remoteVisible(shipped, tier)).toBe(false);
     expect(remoteVisible([{ id: "remote", state: "gated", visible: true }], "owner")).toBe(false);
     expect(remoteVisible([], "owner")).toBe(false);
   });
