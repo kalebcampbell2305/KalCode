@@ -93,6 +93,14 @@ after this correction. A 21-worker frontend run timed out in three files; bounde
 reproof passed all 11 cases, with initial failure evidence preserved and the other 286 passing
 files retained. No timeout or assertion was weakened.
 
+Exact combined-candidate CI subsequently found a strict desktop test lint (`cloned_ref_to_slice_refs`)
+that the provider-only Clippy pass did not cover. The registry regression now uses
+`std::slice::from_ref`; desktop all-target Clippy with `-D warnings` and the exact registry test
+both pass. The same CI run exceeded the registered desktop-unit time budget twice and timed out
+in unchanged website tests. The latter two files passed all eight cases on the exact candidate
+with one worker. These timeout failures remain recorded; final merge evidence must establish a
+green corrected candidate and may not treat the interrupted run as passing.
+
 ## Rollback and delivery
 
 No database migration, credential migration, personal-memory mutation or archive import is
