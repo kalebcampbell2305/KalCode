@@ -19,6 +19,11 @@ on:
       - "!marketing/**"
       - "docs/releases/**"
   workflow_dispatch:
+    inputs:
+      base:
+        description: "Gate base commit (a manual trial gates every check this range touches); default origin/main~1"
+        required: false
+        default: ""
 
 concurrency:
   group: gate-${{ github.ref }}
@@ -32,21 +37,20 @@ env:
   CARGO_TERM_COLOR: always
   # Each physical worker assigns isolated ports below. Bound nested check fan-out.
   KALCODE_GATE_JOBS: "2"
-  # Rust compiles need real parallelism: at most three heavy gates hold a Rust slot at once (heavy
-  # tokens) and run at below-normal priority, so 8 jobs each keeps the owner's UI and agents first
-  # while a cold first build still fits (2 jobs could not, gate 37345525181).
+  # Rust compiles need real parallelism: one Rust gate at a time per gate PC (rust.lock) at below-normal
+  # priority; a cold first build still fits in 8 jobs (2 jobs could not, gate 37345525181).
   CARGO_BUILD_JOBS: "8"
   VITEST_MAX_WORKERS: "2"
   KALCODE_UI_TEST_WORKERS: "2"
 
 jobs:
   windows:
-    # The build PC's share runs as two jobs on two pool workers so its two chains overlap: "Gate (Windows)"
-    # (the desktop frontend/UI readers and any new check) and "Gate (Windows, native)" (rust, native E2E
-    # and the pool-only Cargo tools, which write the checkout or need the pool's tools). In one checkout
-    # those writes serialized everything (~30 min, lane 7 run 37389408543). The second Windows PC runs the
-    # JS/web share in the "Gate (Windows, PC2)" job below (owner, 2026-10-05: split tests across both PCs).
-    # All three jobs test the same event SHA; tooling/release/lifecycle/gate-split.mjs assigns the checks.
+    # Owner, 2026-10-07: every gate runs on the second Windows PC (KALEBSLAPTOP), which nothing else uses;
+    # the build PC only builds and ships (its owner-requested agents starved gates there). These are two
+    # jobs so their chains overlap on that PC's two gate runners: "Gate (Windows)" (the desktop
+    # frontend/UI readers and any new check) and "Gate (Windows, native)" (rust, native E2E and the Cargo
+    # tools, which write the checkout). The "Gate (Windows, PC2)" job below runs the JS/web share. All
+    # three jobs test the same event SHA; tooling/release/lifecycle/gate-split.mjs assigns the checks.
     name: ${{ matrix.half == 'native' && 'Gate (Windows, native)' || 'Gate (Windows)' }}
     strategy:
       # One half failing never cancels the other: each half's own result is evidence.
@@ -55,8 +59,9 @@ jobs:
         half: [main, native]
     # Never run code from a fork on our machines.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, Windows, kalcode-gate, kalcode-main-pc]
-    timeout-minutes: 195
+    runs-on: [self-hosted, Windows, kalcode-gate-pc2]
+    # A cold first Rust build on the second PC's runners fits; warm runs take a fraction.
+    timeout-minutes: 300
     steps:
       # A merge-train landing fast-forwards main to a candidate this job already gated. Re-gating the
       # identical commit would only occupy the gate runner, so reuse that evidence. Runs before checkout:
@@ -94,18 +99,24 @@ jobs:
             }
             exit 0
           }
+          # A trusted gate host: one of the second PC's gate runners (owner, 2026-10-07: all gates there), or a
+          # build-PC pool worker for a candidate gated before that move.
+          $gateHost = {
+            param($j)
+            ($j.labels -contains 'self-hosted') -and ($j.labels -contains 'Windows') -and (
+              ($j.runner_name -in @('kalcode-win-gate-2', 'kalcode-win-gate-2b') -and ($j.labels -contains 'kalcode-gate-pc2') -and -not ($j.labels -contains 'kalcode-main-pc')) -or
+              ($j.runner_name -match '^kalcode-win-gate(-w[1-5])?$' -and ($j.labels -contains 'kalcode-gate') -and ($j.labels -contains 'kalcode-main-pc')))
+          }
           try {
             $runs = (Invoke-RestMethod -Headers $headers -Uri "$api/workflows/gate.yml/runs?head_sha=$env:GITHUB_SHA&per_page=20").workflow_runs
             foreach ($run in $runs) {
               if ($run.id -eq [long]$env:GITHUB_RUN_ID -or $run.head_sha -ne $env:GITHUB_SHA -or $run.event -ne 'push' -or
                   $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.path -ne '.github/workflows/gate.yml' -or $run.head_branch -notmatch '^merge-train/[0-9a-f]{12}-[0-9a-f]{8}$') { continue }
               $jobs = (Invoke-RestMethod -Headers $headers -Uri "$api/runs/$($run.id)/jobs?filter=latest&per_page=100").jobs
-              # The same evidence the train lands on: a main-PC pool worker whose Gate step itself ran and passed.
+              # The same evidence the train lands on: a trusted gate host whose Gate step itself ran and passed.
               $green = $jobs | Where-Object {
                 $_.name -eq 'Gate (Windows)' -and $_.conclusion -eq 'success' -and $_.head_sha -eq $env:GITHUB_SHA -and
-                $_.runner_name -match '^kalcode-win-gate(-w[1-5])?$' -and
-                ($_.labels -contains 'self-hosted') -and ($_.labels -contains 'Windows') -and
-                ($_.labels -contains 'kalcode-gate') -and ($_.labels -contains 'kalcode-main-pc') -and
+                (& $gateHost $_) -and
                 ($_.steps | Where-Object { $_.name -eq 'Gate' -and $_.conclusion -eq 'success' })
               }
               # A split gate also needs the second PC's job green on the same SHA; a legacy run has none.
@@ -116,13 +127,11 @@ jobs:
                 -not ($_.labels -contains 'kalcode-main-pc') -and
                 ($_.steps | Where-Object { $_.name -eq 'Gate' -and $_.conclusion -eq 'success' })
               }).Count -eq 1
-              # A two-job build-PC half also needs its native job green on the same SHA on a pool worker.
+              # A two-job Windows gate also needs its native job green on the same SHA on a trusted gate host.
               $native = @($jobs | Where-Object { $_.name -eq 'Gate (Windows, native)' })
               $nativeGreen = $native.Count -eq 0 -or @($native | Where-Object {
                 $_.conclusion -eq 'success' -and $_.head_sha -eq $env:GITHUB_SHA -and
-                $_.runner_name -match '^kalcode-win-gate(-w[1-5])?$' -and
-                ($_.labels -contains 'self-hosted') -and ($_.labels -contains 'Windows') -and
-                ($_.labels -contains 'kalcode-gate') -and ($_.labels -contains 'kalcode-main-pc') -and
+                (& $gateHost $_) -and
                 ($_.steps | Where-Object { $_.name -eq 'Gate' -and $_.conclusion -eq 'success' })
               }).Count -eq 1
               if ($green -and $pc2Green -and $nativeGreen) {
@@ -173,17 +182,15 @@ jobs:
         id: plan
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
-          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || (github.event_name == 'push' && github.event.before) || 'origin/main~1' }}
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || (github.event_name == 'push' && github.event.before) || inputs.base || 'origin/main~1' }}
           GATE_HALF: ${{ matrix.half }}
         run: |
           $ErrorActionPreference = 'Stop'
-          if ($env:GATE_HALF -notin @('main', 'native')) { throw "Unknown build-PC gate half: $env:GATE_HALF" }
-          Import-Module ./tooling/runners/windows/gate-worker-pool.psm1 -Force
-          Assert-GateWorkerHost
-          if ($env:RUNNER_NAME -notmatch '^kalcode-win-gate(-w[1-5])?$') { throw 'Unknown main-PC gate worker' }
-          $slot = if ($env:RUNNER_NAME -eq 'kalcode-win-gate') { 0 } else { [int]$env:RUNNER_NAME.Substring($env:RUNNER_NAME.Length - 1) }
-          if ($env:KALCODE_GATE_SLOT -and $env:KALCODE_GATE_SLOT -ne [string]$slot) { throw 'Runner name does not match its configured slot' }
-          $ports = Get-GateWorkerPlan -Slot $slot
+          if ($env:GATE_HALF -notin @('main', 'native')) { throw "Unknown Windows gate half: $env:GATE_HALF" }
+          # The second PC's two gate runners each have a fixed port block (slot 1 adds 20), shared with the
+          # PC2 job below: a runner runs one job at a time.
+          $pc2Slot = switch ($env:RUNNER_NAME) { 'kalcode-win-gate-2' { 0 } 'kalcode-win-gate-2b' { 1 } default { throw 'Unknown second-PC gate worker' } }
+          $portOffset = 20 * $pc2Slot
           $head = (git rev-parse HEAD | Out-String).Trim()
           if ($LASTEXITCODE -or $head -ne $env:GITHUB_SHA) { throw 'Checkout does not match the immutable event SHA' }
           $base = $env:BASE
@@ -204,32 +211,24 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $plan = ($json | Out-String | ConvertFrom-Json).plan
           $selected = @($plan | Where-Object { $_.state -eq 'selected' } | ForEach-Object { $_.id })
-          # This job's share of the plan (tooling/release/lifecycle/gate-split.mjs): the build PC's "main" or
-          # "native" half; the other build-PC job and the second PC run the rest.
+          # This job's share of the plan (tooling/release/lifecycle/gate-split.mjs): the "main" or "native"
+          # half; the other half and the PC2 job run the rest.
           $only = (node tooling/release/lifecycle/gate-split.mjs $env:GATE_HALF ($selected -join ',') | Out-String).Trim()
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $ids = @($only -split ',' | Where-Object { $_ })
           @(
-            "KALCODE_GATE_BASE=$base", "KALCODE_GATE_ONLY=$only", "KALCODE_GATE_HEAVY=$($ids -contains 'rust' -or $ids -contains 'desktop-native-e2e')", "KALCODE_GATE_SLOT=$slot",
-            "KALCODE_E2E_PORT=$($ports.E2ePort)", "KALCODE_E2E_MAIL_PORT=$($ports.MailPort)",
-            "KALCODE_E2E_INSPECTOR_PORT=$($ports.InspectorPort)", "KALCODE_UI_TEST_PORT=$($ports.UiPort)",
-            "KALCODE_E2E_CDP_PORT=$($ports.CdpPort)",
-            'KALCODE_GATE_REPORT_DIR=C:\ProgramData\KalCodeGatePool\reports',
-            'KALCODE_GATE_EVIDENCE_DIR=C:\ProgramData\KalCodeGatePool\evidence',
-            # desktop-ui and desktop-native-e2e never overlap across this PC's jobs (machine-lock.mjs).
-            'KALCODE_GATE_LOCK_DIR=C:\ProgramData\KalCodeGatePool\heavy'
+            "KALCODE_GATE_BASE=$base", "KALCODE_GATE_ONLY=$only", "KALCODE_GATE_HEAVY=$($ids -contains 'rust' -or $ids -contains 'desktop-native-e2e')",
+            "KALCODE_E2E_PORT=$(4691 + $portOffset)", "KALCODE_E2E_MAIL_PORT=$(4692 + $portOffset)",
+            "KALCODE_E2E_INSPECTOR_PORT=$(9701 + $portOffset)", "KALCODE_UI_TEST_PORT=$(1791 + $portOffset)",
+            "KALCODE_E2E_CDP_PORT=$(39333 + $portOffset)",
+            # desktop-ui and desktop-native-e2e never overlap across this PC's jobs (machine-lock.mjs), in the
+            # folder every PC2 runner account can write (tooling/runners/windows/add-gate-runner-pc2.ps1).
+            'KALCODE_GATE_LOCK_DIR=C:\ProgramData\KalCodePC2\locks'
           ) | Add-Content -Path $env:GITHUB_ENV -Encoding ascii
           "python=$(([string]($ids -contains 'tooling-unit' -or $ids -contains 'desktop-native-e2e')).ToLower())" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding ascii
           "native=$(([string]($ids -contains 'desktop-native-e2e')).ToLower())" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding ascii
           "browsers=$(([string](@($ids | Where-Object { $_ -in @('desktop-ui','desktop-native-e2e','website-e2e','website-checkout-e2e') }).Count -gt 0)).ToLower())" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding ascii
           Write-Host "Exact candidate $head; base $base; selected checks: $($selected -join ', '); in this $env:GATE_HALF job: $($ids -join ', ')"
-      - name: Admit optional gate work
-        if: steps.reuse.outputs.reused != 'true'
-        id: admission
-        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
-        run: |
-          & 'C:\ProgramData\KalCodeGatePool\gate-worker-hook.ps1' -Phase Before -Slot $env:KALCODE_GATE_SLOT
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Install
         if: steps.reuse.outputs.reused != 'true'
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
@@ -266,35 +265,41 @@ jobs:
           $head = (git rev-parse HEAD | Out-String).Trim()
           if ($LASTEXITCODE -or $head -ne $env:GITHUB_SHA) { throw "Checkout does not match the immutable event SHA" }
           (Get-Process -Id $PID).PriorityClass = 'BelowNormal'
-          if (-not $env:KALCODE_GATE_ONLY) { Write-Host 'gate: nothing selected for this build-PC job (the other jobs run the rest)'; exit 0 }
+          if (-not $env:KALCODE_GATE_ONLY) { Write-Host 'gate: nothing selected for this job (the other jobs run the rest)'; exit 0 }
           $token = $null
+          $lock = $null
           try {
             if ($env:KALCODE_GATE_HEAVY -eq 'True') {
-              # Six workers share three Rust slots. Process exit releases the held lock.
-              $lockRoot = 'C:\ProgramData\KalCodeGatePool\heavy'
-              if (-not (Test-Path -LiteralPath $lockRoot -PathType Container)) { throw 'Gate pool heavy-token directory is not installed' }
-              $deadline = (Get-Date).AddMinutes(45)
+              # One Rust gate at a time on this PC (two cold Rust builds would exhaust it). Process exit
+              # releases the handle, so a killed job never leaves it held.
+              $rust = 'C:\ProgramData\KalCodePC2\locks\rust.lock'
+              $deadline = (Get-Date).AddMinutes(120)
               while ($null -eq $token) {
-                $freeGb = (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).FreePhysicalMemory / 1MB
-                if ($freeGb -ge 10) {
-                  foreach ($index in 1..3) {
-                    try {
-                      $token = [IO.File]::Open((Join-Path $lockRoot "heavy-$index.lock"), 'OpenOrCreate', 'ReadWrite', 'None')
-                      break
-                    } catch [IO.IOException] { }
-                  }
+                try {
+                  $token = [IO.File]::Open($rust, 'OpenOrCreate', 'ReadWrite', 'None')
+                } catch [System.UnauthorizedAccessException] {
+                  Write-Host "::warning::No access to $rust; running without the Rust slot."
+                  break
+                } catch [System.IO.DirectoryNotFoundException] {
+                  Write-Host "::warning::The second PC's lock folder is missing; running without the Rust slot."
+                  break
+                } catch [System.IO.IOException] {
+                  if ((Get-Date) -ge $deadline) { throw 'Another Rust gate held this PC for 120 minutes; retry when it finishes' }
+                  Write-Host 'Waiting for the other Rust gate on this PC'
+                  Start-Sleep -Seconds 15
                 }
-                if ($null -ne $token) { break }
-                if ((Get-Date) -ge $deadline) { throw 'Optional Rust gate remains resource-constrained; retry when capacity is available' }
-                Write-Host "Waiting for one of three Rust slots and at least 10 GiB free RAM; available $([math]::Round($freeGb,1)) GiB"
-                Start-Sleep -Seconds 15
               }
             }
+            # Shared with this PC's other gate runner; never alongside its Windows update proof, which has priority.
+            . .github/scripts/pc2-machine-lock.ps1
+            $lock = Enter-Pc2MachineLock -Mode Shared -TimeoutMinutes 60
             node tooling/release/ship.mjs gate --base $env:KALCODE_GATE_BASE --only $env:KALCODE_GATE_ONLY --jobs $env:KALCODE_GATE_JOBS --keep-going
-            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            $code = $LASTEXITCODE
           } finally {
+            if ($null -ne $lock) { Exit-Pc2MachineLock $lock }
             if ($null -ne $token) { $token.Dispose() }
           }
+          if ($code) { exit $code }
       # A failed Playwright suite keeps its traces and DOM snapshots (retain-on-failure) for diagnosis,
       # on failure only and only while they stay small.
       - name: Measure Playwright failure evidence
@@ -325,11 +330,6 @@ jobs:
         if: steps.reuse.outputs.reused != 'true' && (always() && steps.native.outcome != 'skipped' && steps.native.outcome != '')
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: .github/scripts/prepare-portable-cmake.ps1 -Cleanup
-      - name: Release optional gate slot
-        if: steps.reuse.outputs.reused != 'true' && (always() && steps.admission.outcome == 'success')
-        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
-        run: |
-          & 'C:\ProgramData\KalCodeGatePool\gate-worker-hook.ps1' -Phase After -Slot $env:KALCODE_GATE_SLOT
       - name: Preserve exact candidate evidence
         if: steps.reuse.outputs.reused != 'true' && (always())
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -349,9 +349,9 @@ jobs:
     name: Gate (Windows, PC2)
     # Never run code from a fork on our machines.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    # The second Windows PC runs the self-contained JS/web half of the same exact candidate while the
-    # build PC's pool runs the native half (owner, 2026-10-05). Its runners are kalcode-win-gate-2 and
-    # kalcode-win-gate-2b (owner, 2026-10-06), each with its own account, checkout and port block.
+    # The JS/web share of the same exact candidate, on the second Windows PC like the jobs above (owner,
+    # 2026-10-07: all gates there). Its runners are kalcode-win-gate-2 and kalcode-win-gate-2b, each with
+    # its own account, checkout and port block.
     runs-on: [self-hosted, Windows, kalcode-gate-pc2]
     timeout-minutes: 120
     steps:
@@ -391,18 +391,24 @@ jobs:
             }
             exit 0
           }
+          # A trusted gate host: one of the second PC's gate runners (owner, 2026-10-07: all gates there), or a
+          # build-PC pool worker for a candidate gated before that move.
+          $gateHost = {
+            param($j)
+            ($j.labels -contains 'self-hosted') -and ($j.labels -contains 'Windows') -and (
+              ($j.runner_name -in @('kalcode-win-gate-2', 'kalcode-win-gate-2b') -and ($j.labels -contains 'kalcode-gate-pc2') -and -not ($j.labels -contains 'kalcode-main-pc')) -or
+              ($j.runner_name -match '^kalcode-win-gate(-w[1-5])?$' -and ($j.labels -contains 'kalcode-gate') -and ($j.labels -contains 'kalcode-main-pc')))
+          }
           try {
             $runs = (Invoke-RestMethod -Headers $headers -Uri "$api/workflows/gate.yml/runs?head_sha=$env:GITHUB_SHA&per_page=20").workflow_runs
             foreach ($run in $runs) {
               if ($run.id -eq [long]$env:GITHUB_RUN_ID -or $run.head_sha -ne $env:GITHUB_SHA -or $run.event -ne 'push' -or
                   $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.path -ne '.github/workflows/gate.yml' -or $run.head_branch -notmatch '^merge-train/[0-9a-f]{12}-[0-9a-f]{8}$') { continue }
               $jobs = (Invoke-RestMethod -Headers $headers -Uri "$api/runs/$($run.id)/jobs?filter=latest&per_page=100").jobs
-              # The same evidence the train lands on: a main-PC pool worker whose Gate step itself ran and passed.
+              # The same evidence the train lands on: a trusted gate host whose Gate step itself ran and passed.
               $green = $jobs | Where-Object {
                 $_.name -eq 'Gate (Windows)' -and $_.conclusion -eq 'success' -and $_.head_sha -eq $env:GITHUB_SHA -and
-                $_.runner_name -match '^kalcode-win-gate(-w[1-5])?$' -and
-                ($_.labels -contains 'self-hosted') -and ($_.labels -contains 'Windows') -and
-                ($_.labels -contains 'kalcode-gate') -and ($_.labels -contains 'kalcode-main-pc') -and
+                (& $gateHost $_) -and
                 ($_.steps | Where-Object { $_.name -eq 'Gate' -and $_.conclusion -eq 'success' })
               }
               # A split gate also needs the second PC's job green on the same SHA; a legacy run has none.
@@ -413,13 +419,11 @@ jobs:
                 -not ($_.labels -contains 'kalcode-main-pc') -and
                 ($_.steps | Where-Object { $_.name -eq 'Gate' -and $_.conclusion -eq 'success' })
               }).Count -eq 1
-              # A two-job build-PC half also needs its native job green on the same SHA on a pool worker.
+              # A two-job Windows gate also needs its native job green on the same SHA on a trusted gate host.
               $native = @($jobs | Where-Object { $_.name -eq 'Gate (Windows, native)' })
               $nativeGreen = $native.Count -eq 0 -or @($native | Where-Object {
                 $_.conclusion -eq 'success' -and $_.head_sha -eq $env:GITHUB_SHA -and
-                $_.runner_name -match '^kalcode-win-gate(-w[1-5])?$' -and
-                ($_.labels -contains 'self-hosted') -and ($_.labels -contains 'Windows') -and
-                ($_.labels -contains 'kalcode-gate') -and ($_.labels -contains 'kalcode-main-pc') -and
+                (& $gateHost $_) -and
                 ($_.steps | Where-Object { $_.name -eq 'Gate' -and $_.conclusion -eq 'success' })
               }).Count -eq 1
               if ($green -and $pc2Green -and $nativeGreen) {
@@ -470,7 +474,7 @@ jobs:
         id: plan
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
-          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || (github.event_name == 'push' && github.event.before) || 'origin/main~1' }}
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || (github.event_name == 'push' && github.event.before) || inputs.base || 'origin/main~1' }}
         run: |
           $ErrorActionPreference = 'Stop'
           # No build-PC pool hooks here. The second PC has two gate runners; each gets its own fixed port block
@@ -497,7 +501,7 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $plan = ($json | Out-String | ConvertFrom-Json).plan
           $selected = @($plan | Where-Object { $_.state -eq 'selected' } | ForEach-Object { $_.id })
-          # This machine's share of the plan (tooling/release/lifecycle/gate-split.mjs); the build PC runs the rest.
+          # This job's share of the plan (tooling/release/lifecycle/gate-split.mjs); the jobs above run the rest.
           $only = (node tooling/release/lifecycle/gate-split.mjs pc2 ($selected -join ',') | Out-String).Trim()
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $ids = @($only -split ',' | Where-Object { $_ })
@@ -535,7 +539,7 @@ jobs:
           $head = (git rev-parse HEAD | Out-String).Trim()
           if ($LASTEXITCODE -or $head -ne $env:GITHUB_SHA) { throw "Checkout does not match the immutable event SHA" }
           (Get-Process -Id $PID).PriorityClass = 'BelowNormal'
-          if (-not $env:KALCODE_GATE_ONLY) { Write-Host 'gate: nothing selected for the second PC (the build PC runs the rest)'; exit 0 }
+          if (-not $env:KALCODE_GATE_ONLY) { Write-Host 'gate: nothing selected for the second PC (the other jobs run the rest)'; exit 0 }
           # Shared with this PC's other gate runner; never alongside its Windows update proof, which has priority.
           . .github/scripts/pc2-machine-lock.ps1
           $lock = Enter-Pc2MachineLock -Mode Shared -TimeoutMinutes 60

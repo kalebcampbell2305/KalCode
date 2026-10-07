@@ -88,8 +88,17 @@ export function isPc2Job(job, sha) {
   );
 }
 
-/** The build PC's second job of a split gate: rust, native E2E and the pool-only Cargo tools. */
+/** The second job of the two-job Windows gate: rust, native E2E and the Cargo tools. */
 export const NATIVE_GATE_JOB = "Gate (Windows, native)";
+
+/**
+ * A trusted host for the "Gate (Windows)" and native jobs: one of the second PC's gate runners (owner,
+ * 2026-10-07: every gate runs there; the build PC only builds and ships), or a build-PC pool worker for a
+ * candidate gated before that move.
+ */
+export function isGateHostJob(job, sha) {
+  return isPc2Job(job, sha) || isMainPcJob(job, sha);
+}
 
 /** One job's verdict: its own completed, trusted, executed Gate step decides it. */
 function jobState(matching, run, sha, trusted) {
@@ -108,9 +117,9 @@ function jobState(matching, run, sha, trusted) {
 }
 
 /**
- * The candidate is green only when every part of its gate is: the build-PC job always, and the build PC's
- * native job and the second-PC job whenever the run has them (a workflow without a split keeps its
- * single-job evidence).
+ * The candidate is green only when every part of its gate is: the "Gate (Windows)" job always, and the
+ * native job and the PC2 job whenever the run has them (a workflow without a split keeps its single-job
+ * evidence).
  */
 export function gateStateFrom(runs, jobs, sha, branch) {
   const run = runs[0];
@@ -120,11 +129,11 @@ export function gateStateFrom(runs, jobs, sha, branch) {
       jobs.filter((j) => j.name === GATE_JOB),
       run,
       sha,
-      isMainPcJob,
+      isGateHostJob,
     ),
   ];
   const nativeJobs = jobs.filter((j) => j.name === NATIVE_GATE_JOB);
-  if (nativeJobs.length) parts.push(jobState(nativeJobs, run, sha, isMainPcJob));
+  if (nativeJobs.length) parts.push(jobState(nativeJobs, run, sha, isGateHostJob));
   const pc2Jobs = jobs.filter((j) => j.name === PC2_GATE_JOB);
   if (pc2Jobs.length) parts.push(jobState(pc2Jobs, run, sha, isPc2Job));
   for (const state of ["failure", "pending", "stale"]) {

@@ -40,12 +40,12 @@ export function assertCandidateWorkflow(source) {
   const windows = workflow.match(/^ {2}windows:\n([\s\S]*?)(?=^ {2}[a-zA-Z][\w-]*:|$(?![\s\S]))/m)?.[1] ?? "";
   if (
     !/ {2}push:\n(?:\s+#.*\n)* {4}branches: \[(?:main, )?"merge-train\/\*\*"\]/.test(workflow) ||
-    !/ {4}runs-on: \[self-hosted, Windows, kalcode-gate(?:, kalcode-main-pc)?\]\n/.test(windows) ||
+    !/ {4}runs-on: \[self-hosted, Windows, (?:kalcode-gate(?:, kalcode-main-pc)?|kalcode-gate-pc2)\]\n/.test(windows) ||
     !windows.includes("name: Gate\n") ||
     !windows.includes("trailers:key=Merge-Train-Base,valueonly")
   ) {
     throw new Error(
-      "candidate gate workflow must trigger merge-train pushes on the main Windows PC and gate its recorded base",
+      "candidate gate workflow must trigger merge-train pushes on a Windows gate runner and gate its recorded base",
     );
   }
   // A split gate's second-PC half must gate the same recorded base on the second PC's runner.

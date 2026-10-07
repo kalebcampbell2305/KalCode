@@ -1,16 +1,15 @@
-// Splits one change-based gate plan between the two Windows gate machines (owner, 2026-10-05: "some
-// tests running on this computer, and some tests running on the other Windows computer"). Both jobs of
-// a gate.yml run test the same event SHA; together they run exactly the selected checks, once each.
+// Splits one change-based gate plan across gate.yml's three Windows jobs. All three run on the second
+// Windows PC's two gate runners (owner, 2026-10-07: "all gates on PC 2 ... We use this computer to build
+// ... the other one to pass the gates and ship to users"). They test the same event SHA; together they
+// run exactly the selected checks, once each.
 //
 //   node tooling/release/lifecycle/gate-split.mjs <main|native|pc2> <id,id,...>   prints that job's ids
 //
-// The second PC takes the self-contained JS/web checks. Everything else (Rust, the desktop frontend,
-// UI and native E2E, and any check added later) stays on the build PC's pool, which has the warm
-// Cargo targets, CMake/libclang and the provider CLIs those checks need. On the build PC it runs as two
-// jobs on two pool workers: "native" (the checks that write the checkout or need the pool's Cargo
-// tools) and "main" (the desktop readers and anything new). In one checkout, rust and native E2E's
-// workspace writes serialized them behind the desktop readers (lane 7 run 37389408543: [frontend 304 s
-// ‖ UI 677 s] → rust 286 s → native E2E 587 s, ~30 min); as separate jobs the two chains overlap.
+// "pc2" takes the self-contained JS/web checks; "native" the checks that write the checkout or need the
+// Cargo tools (rust, native E2E, cargo-deny/audit); "main" the desktop readers and anything new. In one
+// checkout, rust and native E2E's workspace writes serialized them behind the desktop readers (lane 7
+// run 37389408543: [frontend 304 s ‖ UI 677 s] → rust 286 s → native E2E 587 s, ~30 min); as separate
+// jobs the chains overlap.
 import { fileURLToPath } from "node:url";
 
 export const PC2_GATES = Object.freeze([

@@ -938,7 +938,27 @@ describe("merge train pieces", () => {
       "stale",
     );
     assert.equal(state(main, { ...pc2, conclusion: "cancelled" }), "stale");
-    assert.equal(state({ ...pc2, name: "Gate (Windows)" }), "stale", "the second PC never satisfies the build-PC half");
+    // Owner, 2026-10-07: every gate job runs on the second PC, so its runners satisfy every job.
+    assert.equal(state({ ...pc2, name: "Gate (Windows)" }), "success", "a second-PC Gate (Windows) is evidence");
+    const pc2Native = { ...pc2, name: NATIVE_GATE_JOB, runner_name: "kalcode-win-gate-2b" };
+    assert.equal(
+      state({ ...pc2, name: "Gate (Windows)" }, pc2Native, pc2),
+      "success",
+      "all three jobs on the second PC",
+    );
+    assert.equal(
+      state({ ...pc2, name: "Gate (Windows)", runner_name: "kalcode-win-gate-2c" }, pc2Native, pc2),
+      "stale",
+      "only the second PC's own runners",
+    );
+    assert.equal(
+      state({
+        ...pc2,
+        name: "Gate (Windows)",
+        labels: ["self-hosted", "Windows", "kalcode-gate-pc2", "kalcode-main-pc"],
+      }),
+      "stale",
+    );
     // The build PC's two-job half: its native job must be green on a pool worker too.
     const native = { ...main, name: NATIVE_GATE_JOB, runner_name: "kalcode-win-gate-w4" };
     assert.equal(state(main, native, pc2), "success", "all three jobs green");
@@ -1073,11 +1093,10 @@ describe("merge train pieces", () => {
       workflow,
       /if: github\.event_name != 'pull_request' \|\| github\.event\.pull_request\.head\.repo\.full_name == github\.repository/,
     );
-    assert.match(workflow, /runs-on: \[self-hosted, Windows, kalcode-gate, kalcode-main-pc\]\n/);
+    // Owner, 2026-10-07: every Windows gate job runs on the second PC's gate runners.
+    assert.doesNotMatch(workflow, /kalcode-main-pc\]/);
     assert.match(workflow, /name: Plan change-based gate/);
-    assert.match(workflow, /Assert-GateWorkerHost/);
-    assert.ok(workflow.includes("'^kalcode-win-gate(-w[1-5])?$'"));
-    assert.match(workflow, /Runner name does not match its configured slot/);
+    assert.match(workflow, /Unknown second-PC gate worker/);
     assert.match(
       workflow,
       /--base \$env:KALCODE_GATE_BASE --only \$env:KALCODE_GATE_ONLY --jobs \$env:KALCODE_GATE_JOBS --keep-going/,
@@ -1085,7 +1104,7 @@ describe("merge train pieces", () => {
     // The split: the second PC's half gates the same exact candidate and recorded base.
     assert.match(workflow, /name: Gate \(Windows, PC2\)/);
     assert.match(workflow, /runs-on: \[self-hosted, Windows, kalcode-gate-pc2\]\n/);
-    // The build PC's share runs as two matrix jobs (main, native), each gating its half of the split.
+    // The Windows gate runs as two matrix jobs (main, native), each gating its half of the split.
     assert.match(workflow, /half: \[main, native\]/);
     assert.match(workflow, /gate-split\.mjs \$env:GATE_HALF/);
     assert.match(workflow, /gate-split\.mjs pc2/);
@@ -1126,12 +1145,16 @@ test("bootstrap refuses pushing a candidate with no usable main-PC push workflow
   for (const invalid of [
     "",
     workflow.replace('"merge-train/**"', '"unrelated/**"'),
-    workflow.replace(/Windows, kalcode-gate(?:, kalcode-main-pc)?\]/, "Windows, kalcode-gate-2]"),
-    workflow.replace("trailers:key=Merge-Train-Base,valueonly", "wrong-base"),
+    // The two-job Windows gate on an unknown runner label, then the PC2 job.
     workflow.replace(
       "runs-on: [self-hosted, Windows, kalcode-gate-pc2]",
       "runs-on: [self-hosted, Windows, kalcode-gate-2]",
     ),
+    workflow.replace("trailers:key=Merge-Train-Base,valueonly", "wrong-base"),
+    (() => {
+      const at = workflow.lastIndexOf("runs-on: [self-hosted, Windows, kalcode-gate-pc2]");
+      return `${workflow.slice(0, at)}runs-on: [self-hosted, Windows, kalcode-gate-2]${workflow.slice(at + 49)}`;
+    })(),
   ]) {
     const env = setup();
     openPr(env, 1, { ".github/workflows/gate.yml": invalid });
