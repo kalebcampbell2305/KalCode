@@ -57,7 +57,14 @@ fn exe_dir() -> PathBuf {
 }
 
 fn config() -> Value {
-    std::fs::read_to_string(exe_dir().join("fake-provider.json"))
+    let bin = exe_dir();
+    std::fs::read_to_string(bin.join("fake-provider.json"))
+        .or_else(|_| {
+            bin.parent()
+                .map(|root| root.join("codex-resources").join("fake-provider.json"))
+                .ok_or_else(|| std::io::Error::other("fake provider has no distribution root"))
+                .and_then(std::fs::read_to_string)
+        })
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or(Value::Null)
@@ -204,6 +211,76 @@ fn codex_help(config: &Value, args: &[String]) -> Option<String> {
     None
 }
 
+/// Writes the read-only Codex 0.161 app-server config schema used by compatibility negotiation.
+/// The shape mirrors the native CLI's generated `ConfigReadResponse.json`; scenarios can narrow
+/// its string enum or make the output structurally invalid without executing provider code.
+fn codex_config_schema(config: &Value, args: &[String]) -> bool {
+    if args.len() != 4
+        || args[0] != "app-server"
+        || args[1] != "generate-json-schema"
+        || args[2] != "--out"
+    {
+        return false;
+    }
+    let output = PathBuf::from(&args[3]);
+    let mode = get_str(config, "codexConfigSchemaMode", "native");
+    let path = if mode == "wrong-path" {
+        output.join("ConfigReadResponse.json")
+    } else {
+        output.join("v2").join("ConfigReadResponse.json")
+    };
+    if std::fs::create_dir_all(path.parent().unwrap_or(&output)).is_err() {
+        exit(8);
+    }
+    if mode == "malformed" {
+        if std::fs::write(path, b"{not-json").is_err() {
+            exit(8);
+        }
+        return true;
+    }
+
+    let property = if mode == "missing-property" {
+        serde_json::json!({})
+    } else {
+        serde_json::json!({
+            "model_reasoning_effort": {
+                "anyOf": [
+                    {"$ref": "#/definitions/ReasoningEffort"},
+                    {"type": "null"}
+                ]
+            }
+        })
+    };
+    let mut reasoning = serde_json::json!({
+        "description": "Reasoning effort accepted by this deterministic Codex fixture.",
+        "minLength": 1,
+        "type": "string"
+    });
+    if let Some(efforts) = config
+        .get("codexReasoningEfforts")
+        .and_then(Value::as_array)
+    {
+        let Some(reasoning) = reasoning.as_object_mut() else {
+            exit(8);
+        };
+        reasoning.insert("enum".into(), Value::Array(efforts.clone()));
+    }
+    let schema = serde_json::json!({
+        "definitions": {
+            "Config": {"properties": property},
+            "ReasoningEffort": reasoning
+        }
+    });
+    let encoded = match serde_json::to_vec(&schema) {
+        Ok(encoded) => encoded,
+        Err(_) => exit(8),
+    };
+    if std::fs::write(path, encoded).is_err() {
+        exit(8);
+    }
+    true
+}
+
 fn get_i64(config: &Value, key: &str, default: i64) -> i64 {
     config.get(key).and_then(Value::as_i64).unwrap_or(default)
 }
@@ -230,7 +307,17 @@ const EXIT_TOKEN: &str = "FAKE_PROVIDER_EXIT";
 /// each record and its newline go out in ONE append. `writeln!` issues the text and the newline
 /// as separate writes, and two processes interleaving between them merge records onto one
 /// unparseable line, which tests then miscount as missing launches.
-fn record_run(args: &[String]) {
+fn record_run(args: &[String], config: &Value) {
+    // Immutable managed-runtime tests model native provider distributions, whose read-only
+    // capability probes do not rewrite their installation directory. Existing process fixtures
+    // keep the historical adjacent run log unless they opt out explicitly.
+    if config
+        .get("recordAdjacentArtifacts")
+        .and_then(Value::as_bool)
+        == Some(false)
+    {
+        return;
+    }
     let name = std::env::current_exe()
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
@@ -391,13 +478,13 @@ fn main() {
         // the same library code, so the real protocol and failure policy run.
         run_hook_helper(&args[1..]);
     }
-    record_run(&args);
+    let config = config();
+    record_run(&args, &config);
     if args.first().map(String::as_str) == Some("--fake-grandchild") {
         loop {
             std::thread::sleep(Duration::from_secs(1));
         }
     }
-    let config = config();
     let stem = std::env::current_exe()
         .ok()
         .and_then(|p| {
@@ -448,6 +535,9 @@ fn main() {
         print!("{help}");
         exit(get_i64(&config, "helpExit", 0));
     }
+    if kind == "codex" && codex_config_schema(&config, &args) {
+        exit(get_i64(&config, "codexConfigSchemaExit", 0));
+    }
     if kind == "cursor" && args.first().is_some_and(|arg| arg == "status") {
         println!(
             "{{\"status\":\"authenticated\",\"isAuthenticated\":true,\"userInfo\":{{\"email\":\"cursor@example.test\"}}}}"
@@ -474,15 +564,15 @@ fn main() {
         codex_app_server(&config);
     }
     if kind == "codex" && args.first().map(String::as_str) == Some("exec") {
-        record_invocation(&args);
+        record_invocation(&args, &config);
         turns::codex_exec(&config, &args);
     }
     if kind == "gemini" && args.iter().any(|a| a == "--output-format") {
-        record_invocation(&args);
+        record_invocation(&args, &config);
         turns::gemini_headless(&config, &args);
     }
     if kind != "claude" && !args.starts_with(&["login".into(), "status".into()]) {
-        record_invocation(&args);
+        record_invocation(&args, &config);
         turns::interactive(kind, &config, &args);
     }
     if args.starts_with(&["auth".into(), "status".into()]) {
@@ -502,19 +592,26 @@ fn main() {
         exit(get_i64(&config, "loginExit", 0));
     }
     if args.iter().any(|a| a == "-p") {
-        record_invocation(&args);
+        record_invocation(&args, &config);
         session(&config, &args);
         return;
     }
     if args.iter().any(|a| a == "--settings") {
-        record_invocation(&args);
+        record_invocation(&args, &config);
         interactive::run(&config, &args);
     }
     eprintln!("fake provider: unsupported arguments");
     exit(2);
 }
 
-fn record_invocation(args: &[String]) {
+fn record_invocation(args: &[String], config: &Value) {
+    if config
+        .get("recordAdjacentArtifacts")
+        .and_then(Value::as_bool)
+        == Some(false)
+    {
+        return;
+    }
     let dir = exe_dir();
     let _ = std::fs::write(
         dir.join("last-args.json"),
@@ -681,10 +778,16 @@ mod turns {
 
     const CODEX_FIRST: &str = r#"{"type":"thread.started","thread_id":"{SESSION_ID}"}"#;
 
-    fn read_prompt() -> String {
+    fn read_prompt(config: &Value) -> String {
         let mut text = String::new();
         let _ = std::io::stdin().read_to_string(&mut text);
-        let _ = std::fs::write(exe_dir().join("last-stdin.txt"), &text);
+        if config
+            .get("recordAdjacentArtifacts")
+            .and_then(Value::as_bool)
+            != Some(false)
+        {
+            let _ = std::fs::write(exe_dir().join("last-stdin.txt"), &text);
+        }
         text
     }
 
@@ -723,7 +826,7 @@ mod turns {
     }
 
     pub fn codex_exec(config: &Value, args: &[String]) -> ! {
-        let prompt = read_prompt();
+        let prompt = read_prompt(config);
         let session =
             value_after(args, "resume").unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let out = out(session);
@@ -737,6 +840,19 @@ mod turns {
                 "fatal: upstream rejected api_key=sk-proj-abcdefghijklmnopqrstuvwxyz0123456789"
             );
             exit(3);
+        }
+        if let Some(marker) = config.get("codexTurnMarker").and_then(Value::as_str) {
+            out.emit(CODEX_FIRST);
+            out.raw(r#"{"type":"turn.started"}"#);
+            out.raw(
+                &serde_json::json!({
+                    "type": "item.completed",
+                    "item": {"id": "runtime-marker", "type": "agent_message", "text": marker}
+                })
+                .to_string(),
+            );
+            out.raw(r#"{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}"#);
+            exit(get_i64(config, "exitCode", 0));
         }
         let fixture = if prompt.contains("tools") {
             super::CODEX_TOOLS
@@ -757,7 +873,7 @@ mod turns {
     }
 
     pub fn gemini_headless(config: &Value, args: &[String]) -> ! {
-        let prompt = read_prompt();
+        let prompt = read_prompt(config);
         let session =
             value_after(args, "--resume").unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let out = out(session);

@@ -119,9 +119,68 @@ pub fn select_managed_runtime(
     }
 }
 
+/// Selects an immutable runtime for a managed session that can launch more than one Codex
+/// process. A turn session must not retain a mutable global executable path because a package
+/// manager may replace that path between turns. A compatible last-known-good runtime starts
+/// immediately while the watcher snapshots a new installation. On first use, the installation is
+/// validated before copying, then the exact staged bytes are probed again before promotion.
+/// Storage/layout failures never silently return the mutable installation.
+pub fn select_managed_runtime_pinned(
+    installed_executable: Option<&Path>,
+    env: &BTreeMap<OsString, OsString>,
+    neutral_cwd: &Path,
+    store: &RuntimeStore,
+    mut prepare_job: impl FnMut(&str) -> Result<RegisteredJob, ProviderError>,
+    canceled: Option<&dyn Fn() -> bool>,
+) -> Result<ManagedCodexRuntime, ProviderError> {
+    let mut candidate_error = None;
+    if let Some(installed) = installed_executable {
+        if let Ok(Some(selected)) = select_cached_installed(
+            installed,
+            env,
+            neutral_cwd,
+            store,
+            &mut prepare_job,
+            canceled,
+        ) {
+            return Ok(selected);
+        }
+        // A newly installed binary can race the background snapshot watcher. Prefer an existing
+        // policy-compatible immutable runtime immediately; the watcher validates and adopts the
+        // new bytes without making this session wait on their protocol probe or distribution copy.
+        if let Ok(Some(selected)) =
+            select_last_known_good(env, neutral_cwd, store, &mut prepare_job, canceled)
+        {
+            return Ok(selected);
+        }
+        match select_direct(installed, env, neutral_cwd, &mut prepare_job, canceled) {
+            Ok(_) => match select_installed_pinned(
+                installed,
+                env,
+                neutral_cwd,
+                store,
+                &mut prepare_job,
+                canceled,
+            ) {
+                Ok(selected) => return Ok(selected),
+                Err(error) => candidate_error = Some(error),
+            },
+            Err(error) => candidate_error = Some(error),
+        }
+    }
+
+    match select_last_known_good(env, neutral_cwd, store, &mut prepare_job, canceled) {
+        Ok(Some(selected)) => Ok(selected),
+        Ok(None) => Err(candidate_error.unwrap_or(ProviderError::NotInstalled)),
+        Err(fallback_error) => Err(candidate_error.unwrap_or(fallback_error)),
+    }
+}
+
 /// Background-only snapshot preparation. This may copy and hash a large provider distribution,
 /// so desktop startup and installation-change watchers call it asynchronously and retain the
-/// returned lease. Foreground launches use [`select_managed_runtime`] and never perform this copy.
+/// returned lease. Single-process foreground launches use [`select_managed_runtime`] without
+/// copying. A cold multi-turn headless session uses [`select_managed_runtime_pinned`] and must wait
+/// for the immutable copy so later turns cannot follow a replaced global executable path.
 pub fn prewarm_managed_runtime(
     installed_executable: Option<&Path>,
     env: &BTreeMap<OsString, OsString>,
@@ -232,6 +291,45 @@ fn select_installed(
         // the source executable before direct use because it may have changed while staging.
         Err(_) => select_direct(executable, env, neutral_cwd, prepare_job, canceled),
     }
+}
+
+fn select_installed_pinned(
+    executable: &Path,
+    env: &BTreeMap<OsString, OsString>,
+    neutral_cwd: &Path,
+    store: &RuntimeStore,
+    prepare_job: &mut impl FnMut(&str) -> Result<RegisteredJob, ProviderError>,
+    canceled: Option<&dyn Fn() -> bool>,
+) -> Result<ManagedCodexRuntime, ProviderError> {
+    let platform = RuntimePlatform::current().map_err(|_| immutable_runtime_unavailable())?;
+    let layout = resolve_codex_runtime_layout(executable, env, platform)
+        .map_err(|_| immutable_runtime_unavailable())?;
+    let pinned = store
+        .stage(ProviderId::CODEX, &layout)
+        .map_err(|_| immutable_runtime_unavailable())?;
+    let mut snapshot_env = env.clone();
+    pinned.configure_environment(&mut snapshot_env);
+    let capabilities = probe_and_apply_policy(
+        pinned.executable(),
+        &snapshot_env,
+        neutral_cwd,
+        prepare_job,
+        canceled,
+    )?;
+    let version = capabilities.version.to_string();
+    let lease = store
+        .promote_validated(&pinned, &version)
+        .map_err(|_| immutable_runtime_unavailable())?;
+    Ok(ManagedCodexRuntime {
+        executable: lease.executable().to_path_buf(),
+        capabilities,
+        runtime_lease: Some(lease),
+        source: ManagedRuntimeSource::ValidatedSnapshot,
+    })
+}
+
+fn immutable_runtime_unavailable() -> ProviderError {
+    ProviderError::Start("KalCode could not prepare an immutable managed Codex runtime".into())
 }
 
 fn select_direct(

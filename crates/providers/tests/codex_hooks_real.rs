@@ -8,8 +8,7 @@
 //!   cargo test -p kalcode-providers --test codex_hooks_real -- --ignored --nocapture
 //! ```
 //!
-//! It proves, against the installed codex-cli (a verified hook line,
-//! `codex::observing_hooks_verified`), that the `-c hooks.*` session overrides are trusted and
+//! It proves, against the installed codex-cli, that the `-c hooks.*` session overrides are trusted and
 //! fire, asynchronously, in the interactive TUI: WORKING (UserPromptSubmit) → TESTING
 //! (PreToolUse with a test command) → IDLE (Stop, completed once with `notify`), then NEEDS YOU on Codex's own approval prompt (PermissionRequest, for network
 //! access the pane's sandbox lacks) that KalCode's hook never answers: nothing runs until the
@@ -167,9 +166,32 @@ fn real_codex_pane_reports_shared_states_through_its_hooks() {
         .expect("bridge"),
     );
     let panes = Arc::new(PaneRegistry::new());
+    // This explicit hook certification waits for the optional read-only capability probe.
+    // Ordinary first panes remain nonblocking and use notify while the probe warms.
+    let detect_env = DetectEnv::from_process();
+    let spec = kalcode_providers::catalog::codex_spec();
+    let detected = kalcode_providers::launch_probe::detect_for_launch(&spec, &detect_env, None);
+    let executable = detected.executable.expect("installed Codex executable");
+    let version = detected
+        .detection
+        .version
+        .as_deref()
+        .and_then(kalcode_providers::version::Version::parse)
+        .expect("installed Codex semantic version");
+    assert_eq!(
+        kalcode_providers::codex::hook_compatibility::probe_and_cache(
+            &executable,
+            &detect_env.provider_env(&spec.env_policy),
+            Some(root.path()),
+            None,
+            Some(&version),
+        ),
+        kalcode_providers::codex::compatibility::CapabilitySupport::Supported,
+        "the installed Codex must prove its observing-hook contract before this certification"
+    );
     let provider = InteractiveCliProvider::new(
         PaneCli::Codex,
-        DetectEnv::from_process(),
+        detect_env,
         Some(bridge),
         InteractiveConfig {
             hook_program: helper,

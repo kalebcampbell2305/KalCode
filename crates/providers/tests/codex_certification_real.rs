@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use kalcode_providers::DetectEnv;
 use kalcode_providers::account_auth::{CodexAccountAuthError, CodexAccountAuthManager};
+use kalcode_providers::codex::argv::EFFORT_LEVELS;
 use kalcode_providers::codex::runtime::{
     ManagedRuntimeSource, prewarm_managed_runtime, select_managed_runtime,
 };
@@ -108,6 +109,25 @@ fn real_codex_selects_and_probes_an_immutable_managed_runtime() {
     let foreground_elapsed = foreground_started.elapsed();
     assert_eq!(foreground.source(), ManagedRuntimeSource::InstalledDirect);
     assert!(foreground.runtime_lease().is_none());
+    for effort in EFFORT_LEVELS {
+        assert!(
+            foreground
+                .capabilities()
+                .reasoning_effort_values
+                .contains(*effort),
+            "the real generated Config schema diagnostics omitted required {effort}"
+        );
+        assert!(
+            foreground.capabilities().supports_reasoning_effort(effort),
+            "the real generated Config schema rejected {effort}"
+        );
+    }
+    assert!(
+        !foreground
+            .capabilities()
+            .supports_reasoning_effort("high';model='attacker"),
+        "open schema support must still reject quote/injection-shaped argv values"
+    );
     assert!(
         !store_root.exists(),
         "a foreground prewarm miss must not create or copy runtime storage"

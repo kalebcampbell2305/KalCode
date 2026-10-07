@@ -196,17 +196,26 @@ pub fn permission_mappings() -> Vec<PermissionMapping> {
 pub enum CodexExecError {
     #[error("the model name is not valid")]
     InvalidModel,
-    #[error("the reasoning effort is not supported")]
+    #[error("the reasoning effort name is not valid")]
     InvalidEffort,
     #[error("the session id is not valid")]
     InvalidSessionId,
 }
 
-/// Codex reasoning-effort values certified for the CLI config override.
+/// Current KalCode effort choices. Capability negotiation can admit additional provider-native
+/// values that satisfy [`valid_effort_name`].
 pub const EFFORT_LEVELS: &[&str] = &["minimal", "low", "medium", "high", "xhigh"];
 
+/// Accepts only the bounded token grammar that is safe inside KalCode's quoted TOML override.
+/// Whether a managed Codex runtime supports the token is decided by its probed capability schema.
 pub fn valid_effort_name(effort: &str) -> bool {
-    EFFORT_LEVELS.contains(&effort)
+    const MAX_EFFORT_NAME_BYTES: usize = 64;
+
+    !effort.is_empty()
+        && effort.len() <= MAX_EFFORT_NAME_BYTES
+        && effort
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_-".contains(&byte))
 }
 
 /// The argv (after the program) for one headless turn. The prompt is written to stdin (`-`).
@@ -455,7 +464,16 @@ mod tests {
         for effort in EFFORT_LEVELS {
             assert!(exec_args(PermissionMode::Approve, None, Some(effort), None).is_ok());
         }
-        for effort in ["", "HIGH", "max", "ultra", "high' -c web_search='live"] {
+        for effort in ["max", "ultra", "adaptive_2", "extra-high", "2high"] {
+            assert!(exec_args(PermissionMode::Approve, None, Some(effort), None).is_ok());
+        }
+        for effort in [
+            "",
+            "HIGH",
+            "high effort",
+            "high' -c web_search='live",
+            "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklm",
+        ] {
             assert_eq!(
                 exec_args(PermissionMode::Approve, None, Some(effort), None),
                 Err(CodexExecError::InvalidEffort)
