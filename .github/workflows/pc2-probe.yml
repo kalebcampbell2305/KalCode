@@ -29,24 +29,36 @@ jobs:
           $accountRoot = Split-Path -Parent $runnerRoot
           "Host runner $env:RUNNER_NAME as $env:USERNAME; runner root $runnerRoot; account root $accountRoot"
           if (-not (Test-Path -LiteralPath (Join-Path $runnerRoot 'config.cmd'))) { throw "No runner install at $runnerRoot" }
+          # A child must not inherit this job's runner identity.
+          Get-ChildItem Env: | Where-Object { $_.Name -match '^(RUNNER_|ACTIONS_|GITHUB_)' } | ForEach-Object { Remove-Item -LiteralPath ("Env:" + $_.Name) }
+          $files = '.runner', '.credentials', '.credentials_rsaparams', '.service'
           foreach ($name in 'kalcode-win-gate-2c', 'kalcode-win-gate-2d') {
             $dir = Join-Path $accountRoot ('runner-' + ($name -replace '^kalcode-win-gate-', ''))
-            if (-not (Test-Path -LiteralPath (Join-Path $dir '.runner'))) {
-              New-Item -ItemType Directory -Force -Path $dir | Out-Null
-              & robocopy.exe $runnerRoot $dir /E /NFL /NDL /NJH /NJS /NP /XD _work _diag /XF .runner .credentials .credentials_rsaparams .service | Out-Null
-              if ($LASTEXITCODE -ge 8) { throw "copy failed for $name ($LASTEXITCODE)" }
-              Push-Location $dir
-              try {
-                & .\config.cmd --unattended --replace --url https://github.com/kalebcampbell2305/KalCode --token $env:REG_TOKEN --name $name --labels kalcode-gate-pc2-pending --work _work
-                if ($LASTEXITCODE) { throw "config failed for $name ($LASTEXITCODE)" }
-              } finally { Pop-Location }
-            }
-            $running = @(Get-CimInstance Win32_Process -Filter "Name='Runner.Listener.exe'" | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($dir, [StringComparison]::OrdinalIgnoreCase) })
+            $listener = { @(Get-CimInstance Win32_Process -Filter "Name='Runner.Listener.exe'" | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($dir + '\', [StringComparison]::OrdinalIgnoreCase) }) }
+            $running = & $listener
             if ($running.Count -gt 0) { "$name already running (pid $($running[0].ProcessId))"; continue }
+            if (Test-Path -LiteralPath $dir) {
+              "$name stale folder (no listener): " + ((Get-ChildItem -Force -LiteralPath $dir | ForEach-Object Name) -join ' ')
+              foreach ($f in $files) { Remove-Item -Force -LiteralPath (Join-Path $dir $f) -ErrorAction SilentlyContinue }
+            }
+            New-Item -ItemType Directory -Force -Path $dir | Out-Null
+            & robocopy.exe $runnerRoot $dir /E /NFL /NDL /NJH /NJS /NP /XD _work _diag /XF .runner .credentials .credentials_rsaparams .service | Out-Null
+            if ($LASTEXITCODE -ge 8) { throw "copy failed for $name ($LASTEXITCODE)" }
+            foreach ($f in $files) { Remove-Item -Force -LiteralPath (Join-Path $dir $f) -ErrorAction SilentlyContinue }
+            Push-Location $dir
+            try {
+              & .\config.cmd --unattended --replace --url https://github.com/kalebcampbell2305/KalCode --token $env:REG_TOKEN --name $name --labels kalcode-gate-pc2-pending --work _work
+              if ($LASTEXITCODE) {
+                "config refused; folder now: " + ((Get-ChildItem -Force -LiteralPath $dir | ForEach-Object Name) -join ' ')
+                Get-ChildItem -Force -LiteralPath (Join-Path $dir 'bin') -Filter '.*' -ErrorAction SilentlyContinue | ForEach-Object { "bin has " + $_.Name }
+                throw "config failed for $name ($LASTEXITCODE)"
+              }
+            } finally { Pop-Location }
             # Outlive this job: the runner stops a job's leftovers by its tracking id; give the child none.
             $env:RUNNER_TRACKING_ID = '0'
             Start-Process -FilePath (Join-Path $dir 'run.cmd') -WorkingDirectory $dir -WindowStyle Hidden
-            Start-Sleep -Seconds 10
-            $started = @(Get-CimInstance Win32_Process -Filter "Name='Runner.Listener.exe'" | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($dir, [StringComparison]::OrdinalIgnoreCase) })
+            Start-Sleep -Seconds 15
+            $started = & $listener
             "$name started: $($started.Count) listener(s) in $dir"
+            if ($started.Count -eq 0) { throw "$name did not start" }
           }
