@@ -8,6 +8,7 @@ import { after, describe, test } from "node:test";
 import {
   createGitHubProvider,
   gateStateFrom,
+  isQueuedPrGateRun,
   MAIN_PC_GATE_RUNNER,
   NATIVE_GATE_JOB,
   PC2_GATE_JOB,
@@ -1239,4 +1240,65 @@ test("GitHub cancellation binds exact candidate push and rechecks status without
   });
   assert.deepEqual(await provider.cancelGates(sha, branch), [1]);
   assert.deepEqual(mutations, ["repos/fixture/repository/actions/runs/1/cancel"]);
+});
+
+test("the train cancels only queued PRs' own active branch gates, re-reading each before cancelling", async () => {
+  const item = { number: 7, headRef: "feat/thing" };
+  const base = {
+    event: "pull_request",
+    path: ".github/workflows/gate.yml",
+    head_branch: "feat/thing",
+    status: "in_progress",
+  };
+  assert.equal(isQueuedPrGateRun(base, item), true);
+  for (const wrong of [
+    { event: "push" },
+    { path: ".github/workflows/other.yml" },
+    { head_branch: "feat/other" },
+    { status: "completed" },
+  ])
+    assert.equal(isQueuedPrGateRun({ ...base, ...wrong }, item), false);
+  assert.equal(isQueuedPrGateRun(base, { number: 7, headRef: "" }), false);
+  const runs = [
+    { ...base, id: 1 },
+    { ...base, id: 2, status: "queued" },
+    { ...base, id: 3, status: "completed" },
+    { ...base, id: 4, event: "push" },
+    { ...base, id: 5 },
+  ];
+  const mutations = [];
+  const provider = await createGitHubProvider({
+    repo: ".",
+    slug: "fixture/repository",
+    gh: async (args) => {
+      if (args.includes("POST")) {
+        mutations.push(args.at(-1));
+        return { code: 0, stdout: "", stderr: "" };
+      }
+      if (args[1].includes("/runs?")) {
+        assert.match(args[1], /event=pull_request&branch=feat%2Fthing/);
+        return { stdout: JSON.stringify({ workflow_runs: runs }) };
+      }
+      const id = Number(args[1].split("/").at(-1));
+      const run = { ...runs.find((r) => r.id === id) };
+      if (id === 5) run.status = "completed";
+      return { stdout: JSON.stringify(run) };
+    },
+  });
+  assert.deepEqual(await provider.cancelPrGates([item, { number: 8 }]), [1, 2]);
+  assert.deepEqual(mutations, [
+    "repos/fixture/repository/actions/runs/1/cancel",
+    "repos/fixture/repository/actions/runs/2/cancel",
+  ]);
+});
+
+test("gate.yml skips a queued PR's own branch gate (the train gates its exact candidate)", () => {
+  const workflow = readFileSync(new URL("../../.github/workflows/gate.yml", import.meta.url), "utf8").replaceAll(
+    "\r\n",
+    "\n",
+  );
+  const guards = workflow.match(/^ {4}if: github\.event_name != 'pull_request' .*$/gm) ?? [];
+  assert.equal(guards.length, 2, "the windows matrix and the PC2 job");
+  for (const guard of guards)
+    assert.ok(guard.includes("!contains(github.event.pull_request.labels.*.name, 'merge-queue')"));
 });

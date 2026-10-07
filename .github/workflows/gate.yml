@@ -58,7 +58,9 @@ jobs:
       matrix:
         half: [main, native]
     # Never run code from a fork on our machines.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # A PR in the merge queue is gated inside its exact merge-train candidate; its own branch gate would only
+    # hold the runners the candidates need (the train also cancels such runs when it builds).
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository && !contains(github.event.pull_request.labels.*.name, 'merge-queue')
     runs-on: [self-hosted, Windows, kalcode-gate-pc2]
     # A cold first Rust build on the second PC's runners fits; warm runs take a fraction.
     timeout-minutes: 300
@@ -167,9 +169,16 @@ jobs:
       # The gate PC must not throttle or sleep mid-gate (owner, 2026-10-07: PC2 stays plugged in and idle for
       # gates). Evidence only: it warns and never fails the job.
       - name: Record the gate PC's power state
-        if: steps.reuse.outputs.reused != 'true' && matrix.half == 'main'
+        if: steps.reuse.outputs.reused != 'true'
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
+          # Capacity and live load at job start: how many gate runners this PC can carry.
+          try {
+            $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+            $cpu = @(Get-CimInstance Win32_Processor -ErrorAction Stop)
+            $load = [math]::Round(($cpu | Measure-Object -Property LoadPercentage -Average).Average)
+            Write-Output ("Capacity: {0} logical CPUs, {1:N1} GiB RAM ({2:N1} GiB free); CPU load {3}%" -f ($cpu | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum, ($os.TotalVisibleMemorySize / 1MB), ($os.FreePhysicalMemory / 1MB), $load)
+          } catch { }
           $scheme = (powercfg /getactivescheme | Out-String).Trim()
           Write-Output "Power plan: $scheme"
           if ($scheme -notmatch '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c|High performance|Ultimate') { Write-Output '::warning::The gate PC is not on the High Performance power plan.' }
@@ -372,7 +381,9 @@ jobs:
   pc2:
     name: Gate (Windows, PC2)
     # Never run code from a fork on our machines.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # A PR in the merge queue is gated inside its exact merge-train candidate; its own branch gate would only
+    # hold the runners the candidates need (the train also cancels such runs when it builds).
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository && !contains(github.event.pull_request.labels.*.name, 'merge-queue')
     # The JS/web share of the same exact candidate, on the second Windows PC like the jobs above (owner,
     # 2026-10-07: all gates there). Its runners are kalcode-win-gate-2 and kalcode-win-gate-2b, each with
     # its own account, checkout and port block.
