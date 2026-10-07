@@ -242,6 +242,21 @@ export function laneId(prs) {
     .slice(0, 8);
 }
 
+/**
+ * The stacking order for one round (owner rule: a finished feature that merges clean never waits behind a
+ * failing one). Lanes with no recent red form the bottom of the stack; lanes `isRed(number)` flags for any
+ * of their PRs go on top. Ties keep queue order. `moved` and `jumped` name the red lanes that now stack
+ * above clean lanes queued after them (both empty when the order is the queue order).
+ */
+export function stackOrder(lanes, isRed) {
+  const red = new Set(lanes.filter((l) => l.numbers.some(isRed)));
+  const ordered = [...lanes.filter((l) => !red.has(l)), ...lanes.filter((l) => red.has(l))];
+  const at = (lane) => lanes.indexOf(lane);
+  const moved = [...red].filter((r) => lanes.some((l) => !red.has(l) && at(l) > at(r)));
+  const jumped = moved.length ? lanes.filter((l) => !red.has(l) && at(l) > at(moved[0])) : [];
+  return { lanes: ordered, moved, jumped };
+}
+
 /** Paths every release lands on main (the website's release record and release notes). */
 export function isReleaseRecordPath(path) {
   return path === "apps/website/src/data/releases.json" || path.startsWith("docs/releases/");
@@ -366,6 +381,7 @@ export function createTrain({
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   hooks = {},
   abandonAfterMs = 20 * 60_000,
+  redLaneWindowMs = 6 * 60 * 60_000,
   leaseMs = 5 * 60_000,
   leasePath = null,
   leaseOwner = null,
@@ -416,6 +432,20 @@ export function createTrain({
     pr[event] ??= at;
     pr.last = event;
     pr.lastAt = at;
+  };
+  /**
+   * Whether `number` stacks on top this round: its most recent gated level was attributed red (redAt, kept
+   * until a level containing it gates green), or an eject / bisect record from the last redLaneWindowMs
+   * (state written before redAt existed) with no green since.
+   */
+  const recentlyRed = (state, number) => {
+    const pr = state.prs?.[number] ?? {};
+    if (Number.isFinite(pr.redAt)) return true;
+    const green = Math.max(pr.lastGreenAt ?? 0, pr.greenAt ?? 0);
+    const records = [pr.failedAt];
+    for (const [key, record] of Object.entries(state.bisect ?? {}))
+      if (key.split(",").some((part) => part.split(":")[0] === String(number))) records.push(record?.at);
+    return records.some((at) => Number.isFinite(at) && now() - at < redLaneWindowMs && at > green);
   };
   const lines = async (args) =>
     (await git(args)).stdout
@@ -974,6 +1004,7 @@ export function createTrain({
    * concurrently. The deepest green level lands in one fast-forward (compatible lanes batch); when a lower
    * level lands, the deeper ones still fast-forward with their exact gated trees (main is on their chain).
    * A lane's conflict skips only its own PRs; a red level is attributed to its own lane (see run()).
+   * Lane order is queue order, except that recently-red lanes stack above clean ones (see stackOrder).
    */
   async function buildAll() {
     return withNamespace(async (ns) => {
@@ -982,6 +1013,15 @@ export function createTrain({
       const planned = await planIn(ns, snap);
       const state = loadState();
       const bisect = state.bisect ?? {};
+      // Recently-red lanes stack on top: clean lanes below them gate and land without waiting on them.
+      const order = stackOrder(planned.lanes, (n) => recentlyRed(state, n));
+      planned.lanes = order.lanes;
+      if (order.moved.length) {
+        const fmt = (ls) => ls.map((l) => `[${l.numbers.map((n) => `#${n}`).join(" ")}]`).join(" ");
+        log(
+          `stacking recently-red lane${order.moved.length > 1 ? "s" : ""} ${fmt(order.moved)} above ${fmt(order.jumped)}`,
+        );
+      }
       const valid = new Map();
       const onMain = (c) => !c.invalid && (c.base === main || c.chain?.includes(main));
       for (const c of snap.candidates) if (onMain(c)) valid.set(c.branch, c);
@@ -1503,7 +1543,11 @@ export function createTrain({
           all.levels.forEach((level, k) => {
             for (const i of level.included) {
               if (gates[k].state === "pending") prEvent(state, i.number, "gateStartedAt");
-              if (gates[k].state === "success") prEvent(state, i.number, "greenAt");
+              if (gates[k].state === "success") {
+                prEvent(state, i.number, "greenAt");
+                state.prs[i.number].lastGreenAt = now();
+                delete state.prs[i.number].redAt; // green again: back to queue order
+              }
             }
           });
         });
@@ -1516,6 +1560,13 @@ export function createTrain({
           attributed = true;
           const level = all.levels[k];
           const lanePrs = level.included.filter((i) => level.added.includes(i.number));
+          // The whole lane stacks on top from the next build until a level containing it gates green.
+          updateState((state) => {
+            for (const n of new Set([...level.laneNumbers, ...lanePrs.map((i) => i.number)])) {
+              state.prs[n] ??= {};
+              state.prs[n].redAt = now();
+            }
+          });
           if (lanePrs.length === 1) {
             await ejectPr(lanePrs[0], level);
           } else {
@@ -1535,6 +1586,8 @@ export function createTrain({
           for (const above of all.levels.slice(k))
             await retire(above, `built on red ${level.branch}`, { supersededBy: "bisect" });
         }
+        // No wait: the next round rebuilds at once, with the red lane on top (or ejected), so the clean levels
+        // that were above it re-stack on the highest green level below it (or main) and gate immediately.
         if (attributed) continue;
 
         const green = all.levels
