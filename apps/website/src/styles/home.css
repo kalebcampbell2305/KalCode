@@ -1046,6 +1046,18 @@
   font-size: 0.625rem;
   white-space: nowrap;
 }
+/* The desk-restore notice: a standalone card, its action in the accent (not a destructive red). */
+.fv-close--resume {
+  height: auto;
+}
+.fv-close--resume .fv-dialog {
+  position: static;
+}
+.fv-btns span[data-accent] {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+  color: var(--color-accent-text);
+}
 .fv-btns span[data-primary] {
   border-color: var(--status-failed-line);
   background: var(--status-failed-soft);

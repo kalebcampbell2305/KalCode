@@ -147,13 +147,17 @@ describe("the live demo's sample workspace", () => {
     expect(state.surface).toBe("dashboard");
   });
 
-  it("Smart Close asks before ending active work and can keep an agent running", () => {
+  it("Smart Close asks before ending active work, and closing a pane stops its agent (0.1.9+2168)", () => {
     const state = initialState();
     requestClose(state, "t-a1");
     expect(state.closing).toBe("t-a1");
-    resolveClose(state, "keep");
-    expect(state.tabs["t-a1"]).toBeUndefined();
+    resolveClose(state, "cancel");
+    expect(state.tabs["t-a1"]).toBeDefined();
     expect(state.agents.a1).toBeDefined();
+    requestClose(state, "t-a1");
+    resolveClose(state, "stop");
+    expect(state.tabs["t-a1"]).toBeUndefined();
+    expect(state.agents.a1).toBeUndefined();
     requestClose(state, "t-a3");
     expect(state.closing).toBeNull();
     expect(state.agents.a3).toBeUndefined();

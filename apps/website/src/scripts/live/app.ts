@@ -223,13 +223,12 @@ export function mountLiveDemo(root: HTMLElement): LiveDemo {
         break;
       case "close":
         requestClose(state, arg);
-        if (state.closing) focusSoon('[data-do="close-keep"]');
+        if (state.closing) focusSoon('[data-do="close-cancel"]');
         break;
       case "close-cancel":
-      case "close-keep":
       case "close-stop": {
         const tab = state.closing;
-        resolveClose(state, name === "close-keep" ? "keep" : name === "close-stop" ? "stop" : "cancel");
+        resolveClose(state, name === "close-stop" ? "stop" : "cancel");
         if (name === "close-cancel" && tab) focusSoon(`[data-do="close:${tab}"]`);
         break;
       }

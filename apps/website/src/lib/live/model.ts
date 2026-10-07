@@ -201,7 +201,7 @@ export interface State {
   layout: "auto" | "2" | "3" | "4";
   menu: Menu;
   launcher: Launcher | null;
-  /** The pane whose close is waiting on Smart Close (Cancel / Keep Running / Stop and Close). */
+  /** The pane whose close is waiting on Smart Close (Cancel / Stop and Close). */
   closing: string | null;
   /** The terminal-header account picker: which agent it is open for and the chosen account. */
   picker: { agent: string; choice: string | null } | null;
@@ -369,8 +369,8 @@ function accounts(): Account[] {
       plan: "Max 20x",
       isDefault: true,
       windows: [
-        { label: "5-hour", left: 64, resets: "Resets in 2h 14m" },
         { label: "Weekly", left: 81, resets: "Resets Mon 9:00" },
+        { label: "5-hour", left: 64, resets: "Resets in 2h 14m" },
       ],
     },
     {
@@ -380,8 +380,8 @@ function accounts(): Account[] {
       plan: "Team",
       isDefault: false,
       windows: [
+        { label: "Weekly", left: 12, resets: "Resets Thu 9:00" },
         { label: "5-hour", left: 18, resets: "Resets in 41m" },
-        { label: "Weekly", left: 52, resets: "Resets Thu 9:00" },
       ],
     },
     {
@@ -391,8 +391,8 @@ function accounts(): Account[] {
       plan: "Plus",
       isDefault: true,
       windows: [
-        { label: "5-hour", left: 56, resets: "Resets in 3h 02m" },
         { label: "Weekly", left: 73, resets: "Resets Sun 18:00" },
+        { label: "5-hour", left: 56, resets: "Resets in 3h 02m" },
       ],
     },
     {
@@ -1197,7 +1197,7 @@ export function openWidget(state: State, widget: "approvals" | "agents") {
   );
 }
 
-/** Removes a pane. Its agent, if any, keeps running in the background (Smart Close: Keep Running). */
+/** Removes a pane from the layout (closeTab then ends what ran in it). */
 export function detachTab(state: State, tabId: string) {
   const tab = state.tabs[tabId];
   if (!tab) return;
@@ -1244,23 +1244,11 @@ export function requestClose(state: State, tabId: string) {
   if (hasActiveWork(state, tabId)) state.closing = tabId;
   else closeTab(state, tabId);
 }
-export function resolveClose(state: State, choice: "cancel" | "keep" | "stop") {
+export function resolveClose(state: State, choice: "cancel" | "stop") {
   const tabId = state.closing;
   state.closing = null;
   if (!tabId || choice === "cancel") return;
-  const tab = state.tabs[tabId];
-  if (choice === "keep") {
-    detachTab(state, tabId);
-    if (tab)
-      toast(
-        state,
-        `${tab.agent ? (state.agents[tab.agent]?.name ?? tab.title) : tab.title} keeps running.`,
-        "info",
-        tab.agent,
-      );
-  } else {
-    closeTab(state, tabId);
-  }
+  closeTab(state, tabId);
 }
 
 /** KalTidy "Stop idle terminals": idle shells close; agents and busy terminals stay. */

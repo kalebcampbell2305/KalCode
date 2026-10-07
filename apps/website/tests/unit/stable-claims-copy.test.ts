@@ -221,7 +221,8 @@ describe("KalVoice command examples", () => {
     expect(text(await render(KalVoicePage, "/kalvoice"))).toContain("“Pause every active thread.”");
     const docs = text(await render(KalVoiceDocs, "/docs/kalvoice"));
     for (const example of [
-      "“Go to the dashboard.”",
+      "“Open Activity.”",
+      "“Start three Codex agents.”",
       "“Pause every active thread.”",
       "“What needs permission?”",
       "“What are my threads doing?”",
