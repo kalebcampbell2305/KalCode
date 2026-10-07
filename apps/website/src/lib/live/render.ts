@@ -901,8 +901,8 @@ function smartClose(state: State): string {
   return `<div class="lk-scrim" data-do="close-cancel"></div>
 <div class="lk-dialog lk-dialog--alert" role="alertdialog" aria-modal="true" aria-labelledby="lk-close-title" aria-describedby="lk-close-body" data-dialog>
   <h4 id="lk-close-title">Close active work?</h4>
-  <p id="lk-close-body">A terminal or agent may still be running. Keep it in the background, or stop it and close.</p>
-  <div class="lk-dialog__actions"><button type="button" class="lk-btn lk-btn--ghost" data-do="close-cancel">Cancel</button><button type="button" class="lk-btn" data-do="close-keep">Keep Running</button><button type="button" class="lk-btn lk-btn--danger" data-do="close-stop">Stop and Close</button></div>
+  <p id="lk-close-body">A terminal or agent may still be running. Stop it and close the pane, or cancel to keep working.</p>
+  <div class="lk-dialog__actions"><button type="button" class="lk-btn lk-btn--ghost" data-do="close-cancel">Cancel</button><button type="button" class="lk-btn lk-btn--danger" data-do="close-stop">Stop and Close</button></div>
 </div>`;
 }
 
