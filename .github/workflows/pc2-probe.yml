@@ -1,4 +1,9 @@
-name: PC2 capacity probe (throwaway)
+name: PC2 extra gate runners bootstrap (throwaway)
+
+# Throwaway branch only (never merged). Registers kalcode-win-gate-2c and -2d on the second PC as extra
+# runner instances of this gate account, outside any runner's _work tree, with the holding label
+# kalcode-gate-pc2-pending (activated only once gate.yml on main accepts their names, #382). They run
+# detached until the next reboot; the owner's one-time elevated add-gate-runner-pc2.ps1 makes them services.
 
 on:
   push:
@@ -8,38 +13,40 @@ permissions:
   contents: read
 
 jobs:
-  probe:
-    runs-on: [self-hosted, Windows, kalcode-desktop-qa]
+  bootstrap:
+    runs-on: [self-hosted, Windows, kalcode-gate-pc2]
     timeout-minutes: 20
     steps:
-      - name: Measure PC2 hardware and sample load while gates run
+      - name: Register and start kalcode-win-gate-2c and -2d
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        env:
+          REG_TOKEN: ${{ secrets.PC2_RUNNER_TOKEN }}
         run: |
-          $os = Get-CimInstance Win32_OperatingSystem
-          $cpu = @(Get-CimInstance Win32_Processor)
-          $cs = Get-CimInstance Win32_ComputerSystem
-          "Host: $($cs.Name) model $($cs.Manufacturer) $($cs.Model)"
-          "CPU: $($cpu[0].Name.Trim()); $(($cpu | Measure-Object NumberOfCores -Sum).Sum) cores / $(($cpu | Measure-Object NumberOfLogicalProcessors -Sum).Sum) logical; max $($cpu[0].MaxClockSpeed) MHz"
-          "RAM: {0:N1} GiB total" -f ($os.TotalVisibleMemorySize / 1MB)
-          Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | ForEach-Object { "Disk {0} {1:N0} GiB free of {2:N0} GiB" -f $_.DeviceID, ($_.FreeSpace / 1GB), ($_.Size / 1GB) }
-          Get-PhysicalDisk -ErrorAction SilentlyContinue | ForEach-Object { "PhysicalDisk: $($_.FriendlyName) $($_.MediaType) $($_.BusType) {0:N0} GiB" -f ($_.Size / 1GB) }
-          foreach ($root in 'C:\kalcode-ci', 'C:\kalcode-ci-2b') {
-            if (Test-Path -LiteralPath $root) {
-              $targets = Get-ChildItem -LiteralPath $root -Directory -Recurse -Depth 4 -Filter target -ErrorAction SilentlyContinue | Select-Object -First 4
-              foreach ($t in $targets) {
-                $bytes = (Get-ChildItem -LiteralPath $t.FullName -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
-                "Cargo target {0}: {1:N1} GiB" -f $t.FullName, ($bytes / 1GB)
-              }
-            } else { "No $root" }
-          }
-          "--- sampling every 15 s for 10 min (CPU %, free RAM GiB, gate processes) ---"
-          for ($i = 0; $i -lt 40; $i++) {
-            $load = [math]::Round((Get-CimInstance Win32_Processor | Measure-Object LoadPercentage -Average).Average)
-            $free = (Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1MB
-            $procs = Get-Process -ErrorAction SilentlyContinue
-            $rustc = @($procs | Where-Object { $_.ProcessName -eq 'rustc' }).Count
-            $node = @($procs | Where-Object { $_.ProcessName -eq 'node' }).Count
-            $chrome = @($procs | Where-Object { $_.ProcessName -match 'chrome|msedgewebview2' }).Count
-            "{0:HH:mm:ss} cpu {1,3}% freeRAM {2,5:N1} GiB rustc {3} node {4} browser {5}" -f (Get-Date).ToUniversalTime(), $load, $free, $rustc, $node, $chrome
-            Start-Sleep -Seconds 15
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:REG_TOKEN) { throw 'No registration token secret' }
+          # RUNNER_WORKSPACE = <runner>\_work\<repo>; the runner's own folder holds bin\, externals\ and .env.
+          $runnerRoot = Split-Path -Parent (Split-Path -Parent $env:RUNNER_WORKSPACE)
+          $accountRoot = Split-Path -Parent $runnerRoot
+          "Host runner $env:RUNNER_NAME as $env:USERNAME; runner root $runnerRoot; account root $accountRoot"
+          if (-not (Test-Path -LiteralPath (Join-Path $runnerRoot 'config.cmd'))) { throw "No runner install at $runnerRoot" }
+          foreach ($name in 'kalcode-win-gate-2c', 'kalcode-win-gate-2d') {
+            $dir = Join-Path $accountRoot ('runner-' + ($name -replace '^kalcode-win-gate-', ''))
+            if (-not (Test-Path -LiteralPath (Join-Path $dir '.runner'))) {
+              New-Item -ItemType Directory -Force -Path $dir | Out-Null
+              & robocopy.exe $runnerRoot $dir /E /NFL /NDL /NJH /NJS /NP /XD _work _diag /XF .runner .credentials .credentials_rsaparams .service | Out-Null
+              if ($LASTEXITCODE -ge 8) { throw "copy failed for $name ($LASTEXITCODE)" }
+              Push-Location $dir
+              try {
+                & .\config.cmd --unattended --replace --url https://github.com/kalebcampbell2305/KalCode --token $env:REG_TOKEN --name $name --labels kalcode-gate-pc2-pending --work _work
+                if ($LASTEXITCODE) { throw "config failed for $name ($LASTEXITCODE)" }
+              } finally { Pop-Location }
+            }
+            $running = @(Get-CimInstance Win32_Process -Filter "Name='Runner.Listener.exe'" | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($dir, [StringComparison]::OrdinalIgnoreCase) })
+            if ($running.Count -gt 0) { "$name already running (pid $($running[0].ProcessId))"; continue }
+            # Outlive this job: the runner stops a job's leftovers by its tracking id; give the child none.
+            $env:RUNNER_TRACKING_ID = '0'
+            Start-Process -FilePath (Join-Path $dir 'run.cmd') -WorkingDirectory $dir -WindowStyle Hidden
+            Start-Sleep -Seconds 10
+            $started = @(Get-CimInstance Win32_Process -Filter "Name='Runner.Listener.exe'" | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($dir, [StringComparison]::OrdinalIgnoreCase) })
+            "$name started: $($started.Count) listener(s) in $dir"
           }
