@@ -1242,7 +1242,20 @@ export function createTrain({
       log(
         `lanes on ${short(main)}: ${planned.lanes.map((l) => `[${l.numbers.map((n) => `#${n}`).join(" ")}]`).join(" ") || "none"}; levels ${levels.map((l) => `${l.branch}(${l.action})`).join(", ") || "none"}`,
       );
-      return { schema: MANIFEST_SCHEMA, base: main, lanes: planned.lanes, levels, skipped, reasons: planned.reasons };
+      const manifest = {
+        schema: MANIFEST_SCHEMA,
+        base: main,
+        lanes: planned.lanes,
+        levels,
+        skipped,
+        reasons: planned.reasons,
+      };
+      try {
+        await hooks.afterBuild?.(manifest); // e.g. the opt-in release lookahead (speculative.mjs); never breaks a round
+      } catch (error) {
+        log(`warning: after-build hook failed: ${error.message}`);
+      }
+      return manifest;
     });
   }
 
@@ -1782,6 +1795,16 @@ async function main(argv) {
     resolvers: [releaseRecordResolver],
     leasePath: machineLeasePath(),
     leaseOwner: process.env.KALCODE_TRAIN_OWNER || null,
+    hooks: {
+      afterBuild: async (manifest) =>
+        (await import("./speculative.mjs")).releaseLookahead({
+          manifest,
+          repo: toplevel,
+          mainCheckout: dirname(resolve(commonDir)),
+          lanesDir,
+          mergeLog: join(lanesDir, "merge-log.md"),
+        }),
+    },
   });
   if (opts.command === "submit") {
     const n = Number(opts.positional[0].replace(/^#/, ""));
