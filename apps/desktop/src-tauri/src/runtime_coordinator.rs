@@ -98,9 +98,12 @@ impl RuntimeBundle {
             (account.snapshot().account, account.acquire_active_lease())
         {
             let weak = Arc::downgrade(&account);
+            let account_id = identity.id.clone();
+            // Integrations live as long as this runtime, so a plan-document renewal or offline
+            // grace for the same account must not revoke them; sign-out or expiry still does.
             let valid = Arc::new(move || {
                 weak.upgrade()
-                    .is_some_and(|account| account.validate_active_lease(&lease))
+                    .is_some_and(|account| account.validate_active_account(&lease, &account_id))
             });
             match crate::integration_commands::IntegrationState::start(
                 state,

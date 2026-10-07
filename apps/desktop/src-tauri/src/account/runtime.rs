@@ -28,6 +28,11 @@ use super::social::{
 };
 
 const RETRY_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+/// A running KalCode renews its signed plan document this long before the document expires.
+/// The document lasts at most 7 days (less near a subscription's renewal), and an expired one
+/// revokes workspace authority, which stops running agents and terminals.
+pub const ENTITLEMENT_RENEW_BEFORE_SECONDS: i64 = 24 * 60 * 60;
 const MAX_SOCIAL_PENDING_SECONDS: i64 = 15 * 60;
 
 pub trait Clock: Send + Sync {
@@ -982,6 +987,42 @@ impl AccountRuntime {
             self.persist_locked(&state)?;
         }
         self.fetch_authority(generation)
+    }
+
+    /// True when the active signed plan document expires within
+    /// [`ENTITLEMENT_RENEW_BEFORE_SECONDS`] (or already has), so a background [`Self::refresh`]
+    /// should fetch a new one before workspace authority lapses. Signed-out, pending and
+    /// unactivated accounts never renew.
+    pub fn entitlement_renewal_due(&self) -> bool {
+        let state = self.lock_state();
+        state.snapshot.authority() == AccountAuthority::Active
+            && state.cached.is_some()
+            && state
+                .snapshot
+                .entitlement_expires_at
+                .is_some_and(|expires_at| {
+                    expires_at.saturating_sub(self.clock.now_unix())
+                        <= ENTITLEMENT_RENEW_BEFORE_SECONDS
+                })
+    }
+
+    /// Whether long-lived work started under `lease` may continue: the same account is still
+    /// active in the same sign-in generation. Unlike [`Self::validate_active_lease`], a
+    /// same-account refresh (a renewed plan document, or offline grace) keeps it valid; sign-out,
+    /// expiry, revocation or another account ends it. Per-command admission keeps using the
+    /// exact lease.
+    pub fn validate_active_account(&self, lease: &AuthorityLease, account_id: &str) -> bool {
+        let Ok(current) = self.acquire_active_lease() else {
+            return false;
+        };
+        current.generation == lease.generation
+            && self
+                .lock_state()
+                .snapshot
+                .account
+                .as_ref()
+                .is_some_and(|account| account.id == account_id)
+            && self.validate_active_lease(&current)
     }
 
     #[cfg(any(test, feature = "e2e"))]
