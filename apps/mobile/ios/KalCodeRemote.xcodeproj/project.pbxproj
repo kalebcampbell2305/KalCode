@@ -40,6 +40,7 @@
 		975E7EA707BBB7F41C3B21B6 /* AgentCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF5F6DF82C3636915A075ED9 /* AgentCard.swift */; };
 		9994D96DF66F8707C2F0A178 /* LaunchSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D701AD16A0E940EFAB01A68 /* LaunchSheet.swift */; };
 		9B94E8353518CDA7867AFFD8 /* AgentLogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7898EEAABC1224660FC8F4CB /* AgentLogView.swift */; };
+		A2250E3B7629499A64AE4FC0 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 3002C03ACAC7DBCA76CF50D2 /* PrivacyInfo.xcprivacy */; };
 		A58D6F0C6B9C257EDA89F06F /* DiffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1014AAA268D5104CDD255195 /* DiffView.swift */; };
 		A68C301B8B9F543D66695E21 /* LexendDeca-400.ttf in Resources */ = {isa = PBXBuildFile; fileRef = ED72A5827A2A429420B19D80 /* LexendDeca-400.ttf */; };
 		A6CAB7C426E244E33F9BDBAC /* JetBrainsMono-700.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 79B266884A33AAD4600FB139 /* JetBrainsMono-700.ttf */; };
@@ -61,6 +62,7 @@
 		D6B00048BB6911A9FB64FEEE /* Links.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62C9D922190966067DD0BDDE /* Links.swift */; };
 		E3E189AAFB58B0ACC3ADB2FA /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB46423982B9DCA9D7196682 /* Theme.swift */; };
 		E5DB47A8E41217D2BF5C4DA6 /* Atmosphere.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3DBC56A0D0B3613B8D7CD5D /* Atmosphere.swift */; };
+		E6378AD7C8001213BB7008DA /* DemoWorkstation.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB0B49193702C78F33FFDAD1 /* DemoWorkstation.swift */; };
 		E812ADDA803535D3157564EA /* JSONValue.swift in Sources */ = {isa = PBXBuildFile; fileRef = F31FC3BDF76BD9F81F4ABF4B /* JSONValue.swift */; };
 		EB3831E15B22449B53E65635 /* Messages.swift in Sources */ = {isa = PBXBuildFile; fileRef = D199AFA9041253634E6B0063 /* Messages.swift */; };
 		EFFB9D102D007C2DA8D7A17A /* Notifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74798F439925381508B747EF /* Notifier.swift */; };
@@ -137,6 +139,7 @@
 		2AE9EFAFD96A21D2CFDA4DD0 /* FleetState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetState.swift; sourceTree = "<group>"; };
 		2B5A1FE2DBF5500249898E89 /* Fixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Fixtures.swift; sourceTree = "<group>"; };
 		2D701AD16A0E940EFAB01A68 /* LaunchSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchSheet.swift; sourceTree = "<group>"; };
+		3002C03ACAC7DBCA76CF50D2 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		376C1C06DA631F33D0B1095C /* noise_ik.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = noise_ik.json; sourceTree = "<group>"; };
 		39757F02B6467973351C1A0D /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		39DF29EF0285F39762AAD43B /* Router.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Router.swift; sourceTree = "<group>"; };
@@ -182,6 +185,7 @@
 		BF5F6DF82C3636915A075ED9 /* AgentCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentCard.swift; sourceTree = "<group>"; };
 		C012ABB4B4A131F275F23F8B /* NoiseVectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoiseVectorTests.swift; sourceTree = "<group>"; };
 		C79F48CD9C229DC9A2D58BF4 /* Shells.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shells.swift; sourceTree = "<group>"; };
+		CB0B49193702C78F33FFDAD1 /* DemoWorkstation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoWorkstation.swift; sourceTree = "<group>"; };
 		D199AFA9041253634E6B0063 /* Messages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Messages.swift; sourceTree = "<group>"; };
 		DA03EFBBD51C7F36F5C07B89 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		E3DBC56A0D0B3613B8D7CD5D /* Atmosphere.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Atmosphere.swift; sourceTree = "<group>"; };
@@ -302,6 +306,7 @@
 				7FD439D1CAC2646FD085157E /* KalCodeRemoteApp.swift */,
 				BE46C6AF35D96B9769A8E669 /* Agent */,
 				95D42772823FFCE0D8F163B7 /* Core */,
+				F04C3DDC190A90FCE4E1A28B /* Demo */,
 				DDF51E07DDBE79429063BCCE /* Design */,
 				21F725AEE60858A0C02069DE /* Diff */,
 				98B97E15FB41ACF1567DB62B /* Fleet */,
@@ -474,9 +479,18 @@
 			children = (
 				4130E7FB7AB61903EE95F466 /* Assets.xcassets */,
 				1E4AFA1F85786856398101F8 /* Info.plist */,
+				3002C03ACAC7DBCA76CF50D2 /* PrivacyInfo.xcprivacy */,
 				B490C71D077CAAB289BD5254 /* Fonts */,
 			);
 			path = Resources;
+			sourceTree = "<group>";
+		};
+		F04C3DDC190A90FCE4E1A28B /* Demo */ = {
+			isa = PBXGroup;
+			children = (
+				CB0B49193702C78F33FFDAD1 /* DemoWorkstation.swift */,
+			);
+			path = Demo;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -569,20 +583,20 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					08EBF50B1082089F965F3370 = {
-						DevelopmentTeam = "";
+						DevelopmentTeam = JG5K9T47ZF;
 						ProvisioningStyle = Automatic;
 					};
 					0A0CB5380B20BDEAA35BF795 = {
-						DevelopmentTeam = "";
+						DevelopmentTeam = JG5K9T47ZF;
 						ProvisioningStyle = Automatic;
 					};
 					B6E71D4833C39A76D09D9074 = {
-						DevelopmentTeam = "";
+						DevelopmentTeam = JG5K9T47ZF;
 						ProvisioningStyle = Automatic;
 						TestTargetID = DD800DC2C202243E2C7CEF91;
 					};
 					DD800DC2C202243E2C7CEF91 = {
-						DevelopmentTeam = "";
+						DevelopmentTeam = JG5K9T47ZF;
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -625,6 +639,7 @@
 				666F1E81A9A6B88C1DFBF53C /* LexendDeca-700.ttf in Resources */,
 				1A25AE18D78749C5770548FC /* OFL-JetBrainsMono.txt in Resources */,
 				CAF50F0E862C2172733CF632 /* OFL-LexendDeca.txt in Resources */,
+				A2250E3B7629499A64AE4FC0 /* PrivacyInfo.xcprivacy in Resources */,
 				F74FD73AEC7FAD0E55B82F6D /* README.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -688,6 +703,7 @@
 				E5DB47A8E41217D2BF5C4DA6 /* Atmosphere.swift in Sources */,
 				54FB047CD49BFEB7CD9D7D0D /* Components.swift in Sources */,
 				FC2AD99FACC1D92AF5A93219 /* ConnectionBanner.swift in Sources */,
+				E6378AD7C8001213BB7008DA /* DemoWorkstation.swift in Sources */,
 				A58D6F0C6B9C257EDA89F06F /* DiffView.swift in Sources */,
 				8A0CB59075629BE1B553CE0A /* ErrorCopy.swift in Sources */,
 				D42F564F8A6C12141394DFA5 /* Fixtures.swift in Sources */,
@@ -776,7 +792,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = JG5K9T47ZF;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -971,7 +987,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = JG5K9T47ZF;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;

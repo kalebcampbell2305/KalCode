@@ -27,7 +27,7 @@ struct KalCodeRemoteApp: App {
             switch phase {
             case .active:
                 BackgroundLinger.shared.end()
-                if !model.fixtureMode { model.client.reconnectNow() }
+                if !model.isSimulated { model.client.reconnectNow() }
             case .background:
                 // Keep the session briefly so a just-sent prompt lands and notifications still arrive.
                 BackgroundLinger.shared.begin()

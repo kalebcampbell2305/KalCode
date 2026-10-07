@@ -13,7 +13,8 @@ import XCTest
 //    fresh single-use pairing link. Every test launches with `-kc-reset`.
 //
 // Accessibility identifiers used by the app:
-//  welcome.view, welcome.scan, welcome.paste
+//  welcome.view, welcome.scan, welcome.paste, welcome.demo
+//  demo.badge, demo.exit, settings.exitDemo
 //  pair.linkField, pair.pasteFromClipboard, pair.continue, pair.linkError, pair.title,
 //  pair.expiry, pair.confirm, pair.done, pair.retry, pair.cancel, pair.errorTitle
 //  scanner.close, scanner.paste, scanner.error
@@ -137,7 +138,7 @@ final class FixtureSmokeTests: XCTestCase {
     func testRemovedFixture() {
         let app = launch("removed")
         app.element("removed.view").waitFor()
-        XCTAssertTrue(app.element("removed.message").label.contains("Kaleb's Workstation"))
+        XCTAssertTrue(app.element("removed.message").label.contains("Studio Workstation"))
         app.element("removed.repair").tap()
         app.element("welcome.paste").waitFor()
     }
@@ -157,6 +158,76 @@ final class FixtureSmokeTests: XCTestCase {
         app.open(URL(string: "kalcode-remote://agent/thr_gone_does_not_exist")!)
         let toast = app.toast.waitFor()
         XCTAssertTrue(toast.label.contains("finished"))
+    }
+}
+
+// MARK: - In-app demo (release code path: what App Review and new users see)
+
+final class DemoModeTests: XCTestCase {
+    override func setUp() { continueAfterFailure = false }
+
+    func testExploreDemoWorkstationEndToEnd() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-kc-reset"]
+        app.launch()
+
+        // Welcome → demo: the real fleet UI with a persistent Demo badge.
+        app.element("welcome.demo").waitFor().tap()
+        app.element("fleet.list").waitFor()
+        XCTAssertTrue(app.element("demo.badge").waitFor().exists)
+        XCTAssertEqual(app.element("status.pill").label, "Connection: Online")
+
+        // Approving answers locally and removes the request.
+        let approve = app.element("needs.approve.approval:apr_7731").waitFor()
+        approve.tap()
+        XCTAssertTrue(app.toast.waitFor().label.contains("Approved"))
+        XCTAssertTrue(approve.waitToDisappear(5))
+
+        // Agent detail, diff and a follow-up prompt.
+        app.scrollTo("agentCard.thr_remote").waitFor().tap()
+        app.element("agent.header").waitFor()
+        app.element("agent.output").waitFor()
+        let field = app.element("agent.prompt.field").waitFor()
+        field.tap()
+        field.typeText("Also pin the header row")
+        app.element("agent.prompt.send").tap()
+        XCTAssertTrue(app.toast.waitFor().label.contains("Sent"))
+        XCTAssertFalse(app.element("agent.prompt.queued").exists)
+
+        // Stop changes the agent's state.
+        app.element("agent.stop").waitFor().tap()
+        app.element("agent.stop.confirm").waitFor().tap()
+        XCTAssertTrue(app.toast.waitFor().label.contains("Stopped"))
+        XCTAssertTrue(app.element("demo.badge").exists)
+
+        // Settings → Exit demo returns to the welcome screen, still unpaired.
+        app.terminate()
+        app.launchArguments = ["-kc-reset"]
+        app.launch()
+        app.element("welcome.demo").waitFor().tap()
+        app.element("fleet.list").waitFor()
+        if app.element("fleet.settings").exists {
+            app.element("fleet.settings").tap()
+        } else {
+            app.element("sidebar.settings").waitFor().tap()
+        }
+        XCTAssertFalse(app.element("settings.unpair").exists)
+        app.element("settings.exitDemo").waitFor().tap()
+        app.element("welcome.paste").waitFor()
+        XCTAssertFalse(app.element("demo.badge").exists)
+    }
+
+    /// The demo leaves no pairing behind: a fresh launch (without reset) is back at welcome.
+    func testDemoIsNotRemembered() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-kc-reset"]
+        app.launch()
+        app.element("welcome.demo").waitFor().tap()
+        app.element("fleet.list").waitFor()
+        app.terminate()
+        app.launchArguments = []
+        app.launch()
+        app.element("welcome.demo").waitFor()
     }
 }
 
