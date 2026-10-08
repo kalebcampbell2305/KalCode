@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cargoEnvironment } from "../apps/desktop/scripts/cargo.mjs";
+import { guardHeavyWork } from "./disk-hygiene.mjs";
 import { lowerLocalPriority } from "./local-priority.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -654,6 +655,7 @@ export function runSelectedSuites(arguments_, options = {}) {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   lowerLocalPriority();
+  guardHeavyWork("test suites");
   try {
     runSelectedSuites(process.argv.slice(2));
   } catch (error) {

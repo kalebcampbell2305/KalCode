@@ -1062,6 +1062,36 @@ Never delete, reset, overwrite, clean, prune, or disturb current source, uncommi
 
 Before removing any worktree, prove all of the following: no active process uses it; no agent is working there; no uncommitted changes exist; no unique branch/work would be stranded; no release/QA evidence depends on it; and its useful changes are merged or preserved. Age, size, or an apparently finished task is not proof. If uncertain, **KEEP IT**.
 
+### Automatic disk hygiene (2026-10-07)
+
+`tooling/disk-hygiene.mjs` enforces this policy instead of leaving it to memory. The cargo and tauri wrappers
+(`apps/desktop/scripts/cargo.mjs`, `tauri.mjs`), the E2E build and `tooling/test-suites.mjs` check free space
+first. Below 150 GB they start one hidden, idle-priority sweep in the background, at most once an hour per
+machine. Below 25 GB they refuse to start the build instead of failing halfway. They never stop a process.
+`KALCODE_DISK_GUARD=warn` downgrades the refusal to a warning and `=off` skips the check. The guard also warns
+when free space falls 100 GB or more within a day.
+
+`node tooling/disk-hygiene.mjs sweep` is a dry run that classifies every cargo profile of every worktree, plus
+the named caches nested in the main checkout's `target/`. `--apply` deletes only the SAFE ones. A profile is
+SAFE when all of these hold:
+
+- its worktree is not protected (`tooling/disk-hygiene.config.json`: `kc-code-primary`, proofs, handoff and gate
+  records) and is not one of the 4 newest release seeds (`kc-release-code-primary-*`; the kit copies the newest);
+- no running process mentions it;
+- no other target's build-script output points into it;
+- nothing in it, nor its worktree's git index, changed for 24 hours (48 hours for the main checkout's nested
+  caches).
+
+Only regenerable output goes: `deps`, `build`, `incremental`, `.fingerprint` and loose build products. `bundle/`,
+evidence and every other file stay. Each entry is renamed aside first, so anything a build holds open is
+skipped. Kept profiles that no process uses, the main checkout's `target/debug` included, also shed per-crate
+incremental dirs untouched for 7 days. The sweep also clears leaked temp dirs: `.tmpXXXXXX` Core test
+fixtures holding a `kalcode.db` and idle for a day (Windows leaves a TempDir behind when a file in it is still
+open at drop; one day of gates leaked 17,000 of them, 14 GB), Claude Code `bash-edit-diff` snapshot stores
+untouched for 3 days, and any other top-level temp entry idle for 2 days that no running process names. Dev and test builds use `debug = "line-tables-only"` (root
+`Cargo.toml`): full debuginfo `.pdb` files were 46 GB of a 128 GB debug target, and the change cut a
+`kalcode-native-core` test build from 1,986 MB to 1,299 MB (`.pdb` 618 MB to 261 MB).
+
 ### Rust / Cargo priority
 
 Cargo/Rust artifacts are expected to be a major recurring storage consumer. After major Rust builds, packaging, release work, or worktree retirement, inspect target directories and Cargo caches, including old worktrees, retired branches, duplicate repo copies, obsolete builds, and abandoned QA/build directories. Aggressively remove obsolete incremental/debug/release artifacts only when proven unnecessary.

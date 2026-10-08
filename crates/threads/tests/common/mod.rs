@@ -578,7 +578,6 @@ impl WorkspaceResolver for FakeWorkspaces {
 // ---------------------------------------------------------------- harness
 
 pub struct Harness {
-    pub dir: tempfile::TempDir,
     pub core: Arc<Core>,
     pub registry: Arc<ProviderRegistry>,
     pub workspaces: Arc<FakeWorkspaces>,
@@ -586,6 +585,9 @@ pub struct Harness {
     pub gate: Arc<TestGate>,
     pub provider: Arc<FakeProvider>,
     pub runtime: ThreadRuntime,
+    // Last: fields drop in declaration order, so Core closes kalcode.lock and the db first.
+    // Dropped earlier, the TempDir silently survives on Windows.
+    pub dir: tempfile::TempDir,
 }
 
 pub fn config(dir: &std::path::Path) -> CoreConfig {

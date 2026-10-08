@@ -45,3 +45,9 @@ lto = true
 opt-level = "s"
 panic = "abort"
 strip = true
+
+# Debug and test builds keep line tables (backtraces and panics still name function, file and line) but not
+# full debuginfo: on Windows the .pdb files were 46 GB of a 128 GB debug target, and every worktree, gate and
+# agent build carries its own target (tooling/disk-hygiene.mjs).
+[profile.dev]
+debug = "line-tables-only"
