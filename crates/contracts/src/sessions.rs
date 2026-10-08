@@ -86,6 +86,9 @@ pub enum SessionMatchTier {
     rename_all_fields = "camelCase"
 )]
 #[ts(export)]
+// One answer per lookup, never stored in bulk: the size gap between `Resolved` and the others is harmless,
+// and boxing `target` would change every construction site and the generated binding for no gain.
+#[allow(clippy::large_enum_variant)]
 pub enum SessionResolution {
     Resolved {
         target: Box<SessionCandidate>,
