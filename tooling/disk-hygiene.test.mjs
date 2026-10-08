@@ -291,3 +291,26 @@ test("leaked test fixtures and old Claude snapshot stores in temp are found; any
   dir(join("claude", "C--project", "session"), ["x.output"], 500);
   assert.deepEqual(staleTempLeftovers({ tmp, now: NOW }).sort(), [leaked, oldSnapshot].sort());
 });
+
+test("only the newest release seeds are retained; older idle, unreferenced seeds are SAFE", (t) => {
+  const root = fixture(t);
+  const seeds = [500, 400, 300, 200, 100, 50].map((age, index) =>
+    worktree(root, `kc-release-code-primary-${index}`, { ageHours: age, profile: "release" }),
+  );
+  const origin = seeds[0];
+  writeFileSync(
+    join(seeds[5].dir, "build", "ring-1", "output"),
+    `cargo:rustc-link-search=native=${join(origin.dir, "build", "ring-1", "out")}\n`,
+  );
+  const plan = planSweep({
+    config: { ...config, protect: [], retain: [{ match: "kc-release-code-primary-*", keepNewest: 2 }] },
+    now: NOW,
+    worktrees: seeds.map((seed) => ({ path: seed.path })),
+    commandLines: [],
+  });
+  const result = verdicts(plan);
+  assert.match(result[seeds[5].dir], /^KEEP: one of the newest/);
+  assert.match(result[seeds[4].dir], /^KEEP: one of the newest/);
+  assert.match(result[origin.dir], /^KEEP: build outputs of/);
+  for (const seed of seeds.slice(1, 4)) assert.match(result[seed.dir], /^SAFE/);
+});

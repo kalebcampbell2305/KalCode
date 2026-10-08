@@ -1075,8 +1075,8 @@ when free space falls 100 GB or more within a day.
 the named caches nested in the main checkout's `target/`. `--apply` deletes only the SAFE ones. A profile is
 SAFE when all of these hold:
 
-- its worktree is not protected (`tooling/disk-hygiene.config.json`: release seeds, `kc-code-primary`, proofs,
-  handoff and gate records);
+- its worktree is not protected (`tooling/disk-hygiene.config.json`: `kc-code-primary`, proofs, handoff and gate
+  records) and is not one of the 4 newest release seeds (`kc-release-code-primary-*`; the kit copies the newest);
 - no running process mentions it;
 - no other target's build-script output points into it;
 - nothing in it, nor its worktree's git index, changed for 24 hours (7 days for the main checkout's nested

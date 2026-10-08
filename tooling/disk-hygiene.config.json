@@ -6,7 +6,10 @@
   "mainIdleHours": 168,
   "incrementalDays": 7,
   "protect": [
-    "kc-release-*",
+    "kc-release-*-notes-*",
+    "kc-release-unified-*",
+    "kc-release-smart-*",
+    "kc-release-cursor-*",
     "kc-code-primary",
     "kc-proof-*",
     "kc-website-policy-*",
@@ -16,5 +19,11 @@
     "kc-runner",
     "kc-gates-pc2"
   ],
-  "retain": []
+  "retain": [
+    {
+      "$comment": "Release seeds: the kit copies the newest; older ones are SAFE once idle and unreferenced.",
+      "match": "kc-release-code-primary-*",
+      "keepNewest": 4
+    }
+  ]
 }
