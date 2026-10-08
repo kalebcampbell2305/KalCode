@@ -836,38 +836,52 @@ pub struct DesktopProviders {
     registry: Arc<ProviderRegistry>,
     runtime: crate::provider_auth_commands::ProviderRuntimeAuthority,
     reasoning_dir: std::path::PathBuf,
+    ensure_providers: Option<crate::kalvoice_executor::ProviderReadiness>,
 }
 
 impl DesktopProviders {
-    fn ensure_detected(&self) {
-        if self.registry.list().iter().all(|s| s.detection.is_none()) {
-            // First use before the Providers page ran detection: read-only version and
-            // sign-in checks (or the startup check already running, without a second one).
-            let _ = self.registry.detect_all_once();
-        }
+    fn ensure_ready(&self) {
+        ensure_provider_directory_ready(&self.registry, self.ensure_providers.as_ref());
     }
+}
+
+fn ensure_provider_directory_ready(
+    registry: &ProviderRegistry,
+    ensure_providers: Option<&crate::kalvoice_executor::ProviderReadiness>,
+) {
+    if let Some(ensure) = ensure_providers {
+        ensure(None);
+    } else if registry.list().iter().all(|s| s.detection.is_none()) {
+        // First use before the Providers page ran detection: read-only version and sign-in
+        // checks (or the startup check already running, without a second one).
+        let _ = registry.detect_all_once();
+    }
+}
+
+fn provider_choice_availability(
+    status: &kalcode_providers::ProviderStatus,
+    launchable: &[ProviderId],
+) -> Option<bool> {
+    (status.adapter == kalcode_providers::AdapterState::Implemented)
+        .then(|| launchable.contains(&status.id))
 }
 
 impl ProviderDirectory for DesktopProviders {
     fn connected(&self) -> Vec<ProviderChoice> {
+        self.ensure_ready();
         let usable = self.registry.usable();
         let accounts = self.runtime.account_store();
         self.registry
             .list()
             .into_iter()
-            .filter(|s| s.adapter == kalcode_providers::AdapterState::Implemented)
-            .filter(|s| {
-                s.detection
-                    .as_ref()
-                    .is_some_and(|d| d.state == kalcode_contracts::agent::DetectionState::Installed)
-            })
             .filter_map(|s| {
+                let available = provider_choice_availability(&s, &usable)?;
                 let _account = accounts
                     .resolve(s.id.as_str(), &ProviderAccountScopes::default())
                     .ok()
                     .flatten()?;
                 Some(ProviderChoice {
-                    available: usable.contains(&s.id),
+                    available,
                     display_name: provider_display_name(&s.id),
                     id: s.id,
                 })
@@ -898,7 +912,7 @@ impl ProviderDirectory for DesktopProviders {
     ) -> Option<(Arc<dyn AgentProvider>, SessionConfig)> {
         // Compatibility for older native consumers only. KalVoice's current local-only
         // orchestrator never calls this method and a stored provider preference cannot reach it.
-        self.ensure_detected();
+        self.ensure_ready();
         if !self.registry.usable().contains(id) {
             return None;
         }
@@ -984,8 +998,8 @@ pub struct KalVoiceServices {
     pub registry: Arc<ProviderRegistry>,
     pub provider_runtime: crate::provider_auth_commands::ProviderRuntimeAuthority,
     pub threads: Option<Arc<kalcode_threads::ThreadRuntime>>,
-    /// Registers detected provider adapters before a voice launch (`ThreadsState::ensure_providers`).
-    pub ensure_providers: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Refreshes detected adapters; selected launches may also share provider startup readiness.
+    pub ensure_providers: Option<crate::kalvoice_executor::ProviderReadiness>,
     pub permissions: Option<Arc<kalcode_permissions::PermissionService>>,
     pub locator: Option<Arc<kalcode_locator::Locator>>,
     pub components: Arc<KalVoiceComponentManager>,
@@ -1038,6 +1052,7 @@ pub fn init(
         registry,
         runtime: provider_runtime.clone(),
         reasoning_dir: core.paths().data_dir.join("kalvoice").join("reasoning"),
+        ensure_providers: ensure_providers.clone(),
     });
     let session_locator_enabled = feature_enabled(&info.flags, FeatureId::SessionLocator);
     let recognizers = Arc::new(DesktopRecognizers {
@@ -3229,6 +3244,71 @@ pub fn kalvoice_open_microphone_settings(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_directory_refreshes_managed_readiness_before_listing_choices() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let registry = Arc::new(ProviderRegistry::with_specs(
+            kalcode_providers::DetectEnv::default(),
+            Vec::new(),
+        ));
+        let refreshes = Arc::new(AtomicUsize::new(0));
+        let ensure: crate::kalvoice_executor::ProviderReadiness = {
+            let registry = Arc::clone(&registry);
+            let refreshes = Arc::clone(&refreshes);
+            Arc::new(move |_| {
+                refreshes.fetch_add(1, Ordering::SeqCst);
+                registry.set_managed_runtime(
+                    ProviderId::new(ProviderId::CODEX),
+                    Some(kalcode_providers::model::ManagedRuntimeReadiness {
+                        version: "0.161.0".into(),
+                        source: "last_known_good".into(),
+                    }),
+                );
+            })
+        };
+
+        ensure_provider_directory_ready(&registry, Some(&ensure));
+
+        assert_eq!(refreshes.load(Ordering::SeqCst), 1);
+        assert!(
+            registry
+                .usable()
+                .contains(&ProviderId::new(ProviderId::CODEX)),
+            "KalVoice must read launchability after the shared readiness refresh"
+        );
+    }
+
+    #[test]
+    fn managed_runtime_readiness_keeps_native_missing_truth_and_remains_launchable() {
+        let mut status = kalcode_providers::catalog::statuses()
+            .into_iter()
+            .find(|status| status.id.as_str() == ProviderId::CODEX)
+            .expect("Codex status");
+        status.detection = Some(kalcode_contracts::agent::ProviderDetection {
+            provider_id: status.id.clone(),
+            display_name: status.display_name.clone(),
+            state: kalcode_contracts::agent::DetectionState::NotInstalled,
+            display_path: None,
+            version: None,
+            minimum_version: None,
+            auth: kalcode_contracts::agent::AuthState::Unknown,
+            message: None,
+            checked_at: "cached".into(),
+        });
+        let launchable = vec![ProviderId::new(ProviderId::CODEX)];
+
+        assert_eq!(
+            provider_choice_availability(&status, &launchable),
+            Some(true)
+        );
+        assert_eq!(
+            status.detection.as_ref().unwrap().state,
+            kalcode_contracts::agent::DetectionState::NotInstalled
+        );
+        assert_eq!(provider_choice_availability(&status, &[]), Some(false));
+    }
 
     #[test]
     fn shutdown_gate_rejects_new_work_and_waits_without_holding_the_task_lock() {

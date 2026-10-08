@@ -198,6 +198,7 @@ export type { LocatorResult } from "./LocatorResult.ts";
 export type { LocatorSort } from "./LocatorSort.ts";
 export type { LocatorStatusFilter } from "./LocatorStatusFilter.ts";
 export type { LocatorVia } from "./LocatorVia.ts";
+export type { ManagedRuntimeReadiness } from "./ManagedRuntimeReadiness.ts";
 export type { MappingFidelity } from "./MappingFidelity.ts";
 export type { MatchRange } from "./MatchRange.ts";
 export type { MemoryCategory } from "./MemoryCategory.ts";

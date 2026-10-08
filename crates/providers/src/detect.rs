@@ -386,7 +386,7 @@ fn probe_version(
             run_probe(&process, timeout, true, MAX_PROBE_OUTPUT).map_err(map_version_probe_error)?
         }
     };
-    parse_version_output(output)
+    parse_version_output(provider_id, output)
 }
 
 fn map_version_probe_error(error: ProcessError) -> (&'static str, String) {
@@ -410,6 +410,7 @@ fn map_version_probe_error(error: ProcessError) -> (&'static str, String) {
 }
 
 fn parse_version_output(
+    provider_id: &str,
     output: crate::process::ProbeOutput,
 ) -> Result<Version, (&'static str, String)> {
     if !output.status.success() {
@@ -429,7 +430,12 @@ fn parse_version_output(
             ),
         ));
     }
-    Version::find_in(&output.stdout).ok_or((
+    let version = if provider_id == ProviderId::CURSOR {
+        crate::cursor::parse_cli_version(&output.stdout)
+    } else {
+        Version::find_in(&output.stdout)
+    };
+    version.ok_or((
         "version_unrecognized",
         "The version check printed something KalCode doesn't recognize.".to_owned(),
     ))

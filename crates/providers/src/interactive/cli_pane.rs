@@ -34,7 +34,7 @@ use crate::claude::actions::ActionContext;
 use crate::claude::argv::working_directory;
 use crate::codex::managed_policy::CloudConfigEligibility;
 use crate::codex::{
-    managed_executable_and_version as managed_codex_executable, observing_hooks_verified,
+    managed_executable_and_version as managed_codex_executable, require_managed_reasoning_effort,
     usable_executable_and_version,
 };
 use crate::detect::{DetectEnv, DetectionSpec, detect, detect_guarded};
@@ -213,7 +213,10 @@ impl InteractiveCliProvider {
         let mut gemini_args = None;
         let mut integration_lifetime = None;
         let mut lease: Option<ProfileLease> = None;
+        let mut runtime_lease = None;
         let mut version = None;
+        let mut codex_hook_probe_root = None;
+        let mut codex_hook_probe_guardian = None;
         let (executable, mut env, cwd) = match (self.managed_profiles.as_ref(), account_id) {
             (Some(profiles), Some(account_id)) => match self.cli {
                 PaneCli::Cursor => {
@@ -240,16 +243,33 @@ impl InteractiveCliProvider {
                         .as_ref()
                         .and_then(|resolve| resolve(account_id).ok())
                         .unwrap_or(CloudConfigEligibility::Unknown);
-                    let prepared = crate::codex::managed_policy::prepare_session(
+                    let mut prepared = crate::codex::managed_policy::prepare_session(
                         profiles,
                         &self.env,
                         account_id,
                         &workspace,
                         eligibility,
                     )?;
-                    let (executable, verified) =
-                        managed_codex_executable(&spec, &prepared.detect_env, &probe_guardian)?;
+                    let compatibility_probe_dir = profiles.compatibility_probe_dir()?;
+                    let selected = managed_codex_executable(
+                        &spec,
+                        &prepared.detect_env,
+                        &probe_guardian,
+                        &profiles.runtime_store(),
+                        &compatibility_probe_dir,
+                        |label| prepared.lease.prepare_guarded_job(label),
+                    )?;
+                    require_managed_reasoning_effort(
+                        selected.capabilities(),
+                        config.effort.as_deref(),
+                    )?;
+                    selected.configure_environment(&mut prepared.env);
+                    let (executable, verified, _capabilities, selected_runtime_lease) =
+                        selected.into_parts();
+                    runtime_lease = selected_runtime_lease;
                     version = Some(verified);
+                    codex_hook_probe_root = Some(compatibility_probe_dir);
+                    codex_hook_probe_guardian = Some(probe_guardian);
                     codex_overrides = prepared.cli_overrides;
                     lease = Some(prepared.lease);
                     (executable, prepared.env, workspace.clone())
@@ -308,6 +328,14 @@ impl InteractiveCliProvider {
         ] {
             env.insert(name.into(), value.into());
         }
+        let observe_codex_hooks = matches!(self.cli, PaneCli::Codex)
+            && crate::codex::hook_compatibility::cached_or_warm(
+                &executable,
+                &env,
+                codex_hook_probe_root.as_deref(),
+                codex_hook_probe_guardian.take(),
+                version.as_ref(),
+            ) == crate::codex::compatibility::CapabilitySupport::Supported;
         let launch = resolve(&executable, &env);
         if launch.kind == LaunchKind::ShimUnresolved {
             return Err(ProviderError::Start(format!(
@@ -465,7 +493,7 @@ impl InteractiveCliProvider {
                         hook_prefix_args: &self.config.hook_prefix_args,
                         endpoint: bridge.endpoint().as_str(),
                         session: registration.session_id(),
-                        observe_hooks: version.as_ref().is_some_and(observing_hooks_verified),
+                        observe_hooks: observe_codex_hooks,
                     },
                     &codex_overrides,
                 )
@@ -507,6 +535,7 @@ impl InteractiveCliProvider {
             .map(|lease| lease.prepare_guarded_job("provider-pane"))
             .transpose()?;
         let exit_lease = shared_lease.clone();
+        let exit_runtime_lease = runtime_lease;
         let weak: Weak<Shared> = Arc::downgrade(&shared);
         let mut argv: Vec<OsString> = launch.prefix_args.clone();
         argv.extend(args);
@@ -524,6 +553,7 @@ impl InteractiveCliProvider {
                 shared.on_exit(exit.code, exit.killed);
             }
             drop(exit_lease);
+            drop(exit_runtime_lease);
         };
         let spawn_error = |error: kalcode_pty::PtyError| {
             tracing::warn!(event = "pane.spawn_failed", provider_id = self.cli.id(), error = %error);

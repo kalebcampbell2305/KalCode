@@ -3166,6 +3166,9 @@ dependencies = [
 name = "kalcode-providers"
 version = "0.0.0"
 dependencies = [
+ "base64 0.22.1",
+ "ed25519-dalek",
+ "fs2",
  "kalcode-contracts",
  "kalcode-hook-bridge",
  "kalcode-native-core",
@@ -3177,8 +3180,10 @@ dependencies = [
  "process-wrap",
  "rusqlite",
  "same-file",
+ "semver",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.21",
  "time",

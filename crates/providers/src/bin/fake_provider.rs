@@ -4,7 +4,8 @@
 //! (`claude.exe`, `codex`, ...) next to a `fake-provider.json` that selects its behaviour, then
 //! put that folder on the `PATH` KalCode's detection searches. In session mode it replays the
 //! documented stream-JSON fixtures in `tests/fixtures/claude/` so the whole
-//! spawn → parse → normalize → event pipeline runs without a real provider.
+//! provider event pipeline runs without a real provider. Codex mode additionally exposes the
+//! command/flag surface and isolated app-server handshake used by compatibility negotiation.
 //!
 //! In interactive mode (started with `--settings`, as a provider pane starts `claude`) it shows
 //! a minimal TUI and fires the hooks from KalCode's settings file with the documented payloads
@@ -55,11 +56,49 @@ fn exe_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-fn config() -> Value {
-    std::fs::read_to_string(exe_dir().join("fake-provider.json"))
+/// Where this run records its artifacts (`runs.log`, `last-args.json`, ...): the folder of the
+/// live fixture configuration, else the executable's own folder.
+static ARTIFACT_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+fn artifact_dir() -> PathBuf {
+    ARTIFACT_DIR.get().cloned().unwrap_or_else(exe_dir)
+}
+
+fn read_json(path: &Path) -> Option<Value> {
+    std::fs::read_to_string(path)
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or(Value::Null)
+}
+
+/// Loads the fixture configuration: `fake-provider.json` beside the executable, else the one in
+/// a distribution-shaped install's `codex-resources/` (what a real Codex distribution carries
+/// beside `bin/`, and what KalCode copies into its immutable managed runtime snapshot).
+///
+/// A distribution resource may instead name the live fixture folder (`{"fixtureDir": ...}`).
+/// Then a copy KalCode snapshotted elsewhere reads the same live configuration and records its
+/// artifacts there, exactly like the installed copy, and never writes into the snapshot: a real
+/// provider never modifies its own installation, and KalCode verifies snapshots are unchanged.
+fn config() -> Value {
+    let bin = exe_dir();
+    if let Some(config) = read_json(&bin.join("fake-provider.json")) {
+        let _ = ARTIFACT_DIR.set(bin);
+        return config;
+    }
+    let Some(resource) = bin
+        .parent()
+        .and_then(|root| read_json(&root.join("codex-resources").join("fake-provider.json")))
+    else {
+        return Value::Null;
+    };
+    match resource.get("fixtureDir").and_then(Value::as_str) {
+        Some(fixture) => {
+            let fixture = PathBuf::from(fixture);
+            let config = read_json(&fixture.join("fake-provider.json")).unwrap_or(Value::Null);
+            let _ = ARTIFACT_DIR.set(fixture);
+            config
+        }
+        None => resource,
+    }
 }
 
 fn get_str<'a>(config: &'a Value, key: &str, default: &'a str) -> &'a str {
@@ -77,6 +116,200 @@ fn provider_version<'a>(config: &'a Value, kind: &str, default: &'a str) -> &'a 
                 .and_then(Value::as_str)
         })
         .unwrap_or(default)
+}
+
+fn codex_semver(config: &Value) -> &str {
+    provider_version(config, "codex", "codex-cli 0.160.0")
+        .split_ascii_whitespace()
+        .find(|part| {
+            part.chars()
+                .next()
+                .is_some_and(|character| character.is_ascii_digit())
+        })
+        .unwrap_or("0.160.0")
+}
+
+fn codex_capability(config: &Value, name: &str) -> bool {
+    config
+        .get("codexCapabilities")
+        .and_then(|capabilities| capabilities.get(name))
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
+
+fn codex_help(config: &Value, args: &[String]) -> Option<String> {
+    if args == ["--help"] {
+        let mut commands = Vec::new();
+        if codex_capability(config, "exec") {
+            commands.push("  exec        Run Codex non-interactively");
+        }
+        if codex_capability(config, "interactiveResume") {
+            commands.push("  resume      Resume an interactive session");
+        }
+        if codex_capability(config, "mcp") {
+            commands.push("  mcp         Manage MCP servers");
+        }
+        if codex_capability(config, "appServer") {
+            commands.push("  app-server  Run the Codex app server");
+        }
+        let mut options = Vec::new();
+        if codex_capability(config, "configOverride") {
+            options.push("  -c, --config <key=value>          Override a configuration value");
+        }
+        if codex_capability(config, "workingDirectory") {
+            options.push("  -C, --cd <DIR>                    Set the working directory");
+        }
+        if codex_capability(config, "rootSandbox") {
+            options.push("  -s, --sandbox <MODE>              Select the sandbox policy");
+        }
+        if codex_capability(config, "approvalPolicy") {
+            options.push("  -a, --ask-for-approval <POLICY>   Select the approval policy");
+        }
+        if codex_capability(config, "modelSelection") {
+            options.push("  -m, --model <MODEL>                Select the model");
+        }
+        if codex_capability(config, "noDaemon") {
+            options.push("      --no-daemon                    Run without the desktop daemon");
+        }
+        return Some(format!(
+            "Usage: codex [OPTIONS] [PROMPT]\n\nCommands:\n{}\n\nOptions:\n{}\n",
+            commands.join("\n"),
+            options.join("\n")
+        ));
+    }
+    if args == ["exec", "--help"] {
+        let mut commands = Vec::new();
+        if codex_capability(config, "resume") {
+            commands.push("  resume  Resume a previous non-interactive session");
+        }
+        let mut options = Vec::new();
+        if codex_capability(config, "configOverride") {
+            options.push("  -c, --config <key=value>  Override a configuration value");
+        }
+        if codex_capability(config, "modelSelection") {
+            options.push("  -m, --model <MODEL>       Select the model");
+        }
+        if codex_capability(config, "sandbox") {
+            options.push("  -s, --sandbox <MODE>      Select the sandbox policy");
+        }
+        if codex_capability(config, "skipGitRepoCheck") {
+            options.push("  --skip-git-repo-check    Allow execution outside a Git repository");
+        }
+        if codex_capability(config, "execJson") {
+            options.push("  --json                  Emit JSONL events");
+        }
+        if codex_capability(config, "structuredOutput") {
+            options.push("  --output-schema <FILE>  Validate the final response");
+        }
+        return Some(format!(
+            "Usage: codex exec [OPTIONS] [PROMPT]\n\nCommands:\n{}\n\nOptions:\n{}\n",
+            commands.join("\n"),
+            options.join("\n")
+        ));
+    }
+    if args == ["exec", "resume", "--help"] {
+        let mut options = Vec::new();
+        if codex_capability(config, "configOverride") {
+            options.push("  --config <key=value>  Override a configuration value");
+        }
+        if codex_capability(config, "execJson") {
+            options.push("  --json                Emit JSONL events");
+        }
+        return Some(format!(
+            "Usage: codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]\n\nOptions:\n{}\n",
+            options.join("\n")
+        ));
+    }
+    if args == ["resume", "--help"] {
+        return Some(
+            "Usage: codex resume [OPTIONS] [SESSION_ID] [PROMPT]\n\nOptions:\n  --last  Resume the most recent session\n"
+                .into(),
+        );
+    }
+    if args == ["app-server", "--help"] {
+        let mut options = Vec::new();
+        if codex_capability(config, "configOverride") {
+            options.push("  --config <key=value>  Override a configuration value");
+        }
+        if codex_capability(config, "appServerStdio") {
+            options.push("  --stdio              Serve the protocol over stdin/stdout");
+        }
+        return Some(format!(
+            "Usage: codex app-server [OPTIONS]\n\nOptions:\n{}\n",
+            options.join("\n")
+        ));
+    }
+    None
+}
+
+/// Writes the read-only Codex 0.161 app-server config schema used by compatibility negotiation.
+/// The shape mirrors the native CLI's generated `ConfigReadResponse.json`; scenarios can narrow
+/// its string enum or make the output structurally invalid without executing provider code.
+fn codex_config_schema(config: &Value, args: &[String]) -> bool {
+    if args.len() != 4
+        || args[0] != "app-server"
+        || args[1] != "generate-json-schema"
+        || args[2] != "--out"
+    {
+        return false;
+    }
+    let output = PathBuf::from(&args[3]);
+    let mode = get_str(config, "codexConfigSchemaMode", "native");
+    let path = if mode == "wrong-path" {
+        output.join("ConfigReadResponse.json")
+    } else {
+        output.join("v2").join("ConfigReadResponse.json")
+    };
+    if std::fs::create_dir_all(path.parent().unwrap_or(&output)).is_err() {
+        exit(8);
+    }
+    if mode == "malformed" {
+        if std::fs::write(path, b"{not-json").is_err() {
+            exit(8);
+        }
+        return true;
+    }
+
+    let property = if mode == "missing-property" {
+        serde_json::json!({})
+    } else {
+        serde_json::json!({
+            "model_reasoning_effort": {
+                "anyOf": [
+                    {"$ref": "#/definitions/ReasoningEffort"},
+                    {"type": "null"}
+                ]
+            }
+        })
+    };
+    let mut reasoning = serde_json::json!({
+        "description": "Reasoning effort accepted by this deterministic Codex fixture.",
+        "minLength": 1,
+        "type": "string"
+    });
+    if let Some(efforts) = config
+        .get("codexReasoningEfforts")
+        .and_then(Value::as_array)
+    {
+        let Some(reasoning) = reasoning.as_object_mut() else {
+            exit(8);
+        };
+        reasoning.insert("enum".into(), Value::Array(efforts.clone()));
+    }
+    let schema = serde_json::json!({
+        "definitions": {
+            "Config": {"properties": property},
+            "ReasoningEffort": reasoning
+        }
+    });
+    let encoded = match serde_json::to_vec(&schema) {
+        Ok(encoded) => encoded,
+        Err(_) => exit(8),
+    };
+    if std::fs::write(path, encoded).is_err() {
+        exit(8);
+    }
+    true
 }
 
 fn get_i64(config: &Value, key: &str, default: i64) -> i64 {
@@ -105,7 +338,17 @@ const EXIT_TOKEN: &str = "FAKE_PROVIDER_EXIT";
 /// each record and its newline go out in ONE append. `writeln!` issues the text and the newline
 /// as separate writes, and two processes interleaving between them merge records onto one
 /// unparseable line, which tests then miscount as missing launches.
-fn record_run(args: &[String]) {
+fn record_run(args: &[String], config: &Value) {
+    // Immutable managed-runtime tests model native provider distributions, whose read-only
+    // capability probes do not rewrite their installation directory. Existing process fixtures
+    // keep the historical adjacent run log unless they opt out explicitly.
+    if config
+        .get("recordAdjacentArtifacts")
+        .and_then(Value::as_bool)
+        == Some(false)
+    {
+        return;
+    }
     let name = std::env::current_exe()
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
@@ -115,7 +358,7 @@ fn record_run(args: &[String]) {
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(exe_dir().join("runs.log"))
+        .open(artifact_dir().join("runs.log"))
     {
         let _ = file.write_all(line.as_bytes());
     }
@@ -129,6 +372,20 @@ fn codex_app_server(config: &Value) -> ! {
     let Some(codex_home) = std::env::var_os("CODEX_HOME").map(PathBuf::from) else {
         exit(8);
     };
+    let reported_home = config
+        .get("codexReportedHome")
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| codex_home.clone());
+    let user_agent = format!("codex_cli_rs/{}", codex_semver(config));
+    // KalCode's compatibility smoke runs the app-server against a disposable, credential-free
+    // home (`.kalcode-codex-compat-*/home`). A real Codex answers that read locally and at once,
+    // with no account; the fixture's delayed, signed-in reads model a person's account home.
+    let disposable_probe_home = codex_home
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with(".kalcode-codex-compat-"));
     let marker = codex_home.join(".kalcode-fake-first-account-read");
     let delay_ms = get_i64(config, "codexFirstAccountReadDelayMs", 0);
     let plan = get_str(config, "codexPlan", "pro").to_owned();
@@ -151,8 +408,8 @@ fn codex_app_server(config: &Value) -> ! {
 
         let result = match method {
             "initialize" => serde_json::json!({
-                "userAgent": "codex_cli_rs/0.160.0",
-                "codexHome": codex_home,
+                "userAgent": &user_agent,
+                "codexHome": &reported_home,
                 "platformFamily": if cfg!(windows) { "windows" } else { "unix" },
                 "platformOs": std::env::consts::OS,
             }),
@@ -164,6 +421,16 @@ fn codex_app_server(config: &Value) -> ! {
                     != Some(false)
                 {
                     exit(8);
+                }
+                if disposable_probe_home {
+                    let response = serde_json::json!({
+                        "id": id,
+                        "result": {"account": null, "requiresOpenaiAuth": true},
+                    });
+                    if writeln!(stdout, "{response}").is_err() || stdout.flush().is_err() {
+                        exit(8);
+                    }
+                    continue;
                 }
                 match std::fs::OpenOptions::new()
                     .create_new(true)
@@ -243,7 +510,20 @@ fn codex_app_server(config: &Value) -> ! {
                     Some(_) => exit(8),
                 }
             }
-            _ => continue,
+            // Like the native JSON-RPC server, a request this fixture does not implement (for
+            // example `hooks/list`, which hook-capable Codex releases answer) gets an immediate
+            // "method not found" error rather than silence, so a caller never waits out its
+            // timeout on a live fixture process.
+            _ => {
+                let response = serde_json::json!({
+                    "id": id,
+                    "error": {"code": -32601, "message": format!("method not found: {method}")},
+                });
+                if writeln!(stdout, "{response}").is_err() || stdout.flush().is_err() {
+                    exit(8);
+                }
+                continue;
+            }
         };
         let response = serde_json::json!({ "id": id, "result": result });
         if writeln!(stdout, "{response}").is_err() || stdout.flush().is_err() {
@@ -260,13 +540,13 @@ fn main() {
         // the same library code, so the real protocol and failure policy run.
         run_hook_helper(&args[1..]);
     }
-    record_run(&args);
+    let config = config();
+    record_run(&args, &config);
     if args.first().map(String::as_str) == Some("--fake-grandchild") {
         loop {
             std::thread::sleep(Duration::from_secs(1));
         }
     }
-    let config = config();
     let stem = std::env::current_exe()
         .ok()
         .and_then(|p| {
@@ -311,6 +591,15 @@ fn main() {
         println!("{}", provider_version(&config, kind, default));
         exit(get_i64(&config, "versionExit", 0));
     }
+    if kind == "codex"
+        && let Some(help) = codex_help(&config, &args)
+    {
+        print!("{help}");
+        exit(get_i64(&config, "helpExit", 0));
+    }
+    if kind == "codex" && codex_config_schema(&config, &args) {
+        exit(get_i64(&config, "codexConfigSchemaExit", 0));
+    }
     if kind == "cursor" && args.first().is_some_and(|arg| arg == "status") {
         println!(
             "{{\"status\":\"authenticated\",\"isAuthenticated\":true,\"userInfo\":{{\"email\":\"cursor@example.test\"}}}}"
@@ -318,7 +607,7 @@ fn main() {
         exit(0);
     }
     if kind == "cursor" && args.first().is_some_and(|arg| arg == "models") {
-        if !exe_dir().join("cursor-login-completed").exists()
+        if !artifact_dir().join("cursor-login-completed").exists()
             && let Some(failure) = config.get("cursorModelFailure").and_then(Value::as_str)
         {
             eprintln!("{failure}");
@@ -330,22 +619,22 @@ fn main() {
         exit(0);
     }
     if kind == "cursor" && args.first().is_some_and(|arg| arg == "login") {
-        let _ = std::fs::write(exe_dir().join("cursor-login-completed"), "signed in");
+        let _ = std::fs::write(artifact_dir().join("cursor-login-completed"), "signed in");
         exit(0);
     }
     if kind == "codex" && args.iter().any(|arg| arg == "app-server") {
         codex_app_server(&config);
     }
     if kind == "codex" && args.first().map(String::as_str) == Some("exec") {
-        record_invocation(&args);
+        record_invocation(&args, &config);
         turns::codex_exec(&config, &args);
     }
     if kind == "gemini" && args.iter().any(|a| a == "--output-format") {
-        record_invocation(&args);
+        record_invocation(&args, &config);
         turns::gemini_headless(&config, &args);
     }
     if kind != "claude" && !args.starts_with(&["login".into(), "status".into()]) {
-        record_invocation(&args);
+        record_invocation(&args, &config);
         turns::interactive(kind, &config, &args);
     }
     if args.starts_with(&["auth".into(), "status".into()]) {
@@ -365,20 +654,27 @@ fn main() {
         exit(get_i64(&config, "loginExit", 0));
     }
     if args.iter().any(|a| a == "-p") {
-        record_invocation(&args);
+        record_invocation(&args, &config);
         session(&config, &args);
         return;
     }
     if args.iter().any(|a| a == "--settings") {
-        record_invocation(&args);
+        record_invocation(&args, &config);
         interactive::run(&config, &args);
     }
     eprintln!("fake provider: unsupported arguments");
     exit(2);
 }
 
-fn record_invocation(args: &[String]) {
-    let dir = exe_dir();
+fn record_invocation(args: &[String], config: &Value) {
+    if config
+        .get("recordAdjacentArtifacts")
+        .and_then(Value::as_bool)
+        == Some(false)
+    {
+        return;
+    }
+    let dir = artifact_dir();
     let _ = std::fs::write(
         dir.join("last-args.json"),
         serde_json::to_string(args).unwrap_or_default(),
@@ -454,7 +750,10 @@ fn session(config: &Value, args: &[String]) {
                 .stderr(std::process::Stdio::null())
                 .spawn()
         {
-            let _ = std::fs::write(exe_dir().join("grandchild.pid"), child.id().to_string());
+            let _ = std::fs::write(
+                artifact_dir().join("grandchild.pid"),
+                child.id().to_string(),
+            );
         }
         loop {
             std::thread::sleep(Duration::from_secs(1));
@@ -540,14 +839,20 @@ mod turns {
 
     use serde_json::Value;
 
-    use super::{Out, exe_dir, exit, get_i64, hidden_command, sleep_ms};
+    use super::{Out, artifact_dir, exit, get_i64, hidden_command, sleep_ms};
 
     const CODEX_FIRST: &str = r#"{"type":"thread.started","thread_id":"{SESSION_ID}"}"#;
 
-    fn read_prompt() -> String {
+    fn read_prompt(config: &Value) -> String {
         let mut text = String::new();
         let _ = std::io::stdin().read_to_string(&mut text);
-        let _ = std::fs::write(exe_dir().join("last-stdin.txt"), &text);
+        if config
+            .get("recordAdjacentArtifacts")
+            .and_then(Value::as_bool)
+            != Some(false)
+        {
+            let _ = std::fs::write(artifact_dir().join("last-stdin.txt"), &text);
+        }
         text
     }
 
@@ -578,7 +883,10 @@ mod turns {
                 .stderr(std::process::Stdio::null())
                 .spawn()
         {
-            let _ = std::fs::write(exe_dir().join("grandchild.pid"), child.id().to_string());
+            let _ = std::fs::write(
+                artifact_dir().join("grandchild.pid"),
+                child.id().to_string(),
+            );
         }
         loop {
             std::thread::sleep(std::time::Duration::from_secs(1));
@@ -586,7 +894,7 @@ mod turns {
     }
 
     pub fn codex_exec(config: &Value, args: &[String]) -> ! {
-        let prompt = read_prompt();
+        let prompt = read_prompt(config);
         let session =
             value_after(args, "resume").unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let out = out(session);
@@ -600,6 +908,19 @@ mod turns {
                 "fatal: upstream rejected api_key=sk-proj-abcdefghijklmnopqrstuvwxyz0123456789"
             );
             exit(3);
+        }
+        if let Some(marker) = config.get("codexTurnMarker").and_then(Value::as_str) {
+            out.emit(CODEX_FIRST);
+            out.raw(r#"{"type":"turn.started"}"#);
+            out.raw(
+                &serde_json::json!({
+                    "type": "item.completed",
+                    "item": {"id": "runtime-marker", "type": "agent_message", "text": marker}
+                })
+                .to_string(),
+            );
+            out.raw(r#"{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}"#);
+            exit(get_i64(config, "exitCode", 0));
         }
         let fixture = if prompt.contains("tools") {
             super::CODEX_TOOLS
@@ -620,7 +941,7 @@ mod turns {
     }
 
     pub fn gemini_headless(config: &Value, args: &[String]) -> ! {
-        let prompt = read_prompt();
+        let prompt = read_prompt(config);
         let session =
             value_after(args, "--resume").unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let out = out(session);

@@ -5,8 +5,9 @@ import { expect, type Page } from "@playwright/test";
 import {
   closeGracefully,
   EXE,
+  fakeProviderProcesses,
+  installFakeCodex,
   launch,
-  processesMatching,
   RESOURCE_PROVIDER_FIXTURE_OPT_IN,
   removeDir,
   test,
@@ -46,7 +47,7 @@ test("message search opt-out is immediate and survives restart", async () => {
   writeFileSync(join(project, "README.md"), "# providers2 site\n");
   const bin = join(root, "bin");
   mkdirSync(bin);
-  copyFileSync(FAKE, join(bin, "codex.exe"));
+  installFakeCodex(FAKE, bin);
   copyFileSync(FAKE, join(bin, "gemini.exe"));
   writeManagedFakeProviderConfig(bin);
 
@@ -134,7 +135,7 @@ test("message search opt-out is immediate and survives restart", async () => {
     expect(await privateMatches(page)).toEqual([]);
 
     await closeGracefully(app);
-    expect(processesMatching(bin)).toEqual([]);
+    expect(fakeProviderProcesses(bin, dataDir)).toEqual([]);
     const restarted = await launch(dataDir, { PATH: `${bin};${process.env.PATH ?? ""}` });
     await expect(restarted.page.getByRole("heading", { level: 1, name: "providers2-site" })).toBeVisible();
     expect(await privateMatches(restarted.page)).toEqual([]);

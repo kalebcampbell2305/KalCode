@@ -137,6 +137,10 @@ pub type CursorModelCatalog = Arc<
         + Sync,
 >;
 
+/// Refreshes cached provider adapters. `Some(provider)` also shares any startup readiness work
+/// required by that selected provider; `None` never waits on an unrelated provider.
+pub type ProviderReadiness = Arc<dyn Fn(Option<&ProviderId>) + Send + Sync>;
+
 pub struct DesktopExecutor {
     /// Surfaces this build shows (navigation to others is refused).
     pub visible: Vec<SurfaceId>,
@@ -150,10 +154,9 @@ pub struct DesktopExecutor {
     pub account: Option<Arc<crate::account::runtime::AccountRuntime>>,
     /// `None` when the thread runtime didn't start (then thread commands explain why).
     pub threads: Option<Arc<ThreadRuntime>>,
-    /// Registers the installed providers' adapters with `threads` the first time a session
-    /// operation needs them (`ThreadsState::ensure_providers`), exactly as the thread commands
-    /// do. Without it, a voice launch before any other thread operation sees no providers.
-    pub ensure_providers: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Refreshes the adapters before a provider operation and shares startup readiness only for
+    /// the provider that voice actually selected.
+    pub ensure_providers: Option<ProviderReadiness>,
     /// Resolves the selected native Cursor session's live model catalog.
     pub cursor_models: Option<CursorModelCatalog>,
     /// `None` when the permission engine didn't start.
@@ -668,9 +671,15 @@ impl DesktopExecutor {
     fn provider_threads(&self) -> Result<&Arc<ThreadRuntime>, ExecError> {
         let runtime = self.threads()?;
         if let Some(ensure) = &self.ensure_providers {
-            ensure();
+            ensure(None);
         }
         Ok(runtime)
+    }
+
+    fn ensure_provider_readiness(&self, provider_id: &ProviderId) {
+        if let Some(ensure) = &self.ensure_providers {
+            ensure(Some(provider_id));
+        }
     }
 
     fn workspace_resolver(&self) -> CoreWorkspaces {
@@ -838,18 +847,59 @@ impl DesktopExecutor {
         (ctx.providers.len() == 1).then(|| ctx.providers[0].clone())
     }
 
+    fn explicit_account_provider_candidates(
+        &self,
+        query: &str,
+        eligible_providers: &[ProviderId],
+    ) -> Result<Vec<ProviderId>, ExecError> {
+        let store = AccountStore::new(self.core.clone());
+        if let Some(account_id) = explicit_account_id(query) {
+            let account = store.get(&account_id).map_err(|error| from_core(&error))?;
+            return Ok(eligible_providers
+                .contains(&account.provider_id)
+                .then_some(account.provider_id)
+                .into_iter()
+                .collect());
+        }
+        let accounts = store.list(None).map_err(|error| from_core(&error))?;
+        let mut providers = eligible_providers
+            .iter()
+            .filter(|provider| {
+                let candidates = accounts
+                    .iter()
+                    .filter(|account| &account.provider_id == *provider)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                !matching_accounts(&candidates, provider, query).is_empty()
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if providers.is_empty() {
+            let spoken = label_words(query);
+            providers.extend(
+                eligible_providers
+                    .iter()
+                    .filter(|provider| without_provider(&spoken, provider).len() < spoken.len())
+                    .cloned(),
+            );
+        }
+        providers.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+        providers.dedup();
+        Ok(providers)
+    }
+
     fn inferred_launch_provider(
         &self,
         group: &ProviderPaneRequest,
         workspace: &ResolvedWorkspace,
         provider_hint: Option<&ProviderId>,
-        available: &[ProviderOption],
+        eligible_providers: &[ProviderId],
     ) -> Result<Option<ProviderId>, ExecError> {
         if let Some(provider) = group.provider_id.as_ref() {
             return Ok(Some(provider.clone()));
         }
         let supported = |provider: &ProviderId| {
-            available.iter().any(|option| &option.id == provider)
+            eligible_providers.contains(provider)
                 && [
                     ProviderId::CLAUDE_CODE,
                     ProviderId::CODEX,
@@ -873,26 +923,9 @@ impl DesktopExecutor {
         };
 
         if let Some(query) = group.account_query.as_deref() {
-            if let Some(account_id) = explicit_account_id(query) {
-                let account = store.get(&account_id).map_err(|error| from_core(&error))?;
-                return Ok(supported(&account.provider_id).then_some(account.provider_id));
-            }
-            let providers = available
-                .iter()
-                .flat_map(|option| matching_accounts(&accounts, &option.id, query))
-                .map(|account| account.provider_id.clone())
-                .collect();
-            if let Some(provider) = unique_provider(providers) {
-                return Ok(Some(provider));
-            }
-            let spoken = label_words(query);
-            let named = available
-                .iter()
-                .filter(|option| without_provider(&spoken, &option.id).len() < spoken.len())
-                .map(|option| option.id.clone())
-                .collect();
-            if let Some(provider) = unique_provider(named) {
-                return Ok(Some(provider));
+            let providers = self.explicit_account_provider_candidates(query, eligible_providers)?;
+            if providers.len() == 1 {
+                return Ok(providers.into_iter().next());
             }
             // A spoken account is explicit. If it did not identify exactly one provider, never
             // fall through to the focused/default provider and launch under another account.
@@ -940,10 +973,10 @@ impl DesktopExecutor {
         if let Some(provider) = unique_provider(connected) {
             return Ok(Some(provider));
         }
-        let providers = available
+        let providers = eligible_providers
             .iter()
-            .filter(|option| supported(&option.id))
-            .map(|option| option.id.clone())
+            .filter(|provider| supported(provider))
+            .cloned()
             .collect();
         Ok(unique_provider(providers))
     }
@@ -963,18 +996,63 @@ impl DesktopExecutor {
         }
         let runtime = self.provider_threads()?;
         let workspace = self.target_workspace(workspace_id)?;
-        let options = runtime.options().map_err(|e| from_core(&e))?;
+        let readiness_candidates = [
+            ProviderId::new(ProviderId::CLAUDE_CODE),
+            ProviderId::new(ProviderId::CODEX),
+            ProviderId::new(ProviderId::CURSOR),
+            ProviderId::new(ProviderId::GEMINI_CLI),
+        ];
+        let mut selected = Vec::new();
+        let mut explicit_account_candidates = Vec::with_capacity(groups.len());
+        for group in groups {
+            let account_candidates = if group.provider_id.is_none()
+                && let Some(query) = group.account_query.as_deref()
+            {
+                Some(self.explicit_account_provider_candidates(query, &readiness_candidates)?)
+            } else {
+                None
+            };
+            let providers = if let Some(candidates) = account_candidates.as_ref() {
+                candidates.clone()
+            } else {
+                self.inferred_launch_provider(
+                    group,
+                    &workspace,
+                    provider_hint,
+                    &readiness_candidates,
+                )?
+                .into_iter()
+                .collect()
+            };
+            explicit_account_candidates.push(account_candidates);
+            for provider in providers {
+                if !selected.contains(&provider) {
+                    self.ensure_provider_readiness(&provider);
+                    selected.push(provider);
+                }
+            }
+        }
+        let mut options = runtime.options().map_err(|e| from_core(&e))?;
+        let mut available_provider_ids = options
+            .providers
+            .iter()
+            .map(|provider| provider.id.clone())
+            .collect::<Vec<_>>();
         let permission_mode = provider_launch_permission_mode(self.permissions.as_deref());
         // Resolve every account before starting anything: an unknown label in a later group
         // must not silently start earlier groups under a different/default account.
         let mut requests = Vec::new();
         for (group_index, group) in groups.iter().enumerate() {
-            let inferred_provider = self.inferred_launch_provider(
-                group,
-                &workspace,
-                provider_hint,
-                &options.providers,
-            )?;
+            let inferred_provider = match &explicit_account_candidates[group_index] {
+                Some(candidates) if candidates.len() == 1 => candidates.first().cloned(),
+                Some(_) => None,
+                None => self.inferred_launch_provider(
+                    group,
+                    &workspace,
+                    provider_hint,
+                    &available_provider_ids,
+                )?,
+            };
             let provider = inferred_provider.as_ref().ok_or_else(|| {
                 self.with_launch_provider_choices(
                     ExecError::new(
@@ -987,6 +1065,19 @@ impl DesktopExecutor {
                     &options.providers,
                 )
             })?;
+            if !options
+                .providers
+                .iter()
+                .any(|option| &option.id == provider)
+            {
+                self.ensure_provider_readiness(provider);
+                options = runtime.options().map_err(|error| from_core(&error))?;
+                available_provider_ids = options
+                    .providers
+                    .iter()
+                    .map(|provider| provider.id.clone())
+                    .collect();
+            }
             if ![
                 ProviderId::CLAUDE_CODE,
                 ProviderId::CODEX,
@@ -4756,9 +4847,11 @@ mod tests {
         executor.ensure_providers = Some({
             let calls = calls.clone();
             let registry = registry.clone();
-            Arc::new(move || {
+            Arc::new(move |provider_id| {
                 calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                if registry.get(&ProviderId::new(ProviderId::CODEX)).is_none() {
+                if provider_id.is_some_and(|provider_id| provider_id.as_str() == ProviderId::CODEX)
+                    && registry.get(&ProviderId::new(ProviderId::CODEX)).is_none()
+                {
                     registry.register(Arc::new(IdleProvider(ProviderId::CODEX, false)));
                 }
             })
@@ -4773,6 +4866,135 @@ mod tests {
         ));
         assert!(calls.load(std::sync::atomic::Ordering::SeqCst) >= 1);
         runtime.shutdown();
+    }
+
+    #[test]
+    fn voice_readiness_follows_provider_account_and_context_precedence() {
+        let mut fixture = accounts_fixture();
+        let codex = fixture.account(ProviderId::CODEX, "Codex A", AuthState::Authenticated);
+        let claude = fixture.account(
+            ProviderId::CLAUDE_CODE,
+            "Claude A",
+            AuthState::Authenticated,
+        );
+        fixture
+            .store
+            .bind(
+                ProviderId::CODEX,
+                ProviderAccountBindingKind::Workspace,
+                &fixture.workspace_id,
+                &codex.id,
+            )
+            .expect("Codex workspace binding");
+        let observed = Arc::new(std::sync::Mutex::new(Vec::<Option<String>>::new()));
+        fixture.executor.ensure_providers = Some({
+            let observed = Arc::clone(&observed);
+            Arc::new(move |provider_id| {
+                observed
+                    .lock()
+                    .expect("readiness observations")
+                    .push(provider_id.map(ToString::to_string));
+            })
+        });
+        let launch = KalVoiceIntent::CreateProviderPanes {
+            groups: vec![ProviderPaneRequest {
+                provider_id: Some(ProviderId::new(ProviderId::CLAUDE_CODE)),
+                count: 1,
+                account_query: None,
+                model: None,
+                effort: None,
+                assignments: Vec::new(),
+            }],
+            workspace_id: Some(fixture.workspace_id.clone()),
+        };
+
+        let mut context = ctx();
+        context.providers.push(ProviderId::new(ProviderId::CODEX));
+        fixture
+            .executor
+            .check_with_context(&launch, &context)
+            .expect("explicit Claude launch remains independent of Codex readiness");
+        let first_observations = observed.lock().expect("readiness observations");
+        assert!(
+            first_observations
+                .iter()
+                .any(|provider| provider.as_deref() == Some(ProviderId::CLAUDE_CODE))
+        );
+        assert!(
+            !first_observations
+                .iter()
+                .any(|provider| provider.as_deref() == Some(ProviderId::CODEX)),
+            "a Codex workspace binding must not delay an explicit Claude launch"
+        );
+        drop(first_observations);
+
+        let assert_selected = |account_id: &str, context_provider: &str, expected: &str| {
+            observed.lock().expect("readiness observations").clear();
+            let launch = KalVoiceIntent::CreateProviderPanes {
+                groups: vec![ProviderPaneRequest {
+                    provider_id: None,
+                    count: 1,
+                    account_query: Some(account_id.into()),
+                    model: None,
+                    effort: None,
+                    assignments: Vec::new(),
+                }],
+                workspace_id: Some(fixture.workspace_id.clone()),
+            };
+            let mut context = ctx();
+            context.providers.push(ProviderId::new(context_provider));
+            fixture
+                .executor
+                .check_with_context(&launch, &context)
+                .expect("account-selected provider launch");
+            let selections = observed.lock().expect("readiness observations");
+            assert!(
+                selections
+                    .iter()
+                    .any(|provider| provider.as_deref() == Some(expected)),
+                "account selection must coordinate {expected} readiness"
+            );
+            assert!(
+                !selections.iter().any(|provider| {
+                    provider.as_deref().is_some_and(|provider| {
+                        provider != expected
+                            && [ProviderId::CLAUDE_CODE, ProviderId::CODEX].contains(&provider)
+                    })
+                }),
+                "context must not override the explicit account's provider"
+            );
+        };
+        assert_selected(&codex.id, ProviderId::CLAUDE_CODE, ProviderId::CODEX);
+        assert_selected(&claude.id, ProviderId::CODEX, ProviderId::CLAUDE_CODE);
+
+        fixture.account(ProviderId::CODEX, "Shared", AuthState::Authenticated);
+        fixture.account(ProviderId::CLAUDE_CODE, "Shared", AuthState::Authenticated);
+        observed.lock().expect("readiness observations").clear();
+        let ambiguous = KalVoiceIntent::CreateProviderPanes {
+            groups: vec![ProviderPaneRequest {
+                provider_id: None,
+                count: 1,
+                account_query: Some("Shared".into()),
+                model: None,
+                effort: None,
+                assignments: Vec::new(),
+            }],
+            workspace_id: Some(fixture.workspace_id.clone()),
+        };
+        let error = fixture
+            .executor
+            .check_with_context(&ambiguous, &ctx())
+            .expect_err("same account label across providers stays ambiguous");
+        assert_eq!(error.code, "provider_account_ambiguous");
+        let selections = observed.lock().expect("readiness observations");
+        for provider in [ProviderId::CLAUDE_CODE, ProviderId::CODEX] {
+            assert!(
+                selections
+                    .iter()
+                    .any(|selected| selected.as_deref() == Some(provider)),
+                "ambiguous account labels must preserve {provider} through readiness"
+            );
+        }
     }
 
     #[test]

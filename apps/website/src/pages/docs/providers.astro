@@ -63,13 +63,21 @@ import Docs from "../../layouts/Docs.astro";
     there is no provider fallback.
   </p>
 
-  <h2>Supported CLI versions</h2>
+  <h2>CLI compatibility</h2>
   <p>
-    Managed accounts run the provider CLI release lines KalCode has certified: Claude Code 2.1.282
-    or a later 2.1 release, Codex CLI 0.160 (on macOS also the 0.155 to 0.159 lines, from 0.155.1),
-    and Gemini CLI 0.61. Cursor runs the Cursor Agent CLI you install. Pre-release builds aren't
-    supported. With any other version, sign-in and agents stop with a message that names the
-    supported versions.
+    Managed Codex accounts use capability checks instead of requiring one pinned minor version. A
+    newer stable release keeps working when its required capabilities pass, even when that release
+    is newer than KalCode. Alpha, beta and release-candidate builds use an experimental
+    compatibility path and must pass the same checks. Claude Code and Gemini CLI keep their
+    documented release requirements while their adapters move to the shared compatibility layer.
+    Cursor runs the Cursor Agent CLI you install.
+  </p>
+  <p>
+    KalCode notices when the Codex binary changes, validates it in the background and caches the
+    result for that binary. Agents already running keep the Codex process they started with. New
+    agents use the newly validated binary. A successful update or recovery stays out of the way;
+    KalCode shows an error only when it cannot find a runtime with the capabilities Codex managed
+    accounts require.
   </p>
 
   <h2>Several accounts per provider</h2>

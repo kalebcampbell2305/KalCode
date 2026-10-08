@@ -8,11 +8,13 @@ import {
   capabilityItems,
   detectionLabel,
   fidelityLabel,
+  managedRuntimeLabel,
   managedSignInLabel,
   modelList,
   needsFirstDetection,
   needsInstall,
   needsSignIn,
+  providerRuntimeReady,
   sameSignInLabel,
   settingGroups,
   signInFailureTitle,
@@ -37,6 +39,13 @@ function detected(status: ProviderStatus, patch: Partial<ProviderDetection>): Pr
       ...patch,
     },
   };
+}
+
+function recovered(status: ProviderStatus, source = "last_known_good"): ProviderStatus {
+  return {
+    ...detected(status, { state: "not_installed", version: null }),
+    managedRuntime: { version: "0.160.0", source },
+  } as ProviderStatus;
 }
 
 describe("detectionLabel", () => {
@@ -176,8 +185,33 @@ describe("guidance", () => {
 
   it("offers install guidance only when the CLI is missing", () => {
     expect(needsInstall(detected(codex, { state: "not_installed" }))).toBe(true);
+    expect(needsInstall(recovered(codex))).toBe(false);
     expect(needsInstall(detected(codex, {}))).toBe(false);
     expect(needsInstall(codex)).toBe(false);
+  });
+
+  it("reports a validated managed runtime without hiding native installation truth", () => {
+    const status = recovered(codex);
+    expect(providerRuntimeReady(status)).toBe(true);
+    expect(detectionLabel(status.detection)).toMatchObject({ label: "Not installed", tone: "idle" });
+    expect(managedRuntimeLabel(status)).toEqual({
+      tone: "success",
+      label: "Ready, version 0.160.0",
+      detail: "KalCode is using its last known good Codex runtime for managed accounts.",
+    });
+    expect(managedRuntimeLabel(recovered(codex, "validated_snapshot"))?.detail).toBe(
+      "KalCode validated this isolated Codex runtime for managed accounts.",
+    );
+    expect(managedRuntimeLabel(recovered(codex, "installed_direct"))?.detail).toBe(
+      "KalCode validated the installed Codex CLI for managed accounts.",
+    );
+    expect(providerRuntimeReady(detected(codex, { state: "outdated" }))).toBe(false);
+    expect(
+      providerRuntimeReady({
+        ...detected(codex, { state: "outdated" }),
+        managedRuntime: { version: "0.160.0", source: "last_known_good" },
+      }),
+    ).toBe(true);
   });
 });
 
@@ -240,6 +274,15 @@ describe("summarizeProviders", () => {
       installedNames: ["Claude Code", "Codex"],
     });
     expect(needsFirstDetection(statuses)).toBe(false);
+  });
+
+  it("counts a validated managed runtime as ready when the native CLI is missing", () => {
+    expect(summarizeProviders([recovered(codex), detected(gemini, { state: "not_installed" })])).toEqual({
+      checked: true,
+      installed: 1,
+      total: 2,
+      installedNames: ["Codex"],
+    });
   });
 });
 

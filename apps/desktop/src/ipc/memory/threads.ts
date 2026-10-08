@@ -284,7 +284,7 @@ export function createThreadsMemory(
   scenario: ThreadsScenario = "default",
   /** Open workspaces (Z1). The `threads` scenario adds its fixture workspaces. */
   openWorkspaces: () => WorkspaceOption[] = () => [],
-  /** Providers detection reports usable (Z2); defaults to Claude Code. */
+  /** Provider readiness reports usable (Z2); defaults to Claude Code. */
   usableProviders: () => readonly string[] = () => ["claude-code"],
   /** The permission gate (Z4). Without it, a waiting thread can only be interrupted or stopped. */
   gate: ThreadsGate | null = null,
@@ -302,8 +302,8 @@ export function createThreadsMemory(
   const untitledPanes = new Set<string>();
   const streams = new Map<string, Set<(event: AgentEvent) => void>>();
   const promptReviews = new Map<string, { target: PromptTarget; prompt: string; createdAt: number }>();
-  // Like native `thread_options`: only providers with a thread adapter that detection reports
-  // usable (installed at a supported version, not signed out) are offered.
+  // Like native `thread_options`: only providers with a thread adapter and a launchable native
+  // or validated managed runtime are offered.
   const offered = (): ProviderOption[] => {
     if (scenario === "no-providers") return [];
     const usable = usableProviders();

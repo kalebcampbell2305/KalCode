@@ -308,8 +308,7 @@ export interface UnavailableProvider {
 /**
  * Providers KalCode knows that the New thread flow does not offer, with the reason. Threads use
  * a provider only when KalCode has an adapter for it (Claude Code, Codex and Gemini CLI) and
- * detection found it installed at a supported version and not signed out
- * (`ProviderRegistry::usable`).
+ * the provider registry has a launchable native or managed runtime and the account is usable.
  */
 export function unavailableProviders(
   statuses: readonly ProviderStatus[],
@@ -328,6 +327,9 @@ export function unavailableReason(status: ProviderStatus): string {
     return state === "installed" || state === "outdated"
       ? "Installed, but KalCode can't run threads with it yet"
       : "KalCode can't run threads with it yet";
+  }
+  if (status.managedRuntime && state !== "installed" && state !== "outdated") {
+    return "Managed runtime ready; checking availability";
   }
   if (!detection) return "Not checked yet";
   switch (detection.state) {
