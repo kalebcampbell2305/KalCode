@@ -18,7 +18,7 @@ Plan: MAX and above (the `provider_handoff` placement), matching `handoff-chains
   (`squad_launches` + `squad_launch_members`, no saved template), so the existing dependency-bound
   member path delivers each step's task exactly once, after its dependencies succeed. A failed
   step blocks only its dependents. Parallel branches are steps that share a dependency.
-- **Chain-only facts** live in migration `0027_chains.sql`: goal, acceptance criteria, worktree
+- **Chain-only facts** live in migration `0028_chains.sql`: goal, acceptance criteria, worktree
   mode, each step's intent and instructions, the current attempt per step, the structured step
   report, and the person's explicit decisions (pause, skip, cancel, recorded outcome).
 - **Phases are derived on every read** (`ChainStepPhase`, `ChainPhase`, `waitingReason`,

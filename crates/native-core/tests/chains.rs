@@ -494,11 +494,16 @@ fn review_findings_never_reach_ready_to_merge_without_a_fix() {
     h.complete(&chain, "review", ChainStepResult::ChangesRequested);
     let waiting = h.chains.get(&chain).expect("chain");
     assert_eq!(waiting.phase, ChainPhase::NeedsYou);
-    assert!(waiting
-        .next_action
-        .is_some_and(|text| text.contains("asked for changes")));
+    assert!(
+        waiting
+            .next_action
+            .is_some_and(|text| text.contains("asked for changes"))
+    );
     // The review can run again once the changes were made.
-    let renew = h.chains.retry_step(&chain, "review", None).expect("retry review");
+    let renew = h
+        .chains
+        .retry_step(&chain, "review", None)
+        .expect("retry review");
     assert_eq!(renew.len(), 1);
 }
 
@@ -526,15 +531,21 @@ fn fix_runs_when_a_test_asked_for_changes_even_if_the_review_passed() {
 #[allow(clippy::expect_used)]
 fn a_cancelled_step_blocks_the_chain_with_a_next_action() {
     let h = harness();
-    let chain = h.chains.start(h.standard("req-10"), None).expect("start").id;
+    let chain = h
+        .chains
+        .start(h.standard("req-10"), None)
+        .expect("start")
+        .id;
     h.operations
         .cancel_pending(&h.operation(&chain, "implement"))
         .expect("cancel step from the queue");
     let blocked = h.chains.get(&chain).expect("chain");
     assert_eq!(blocked.phase, ChainPhase::Blocked);
-    assert!(blocked
-        .next_action
-        .is_some_and(|text| text.contains("was cancelled")));
+    assert!(
+        blocked
+            .next_action
+            .is_some_and(|text| text.contains("was cancelled"))
+    );
     assert!(h.chains.retry_step(&chain, "implement", None).is_ok());
 }
 
@@ -542,7 +553,11 @@ fn a_cancelled_step_blocks_the_chain_with_a_next_action() {
 #[allow(clippy::expect_used)]
 fn retry_ends_an_unreported_attempt_and_respects_a_paused_chain() {
     let h = harness();
-    let chain = h.chains.start(h.standard("req-11"), None).expect("start").id;
+    let chain = h
+        .chains
+        .start(h.standard("req-11"), None)
+        .expect("start")
+        .id;
     let first = h.operation(&chain, "implement");
     h.operations
         .claim_user_squad_agent(&first)
@@ -553,7 +568,10 @@ fn retry_ends_an_unreported_attempt_and_respects_a_paused_chain() {
         .expect("bind");
     assert!(h.chains.mark_awaiting_report(&first).expect("await"));
     h.chains.pause(&chain).expect("pause");
-    let authorize = h.chains.retry_step(&chain, "implement", None).expect("retry");
+    let authorize = h
+        .chains
+        .retry_step(&chain, "implement", None)
+        .expect("retry");
     assert!(authorize.is_empty(), "a paused chain authorizes nothing");
     assert_eq!(h.status(&first), OperationStatus::Interrupted);
     let second = h.operation(&chain, "implement");
