@@ -137,7 +137,9 @@ test("portable Python cleanup removes only the validated current run directory",
   }
 });
 
-test("candidate draft access retries the runner's own gh login before refusing", { skip: process.platform !== "win32" }, () => {
+test("candidate draft access retries the runner's own gh login before refusing", {
+  skip: process.platform !== "win32",
+}, () => {
   // Only the function under test: gh is a stub that fails a set number of times (a slow TLS handshake).
   const fn = source.match(/function Invoke-CandidateRelease[\s\S]*?\r?\n\}\r?\n/u)?.[0];
   assert.ok(fn, "Invoke-CandidateRelease");
