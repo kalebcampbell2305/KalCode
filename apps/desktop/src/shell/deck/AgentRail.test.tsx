@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, it, vi } from "vitest";
 import { type KalTidyApi, KalTidyContext } from "../../surfaces/code/kaltidy/kalTidyContext.ts";
 import { thread } from "../../surfaces/dashboard/data/testing.ts";
-import { AgentRail } from "./AgentRail.tsx";
+import { AgentsView, useAgentSections } from "./AgentRail.tsx";
 
 const NOW = Date.parse("2026-10-03T12:00:00.000Z");
 const mocks = vi.hoisted(() => ({ threads: [] as ThreadSummary[] }));
@@ -14,12 +14,14 @@ vi.mock("../../surfaces/dashboard/data/DashboardData.tsx", () => ({
   useArchivedCodingAgents: () => ({ state: { status: "ready", data: [] } }),
 }));
 vi.mock("../../surfaces/dashboard/useNow.ts", () => ({ useClock: () => NOW }));
-vi.mock("./DeckUi.tsx", () => ({
-  useDeckUi: () => ({ agentsOpen: true, setAgentsOpen: vi.fn(), setAgentsActive: vi.fn() }),
-}));
 vi.mock("../navigation.tsx", () => ({ useNavigation: () => ({ navigate: vi.fn() }) }));
 vi.mock("../../runtime/uiIntents.tsx", () => ({ useOptionalUiIntents: () => null }));
 vi.mock("../../surfaces/code/useLaunchAgent.ts", () => ({ useLaunchAgent: () => vi.fn() }));
+
+function View() {
+  const agents = useAgentSections();
+  return <AgentsView agents={agents} />;
+}
 
 const recent = new Date(NOW - 5 * 60_000).toISOString();
 const agent = (name: string, status: ThreadSummary["status"]) =>
@@ -40,7 +42,7 @@ function mount(api: KalTidyApi) {
   render(
     <TooltipProvider>
       <KalTidyContext.Provider value={api}>
-        <AgentRail />
+        <View />
       </KalTidyContext.Provider>
     </TooltipProvider>,
   );
@@ -75,7 +77,7 @@ it("shows a cleared agent again, with its X, when it is restored later", async (
   const tree = () => (
     <TooltipProvider>
       <KalTidyContext.Provider value={api}>
-        <AgentRail />
+        <View />
       </KalTidyContext.Provider>
     </TooltipProvider>
   );
@@ -111,7 +113,7 @@ it("brings the row back when the removal fails", async () => {
 it("shows no X without KalTidy", () => {
   render(
     <TooltipProvider>
-      <AgentRail />
+      <View />
     </TooltipProvider>,
   );
   expect(screen.queryByRole("button", { name: /^Clear / })).toBeNull();

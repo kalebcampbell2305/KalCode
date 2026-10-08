@@ -1196,7 +1196,8 @@ fn migrations_keep_permissions_at_v4() {
             (23, "cursor_accounts"),
             (24, "unified_memory"),
             (25, "terminal_directory"),
-            (26, "squads")
+            (26, "squads"),
+            (27, "launch_recipes")
         ]
     );
 }

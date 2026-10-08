@@ -9,8 +9,20 @@ import {
   IconButton,
   Tooltip,
 } from "@kalcode/ui/components";
-import { ArrowDown, ArrowUp, ChevronRight, FolderOpen, FolderX, MoreHorizontal, Pin, PinOff } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  ChevronRight,
+  FolderOpen,
+  FolderX,
+  LayoutTemplate,
+  MoreHorizontal,
+  Pin,
+  PinOff,
+} from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { sortRecipes } from "../../runtime/recipes/model.ts";
+import { useOptionalRecipeLibrary, useOptionalRecipeRequest } from "../../runtime/recipes/RecipeLaunchProvider.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { useCodingAgents } from "../../surfaces/dashboard/data/DashboardData.tsx";
 import { useNavigation } from "../navigation.tsx";
@@ -41,6 +53,8 @@ export function ProjectList({ collapsed }: { collapsed: boolean }) {
   const { state } = useCodingAgents();
   const { navigate } = useNavigation();
   const pins = useRail();
+  const requestRecipe = useOptionalRecipeRequest();
+  const recipeLibrary = useOptionalRecipeLibrary();
   const { projectsCollapsed, setProjectsCollapsed } = useDeckUi();
   const id = useId();
   const [menuFor, setMenuFor] = useState<string | null>(null);
@@ -352,6 +366,28 @@ export function ProjectList({ collapsed }: { collapsed: boolean }) {
                           </DropdownMenuItem>
                         </>
                       ) : null}
+                      {workspace.available && recipeLibrary && requestRecipe
+                        ? sortRecipes(
+                            recipeLibrary.recipes.filter(
+                              (r) => r.workspaceId === workspace.id || r.workspaceId === null,
+                            ),
+                          )
+                            .slice(0, 6)
+                            .map((recipe) => (
+                              <DropdownMenuItem
+                                key={recipe.id}
+                                icon={<LayoutTemplate />}
+                                onSelect={() =>
+                                  void (async () => {
+                                    if (recipe.workspaceId === null && !(await activate(workspace.id))) return;
+                                    await requestRecipe({ recipeId: recipe.id });
+                                  })()
+                                }
+                              >
+                                {`Launch Recipe: ${recipe.name}`}
+                              </DropdownMenuItem>
+                            ))
+                        : null}
                       {missing ? (
                         <>
                           <DropdownMenuSeparator />

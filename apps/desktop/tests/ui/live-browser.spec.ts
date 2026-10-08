@@ -74,12 +74,12 @@ async function openLiveBrowserBesideAgent(page: Page, options: { roomy?: boolean
   if (options.roomy) {
     await page.getByRole("button", { name: "Hide the workspace rail" }).click();
     // The agents rail follows the agents: a strip while none runs, opening on its own once one
-    // works. Pin it folded the way a person does (open it, then Hide agents) so the agent this
+    // works. Pin it folded the way a person does (open it, then Collapse dock) so the agent this
     // spec launches doesn't reopen it mid-run.
-    const strip = page.getByRole("complementary", { name: "Agents (collapsed)" });
+    const strip = page.getByRole("complementary", { name: "Workspace dock (collapsed)" });
     await expect(strip).toBeVisible();
-    await strip.getByRole("button", { name: "Show agents", exact: true }).click();
-    await page.getByRole("button", { name: "Hide agents", exact: true }).click();
+    await strip.getByRole("button", { name: "Show dock", exact: true }).click();
+    await page.getByRole("button", { name: "Collapse dock", exact: true }).click();
     await expect(strip).toBeVisible();
   }
 

@@ -87,7 +87,15 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("../migrations/0025_terminal_directory.sql"),
     },
     SQUADS_MIGRATION,
+    LAUNCH_RECIPES_MIGRATION,
 ];
+
+/// Saved Launch Recipes: reusable working desks that recreate in one action.
+pub const LAUNCH_RECIPES_MIGRATION: Migration = Migration {
+    version: 27,
+    name: "launch_recipes",
+    sql: include_str!("../migrations/0027_launch_recipes.sql"),
+};
 
 /// Reusable Squad templates and launch relationships to canonical Operations.
 pub const SQUADS_MIGRATION: Migration = Migration {
@@ -699,7 +707,7 @@ mod tests {
         let profile = tempfile::tempdir().expect("profile");
         let database_path = profile.path().join("kalcode.db");
         let backup_dir = profile.path().join("backups");
-        let schema25 = &MIGRATIONS[..MIGRATIONS.len() - 1];
+        let schema25 = &MIGRATIONS[..25];
         assert_eq!(schema25.last().map(|migration| migration.version), Some(25));
 
         let mut conn = open(&database_path).expect("schema 25 database");
@@ -776,7 +784,8 @@ mod tests {
             )
             .expect("operations revision");
 
-        let outcome = migrate(&mut conn, MIGRATIONS, Some(&backup_dir)).expect("upgrade to 26");
+        let outcome =
+            migrate(&mut conn, &MIGRATIONS[..26], Some(&backup_dir)).expect("upgrade to 26");
         assert_eq!((outcome.from_version, outcome.to_version), (25, 26));
         let backup_path = outcome.backup.expect("pre-26 backup");
         assert!(backup_path.is_file());
@@ -828,8 +837,8 @@ mod tests {
         drop(conn);
 
         let mut reopened = open(&database_path).expect("reopen migrated database");
-        let reopen =
-            migrate(&mut reopened, MIGRATIONS, Some(&backup_dir)).expect("idempotent reopen");
+        let reopen = migrate(&mut reopened, &MIGRATIONS[..26], Some(&backup_dir))
+            .expect("idempotent reopen");
         assert!(!reopen.applied_any());
         assert!(reopen.backup.is_none());
         assert_eq!(
@@ -868,7 +877,8 @@ mod tests {
         let recovery_path = profile.path().join("recovered.db");
         fs::copy(&backup_path, &recovery_path).expect("stage backup recovery");
         let mut recovered = open(&recovery_path).expect("open recovered backup");
-        let recovery = migrate(&mut recovered, MIGRATIONS, None).expect("migrate recovered backup");
+        let recovery =
+            migrate(&mut recovered, &MIGRATIONS[..26], None).expect("migrate recovered backup");
         assert_eq!((recovery.from_version, recovery.to_version), (25, 26));
         assert_eq!(
             row_values(&recovered, "workspaces", WORKSPACE_ID),

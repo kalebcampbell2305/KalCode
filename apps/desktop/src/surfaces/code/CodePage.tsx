@@ -1,4 +1,4 @@
-import type { SavedLayoutPreset, Workspace } from "@kalcode/protocol";
+import { getPlanFeature, planIncludes, type SavedLayoutPreset, type Workspace } from "@kalcode/protocol";
 import {
   Badge,
   Button,
@@ -28,6 +28,7 @@ import {
   CircleX,
   Equal,
   LayoutGrid,
+  LayoutTemplate,
   ListChecks,
   Minimize2,
   PlugZap,
@@ -35,14 +36,19 @@ import {
   PowerOff,
   Save,
   Settings2,
+  Sparkles,
   SquareTerminal,
   Trash2,
   Undo2,
 } from "lucide-react";
 import { type FormEvent, memo, type ReactNode, useEffect, useId, useRef, useState } from "react";
+import { useOptionalAccount } from "../../account/AccountProvider.tsx";
+import { planTier } from "../../ipc/account.ts";
 import { toKalCodeError } from "../../ipc/errors.ts";
 import { formatShortcut } from "../../platform/keyboard.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
+import { useOptionalRecipeLibrary, useOptionalRecipeRequest } from "../../runtime/recipes/RecipeLaunchProvider.tsx";
+import { requestRecipeCapture } from "../../runtime/recipes/useRecipeCapture.ts";
 import { useWorkspaces, useWorkspaceVisible, WorkspaceScope } from "../../runtime/WorkspaceProvider.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
 import { TASK_DESCRIPTIONS, TASK_LABELS, TASK_LAYOUTS } from "../../shell/panes/adaptiveCanvas.ts";
@@ -330,6 +336,39 @@ function ToolbarPlaceholder() {
   );
 }
 
+/**
+ * Launch Recipes inside the Layout menu: a Recipe is a saved desk, and living here keeps the
+ * Code header exactly as wide as before (its controls are tuned never to overflow).
+ */
+function RecipeMenuItems() {
+  const library = useOptionalRecipeLibrary();
+  const request = useOptionalRecipeRequest();
+  if (!library || !request) return null;
+  const shown = library.recipes.slice(0, 5);
+  return (
+    <>
+      <DropdownMenuSeparator />
+      <DropdownMenuLabel>Recipes</DropdownMenuLabel>
+      {shown.map((recipe) => (
+        <DropdownMenuItem
+          key={recipe.id}
+          icon={<LayoutTemplate />}
+          description={recipe.pinned ? "Pinned" : undefined}
+          onSelect={() => void request({ recipeId: recipe.id })}
+        >
+          {`Launch ${recipe.name}`}
+        </DropdownMenuItem>
+      ))}
+      <DropdownMenuItem icon={<LayoutTemplate />} onSelect={() => requestRecipeCapture()}>
+        Save desk as Recipe
+      </DropdownMenuItem>
+      <DropdownMenuItem icon={<Settings2 />} onSelect={() => library.library.open()}>
+        Manage Recipes…
+      </DropdownMenuItem>
+    </>
+  );
+}
+
 const Toolbar = memo(function Toolbar({ api, available }: { api: CodeCanvasApi; available: boolean }) {
   const { client } = useRuntime();
   const { controller, shells, background, providerPanes } = api;
@@ -343,6 +382,19 @@ const Toolbar = memo(function Toolbar({ api, available }: { api: CodeCanvasApi; 
   const current = matchingPreset(controller.layout);
   const maximized = controller.layout.maximizedPaneId !== null;
   const noShells = shells.length === 0 || !available;
+  // Adaptive Canvas task layouts are a Pro feature (packages/protocol plans.ts "adaptive-canvas"),
+  // gated like Squads: the owner tier counts as MAX 2X, and no signed-in account never blocks.
+  const account = useOptionalAccount();
+  const navigation = useNavigation();
+  const tier = planTier(account?.snapshot);
+  const canvasIncluded = account
+    ? planIncludes(tier === "owner" ? "max2x" : tier, getPlanFeature("adaptive-canvas"))
+    : true;
+  // Focus stays on every plan: with task layouts it is the Focus layout, otherwise a plain maximize.
+  const focus = () => {
+    if (canvasIncluded) api.applyTaskLayout("focus");
+    else if (controller.focusedPaneId) controller.toggleMaximize(controller.focusedPaneId);
+  };
 
   const loadPresets = () => {
     client
@@ -514,7 +566,7 @@ const Toolbar = memo(function Toolbar({ api, available }: { api: CodeCanvasApi; 
       <WidgetsMenu controller={controller} />
       <RunTestsButton controller={controller} organization={api.organization} />
       <KalTidyActions />
-      <FocusButton controller={controller} onFocus={() => api.applyTaskLayout("focus")} />
+      <FocusButton controller={controller} onFocus={focus} />
       <span className={styles.groupDivider} aria-hidden="true" />
       <Tooltip content="Arrange panes without stopping work. Undo restores your exact layout.">
         <Button size="sm" variant="ghost" icon={<LayoutGrid />} aria-label="Tidy" onClick={() => controller.tidy()}>
@@ -546,8 +598,17 @@ const Toolbar = memo(function Toolbar({ api, available }: { api: CodeCanvasApi; 
           </DropdownMenuTrigger>
         </Tooltip>
         <DropdownMenuContent align="end" minWidth={17}>
-          <DropdownMenuLabel>Adaptive Canvas</DropdownMenuLabel>
-          {api.layoutSuggestion ? (
+          <DropdownMenuLabel>{canvasIncluded ? "Adaptive Canvas" : "Adaptive Canvas · Pro"}</DropdownMenuLabel>
+          {!canvasIncluded ? (
+            <DropdownMenuItem
+              icon={<Sparkles />}
+              description="Build, Debug, Review, Ship and Focus layouts in one click. View plans in Settings."
+              onSelect={() => navigation.navigate("settings")}
+            >
+              Task layouts are included with Pro
+            </DropdownMenuItem>
+          ) : null}
+          {canvasIncluded && api.layoutSuggestion ? (
             <>
               <DropdownMenuItem
                 icon={<LayoutGrid />}
@@ -561,7 +622,7 @@ const Toolbar = memo(function Toolbar({ api, available }: { api: CodeCanvasApi; 
               <DropdownMenuSeparator />
             </>
           ) : null}
-          {TASK_LAYOUTS.map((task) => (
+          {(canvasIncluded ? TASK_LAYOUTS : []).map((task) => (
             <DropdownMenuItem
               key={task}
               icon={
@@ -589,6 +650,7 @@ const Toolbar = memo(function Toolbar({ api, available }: { api: CodeCanvasApi; 
               </DropdownMenuRadioItem>
             ))}
           </DropdownMenuRadioGroup>
+          <RecipeMenuItems />
           {presets.length > 0 ? (
             <>
               <DropdownMenuSeparator />

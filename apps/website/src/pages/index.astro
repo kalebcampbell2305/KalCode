@@ -42,48 +42,48 @@ const STATE_LABEL = SAMPLE_AGENT_STATE_LABEL;
 const providerName = (id: string) => PROVIDERS.find((p) => p.id === id)?.name ?? id;
 /** Sample provider accounts for the accounts beat (fictional): label, plan, usage left. */
 const ACCOUNTS = [
-  { provider: "claude", name: "Personal", plan: "Claude Max", window: "5-hour", left: 64 },
-  { provider: "claude", name: "Work", plan: "Claude Pro", window: "5-hour", left: 8 },
+  { provider: "claude", name: "Personal", plan: "Claude Max", window: "Weekly", left: 64 },
+  { provider: "claude", name: "Work", plan: "Claude Pro", window: "Weekly", left: 8 },
   { provider: "codex", name: "Work", plan: "ChatGPT Business", window: "Weekly", left: 73 },
 ] as const;
 
-/** What shipped recently, each card tied to its catalog entry (Available, or Coming soon). */
+/** What 0.1.10 brings, each card tied to its catalog entry (Available, or Coming soon). */
 const fresh: { feature: PlanFeature; title: string; text: string; visual: string }[] = [
   {
-    feature: getPlanFeature("quick-switcher"),
-    title: "Go anywhere, instantly",
-    text: "Back and Forward, breadcrumbs and one quick switcher for workspaces, agents, terminals, files, accounts, settings and commands.",
-    visual: "switcher",
+    feature: getPlanFeature("new-agent"),
+    title: "Real agents, one click",
+    text: "New agent starts the setup you used last, with the same account, model and effort, in its own terminal. The launcher shows every signed-in account and the models it can use.",
+    visual: "launch",
   },
   {
-    feature: getPlanFeature("terminal-basics"),
-    title: "Smart Close and New like this",
-    text: "Closing a busy terminal asks first: keep it running or stop it. New like this opens a fresh agent with the same provider, account and model.",
-    visual: "close",
+    feature: getPlanFeature("squads"),
+    title: "Squads",
+    text: "Save a team and launch it at once: every member is a real coding terminal with its own provider account, model and effort. A member that waits on other work shows Waiting.",
+    visual: "squad",
   },
   {
-    feature: getPlanFeature("account-hub"),
-    title: "The right account, every time",
-    text: "Pick the account in any terminal's header. When one runs low, KalCode suggests another you've connected, and never switches on its own.",
-    visual: "account",
+    feature: getPlanFeature("needs-you"),
+    title: "One Needs You inbox",
+    text: "Questions, approvals, failures, sign-outs, stalled agents and finished work, each with what happened, why it needs you and the next step.",
+    visual: "needs",
   },
   {
-    feature: getPlanFeature("native-parity"),
-    title: "Native tools, unchanged",
-    text: "Web search, your MCP servers, plugins, slash commands, CLAUDE.md and Codex rules work exactly as in your own terminal.",
-    visual: "tools",
+    feature: getPlanFeature("agent-outcomes"),
+    title: "Outcomes beside every agent",
+    text: "Files changed, tests and whether the work is ready to merge, right on the agent. \u201cOverlaps with\u201d flags two agents changing the same files.",
+    visual: "outcome",
   },
   {
-    feature: getPlanFeature("terminal-status"),
-    title: "One agent state, everywhere",
-    text: "The same state in panes, Agent Fleet, Needs You and KalVoice, for every provider: “3 agents working”, never guesswork.",
-    visual: "states",
+    feature: getPlanFeature("kalvoice-actions"),
+    title: "Say it. See where it landed.",
+    text: "\u201cStart three Codex agents\u201d starts them in your project, and a short streak shows exactly where each command landed.",
+    visual: "voice",
   },
   {
-    feature: getPlanFeature("appearance"),
-    title: "The graphite look",
-    text: "A calmer, sharper KalCode, with Contrast and Text size under Settings → Appearance.",
-    visual: "appearance",
+    feature: getPlanFeature("terminal-smart"),
+    title: "Continue where you left off",
+    text: "After a restart your panes, names, layout, Browser pages and drafts come back, and the agents that can resume, resume. Closing a pane stops its agent.",
+    visual: "resume",
   },
 ];
 const planTag = (feature: PlanFeature) =>
@@ -108,7 +108,7 @@ const qnas = [
   },
   {
     q: "What does KalVoice do?",
-    a: `Hold ${KALVOICE.pushToTalkKey} (Fn on a Mac) and speak. In a terminal your words are typed into the focused agent; anywhere else KalVoice runs the command, like “Open Dashboard”. Dictation runs on your device and is never counted.`,
+    a: `Hold ${KALVOICE.pushToTalkKey} (Fn on a Mac) and speak. In a terminal your words are typed into the focused agent; anywhere else KalVoice runs the command, like “Open Activity” or “Start three Codex agents”. Dictation runs on your device and is never counted.`,
   },
   {
     q: "How do I open another coding agent?",
@@ -116,7 +116,7 @@ const qnas = [
   },
   {
     q: "What does Needs You mean?",
-    a: "An agent is waiting on you: it's asking a question, it needs a sign-in, or it wants access to a credential or secret. The Needs You count is always in the top bar; click it to jump straight to that agent.",
+    a: "Something genuinely needs you: an agent asked a question or wants an approval, a run failed, an account signed out, an agent has been quiet for 20 minutes, or finished work is ready to review. Each item says what happened, why it needs you and the next step, and opens the exact terminal. The count is always in the sidebar.",
   },
   {
     q: "How do updates work?",
@@ -323,7 +323,7 @@ const qnas = [
             </ul>
             <div class="suggest">
               <span class="suggest__icon"><Fragment set:html={icon("users")} /></span>
-              <p><strong>Work has 8% left in its 5-hour limit.</strong><small>Personal · 64% left</small></p>
+              <p><strong>Work has 8% left in its weekly limit.</strong><small>Personal · 64% left</small></p>
               <span class="suggest__action">Continue with Personal?</span>
             </div>
           </div>
@@ -354,7 +354,7 @@ const qnas = [
             <span class="voice-visual__orb"></span>
             <span class="voice-visual__ring"></span>
             <span class="voice-visual__ring voice-visual__ring--2"></span>
-            <div class="voice-visual__bubble"><small>Listening…</small><span class="lk-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>“Open Dashboard”</div>
+            <div class="voice-visual__bubble"><small>Listening…</small><span class="lk-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>“Open Activity”</div>
             <span class="voice-visual__keys"><kbd class="voice-visual__key">{KALVOICE.pushToTalkKey}</kbd><kbd class="voice-visual__key voice-visual__key--fn">fn</kbd></span>
           </div>
         </div>
@@ -491,66 +491,57 @@ const qnas = [
         <header class="beat__copy beat__copy--center" data-reveal>
           <p class="beat__num">08 · New in KalCode{stable ? ` ${stable.version}` : ""}</p>
           <h2 id="new-title" class="h2">Shipped, and in the app today.</h2>
-          <p class="body-lg">Recent builds made KalCode faster to move around and closer to your own terminal.</p>
+          <p class="body-lg">Real agents in one click, whole teams with Squads, one inbox for what needs you, and a desk that picks up where you left off.</p>
         </header>
         <ul class="fresh" role="list" data-reveal>
           {
             fresh.map((item) => (
               <li class="fresh__card" data-visual={item.visual}>
                 <div class="fresh__visual" aria-hidden="true">
-                  {item.visual === "switcher" && (
-                    <div class="fv-switch">
-                      <p class="fv-switch__bar"><span class="fv-nav"><Fragment set:html={icon("back")} /><Fragment set:html={icon("forward")} /></span><span class="fv-switch__input"><Fragment set:html={icon("search")} />dash</span><kbd>Ctrl K</kbd></p>
-                      <p class="fv-row" data-on><Fragment set:html={icon("bot")} /><b>Dashboard Tests</b><small>Agent</small></p>
-                      <p class="fv-row"><Fragment set:html={icon("dashboard")} /><b>Dashboard</b><small>Surface</small></p>
-                      <p class="fv-row"><Fragment set:html={icon("code")} /><b>src/pages/Dashboard.tsx</b><small>File</small></p>
-                    </div>
-                  )}
-                  {item.visual === "close" && (
-                    <div class="fv-close">
-                      <div class="fv-menu">
-                        <p data-on><Fragment set:html={icon("copy")} />New like this<span>›</span></p>
-                        <p><Fragment set:html={icon("pen")} />Rename</p>
-                        <p><Fragment set:html={icon("close")} />Close</p>
-                      </div>
-                      <div class="fv-dialog">
-                        <b>Close active work?</b>
-                        <small>Dashboard Redesign is still working.</small>
-                        <span class="fv-btns"><span>Cancel</span><span>Keep Running</span><span data-primary>Stop and Close</span></span>
-                      </div>
-                    </div>
-                  )}
-                  {item.visual === "account" && (
+                  {item.visual === "launch" && (
                     <div class="fv-account">
-                      <p class="fv-account__head"><ProviderGlyph provider="claude" /><b>Dashboard Redesign</b><span class="fv-account__pick">Personal<small>64% left</small><Fragment set:html={icon("chevron")} /></span></p>
+                      <p class="fv-account__head"><ProviderGlyph provider="claude" /><b>Claude Code</b><span class="fv-account__pick">Personal<small>Opus · High</small><Fragment set:html={icon("chevron")} /></span></p>
                       <div class="fv-account__list">
                         <p data-on><span>Personal</span><i data-level="64"></i><small>64%</small></p>
                         <p><span>Work</span><i data-level="8"></i><small>8%</small></p>
                       </div>
                     </div>
                   )}
-                  {item.visual === "tools" && (
-                    <ul class="fv-tools">
-                      <li>Web search</li>
-                      <li>MCP servers</li>
-                      <li>Slash commands</li>
-                      <li>Plugins</li>
-                      <li>CLAUDE.md</li>
-                      <li>Codex rules</li>
-                    </ul>
+                  {item.visual === "squad" && (
+                    <div class="fv-switch">
+                      <p class="fv-row" data-on><ProviderGlyph provider="codex" /><b>Pricing and checkout</b><small>Codex · Working</small></p>
+                      <p class="fv-row"><ProviderGlyph provider="claude" /><b>Checkout tests</b><small>Claude Code · Waiting</small></p>
+                      <p class="fv-row"><ProviderGlyph provider="cursor" /><b>Release review</b><small>Cursor · Ready</small></p>
+                    </div>
                   )}
-                  {item.visual === "states" && (
+                  {item.visual === "needs" && (
                     <ul class="fv-states">
-                      <li data-state="working">3 working</li>
-                      <li data-state="needs">1 needs you</li>
-                      <li data-state="ready">1 ready</li>
-                      <li data-state="done">2 done</li>
+                      <li data-state="needs">Asked a question</li>
+                      <li data-state="needs">Needs approval</li>
+                      <li data-state="done">Finished · review</li>
+                      <li data-state="ready">Open agent</li>
                     </ul>
                   )}
-                  {item.visual === "appearance" && (
+                  {item.visual === "outcome" && (
+                    <ul class="fv-tools">
+                      <li>2 files</li>
+                      <li>Tests passed</li>
+                      <li>Ready to merge</li>
+                      <li>Overlaps with Cart rounding</li>
+                    </ul>
+                  )}
+                  {item.visual === "voice" && (
                     <div class="fv-look">
-                      <p><span>Contrast</span><span class="fv-seg"><i>System</i><i data-on>Standard</i><i>High</i></span></p>
-                      <p><span>Text size</span><span class="fv-seg"><i data-on>Default</i><i>Large</i><i>Larger</i></span></p>
+                      <p><span>KalVoice</span><span class="fv-seg"><i data-on>“Start three Codex agents”</i></span></p>
+                      <p><span>Done</span><span class="fv-seg"><i>Started 3 sessions</i></span></p>
+                    </div>
+                  )}
+                  {item.visual === "resume" && (
+                    <div class="fv-close fv-close--resume">
+                      <div class="fv-dialog">
+                        <b>northwind is where you left it</b>
+                        <span class="fv-btns"><span>Dismiss</span><span data-accent>Continue where I left off</span></span>
+                      </div>
                     </div>
                   )}
                 </div>

@@ -7,6 +7,7 @@ import { PushToTalkActivity } from "../kalvoice/PushToTalkActivity.tsx";
 import { SessionChoicePanel } from "../kalvoice/SessionChoicePanel.tsx";
 import { NavigationBridge } from "../runtime/NavigationBridge.tsx";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
+import { RecipesProvider } from "../runtime/recipes/RecipeLaunchProvider.tsx";
 import { UiIntentsProvider } from "../runtime/uiIntents.tsx";
 import { WorkspaceProvider } from "../runtime/WorkspaceProvider.tsx";
 import { CodePage } from "../surfaces/code/CodePage.tsx";
@@ -30,16 +31,17 @@ import { ThreadsSurface } from "../surfaces/threads/ThreadsSurface.tsx";
 import { useAppearance } from "./appearance.ts";
 import { CodeStartup } from "./CodeStartup.tsx";
 import { CommandPalette } from "./CommandPalette.tsx";
-import { AgentRail } from "./deck/AgentRail.tsx";
 import { CommandBar } from "./deck/CommandBar.tsx";
 import { DeckDataProvider } from "./deck/DeckData.tsx";
 import { DeckUiProvider } from "./deck/DeckUi.tsx";
+import { ShellDock } from "./dock/WorkspaceDock.tsx";
 import { NavigationBar } from "./NavigationBar.tsx";
 import { destinationMeta, NavigationProvider, useNavigation } from "./navigation.tsx";
 import { NotificationCenter } from "./notifications/NotificationCenter.tsx";
 import { NotificationsProvider } from "./notifications/NotificationsProvider.tsx";
 // Z7-W2: Home, the project page, the workspace list and Git status as pane contents.
 import "./rail/paneContents.tsx";
+import { RecipesHost } from "../surfaces/recipes/RecipesHost.tsx";
 import { FavoritesBar } from "./favorites/FavoritesBar.tsx";
 import { RailProvider, useRail } from "./rail/RailProvider.tsx";
 import { SearchProvider, useSearchOpen } from "./rail/search/SearchProvider.tsx";
@@ -74,13 +76,16 @@ export function Shell() {
                       <RailProvider>
                         {/* KalTidy wraps KalVoice, which stops idle terminals through it. */}
                         <KalTidyProvider>
-                          {kalvoiceEnabled ? (
-                            <KalVoiceProvider>
-                              <ShellLayout kalvoice />
-                            </KalVoiceProvider>
-                          ) : (
-                            <ShellLayout kalvoice={false} />
-                          )}
+                          {/* Launch Recipes: one launch authority for buttons, palette, Projects and KalVoice. */}
+                          <RecipesProvider>
+                            {kalvoiceEnabled ? (
+                              <KalVoiceProvider>
+                                <ShellLayout kalvoice />
+                              </KalVoiceProvider>
+                            ) : (
+                              <ShellLayout kalvoice={false} />
+                            )}
+                          </RecipesProvider>
                         </KalTidyProvider>
                       </RailProvider>
                     </SearchProvider>
@@ -240,7 +245,7 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
                     </div>
                   ) : null}
                 </main>
-                <AgentRail />
+                <ShellDock />
               </div>
               <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
               {kalvoice ? <FloatingAssistant /> : null}
@@ -250,6 +255,7 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
               <ApprovalAnnouncer />
               <NotificationCenter />
               <UpdateReadyNotice client={client} onOpenDetails={openUpdateDetails} />
+              <RecipesHost />
             </div>
           </div>
         </DeckDataProvider>

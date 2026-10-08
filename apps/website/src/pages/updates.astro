@@ -144,9 +144,55 @@ const builds0110 = NOTES_0110.filter((notes) => notes.build <= servedBuild0110).
               <p class="update__kicker">The current release</p>
               <h2 id="release-0-1-10-title">KalCode 0.1.10 is here.</h2>
               <p class="update__lead">
-                Everything in 0.1.9, now as KalCode 0.1.10 on Windows and macOS. It installs when you close
-                KalCode, and every build after it installs the same way.
+                KalCode 0.1.10 brings together everything built since the last big update: real coding agents
+                that start in one click, Squads, one Needs You inbox, outcomes beside every agent, KalVoice that
+                shows where a command landed, and a desk that picks up where you left off. It is on Windows and
+                macOS, and it installs when you close KalCode.
               </p>
+              <h3 class="update__subhead">What 0.1.10 brings</h3>
+              <div class="update__groups">
+                <section>
+                  <h3>Real agents, one click</h3>
+                  <ul>
+                    <li>New agent starts a real Claude Code, Codex, Cursor or Gemini CLI terminal in your project with the account, model and effort you used last. The arrow beside it opens every option. <a class="text-link" href="#build-1816">Build 1816</a></li>
+                    <li>The launcher lists every signed-in account with its weekly usage, and the models that account can actually use, with their efforts. <a class="text-link" href="#build-2178">Build 2178</a></li>
+                  </ul>
+                </section>
+                <section>
+                  <h3>Squads</h3>
+                  <ul>
+                    <li>Save a team and launch it at once: each member opens as a real coding terminal with its own provider account, model and effort, roles, tasks and dependencies. A member that waits on other work shows Waiting until that work succeeds. Squads are part of MAX. <a class="text-link" href="#build-2178">Build 2178</a></li>
+                  </ul>
+                </section>
+                <section>
+                  <h3>Activity and Needs You</h3>
+                  <ul>
+                    <li>Code, Activity and your projects lead the sidebar. Everything else is one click away in More. <a class="text-link" href="#build-1816">Build 1816</a></li>
+                    <li>One Needs You inbox for questions, approvals, failures, sign-outs, stalled agents and finished work. Each item says what happened, why it needs you and the next step, and opens the exact terminal. <a class="text-link" href="#build-1816">Build 1816</a></li>
+                    <li>Every agent shows what its work amounted to: files changed, test results and whether it is ready to merge, would conflict or has uncommitted changes. “Overlaps with” flags two agents changing the same files before you merge. <a class="text-link" href="#build-1816">Build 1816</a></li>
+                  </ul>
+                </section>
+                <section>
+                  <h3>KalVoice</h3>
+                  <ul>
+                    <li>Say “Start three Codex agents” and they start in your project. A short streak runs from the KalVoice orb to the result, so you see where every command landed. <a class="text-link" href="#build-1908">Build 1908</a></li>
+                  </ul>
+                </section>
+                <section>
+                  <h3>Continue where you left off</h3>
+                  <ul>
+                    <li>After a restart, KalCode brings back your panes, their names, layout and focus, your Browser pages and drafts, and resumes the coding agents that can be resumed, automatically or when you choose. <a class="text-link" href="#build-2168">Build 2168</a></li>
+                    <li>Closing a pane now stops its agent, and it stays closed after a restart. <a class="text-link" href="#build-2168">Build 2168</a></li>
+                  </ul>
+                </section>
+                <section>
+                  <h3>The workspace</h3>
+                  <ul>
+                    <li>Project memory sits in Code, with pinned notes first. Operations reads like live telemetry, the focused pane lights up, and the space look scales to each page. <a class="text-link" href="#build-1908">Build 1908</a></li>
+                    <li>A faster Code tab with many agents, agents that start faster, and usage readings you can trust. <a class="text-link" href="#build-1873">Build 1873</a></li>
+                  </ul>
+                </section>
+              </div>
               {
                 builds0110.length > 0 && (
                   <section class="builds" aria-labelledby="builds-0-1-10-title">

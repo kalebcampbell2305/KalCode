@@ -97,7 +97,7 @@ test("run evidence stays inside a narrow window with the Agent rail open", async
   await openCode(page);
   await page.getByRole("button", { name: "Widgets", exact: true }).click();
   await page.getByRole("menuitem", { name: "Runs, services & tests" }).click();
-  await page.getByRole("button", { name: "Show agents", exact: true }).click();
+  await page.getByRole("button", { name: "Show dock", exact: true }).click();
 
   const context = page.getByRole("region", { name: "Workspace context for kalcode-site" });
   await context.getByRole("button", { name: "Open run Frontend dev server" }).click();
