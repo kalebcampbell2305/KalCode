@@ -238,7 +238,8 @@ function AgentRow({
         data-group={state === "needs_you" ? "attention" : state}
         data-state={state}
         onClick={() => onOpen(thread)}
-        aria-label={`${thread.name}, ${label}. ${identityDetail} Open agent`}
+        aria-label={`${thread.name}, ${label}, ${identity.compact} in ${thread.workspaceName}. Open agent`}
+        aria-description={identityDetail}
         title={identityDetail}
       >
         {/* The warm edge on an inert element, not ::before (see AgentRail.module.css). */}

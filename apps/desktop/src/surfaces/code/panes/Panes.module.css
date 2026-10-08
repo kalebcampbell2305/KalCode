@@ -473,8 +473,10 @@
   }
 }
 
+/* The model is the session's identity (a Cursor model id also carries its reasoning variant), so
+   it never steps aside; the provider name, which the tab and its glyph already show, does. */
 @container provider-pane (max-width: 22rem) {
-  .model {
+  .provider {
     display: none;
   }
 }

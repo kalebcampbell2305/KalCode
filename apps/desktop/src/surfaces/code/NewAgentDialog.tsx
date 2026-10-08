@@ -40,6 +40,7 @@ import { useOptionalProviderAccountSessions } from "../providers/ProviderAccount
 import { isBrowserAuthProvider } from "../providers/useProviderAccounts.ts";
 import styles from "./NewAgentDialog.module.css";
 import {
+  ADAPTER_EFFORTS,
   boundLaunchAccount,
   clampAgentCount,
   effortForModel,
@@ -428,7 +429,13 @@ export function NewAgentDialog({
     ...(unavailableModel ? [{ value: model, label: `Unavailable · ${savedModelLabel ?? model}`, title: model }] : []),
   ];
   const modelName = model ? (exactModel ? exactModelLabel(exactModel) : (remembered?.modelName ?? model)) : null;
-  const efforts = effortsForModel(providerId, exactModel, catalogEfforts);
+  // An account that must reconnect has no readable catalog yet. Its preserved request may still
+  // name an adapter-accepted effort; launch checks it against the runtime after reconnecting.
+  const reconnectEfforts =
+    authenticationState === "not_authenticated" && !modelEffortsAreKnown(exactModel, catalogEfforts)
+      ? ADAPTER_EFFORTS[providerId]
+      : undefined;
+  const efforts = effortsForModel(providerId, exactModel, catalogEfforts ?? reconnectEfforts);
   const configuredEffort = draft?.effort;
   // Provider default remains provider-owned. Catalog arrival must never turn a remembered/default
   // null into a concrete effort; the reported default is applied only after an explicit model pick.

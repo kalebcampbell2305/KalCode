@@ -92,10 +92,11 @@ test("expired Codex reconnect continues the preserved three-agent request in thi
   const launcher = await workspace(page, "unavailable");
   await launcher.getByRole("group", { name: "Codex", exact: true }).getByRole("option", { name: /Work/ }).click();
   await launcher.getByRole("spinbutton", { name: "Agents" }).fill("3");
-  await launcher.getByRole("radio", { name: "High", exact: true }).click();
+  // Reasoning choices come from the chosen model's runtime catalog, so pick the model first.
   const models = launcher.getByRole("radiogroup", { name: "Model" }).getByRole("radio");
   await models.last().click();
   const selectedModel = await models.last().textContent();
+  await launcher.getByRole("radio", { name: "High", exact: true }).click();
   await expect(launcher.getByText("Work needs to reconnect.")).toBeVisible();
   await expect(launcher.getByRole("button", { name: "Launch 3 Codex agents" })).toBeDisabled();
   await page.screenshot({ path: "qa/screenshots/provider-launch-inline-reconnect.png" });
@@ -130,7 +131,7 @@ test("expired Codex reconnect continues the preserved three-agent request in thi
     expect(record.workspaceId).toBe(sessions[0]?.record.workspaceId);
     expect(terminal).not.toBeNull();
   }
-  expect(selectedModel).toBe("Codex exact model");
+  expect(selectedModel).toBe("Codex exact model · codex-ui-test-exact");
   expect(sessions.map(({ record }) => record.model)).toEqual([
     "codex-ui-test-exact",
     "codex-ui-test-exact",

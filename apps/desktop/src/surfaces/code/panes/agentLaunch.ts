@@ -6,6 +6,19 @@ import type { PaneProviderId } from "./paneChannel.ts";
  * Codex or Gemini CLI session in a terminal pane, so "six Claude Code agents" is six panes.
  */
 
+/**
+ * The reasoning values each provider adapter accepts (Rust `claude::argv::EFFORT_LEVELS`,
+ * `codex::argv::EFFORT_LEVELS`). Account and model catalogs stay authoritative; this list is used
+ * only while an account must reconnect, so the preserved launch request can still carry an
+ * explicit choice. The exact value is checked against the runtime when the agent starts.
+ */
+export const ADAPTER_EFFORTS: Record<PaneProviderId, readonly string[]> = {
+  "claude-code": ["low", "medium", "high", "xhigh", "max"],
+  codex: ["minimal", "low", "medium", "high", "xhigh"],
+  cursor: [],
+  "gemini-cli": [],
+};
+
 export type ModelEffortInfo = ModelInfo & {
   defaultEffort?: string | null;
   supportedEfforts?: readonly string[];

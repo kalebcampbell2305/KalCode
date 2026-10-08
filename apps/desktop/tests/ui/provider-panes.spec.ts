@@ -50,7 +50,7 @@ const launcher = (page: Page) => page.getByRole("dialog", { name: "New agent" })
 const railNeedsYou = (page: Page) =>
   page
     .getByRole("complementary", { name: "Agents" })
-    .getByRole("button", { name: /, Needs you, Claude Code in pane-site\. Open agent$/ });
+    .getByRole("button", { name: /, Needs you, Claude Code · .* in pane-site\. Open agent$/ });
 
 async function newPane(page: Page) {
   await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
@@ -411,7 +411,8 @@ test.describe("provider panes", () => {
     await expect(region).toHaveAttribute("aria-label", /Codex agent, account /);
     await expect(paneText(page)).toContainText("KalCode fake provider");
     await expect(region.locator("[data-pane-identity]")).toHaveAttribute("title", /^Codex · /);
-    await expect(region.locator("[data-pane-model]"), "an unknown model shows nothing").toHaveCount(0);
+    // An unreported model is said plainly rather than guessed from the launch choice.
+    await expect(region.locator("[data-pane-model]")).toHaveText("Model controlled by provider");
     await expect(status(page)).toHaveText("READY");
     await expect(region.getByText("Approvals in Codex")).toBeVisible();
 
