@@ -340,6 +340,23 @@ export function gameStripeClient({
   };
   return {
     mode,
+    /** Current server-side facts for a configured game Price. */
+    async retrievePrice(priceId: string): Promise<{
+      active: boolean;
+      currency: string | null;
+      unitAmount: number | null;
+      type: "one_time" | "recurring" | null;
+    }> {
+      const id = gameId(priceId, "price");
+      const value = sameMode(await get(`/prices/${encodeURIComponent(id)}`));
+      if (value.object !== "price" || value.id !== id) throw new Error("billing provider unavailable");
+      return {
+        active: value.active === true,
+        currency: typeof value.currency === "string" ? value.currency : null,
+        unitAmount: Number.isSafeInteger(value.unit_amount) ? (value.unit_amount as number) : null,
+        type: value.type === "one_time" || value.type === "recurring" ? value.type : null,
+      };
+    },
     /** The invoice with its payments (API 2025-03-31.basil: payments replace invoice.charge). */
     async retrieveInvoice(invoiceId: string): Promise<Record<string, unknown>> {
       const id = gameId(invoiceId, "in");

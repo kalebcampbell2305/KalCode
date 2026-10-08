@@ -422,12 +422,12 @@ uses fresh throwaway keys, so the whole file changes.
 
 ## 13. KalCode games (KAL University)
 
-Owner direction "KAL University, Update 3" (2026-10-08): the game is **$5 on its own** or **included
+Owner direction "KAL University, Update 3" (2026-10-08): the game is **$9.99 on its own** or **included
 with Pro, MAX and MAX 2X**, and ownership lives in the KalCode account. Status: **implemented and
 tested on a branch; game billing is OFF in production** (`GAME_STRIPE_MODE` unset) until the owner
 approves the policy decisions in KalGame `docs/ENTITLEMENTS.md` §3. KalCode prices are unchanged.
 
-**One catalog.** `packages/protocol/src/games.ts` defines the game (`kal_university`, $5,
+**One catalog.** `packages/protocol/src/games.ts` defines the game (`kal_university`, 999 cents / $9.99,
 `includedWithPlans`), the perk tiers (standalone < Pro < MAX < MAX 2X), the perk items, and the
 signed license format. The website renders it, the API signs claimed perks into the license, and the
 game applies exactly what the license lists.
@@ -466,7 +466,7 @@ tier is the higher of the current plan and the highest claimed tier.
 | `POST /v1/games/license/sign-out` | the game | ends that install's session |
 | `GET /v1/games/license/keys` | anyone | published game-license public keys |
 | `GET /v1/games/library` | website session | ownership, perks (claimed), checkout state, download availability |
-| `POST /v1/games/checkout` | website session | Stripe-hosted Checkout for the $5 purchase (409 if already owned; 503 while `GAME_CHECKOUT_ENABLED` is not `true`) |
+| `POST /v1/games/checkout` | website session | Stripe-hosted Checkout for the $9.99 purchase (409 if already owned; 503 while disabled or if the configured Price is not an active one-time 999-cent USD Price) |
 | `POST /v1/games/downloads` | website session | a 10-minute signed link for an owner (20 per day) |
 | `GET /v1/games/download?t=…` | the link holder | streams the build from R2 `GAME_BUILDS` with Range support |
 | `POST /v1/games/webhook` | Stripe | its own endpoint and signing secret; events `invoice.paid`, `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `charge.refunded`, `charge.dispute.closed` |
@@ -483,12 +483,12 @@ email), `source, perkTier, perks[{id,kind,ref,amountCents}], device` (optional i
 | Name | Kind | Value |
 | --- | --- | --- |
 | `GAME_STRIPE_MODE` | var | unset (off) → `live` at launch (`test` only for a sandbox deployment) |
-| `GAME_STRIPE_PRICE_KAL_UNIVERSITY` | var | the live one-time $5 Price |
+| `GAME_STRIPE_PRICE_KAL_UNIVERSITY` | var | the live one-time 999-cent USD ($9.99) Price; checkout reads and verifies it before use |
 | `GAME_CHECKOUT_ENABLED` | var | `"false"` until launch |
 | `GAME_REFUND_REVOKE_DAYS`, `GAME_US_ONLY` | var | `"30"`, `"true"` (owner decisions E3, E6) |
 | `GAME_TEST_PLAN_PRICES` | var | test mode only: sandbox Price → tier JSON |
 | `GAME_LICENSE_SIGNING_KEY` | secret | `node tooling/admin/gen-game-license-key.mjs --kid g2026-10 \| pnpm --filter @kalcode/api exec wrangler secret put GAME_LICENSE_SIGNING_KEY` (prints only the public key and the Unity pin line) |
-| `GAME_STRIPE_SECRET_KEY` | secret | restricted live key: Checkout Sessions write, Refunds write, Invoices read, Charges read, Disputes read |
+| `GAME_STRIPE_SECRET_KEY` | secret | restricted live key: Checkout Sessions write, Prices read, Refunds write, Invoices read, Charges read, Disputes read |
 | `GAME_STRIPE_WEBHOOK_SECRET` | secret | signing secret of the `/v1/games/webhook` endpoint |
 | `GAME_DOWNLOAD_SIGNING_SECRET` | secret | 32+ random bytes |
 | `GAME_BUILDS` | R2 binding | `campus-founder-builds`, with `kal_university/manifest.json` naming the current build per platform (`key, version, fileName, size, sha256`) |

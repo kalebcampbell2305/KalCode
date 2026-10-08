@@ -96,12 +96,12 @@ Library) and `/games/activate` (approve the game's device sign-in). Both are `no
 It is a world page reached from the footer's Games column; the header navigation and `/pricing`
 stay KalCode-only. Rules:
 
-- **Owned through the KalCode account (owner direction Update 3).** $5 on its own, or included with
+- **Owned through the KalCode account (owner direction Update 3).** $9.99 on its own, or included with
   Pro, MAX and MAX 2X, for life from the first successful payment (docs/BILLING.md §13). Prices come
   from `plans.ts` and the game and perk catalog from `@kalcode/protocol/games`; never type a price or
   a perk into a page. The game page has no form; release news points to the X account in `SOCIAL`.
 - **Truthful state.** While no game build is published, the Windows and macOS download controls and
-  the "Buy for $5" button are disabled "Coming soon" states, and the story arc tags each chapter as "In the
+  the "Buy for $9.99" button are disabled "Coming soon" states, and the story arc tags each chapter as "In the
   development build" or "Planned". Features beyond the current build (a laptop to work anywhere on
   campus, fictional AI tools and an AI company, a fictional stock market and IPO, regions inspired by
   California, Florida and New York) sit together under "Where it's headed", each tagged Planned.

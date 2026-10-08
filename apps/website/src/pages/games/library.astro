@@ -481,7 +481,7 @@ const perksByTier = tiers.map((tier) => ({
     perkTierLabel,
     serializeReturn,
   } from "../../lib/games-client";
-  import type { GameOwnershipSource } from "@kalcode/protocol/games";
+  import { formatGamePrice, type GameOwnershipSource } from "@kalcode/protocol/games";
 
   interface LibraryGame {
     id: string;
@@ -490,6 +490,7 @@ const perksByTier = tiers.map((tier) => ({
     grantedAt: string | null;
     revoked: { at: string | null; reason: string | null } | null;
     perkTier: string | null;
+    standalonePriceCents: number;
     standalonePriceUsd: number;
     perks: { id: string; claimed: boolean }[];
     checkout: { open: boolean };
@@ -547,9 +548,10 @@ const perksByTier = tiers.map((tier) => ({
     if (buy) buy.hidden = game.owned;
     if (checkout && checkoutLabel) {
       checkout.disabled = !game.checkout.open;
+      const price = formatGamePrice(game);
       checkoutLabel.textContent = game.checkout.open
-        ? `Buy for $${game.standalonePriceUsd}`
-        : `Buy for $${game.standalonePriceUsd} · Coming soon`;
+        ? `Buy for ${price}`
+        : `Buy for ${price} · Coming soon`;
     }
     if (perkTier) perkTier.textContent = game.owned ? `${perkTierLabel(game.perkTier)} perks` : "None yet";
     for (const tier of root?.querySelectorAll<HTMLElement>("[data-tier]") ?? []) {

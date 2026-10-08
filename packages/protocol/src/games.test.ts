@@ -6,6 +6,7 @@ import {
   GAME_PERKS,
   GAMES,
   type GameLicense,
+  formatGamePrice,
   getGame,
   higherPerkTier,
   KAL_UNIVERSITY,
@@ -36,8 +37,12 @@ function license(overrides: Partial<Record<keyof GameLicense, unknown>> = {}): R
 }
 
 describe("game catalog", () => {
-  it("sells KAL University for $5 standalone and includes it with every paid KalCode plan", () => {
-    expect(KAL_UNIVERSITY.standalonePriceUsd).toBe(5);
+  it("sells KAL University for $9.99 standalone and includes it with every paid KalCode plan", () => {
+    expect(KAL_UNIVERSITY.standalonePriceCents).toBe(999);
+    expect(KAL_UNIVERSITY.standalonePriceUsd).toBe(9.99);
+    expect(formatGamePrice(KAL_UNIVERSITY)).toBe("$9.99");
+    expect(formatGamePrice({ standalonePriceUsd: 5 })).toBe("$5");
+    expect(formatGamePrice({ standalonePriceUsd: 9.99 })).toBe("$9.99");
     expect(KAL_UNIVERSITY.includedWithPlans).toEqual(["pro", "max", "max2x"]);
     expect(getGame("kal_university")).toBe(KAL_UNIVERSITY);
     expect(GAMES.map((game) => game.id)).toEqual(["kal_university"]);

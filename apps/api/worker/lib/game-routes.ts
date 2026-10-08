@@ -5,7 +5,7 @@
  *   Website (kalcoded.com, session cookie)        Game (no browser, no cookie)
  *   GET  /v1/games/library                        POST /v1/games/device/start
  *   POST /v1/games/device/approve                 POST /v1/games/device/token   → license + refresh token
- *   POST /v1/games/checkout   (standalone $5)     POST /v1/games/license/refresh
+ *   POST /v1/games/checkout   (standalone $9.99)  POST /v1/games/license/refresh
  *   POST /v1/games/downloads  (signed link)       POST /v1/games/license/sign-out
  *   Stripe: POST /v1/games/webhook (own endpoint and signing secret)
  *   Anyone: GET /v1/games/license/keys, GET /v1/games/download?t=… (signed, short-lived)
@@ -523,6 +523,7 @@ export function gameService(options: GameServiceOptions): GameService {
           name: game.name,
           path: game.path,
           status: game.status,
+          standalonePriceCents: game.standalonePriceCents,
           standalonePriceUsd: game.standalonePriceUsd,
           owned: owned.source !== null,
           source: owned.source,
@@ -596,6 +597,21 @@ export function gameService(options: GameServiceOptions): GameService {
       const game = getGame(gameId) as GameDefinition;
       if ((await ownershipOf(accountId, game)).source) {
         return apiError(409, "already_owned", "You already own KAL University. Find it in your Game Library.");
+      }
+      try {
+        const price = await billing.stripe.retrievePrice(priceId);
+        if (
+          !price.active ||
+          price.currency !== "usd" ||
+          price.unitAmount !== game.standalonePriceCents ||
+          price.type !== "one_time"
+        ) {
+          options.log({ level: "error", event: "games.checkout_price_mismatch" });
+          return apiError(503, "checkout_unavailable", "This game is not on sale yet.");
+        }
+      } catch {
+        options.log({ level: "error", event: "games.checkout_price_unavailable" });
+        return apiError(503, "checkout_unavailable", "This game is not on sale yet.");
       }
       // A stable 10-minute bucket keeps retries of one click on one Stripe idempotency key with
       // identical parameters (Stripe needs 30 minutes to 24 hours until expiry).

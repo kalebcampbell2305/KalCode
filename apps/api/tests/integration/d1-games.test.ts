@@ -36,6 +36,7 @@ let eventSeq = 0;
 interface FakeStripe {
   invoices: Record<string, Record<string, unknown>>;
   sessions: Record<string, Record<string, unknown>>;
+  prices: Record<string, Record<string, unknown>>;
   charges: Record<string, Record<string, unknown>[]>;
   disputes: Record<string, Record<string, unknown>[]>;
   refunds: { paymentIntent: string; key: string }[];
@@ -43,7 +44,27 @@ interface FakeStripe {
   calls: string[];
 }
 
-const stripe: FakeStripe = { invoices: {}, sessions: {}, charges: {}, disputes: {}, refunds: [], checkouts: [], calls: [] };
+const stripe: FakeStripe = {
+  invoices: {},
+  sessions: {},
+  prices: {
+    [PRICE_GAME]: {
+      id: PRICE_GAME,
+      object: "price",
+      livemode: false,
+      active: true,
+      currency: "usd",
+      unit_amount: 999,
+      type: "one_time",
+      recurring: null,
+    },
+  },
+  charges: {},
+  disputes: {},
+  refunds: [],
+  checkouts: [],
+  calls: [],
+};
 
 function jsonResponse(value: unknown, status = 200) {
   return new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
@@ -61,6 +82,10 @@ const fakeFetch: typeof fetch = async (input, init) => {
   if (method === "GET" && url.pathname.startsWith("/v1/checkout/sessions/")) {
     const session = stripe.sessions[decodeURIComponent(url.pathname.slice("/v1/checkout/sessions/".length))];
     return session ? jsonResponse(session) : jsonResponse({ error: {} }, 404);
+  }
+  if (method === "GET" && url.pathname.startsWith("/v1/prices/")) {
+    const price = stripe.prices[decodeURIComponent(url.pathname.slice("/v1/prices/".length))];
+    return price ? jsonResponse(price) : jsonResponse({ error: {} }, 404);
   }
   if (method === "GET" && url.pathname === "/v1/charges") {
     return jsonResponse({ object: "list", data: stripe.charges[pi] ?? [], has_more: false });
@@ -120,7 +145,10 @@ function invoice(id: string, input: { customer: string; price: string; amount: n
   if (input.pi && !stripe.charges[input.pi]) paidCharge(input.pi);
 }
 
-function session(id: string, input: { account: string; pi: string; country?: string; price?: string; game?: string }) {
+function session(
+  id: string,
+  input: { account: string; pi: string; country?: string; price?: string; game?: string; amount?: number },
+) {
   stripe.sessions[id] = {
     id,
     object: "checkout.session",
@@ -131,7 +159,7 @@ function session(id: string, input: { account: string; pi: string; country?: str
     client_reference_id: input.account,
     metadata: { kalcode_game: input.game ?? "kal_university", kalcode_account_id: input.account },
     line_items: { data: [{ quantity: 1, price: { id: input.price ?? PRICE_GAME } }] },
-    amount_total: 500,
+    amount_total: input.amount ?? 999,
     currency: "usd",
     payment_intent: input.pi,
     customer_details: { address: { country: input.country ?? "US" } },
@@ -220,6 +248,8 @@ async function library(games: GameService, account: string) {
     perks: { id: string; claimed: boolean; tier: string }[];
     revoked: { reason: string } | null;
     checkout: { open: boolean };
+    standalonePriceCents: number;
+    standalonePriceUsd: number;
     downloads: { platform: string; available: boolean }[];
   };
 }
@@ -347,6 +377,14 @@ describe("lifetime ownership from a qualifying subscription payment", () => {
     await webhook(games, "invoice.paid", { id: "in_annual" });
     expect(await library(games, "acct_annual")).toMatchObject({ owned: true, source: "max2x" });
   });
+
+  it("counts any positive qualifying subscription payment independently of the standalone price", async () => {
+    await addAccount("acct_discounted", { customer: "cus_discounted" });
+    const games = service();
+    invoice("in_discounted", { customer: "cus_discounted", price: PRICE_PRO, amount: 1, pi: "pi_discounted", paidAtMs: clock });
+    await webhook(games, "invoice.paid", { id: "in_discounted" });
+    expect(await library(games, "acct_discounted")).toMatchObject({ owned: true, source: "pro" });
+  });
 });
 
 describe("refunds, chargebacks and fraud (pending owner approval: 30-day window)", () => {
@@ -463,6 +501,7 @@ describe("standalone purchase", () => {
   it("opens Checkout only for accounts that do not own the game, with server-owned parameters", async () => {
     await addAccount("acct_buyer", { customer: "cus_buyer" });
     const games = service();
+    expect(await library(games, "acct_buyer")).toMatchObject({ standalonePriceCents: 999, standalonePriceUsd: 9.99 });
     const response = await games.checkout(websitePost("/v1/games/checkout", { gameId: "kal_university", requestId: "req-000001" }), "acct_buyer");
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ url: "https://checkout.stripe.com/c/pay/cs_test_created" });
@@ -475,6 +514,41 @@ describe("standalone purchase", () => {
       "metadata[kalcode_account_id]": "acct_buyer",
       billing_address_collection: "required",
     });
+    const validPrice = { ...stripe.prices[PRICE_GAME] };
+    const badPrices = [
+      { ...validPrice, unit_amount: 500 },
+      { ...validPrice, active: false },
+      { ...validPrice, currency: "eur" },
+      { ...validPrice, type: "recurring", recurring: { interval: "month" } },
+      { ...validPrice, livemode: true },
+    ];
+    for (const [index, badPrice] of badPrices.entries()) {
+      stripe.prices[PRICE_GAME] = badPrice;
+      const checkoutCount = stripe.checkouts.length;
+      const rejected = await games.checkout(
+        websitePost("/v1/games/checkout", { gameId: "kal_university", requestId: `req-bad-price-${index}` }),
+        "acct_buyer",
+      );
+      expect(rejected.status).toBe(503);
+      expect(stripe.checkouts).toHaveLength(checkoutCount);
+    }
+    delete stripe.prices[PRICE_GAME];
+    const checkoutCount = stripe.checkouts.length;
+    const missingAtStripe = await games.checkout(
+      websitePost("/v1/games/checkout", { gameId: "kal_university", requestId: "req-price-404" }),
+      "acct_buyer",
+    );
+    expect(missingAtStripe.status).toBe(503);
+    expect(stripe.checkouts).toHaveLength(checkoutCount);
+    stripe.prices[PRICE_GAME] = validPrice;
+    const missingConfiguration = service({ billing: billing({ standalonePrices: {} }) });
+    expect(
+      (await missingConfiguration.checkout(
+        websitePost("/v1/games/checkout", { gameId: "kal_university", requestId: "req-no-price-id" }),
+        "acct_buyer",
+      )).status,
+    ).toBe(503);
+    expect(stripe.checkouts).toHaveLength(checkoutCount);
     const owned = await games.checkout(websitePost("/v1/games/checkout", { gameId: "kal_university", requestId: "req-000002" }), "acct_sub");
     expect(owned.status).toBe(409);
     const foreign = await games.checkout(
@@ -488,12 +562,24 @@ describe("standalone purchase", () => {
 
   it("grants ownership from a paid US session and auto-refunds a non-US one", async () => {
     await addAccount("acct_abroad");
+    await addAccount("acct_legacy");
     const games = service();
     session("cs_buyer", { account: "acct_buyer", pi: "pi_buyer" });
+    session("cs_legacy", { account: "acct_legacy", pi: "pi_legacy", amount: 500 });
     session("cs_abroad", { account: "acct_abroad", pi: "pi_abroad", country: "DE" });
     session("cs_wrong", { account: "acct_abroad", pi: "pi_wrong", price: PRICE_PRO });
     await webhook(games, "checkout.session.completed", { id: "cs_buyer" });
+    const legacy = await webhook(games, "checkout.session.completed", { id: "cs_legacy" }, { id: "evt_legacy_500" });
+    const replay = await webhook(games, "checkout.session.completed", { id: "cs_legacy" }, { id: "evt_legacy_500" });
     expect(await library(games, "acct_buyer")).toMatchObject({ owned: true, source: "standalone", perkTier: "standalone" });
+    expect(legacy.body).toEqual({ ok: true });
+    expect(replay.body).toMatchObject({ ok: true, duplicate: true });
+    expect(await library(games, "acct_legacy")).toMatchObject({ owned: true, source: "standalone" });
+    expect(
+      await db
+        .prepare("SELECT amount_cents, currency FROM game_payments WHERE payment_ref = 'cs_legacy'")
+        .first<{ amount_cents: number; currency: string }>(),
+    ).toEqual({ amount_cents: 500, currency: "usd" });
     expect((await webhook(games, "checkout.session.completed", { id: "cs_abroad" })).status).toBe(200);
     expect(stripe.refunds).toContainEqual({ paymentIntent: "pi_abroad", key: "kalcode-game-region-refund-cs_abroad" });
     expect((await webhook(games, "checkout.session.completed", { id: "cs_wrong" })).body).toMatchObject({ ignored: true });

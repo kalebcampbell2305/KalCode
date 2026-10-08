@@ -2,7 +2,10 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { KAL_UNIVERSITY } from "@kalcode/protocol/games";
+import { experimental_AstroContainer as AstroContainer } from "astro/container";
 import { describe, expect, it } from "vitest";
+import KalUniversityPage from "../../src/pages/games/kal-university.astro";
+import GameLibraryPage from "../../src/pages/games/library.astro";
 import {
   formatBytes,
   formatUserCode,
@@ -62,6 +65,23 @@ describe("KAL University page truth (Update 3)", () => {
     expect(page).not.toMatch(/\$10\/|\$25\/|\$50\//);
     expect(page).toMatch(/<button class="cf-soon cf-soon--row cf-own__action" type="button" disabled>/);
     expect(page).toContain('id="own"');
+  });
+
+  it("renders the $9.99 standalone price and disabled coming-soon purchase controls", async () => {
+    const container = await AstroContainer.create();
+    const game = await container.renderToString(KalUniversityPage, {
+      request: new Request("https://kalcoded.com/games/kal-university"),
+    });
+    const library = await container.renderToString(GameLibraryPage, {
+      request: new Request("https://kalcoded.com/games/library"),
+    });
+
+    expect(game).toContain("$9.99 on its own");
+    expect(game).toContain("Buy for $9.99");
+    expect(game).toMatch(/class="cf-soon cf-soon--row cf-own__action" type="button" disabled/);
+    expect(library).toContain("Own it for $9.99 on its own");
+    expect(library).toContain("Buy for $9.99 · Coming soon");
+    expect(library).toMatch(/<button class="button button--primary"[^>]*data-checkout[^>]*disabled[^>]*>/);
   });
 
   it("keeps the private game pages honest about what they decide", () => {

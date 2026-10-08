@@ -66,7 +66,7 @@ export interface Env {
   GAME_STRIPE_MODE?: string;
   GAME_STRIPE_SECRET_KEY?: string;
   GAME_STRIPE_WEBHOOK_SECRET?: string;
-  /** One-time Price of the standalone KAL University purchase. */
+  /** Active one-time USD Price for KAL University; its amount is verified against the game catalog before checkout. */
   GAME_STRIPE_PRICE_KAL_UNIVERSITY?: string;
   /** Test mode only: JSON object of sandbox subscription Price id → "pro" | "max" | "max2x". */
   GAME_TEST_PLAN_PRICES?: string;

@@ -37,7 +37,9 @@ export interface GameDefinition {
   tagline: string;
   /** Website path of the game's page. */
   path: string;
-  /** Standalone one-time price, whole US dollars. */
+  /** Exact standalone one-time price in US cents. */
+  standalonePriceCents: number;
+  /** Standalone one-time price in US dollars. Kept for API compatibility. */
   standalonePriceUsd: number;
   /** KalCode plans whose first successful paid invoice grants lifetime ownership. */
   includedWithPlans: readonly Exclude<PlanId, "free">[];
@@ -45,6 +47,8 @@ export interface GameDefinition {
   status: GameAvailability;
   platforms: readonly GamePlatform[];
 }
+
+export const KAL_UNIVERSITY_STANDALONE_PRICE_CENTS = 999;
 
 export type GamePlatformId = "windows-x64" | "macos-arm64";
 
@@ -59,7 +63,8 @@ export const KAL_UNIVERSITY: GameDefinition = {
   name: "KAL University",
   tagline: "Build your future.",
   path: "/games/kal-university",
-  standalonePriceUsd: 5,
+  standalonePriceCents: KAL_UNIVERSITY_STANDALONE_PRICE_CENTS,
+  standalonePriceUsd: KAL_UNIVERSITY_STANDALONE_PRICE_CENTS / 100,
   includedWithPlans: ["pro", "max", "max2x"],
   status: "coming_soon",
   platforms: [
@@ -280,7 +285,10 @@ export function toLicensedPerk(perk: GamePerk): LicensedPerk {
   return { id: perk.id, kind: perk.kind, ref: perk.ref, amountCents: perk.amountCents };
 }
 
-/** "$5" */
-export function formatGamePrice(game: Pick<GameDefinition, "standalonePriceUsd">): string {
-  return `$${game.standalonePriceUsd}`;
+/** "$9.99"; callers with the legacy dollar-only shape remain supported. */
+export function formatGamePrice(
+  game: Pick<GameDefinition, "standalonePriceUsd"> & Partial<Pick<GameDefinition, "standalonePriceCents">>,
+): string {
+  const cents = game.standalonePriceCents ?? Math.round(game.standalonePriceUsd * 100);
+  return cents % 100 === 0 ? `$${cents / 100}` : `$${(cents / 100).toFixed(2)}`;
 }
