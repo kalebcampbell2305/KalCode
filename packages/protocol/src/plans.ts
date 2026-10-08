@@ -751,7 +751,15 @@ export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
         status: "available",
         verifiedIn: "0.1.9+2178",
       },
-      { id: "handoff-chains", label: "Agent Handoff Chains", from: "max", status: "coming_soon" },
+      {
+        id: "handoff-chains",
+        label: "Agent Handoff Chains: pass one task through implement, review, fix and test",
+        detail:
+          "Each step is a real coding agent on its own provider, account, model and effort, and receives what the steps before it did.",
+        from: "max",
+        status: "available",
+        verifiedIn: "0.1.10+2242",
+      },
       { id: "agent-files", label: "Agent File Ownership and collision warnings", from: "max", status: "coming_soon" },
       { id: "stuck-agents", label: "Stuck Agent Detector", from: "max", status: "coming_soon" },
       {
