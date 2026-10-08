@@ -3578,21 +3578,58 @@ mod tests {
         drop(session);
     }
 
+    /// Lays out the official npm Codex launcher on Windows: an npm `codex.cmd` shim, an isolated
+    /// `node.exe`, `node_modules/@openai/codex/bin/codex.js` (the deterministic fixture logic in
+    /// `entrypoint`), and the platform-native distribution the production runtime resolver
+    /// requires. KalCode resolves this shim to `node.exe codex.js`, so no fixture argument is
+    /// ever interpreted by `cmd.exe` (an unresolvable batch shim is refused before spawn).
+    #[cfg(windows)]
+    fn install_npm_codex_launcher(dir: &std::path::Path, entrypoint: &str) -> std::path::PathBuf {
+        let node = std::env::var_os("PATH")
+            .into_iter()
+            .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+            .map(|path| path.join("node.exe"))
+            .find(|path| path.is_file())
+            .expect("Node.js executable on the test process PATH");
+        std::fs::copy(&node, dir.join("node.exe")).expect("isolated Node.js executable");
+
+        let package_root = dir.join("node_modules/@openai/codex");
+        let package_bin = package_root.join("bin");
+        std::fs::create_dir_all(&package_bin).expect("fake npm package bin");
+        std::fs::write(package_bin.join("codex.js"), entrypoint)
+            .expect("fake npm Codex entrypoint");
+
+        // The official npm package includes the platform-native distribution. The production
+        // runtime resolver requires that bounded layout even though this deterministic fake's
+        // resolved JavaScript entrypoint serves the test protocol directly.
+        let native = package_root
+            .join("node_modules/@openai/codex-win32-x64")
+            .join("vendor/x86_64-pc-windows-msvc/bin/codex.exe");
+        std::fs::create_dir_all(native.parent().expect("fake native bin"))
+            .expect("fake native distribution");
+        std::fs::copy(&node, native).expect("fake native executable");
+
+        let script = dir.join("codex.cmd");
+        std::fs::write(
+            &script,
+            "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\r\nIF EXIST \"%dp0%\\node.exe\" (\r\n  SET \"_prog=%dp0%\\node.exe\"\r\n) ELSE (\r\n  SET \"_prog=node\"\r\n  SET PATHEXT=%PATHEXT:;.JS;=;%\r\n)\r\n\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js\" %*\r\n",
+        )
+        .expect("fake codex");
+        script
+    }
+
     /// Installs a Codex auth manager whose CLI reports `version` and does nothing else.
     #[cfg(any(windows, target_os = "macos"))]
     fn install_codex_reporting(fixture: &mut Fixture, version: &str) {
         let dir = fixture._temp.path().join(format!("codex-{version}"));
         std::fs::create_dir_all(&dir).expect("fake codex directory");
+        // Reports a stable version for every invocation and nothing else, so it lacks every
+        // required command, flag and app-server behaviour.
         #[cfg(windows)]
-        let executable = {
-            let script = dir.join("codex.cmd");
-            std::fs::write(
-                &script,
-                format!("@echo off\r\necho codex-cli {version}\r\n"),
-            )
-            .expect("fake codex");
-            script
-        };
+        let executable = install_npm_codex_launcher(
+            &dir,
+            &format!("process.stdout.write(\"codex-cli {version}\\n\");\n"),
+        );
         #[cfg(unix)]
         let executable = {
             use std::os::unix::fs::PermissionsExt;
@@ -3791,19 +3828,8 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {{
                 ),
             )
             .expect("fake app-server");
-            let node = std::env::var_os("PATH")
-                .into_iter()
-                .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
-                .map(|path| path.join("node.exe"))
-                .find(|path| path.is_file())
-                .expect("Node.js executable on the test process PATH");
-            std::fs::copy(&node, dir.join("node.exe")).expect("isolated Node.js executable");
-
-            let package_root = dir.join("node_modules/@openai/codex");
-            let package_bin = package_root.join("bin");
-            std::fs::create_dir_all(&package_bin).expect("fake npm package bin");
-            std::fs::write(
-                package_bin.join("codex.js"),
+            install_npm_codex_launcher(
+                &dir,
                 r##"const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
@@ -3846,25 +3872,6 @@ child.on("error", () => process.exit(9));
 child.on("exit", (code) => process.exit(code ?? 9));
 "##,
             )
-            .expect("fake npm Codex entrypoint");
-
-            // The official npm package includes the platform-native distribution. The production
-            // runtime resolver requires that bounded layout even though this deterministic fake's
-            // resolved JavaScript entrypoint serves the test protocol directly.
-            let native = package_root
-                .join("node_modules/@openai/codex-win32-x64")
-                .join("vendor/x86_64-pc-windows-msvc/bin/codex.exe");
-            std::fs::create_dir_all(native.parent().expect("fake native bin"))
-                .expect("fake native distribution");
-            std::fs::copy(&node, native).expect("fake native executable");
-
-            let script = dir.join("codex.cmd");
-            std::fs::write(
-                &script,
-                "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\r\nIF EXIST \"%dp0%\\node.exe\" (\r\n  SET \"_prog=%dp0%\\node.exe\"\r\n) ELSE (\r\n  SET \"_prog=node\"\r\n  SET PATHEXT=%PATHEXT:;.JS;=;%\r\n)\r\n\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js\" %*\r\n",
-            )
-            .expect("fake codex");
-            script
         };
         #[cfg(unix)]
         let executable = {
