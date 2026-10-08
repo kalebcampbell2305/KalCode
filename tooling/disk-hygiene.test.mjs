@@ -16,6 +16,7 @@ import {
   staleIncremental,
   staleTempLeftovers,
   startBackgroundSweep,
+  supersededVariants,
   targetDirs,
 } from "./disk-hygiene.mjs";
 
@@ -167,6 +168,109 @@ test("an entry a build holds open is skipped, and a profile that became active i
   assert.equal(existsSync(join(wt.dir, "deps", "libring.rlib")), true);
   assert.equal(existsSync(join(busy.dir, "deps")), true);
   assert.equal(existsSync(join(wt.dir, ".fingerprint")), false);
+});
+
+/** One unit (crate build under one metadata hash) in `dir`, last written `ageHours` before NOW. */
+function unit(dir, crate, hash, ageHours) {
+  const at = NOW - ageHours * HOUR;
+  const files = [`deps/lib${crate}-${hash}.rlib`, `deps/${crate}-${hash}.d`, `deps/${crate}-${hash}.pdb`];
+  const dirs = [`.fingerprint/${crate.replaceAll("_", "-")}-${hash}`, `build/${crate.replaceAll("_", "-")}-${hash}`];
+  for (const sub of dirs) {
+    mkdirSync(join(dir, sub), { recursive: true });
+    writeFileSync(join(dir, sub, "output"), "x");
+    touch(join(dir, sub, "output"), at);
+    touch(join(dir, sub), at);
+  }
+  for (const file of files) {
+    mkdirSync(join(dir, "deps"), { recursive: true });
+    writeFileSync(join(dir, file), "x");
+    touch(join(dir, file), at);
+  }
+  return [...files, ...dirs].map((path) => join(dir, path));
+}
+
+const hash = (n) => n.toString(16).padStart(16, "0");
+
+test("superseded unit variants beyond the newest four and idle for days are pruned", (t) => {
+  const dir = join(fixture(t), "target", "debug");
+  // Six kalcode_core variants: two old enough and beyond the newest four, one of them referenced.
+  const variants = [1, 2, 3, 4, 100, 200].map((age, n) => unit(dir, "kalcode_core", hash(n + 1), age));
+  // One recent extra variant beyond four stays, and so does an old crate with a single variant.
+  const recentFifth = [1, 2, 3, 4, 5].map((age, n) => unit(dir, "kalcode_git", hash(n + 20), age))[4];
+  const lone = unit(dir, "ring", hash(40), 900);
+  for (const name of [
+    "kalcode_core-aaa",
+    "kalcode_core-bbb",
+    "kalcode_core-ccc",
+    "kalcode_core-ddd",
+    "kalcode_core-old",
+  ]) {
+    mkdirSync(join(dir, "incremental", name, "s-1"), { recursive: true });
+    touch(join(dir, "incremental", name, "s-1"), NOW - (name.endsWith("old") ? 300 : 1) * HOUR);
+    touch(join(dir, "incremental", name), NOW - (name.endsWith("old") ? 300 : 1) * HOUR);
+  }
+  // A seed's build-script output points into the oldest variant's OUT_DIR.
+  const referenced = [pathKey(join(dir, "build", `kalcode-core-${hash(6)}`, "out"))];
+  const pruned = supersededVariants(dir, { before: NOW - 72 * HOUR, keep: 4, referenced });
+  const set = new Set(pruned);
+  for (const path of variants[4]) assert.ok(set.has(path), path);
+  for (const path of [...variants[5], ...variants.slice(0, 4).flat(), ...recentFifth, ...lone])
+    assert.equal(set.has(path), false, path);
+  assert.ok(set.has(join(dir, "incremental", "kalcode_core-old")));
+  assert.equal(set.size, variants[4].length + 1);
+});
+
+test("the sweep prunes superseded variants only from a profile idle for an hour", (t) => {
+  const root = fixture(t);
+  const main = worktree(root, "KalCode", { ageHours: 500 });
+  const old = [1, 2, 3, 4, 200].map((age, n) => unit(main.dir, "kalcode_core", hash(n + 1), age))[4];
+  for (const sub of ["", "deps", "build", ".fingerprint", "incremental"]) touch(join(main.dir, sub), NOW - 2 * HOUR);
+  const options = { config: { ...config, variantDays: 3, keepVariants: 4 }, now: NOW, commandLines: [] };
+  const plan = planSweep({ ...options, worktrees: [{ path: main.path, main: true }] });
+  assert.match(plan[0].reason, /^main checkout/);
+  assert.deepEqual([...plan[0].prune].sort(), [...old].sort());
+
+  // Built since the plan: nothing is pruned this time.
+  touch(join(main.dir, "deps"), Date.now());
+  const skipped = applySweep(plan, { now: () => NOW });
+  assert.deepEqual(skipped.pruned, []);
+  assert.ok(old.every((path) => existsSync(path)));
+
+  touch(join(main.dir, "deps"), NOW - 2 * HOUR);
+  const result = applySweep(planSweep({ ...options, worktrees: [{ path: main.path, main: true }] }), {
+    now: () => NOW,
+  });
+  assert.equal(result.pruned.length, old.length);
+  assert.ok(old.every((path) => !existsSync(path)));
+  assert.ok(existsSync(join(main.dir, "deps", `libkalcode_core-${hash(1)}.rlib`)));
+  assert.ok(existsSync(join(main.dir, "deps", "libring.rlib")));
+
+  // A profile written within the hour (a build that may not name it) is left alone.
+  for (const sub of ["", "deps"]) touch(join(main.dir, sub), NOW - 10 * 60_000);
+  unit(main.dir, "kalcode_core", hash(9), 300);
+  const busy = planSweep({ ...options, worktrees: [{ path: main.path, main: true }] });
+  assert.deepEqual(busy[0].prune, []);
+});
+
+test("release seeds and the targets they were copied from keep every variant", (t) => {
+  const root = fixture(t);
+  const seed = worktree(root, "kc-release-code-primary-1", { profile: "release" });
+  const origin = worktree(root, "kc-warm", { profile: "release" });
+  const copied = worktree(root, "kc-copied", { buildOutput: join(origin.dir, "build", "ring-1", "out") });
+  for (const dir of [seed.dir, origin.dir, copied.dir]) {
+    for (const [n, age] of [1, 2, 3, 4, 200].entries()) unit(dir, "kalcode_core", hash(n + 1), age);
+    for (const sub of ["", "deps", "build", ".fingerprint", "incremental"]) touch(join(dir, sub), NOW - 2 * HOUR);
+  }
+  const plan = planSweep({
+    config: { ...config, protect: [], retain: [{ match: "kc-release-code-primary-*", keepNewest: 4 }] },
+    now: NOW,
+    worktrees: [seed, origin, copied].map(({ path }) => ({ path })),
+    commandLines: [],
+  });
+  const byPath = Object.fromEntries(plan.map((entry) => [entry.path, entry]));
+  assert.deepEqual(byPath[seed.dir].prune, []);
+  assert.deepEqual(byPath[origin.dir].prune, []);
+  assert.equal(byPath[copied.dir].prune.length, 5);
 });
 
 test("regenerable entries never include bundle output or evidence", (t) => {
