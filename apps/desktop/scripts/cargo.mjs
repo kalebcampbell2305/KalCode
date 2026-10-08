@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { guardHeavyWork } from "../../../tooling/disk-hygiene.mjs";
 import { normalizeGeneratedBindings } from "../../../tooling/gen-protocol-index.mjs";
 import { lowerLocalPriority } from "../../../tooling/local-priority.mjs";
 
@@ -90,5 +91,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const args = process.argv.slice(2);
   // Builds, checks and tests yield to the gate; `cargo run` is the owner's interactive app.
   if (args[0] !== "run") lowerLocalPriority();
+  // Stops before cargo fills the disk halfway through; starts a sweep of idle caches when low.
+  guardHeavyWork(`cargo ${args[0] ?? ""}`.trim());
   process.exit(runCargo(args));
 }
