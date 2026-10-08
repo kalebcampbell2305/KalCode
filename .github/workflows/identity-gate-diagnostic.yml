@@ -1,0 +1,83 @@
+name: Identity gate diagnostic
+
+on:
+  push:
+    branches:
+      - ops/identity-gate-diagnostic
+
+permissions:
+  contents: read
+
+jobs:
+  metrics:
+    name: Read-only PC2 resource telemetry
+    runs-on: [self-hosted, Windows, kalcode-gate-pc2]
+    timeout-minutes: 3
+    steps:
+      - name: Read bounded host metrics
+        shell: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $os = Get-CimInstance Win32_OperatingSystem
+          $processors = @(Get-CimInstance Win32_Processor)
+          $disk = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'"
+          $tracked = @(
+            Get-CimInstance Win32_Process -Filter "Name='rustc.exe' OR Name='cargo.exe' OR Name='link.exe' OR Name='node.exe' OR Name='workerd.exe'"
+          )
+          $processGroups = @(
+            $tracked |
+              Group-Object Name |
+              Sort-Object Name |
+              ForEach-Object {
+                $workingSet = ($_.Group | Measure-Object -Property WorkingSetSize -Sum).Sum
+                $kernel = ($_.Group | Measure-Object -Property KernelModeTime -Sum).Sum
+                $user = ($_.Group | Measure-Object -Property UserModeTime -Sum).Sum
+                [pscustomobject]@{
+                  name = $_.Name.ToLowerInvariant()
+                  count = $_.Count
+                  workingSetMiB = [math]::Round(([double]$workingSet / 1MB), 1)
+                  cpuSeconds = [math]::Round((([double]$kernel + [double]$user) / 10000000), 1)
+                }
+              }
+          )
+
+          $gateReports = @()
+          $target = Join-Path $env:GITHUB_WORKSPACE 'target'
+          if (Test-Path -LiteralPath $target -PathType Container) {
+            $gateReports = @(
+              Get-ChildItem -LiteralPath $target -File -Filter 'gate*' -ErrorAction SilentlyContinue |
+                Where-Object { $_.Extension -in @('.json', '.log', '.txt') } |
+                Sort-Object LastWriteTimeUtc -Descending |
+                Select-Object -First 25 |
+                ForEach-Object {
+                  [pscustomobject]@{
+                    name = $_.Name
+                    bytes = $_.Length
+                    lastWriteUtc = $_.LastWriteTimeUtc.ToString('o')
+                  }
+                }
+            )
+          }
+
+          $payload = [pscustomobject]@{
+            schema = 'kalcode-pc2-readonly-telemetry/v1'
+            observedAtUtc = [DateTime]::UtcNow.ToString('o')
+            runner = $env:RUNNER_NAME
+            memory = [pscustomobject]@{
+              freeMiB = [math]::Round(([double]$os.FreePhysicalMemory / 1KB), 1)
+              totalMiB = [math]::Round(([double]$os.TotalVisibleMemorySize / 1KB), 1)
+              freePercent = [math]::Round((100 * [double]$os.FreePhysicalMemory / [double]$os.TotalVisibleMemorySize), 1)
+            }
+            cpu = [pscustomobject]@{
+              loadPercent = if ($processors.Count) { [math]::Round((($processors | Measure-Object -Property LoadPercentage -Average).Average), 1) } else { $null }
+              logicalProcessors = [int](($processors | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum)
+            }
+            diskC = [pscustomobject]@{
+              freeGiB = [math]::Round(([double]$disk.FreeSpace / 1GB), 2)
+              totalGiB = [math]::Round(([double]$disk.Size / 1GB), 2)
+            }
+            trackedProcesses = $processGroups
+            gateReportMetadata = $gateReports
+          }
+          $payload | ConvertTo-Json -Depth 6 -Compress
