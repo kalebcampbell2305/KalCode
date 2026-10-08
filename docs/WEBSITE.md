@@ -26,6 +26,7 @@ Status: built and tested in Z0 · Canonical origin: **https://kalcoded.com**
 | `/download` | Build status per OS from the release manifest, the early-access form, what to expect. |
 | `/updates` | Product news and release communication. `/changelog` permanently redirects here, and historic release anchors remain valid. |
 | `/docs/*`, `/security`, `/privacy`, `/terms` | Content pages; docs carry a one-line "Describes the design" chip. |
+| `/games/campus-founder` | Campus Founder, "A KalCode Game" (see "Games" below). |
 
 Rules the pages follow:
 
@@ -85,6 +86,24 @@ Rules the pages follow:
 - **Performance:** below-the-fold world sections use `content-visibility: auto`; the world plate
   and the wordmark are preloaded. Full-page screenshots must force `content-visibility: visible`
   (with CSP bypassed in the capture browser), or off-screen sections appear empty.
+
+## Games
+
+`/games/campus-founder` presents Campus Founder, a separate single-player game, as "A KalCode Game".
+It is a world page reached from the footer's Games column; the header navigation and `/pricing`
+stay KalCode-only. Rules:
+
+- **Separate from KalCode.** No KalCode plan, account, billing, checkout or early-access form appears
+  on the page; release news points to the existing X account in `SOCIAL`.
+- **Truthful state.** While no game build is published, the Windows and macOS download controls are
+  disabled "Coming soon" buttons, no price is shown, and the story arc tags each chapter as "In the
+  development build" or "Planned".
+- **Real captures only.** `public/assets/games/campus-founder/*` are frames from the game's real
+  development build (1920×1080 PNG converted with sharp to AVIF and WebP at 960 and 1920 widths),
+  each captioned "In-game capture · development build" and given a descriptive alt. Never a mock-up,
+  and never a frame that shows retired KalCode branding.
+- **Structured data.** The page's JSON-LD adds a `VideoGame` node and names it as the page's `about`
+  (no offers until the game is for sale).
 
 ## Behaviour
 
