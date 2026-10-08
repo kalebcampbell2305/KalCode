@@ -1,9 +1,8 @@
 name: PC2 extra gate runners bootstrap (throwaway)
 
-# Throwaway branch only (never merged). Bring the second PC's gate accounts (runners 2 = kalcode-ci and
-# 2b = kalcode-ci-2b) to the build PC's gate toolchain: rustc 1.97.1 (+clippy, rustfmt), cargo-deny 0.20.2,
-# cargo-audit 0.22.2. A directory override on the gate checkout beats rust-toolchain.toml without a listener
-# restart; RUSTUP_TOOLCHAIN in the runner's .env keeps it after one.
+# Throwaway branch only (never merged). The kalcode-qa account (runners 2c/2d) gets the build PC's gate tools
+# (cargo-deny 0.20.2, cargo-audit 0.22.2; rustc is pinned to 1.97.1 by RUSTUP_TOOLCHAIN in their .env), and we
+# verify the owner's lock-folder grant lets it open the gate locks read-write.
 
 on:
   push:
@@ -13,36 +12,17 @@ permissions:
   contents: read
 
 jobs:
-  toolchain:
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [kalcode-fix-2, kalcode-fix-2b]
-    runs-on: [self-hosted, Windows, "${{ matrix.target }}"]
-    timeout-minutes: 20
+  qa-account:
+    runs-on: [self-hosted, Windows, kalcode-desktop-qa]
+    timeout-minutes: 15
     steps:
-      - name: Pin rustc 1.97.1 and install cargo-deny 0.20.2 + cargo-audit 0.22.2
+      - name: Tools and lock access for kalcode-qa
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = 'Stop'
-          "runner $env:RUNNER_NAME as $env:USERNAME; workspace $env:GITHUB_WORKSPACE"
-          $cargo = (Get-Command cargo -ErrorAction SilentlyContinue).Source
-          if (-not $cargo) { $cargo = Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe' }
-          $bin = Split-Path -Parent $cargo
-          if (-not (Test-Path -LiteralPath (Join-Path $bin 'rustup.exe'))) { throw "no rustup next to $cargo" }
+          "account $env:USERNAME"
+          $bin = Join-Path $env:USERPROFILE '.cargo\bin'
           $env:PATH = "$bin;$env:PATH"
-          & rustup toolchain install 1.97.1 --profile minimal --component clippy --component rustfmt
-          if ($LASTEXITCODE) { throw "rustup install failed ($LASTEXITCODE)" }
-          New-Item -ItemType Directory -Force -Path $env:GITHUB_WORKSPACE | Out-Null
-          & rustup override set 1.97.1 --path $env:GITHUB_WORKSPACE
-          if ($LASTEXITCODE) { throw "rustup override failed ($LASTEXITCODE)" }
-          $runnerRoot = Split-Path -Parent (Split-Path -Parent $env:RUNNER_WORKSPACE)
-          $envFile = Join-Path $runnerRoot '.env'
-          try {
-            $lines = @(if (Test-Path -LiteralPath $envFile) { Get-Content -LiteralPath $envFile | Where-Object { $_ -notmatch '^RUSTUP_TOOLCHAIN=' } })
-            Set-Content -LiteralPath $envFile -Value (@($lines) + 'RUSTUP_TOOLCHAIN=1.97.1') -Encoding ascii
-            ".env ($envFile): " + ((Get-Content -LiteralPath $envFile) -join ' | ')
-          } catch { "::warning::could not write $envFile ($($_.Exception.Message)); the directory override still applies" }
           $tmp = Join-Path $env:RUNNER_TEMP 'tools'; New-Item -ItemType Directory -Force -Path $tmp | Out-Null
           $deny = 'https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-pc-windows-msvc.tar.gz'
           Invoke-WebRequest -UseBasicParsing -Uri $deny -OutFile "$tmp\deny.tar.gz"
@@ -55,45 +35,16 @@ jobs:
           Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/rustsec/rustsec/releases/download/cargo-audit/v0.22.2/cargo-audit-x86_64-pc-windows-msvc-v0.22.2.zip' -OutFile "$tmp\audit.zip"
           Expand-Archive -Force -LiteralPath "$tmp\audit.zip" -DestinationPath "$tmp\audit"
           Copy-Item -Force (Get-ChildItem -Recurse -LiteralPath "$tmp\audit" -Filter 'cargo-audit.exe' | Select-Object -First 1).FullName (Join-Path $bin 'cargo-audit.exe')
-          Push-Location $env:GITHUB_WORKSPACE
-          try {
-            $v = @((& rustc --version), (& cargo clippy --version), (& cargo deny --version), (& cargo audit --version)) | ForEach-Object { "$_".Trim() }
-          } finally { Pop-Location }
-          "VERIFY ${env:RUNNER_NAME}: $($v -join ' / ')"
-          if ($v[0] -notmatch '^rustc 1\.97\.1 ' -or $v[1] -notmatch '^clippy 0\.1\.97' -or $v[2] -notmatch '^cargo-deny 0\.20\.2' -or $v[3] -notmatch '^cargo-audit(-audit)? 0\.22\.2') { throw "version check failed: $($v -join ' / ')" }
-      - name: Preflight what desktop-native-e2e and desktop-ui need on this runner (no suites)
-        if: always()
-        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
-        run: |
-          $ErrorActionPreference = 'Continue'
-          $rows = New-Object System.Collections.Generic.List[string]
-          function Check([string]$name, [bool]$ok, [string]$detail) { $rows.Add(("{0} {1}: {2}" -f $(if ($ok) { 'PASS' } else { 'FAIL' }), $name, $detail)) }
-          $wv = Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -ErrorAction SilentlyContinue
-          Check 'WebView2 runtime' ([bool]$wv.pv) "$($wv.pv)"
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $vc = if (Test-Path $vswhere) { & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath } else { '' }
-          Check 'MSVC x64 tools' ([bool]$vc) "$vc"
-          foreach ($t in 'git', 'node', 'pnpm') { $c = Get-Command $t -ErrorAction SilentlyContinue; $v = if ($c) { (& $t --version 2>$null | Select-Object -First 1) } else { '' }; Check $t ([bool]$c) "$v" }
-          foreach ($u in 'https://github.com/Kitware/CMake/releases', 'https://github.com/llvm/llvm-project/releases') {
-            try { $r = Invoke-WebRequest -UseBasicParsing -Method Head -Uri $u -TimeoutSec 20; Check "reach $u" ($r.StatusCode -lt 400) "$($r.StatusCode)" } catch { Check "reach $u" $false $_.Exception.Message }
-          }
-          $pw = if ($env:PLAYWRIGHT_BROWSERS_PATH) { $env:PLAYWRIGHT_BROWSERS_PATH } else { Join-Path $env:LOCALAPPDATA 'ms-playwright' }
-          Check 'Playwright browser cache (the gate also installs per run)' (Test-Path $pw) "${pw}: $((Get-ChildItem $pw -Directory -ErrorAction SilentlyContinue | ForEach-Object Name) -join ',')"
-          try { $d = Join-Path ([IO.Path]::GetTempPath()) ("kalcode-e2e-preflight-" + [guid]::NewGuid()); New-Item -ItemType Directory -Path $d | Out-Null; Remove-Item -Recurse -Force $d; Check 'temp dir writable (KALCODE_DATA_DIR)' $true ([IO.Path]::GetTempPath()) } catch { Check 'temp dir writable' $false $_.Exception.Message }
-          foreach ($n in 'browser.lock', 'rust.lock', 'gate.lock') {
+          foreach ($x in '2c', '2d') { "$x .env: " + ((Get-Content -LiteralPath "C:\kalcode-ci-$x\runner\.env") -join ' | ') }
+          $env:RUSTUP_TOOLCHAIN = '1.97.1'
+          $v = @((& rustc --version), (& cargo clippy --version), (& cargo deny --version), (& cargo audit --version)) | ForEach-Object { "$_".Trim() }
+          "VERIFY kalcode-qa (as 2c/2d see it): $($v -join ' / ')"
+          if ($v[0] -notmatch '^rustc 1\.97\.1 ' -or $v[1] -notmatch '^clippy 0\.1\.97' -or $v[2] -notmatch '^cargo-deny 0\.20\.2' -or $v[3] -notmatch '0\.22\.2') { throw "version check failed" }
+          "== lock folder ACL"; & icacls.exe 'C:\ProgramData\KalCodePC2\locks' | Select-String 'kalcode-qa'
+          $bad = 0
+          foreach ($n in 'browser.lock', 'rust.lock', 'gate.lock', 'qa-intent.lock') {
             $f = "C:\ProgramData\KalCodePC2\locks\$n"
-            try { $h = [IO.File]::Open($f, 'OpenOrCreate', 'ReadWrite', 'ReadWrite'); $h.Dispose(); Check "lock $n read-write" $true $f } catch { Check "lock $n read-write" ($_.Exception.Message -match 'being used') $_.Exception.Message }
+            try { $h = [IO.File]::Open($f, 'OpenOrCreate', 'ReadWrite', 'ReadWrite'); $h.Dispose(); "LOCK $n read-write OK" }
+            catch { if ($_.Exception.Message -match 'being used') { "LOCK $n in use (access OK)" } else { "LOCK $n FAILED: $($_.Exception.Message)"; $bad++ } }
           }
-          $slot = switch ($env:RUNNER_NAME) { 'kalcode-win-gate-2' { 0 } 'kalcode-win-gate-2b' { 1 } default { -1 } }
-          if ($slot -ge 0) {
-            $o = 20 * $slot
-            foreach ($port in @(4691 + $o), @(4692 + $o), @(9701 + $o), @(1791 + $o), @(39333 + $o)) {
-              $busy = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
-              Check "port $port free" ($busy.Count -eq 0) $(if ($busy) { "pid $($busy[0].OwningProcess)" } else { 'free' })
-            }
-          }
-          $free = [math]::Round((Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'").FreeSpace / 1GB, 1)
-          Check 'C: free > 40 GB' ($free -gt 40) "$free GB"
-          "PREFLIGHT $env:RUNNER_NAME"
-          $rows | ForEach-Object { "  $_" }
-          exit 0
+          if ($bad) { throw "$bad lock file(s) not writable by kalcode-qa" }
