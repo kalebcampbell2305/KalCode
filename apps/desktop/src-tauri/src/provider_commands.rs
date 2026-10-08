@@ -22,6 +22,77 @@ use crate::thread_commands::ThreadsState;
 pub struct ProviderState {
     registry: Arc<ProviderRegistry>,
     initial_managed_readiness: Arc<InitialManagedReadiness>,
+    watcher: InstallationWatcher,
+}
+
+/// How long runtime shutdown waits for the installation watcher to finish an in-flight step.
+/// Its provider probes are guardian jobs that the guardian drain terminates, so in practice
+/// only an in-progress runtime snapshot copy is waited for.
+const INSTALLATION_WATCH_STOP_WAIT: Duration = Duration::from_secs(30);
+
+/// Stop signal for one runtime generation's installation watcher.
+#[derive(Default)]
+struct WatchStop {
+    stopped: Mutex<bool>,
+    wake: Condvar,
+}
+
+impl WatchStop {
+    fn stop(&self) {
+        *self.stopped.lock().unwrap_or_else(PoisonError::into_inner) = true;
+        self.wake.notify_all();
+    }
+
+    fn is_stopped(&self) -> bool {
+        *self.stopped.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Waits up to `timeout`; returns whether the watcher must stop.
+    fn wait(&self, timeout: Duration) -> bool {
+        let stopped = self.stopped.lock().unwrap_or_else(PoisonError::into_inner);
+        let (stopped, _) = self
+            .wake
+            .wait_timeout_while(stopped, timeout, |stopped| !*stopped)
+            .unwrap_or_else(PoisonError::into_inner);
+        *stopped
+    }
+}
+
+/// The installation watcher thread holds this runtime generation's probe guardian and managed
+/// profiles, which carry the guardian's desktop-epoch fence. The thread must end with its
+/// generation: a watcher that outlived sign-out or restart recovery would keep the old guardian
+/// epoch alive (the next generation then reports the workspace as owned) and could start
+/// provider probes after their owner stopped.
+struct InstallationWatcher {
+    stop: Arc<WatchStop>,
+    thread: Mutex<Option<std::thread::JoinHandle<()>>>,
+}
+
+impl InstallationWatcher {
+    /// Signals the watcher; it starts no further provider work.
+    fn begin_shutdown(&self) {
+        self.stop.stop();
+    }
+
+    /// Waits for the watcher to release every guardian reference. Called after the guardian
+    /// drain, which terminates any probe still running. Returns whether the thread has ended.
+    fn finish_shutdown(&self) -> bool {
+        self.stop.stop();
+        let mut slot = self.thread.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(thread) = slot.take() else {
+            return true;
+        };
+        let deadline = std::time::Instant::now() + INSTALLATION_WATCH_STOP_WAIT;
+        while !thread.is_finished() {
+            if std::time::Instant::now() >= deadline {
+                tracing::warn!(event = "provider.installation_watch_stop_timed_out");
+                *slot = Some(thread);
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        thread.join().is_ok()
+    }
 }
 
 const INITIAL_MANAGED_READINESS_WAIT: Duration = Duration::from_secs(45);
@@ -129,12 +200,24 @@ impl ProviderState {
             DetectEnv::from_process(),
             guardian.clone(),
         ));
-        let initial_managed_readiness =
+        let (initial_managed_readiness, watcher) =
             watch_installations(&registry, guardian, runtime.managed_profiles());
         Ok(Self {
             registry,
             initial_managed_readiness,
+            watcher,
         })
+    }
+
+    /// First step of runtime shutdown: the installation watcher starts no further provider work.
+    pub(crate) fn begin_shutdown(&self) {
+        self.watcher.begin_shutdown();
+    }
+
+    /// Last step of runtime shutdown, after the guardian drain: waits until the installation
+    /// watcher has released this generation's guardian. Returns whether shutdown is clean.
+    pub(crate) fn finish_shutdown(&self) -> bool {
+        self.watcher.finish_shutdown()
     }
 
     pub fn registry(&self) -> Arc<ProviderRegistry> {
@@ -162,10 +245,12 @@ fn watch_installations(
     registry: &Arc<ProviderRegistry>,
     guardian: kalcode_providers::guardian::ProviderProbeGuardian,
     profiles: kalcode_providers::managed::ManagedProfiles,
-) -> Arc<InitialManagedReadiness> {
+) -> (Arc<InitialManagedReadiness>, InstallationWatcher) {
     let initial_managed_readiness = Arc::new(InitialManagedReadiness::pending());
     let completion = Arc::clone(&initial_managed_readiness);
     let registry = Arc::downgrade(registry);
+    let stop = Arc::new(WatchStop::default());
+    let stopped = Arc::clone(&stop);
     let spawned = std::thread::Builder::new()
         .name("provider-installation-watch".into())
         .spawn(move || {
@@ -181,6 +266,9 @@ fn watch_installations(
             // without rehashing the distribution. Old active sessions retain their own leases.
             let mut _warm_runtime = None;
             loop {
+                if stopped.is_stopped() {
+                    break;
+                }
                 let Some(current) = registry.upgrade() else {
                     break;
                 };
@@ -199,6 +287,9 @@ fn watch_installations(
                 policy_revision = next_policy;
                 let provider_status_changed = !changes.is_empty();
                 for (provider, executable) in changes {
+                    if stopped.is_stopped() {
+                        break;
+                    }
                     // Startup already has a shared detection job. Later changes refresh its
                     // cached status and health without waiting for a failed user launch.
                     if !initial {
@@ -245,12 +336,13 @@ fn watch_installations(
                                     _complete_initial.0.complete();
                                 }
                                 // Optional observing hooks warm only after core launchability is
-                                // published. The exact selected environment and guardian are
-                                // handed to a bounded background probe; this watcher never waits.
+                                // published, with the exact selected environment and guardian.
+                                // The bounded probe runs on this watcher thread, so runtime
+                                // shutdown (which joins the watcher) also ends it.
                                 if let Some(runtime) = _warm_runtime.as_ref() {
                                     let mut hook_env = env.clone();
                                     runtime.configure_environment(&mut hook_env);
-                                    let _ = kalcode_providers::codex::hook_compatibility::cached_or_warm(
+                                    let _ = kalcode_providers::codex::hook_compatibility::probe_and_cache(
                                         runtime.executable(),
                                         &hook_env,
                                         Some(&cwd),
@@ -282,14 +374,26 @@ fn watch_installations(
                 if store.prune_unleased("codex", 2).is_err() {
                     tracing::debug!(event = "provider.runtime_maintenance_deferred");
                 }
-                std::thread::sleep(std::time::Duration::from_secs(30));
+                if stopped.wait(Duration::from_secs(30)) {
+                    break;
+                }
             }
         });
-    if spawned.is_err() {
-        initial_managed_readiness.complete();
-        tracing::warn!(event = "provider.installation_watch_start_failed");
-    }
-    initial_managed_readiness
+    let thread = match spawned {
+        Ok(thread) => Some(thread),
+        Err(_) => {
+            initial_managed_readiness.complete();
+            tracing::warn!(event = "provider.installation_watch_start_failed");
+            None
+        }
+    };
+    (
+        initial_managed_readiness,
+        InstallationWatcher {
+            stop,
+            thread: Mutex::new(thread),
+        },
+    )
 }
 
 fn needs_codex_refresh(

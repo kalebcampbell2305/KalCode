@@ -334,6 +334,10 @@ impl RuntimeBundle {
         // Source-bearing Context previews are the exception: leases are already drained here,
         // so erase them before any cleanup retry and never carry them into another account.
         let mut clean = true;
+        // The installation watcher starts no further provider probes once shutdown begins.
+        if let Some(providers) = &self.providers {
+            providers.begin_shutdown();
+        }
         // First: paired devices are told goodbye before the services they mirror stop.
         if let Some(remote) = &self.remote {
             remote.shutdown();
@@ -392,6 +396,11 @@ impl RuntimeBundle {
         }
         if let Some(authority) = &authority {
             clean &= authority.drain_guardian().is_ok();
+        }
+        // After the drain terminated any probe it was running, the watcher must release this
+        // generation's guardian before another generation (or relogin) can claim the workspace.
+        if let Some(providers) = &self.providers {
+            clean &= providers.finish_shutdown();
         }
         clean
     }
