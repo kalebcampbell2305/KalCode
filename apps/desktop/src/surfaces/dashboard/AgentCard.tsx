@@ -32,17 +32,18 @@ import {
 import { type MouseEvent, memo, useEffect, useId, useRef, useState } from "react";
 import { useOptionalChains } from "../../runtime/chains/useChains.tsx";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
+import type { AgentOverlap } from "../../runtime/ownership/model.ts";
 import { FavoriteButton, useFavoriteMenuItems } from "../../shell/favorites/FavoriteActions.tsx";
 import { MODE_LABELS } from "../permissions/labels.ts";
 import { isWaitingForResources, presentThread } from "../threads/model.ts";
 import styles from "./AgentCard.module.css";
 import { ACTION_LABELS, availableActions, type ThreadAction } from "./data/actions.ts";
 import { fleetGroupOf } from "./data/board.ts";
+import { useOptionalOwnership } from "./data/DashboardData.tsx";
 import { formatElapsed, providerName, runDurationMs } from "./data/format.ts";
 import { CommitChanges } from "./fleet/CommitChanges.tsx";
 import type { MergeReadiness } from "./fleet/fleetModel.ts";
-import { OverlapNote } from "./fleet/OverlapNote.tsx";
-import type { AgentOverlap } from "./fleet/overlap.ts";
+import { ClaimNote, OverlapNote } from "./fleet/OverlapNote.tsx";
 import { InlineApproval } from "./InlineApproval.tsx";
 import { AgentOutcome } from "./outcome/AgentOutcome.tsx";
 import { useClock } from "./useNow.ts";
@@ -198,6 +199,8 @@ export const AgentCard = memo(function AgentCard({
   // (the board and every card's menu subtree no longer re-render on each tick).
   const clock = useClock((at) => (givenNow === undefined ? clockTexts({ thread, now: at, archived }) : null));
   const now = givenNow ?? clock;
+  const ownership = useOptionalOwnership();
+  const claimName = (agentId: string) => ownership?.claims.get(agentId)?.name ?? null;
   const display = displayStatusOf(thread.status);
   // A handoff chain step shows its place compactly ("2/4"); its pane header says "Chain · Review 2/4".
   const chainStep = useOptionalChains()?.chainForOperation(thread.id) ?? null;
@@ -464,7 +467,10 @@ export const AgentCard = memo(function AgentCard({
       ) : null}
 
       {/* Another agent edits the same files: seen now, not at merge time. */}
-      {!archived && overlaps && overlaps.length > 0 ? <OverlapNote overlaps={overlaps} onFocus={onFocus} /> : null}
+      {!archived && overlaps && overlaps.length > 0 ? (
+        <OverlapNote overlaps={overlaps} selfName={thread.name.trim() || thread.providerName} onFocus={onFocus} />
+      ) : null}
+      {!archived ? <ClaimNote claim={ownership?.claims.get(thread.id)} nameOf={claimName} /> : null}
 
       {confirmStop ? (
         // biome-ignore lint/a11y/useSemanticElements: a labelled group of buttons, not form fields.

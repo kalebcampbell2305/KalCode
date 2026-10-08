@@ -22,6 +22,7 @@ import { useOptionalNotifications } from "../shell/notifications/NotificationsPr
 import { useStartAgents } from "../surfaces/code/useLaunchAgent.ts";
 import { useAgentWorktreeStates, useCodingAgents } from "../surfaces/dashboard/data/DashboardData.tsx";
 import { focusChain } from "./chains/focus.ts";
+import { allowOverlap } from "./ownership/allowed.ts";
 import { useRuntime } from "./RuntimeProvider.tsx";
 import { useUiIntents } from "./uiIntents.tsx";
 
@@ -225,6 +226,9 @@ export function useKalActions(): KalActions {
         case "retry-ownership":
           reloadOwnership();
           return done("Checking file ownership again.");
+        case "allow-overlap":
+          allowOverlap(action.overlapKey, action.files, action.risk);
+          return done("Allowed. Both agents can keep editing; you'll be warned if it grows.");
         case "open-approvals":
           closeInbox();
           return openApprovals();

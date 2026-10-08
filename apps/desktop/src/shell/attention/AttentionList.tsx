@@ -96,6 +96,7 @@ const AttentionCard = memo(function AttentionCard({
     if ("agentId" in action) return `${action.id}:${action.agentId}`;
     if ("operationId" in action) return `${action.id}:${action.operationId}`;
     if ("providerId" in action) return `${action.id}:${action.providerId}`;
+    if ("overlapKey" in action) return `${action.id}:${action.overlapKey}`;
     return action.id;
   };
   const run = (action: AttentionAction) => {

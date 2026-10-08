@@ -1,8 +1,11 @@
 import type { ThreadSummary } from "@kalcode/protocol";
+import { TooltipProvider } from "@kalcode/ui/components";
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Profiler } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resetAllowedOverlaps } from "../../runtime/ownership/allowed.ts";
+import type { AgentOverlap, OwnershipOverlap } from "../../runtime/ownership/model.ts";
 import { AgentCard, type AgentCardProps, sameAgentCardProps, startedText } from "./AgentCard.tsx";
 
 function thread(accountLabel: string | null): ThreadSummary {
@@ -407,3 +410,94 @@ describe("AgentCard on the shared clock", () => {
     expect(onRender).not.toHaveBeenCalled();
   });
 });
+
+describe("AgentCard ownership", () => {
+  const other = { ...thread(null), id: "0192f3c4-0000-7000-8000-000000000006", name: "Pricing Update" };
+  const entry = (patch: Partial<OwnershipOverlap> = {}): AgentOverlap => ({
+    other,
+    overlap: {
+      key: "ownership:a:b",
+      agentIds: ["0192f3c4-0000-7000-8000-000000000005", other.id],
+      workspaceId: "w1",
+      risk: "same-files",
+      files: ["a.ts", "b.ts"],
+      incomplete: false,
+      area: null,
+      allowed: false,
+      ...patch,
+    },
+  });
+
+  afterEach(() => resetAllowedOverlaps());
+
+  function mountTip(summary: ThreadSummary, extra: Partial<AgentCardProps> = {}) {
+    return render(
+      <TooltipProvider>
+        <AgentCard
+          thread={summary}
+          now={Date.parse("2026-09-28T12:01:00Z")}
+          approvals={[]}
+          pendingAction={undefined}
+          onFocus={vi.fn()}
+          onAction={vi.fn()}
+          onDecide={vi.fn()}
+          onReviewApprovals={vi.fn()}
+          {...extra}
+        />
+      </TooltipProvider>,
+    );
+  }
+
+  it("words each risk, tones it, and opens the other agent", async () => {
+    const onFocus = vi.fn();
+    mountTip(thread(null), { overlaps: [entry()], onFocus });
+    const chip = screen.getByRole("button", { name: /Overlaps with Pricing Update/ });
+    expect(chip.textContent).toContain("Overlaps with Pricing Update · 2 files");
+    await userEvent.click(chip);
+    expect(onFocus).toHaveBeenCalledWith(other);
+  });
+
+  it.each([
+    ["conflict", "Conflicts with Pricing Update", "conflict"],
+    ["live", "Editing the same files as Pricing Update", "live"],
+    ["compatible", "Merges cleanly with Pricing Update", "quiet"],
+  ] as const)("shows %s", (risk, text, tone) => {
+    mountTip(thread(null), { overlaps: [entry({ risk })] });
+    const chip = screen.getByRole("button", { name: new RegExp(text) });
+    expect(chip.getAttribute("data-tone")).toBe(tone);
+  });
+
+  it("names whose area was entered", () => {
+    mountTip(thread(null), {
+      overlaps: [entry({ risk: "area", area: { owner: other.id, entrant: "x", pattern: "src/billing/**" } })],
+    });
+    expect(screen.getByRole("button", { name: /In Pricing Update's area/ })).toBeTruthy();
+  });
+
+  it("allows both, then offers to warn again; compatible offers neither", async () => {
+    const view1 = mountTip(thread(null), { overlaps: [entry()] });
+    await userEvent.click(screen.getByRole("button", { name: /^Allow both to edit these files/ }));
+    expect(allowedKeys()).toContain("ownership:a:b");
+    view1.unmount();
+    mountTip(thread(null), { overlaps: [entry({ allowed: true })] });
+    expect(screen.getByRole("button", { name: /Allowed with Pricing Update/ }).getAttribute("data-tone")).toBe("quiet");
+    await userEvent.click(screen.getByRole("button", { name: /^Warn again about these files/ }));
+    expect(allowedKeys()).not.toContain("ownership:a:b");
+  });
+
+  it("collapses merge-clean overlaps into one quiet chip", () => {
+    mountTip(thread(null), {
+      overlaps: [
+        entry({ risk: "compatible", key: "ownership:1" }),
+        { ...entry({ risk: "compatible", key: "ownership:2" }), other: { ...other, id: "other-2", name: "Docs" } },
+      ],
+    });
+    expect(screen.getAllByRole("button", { name: /Merges cleanly/ })).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: /^Allow both to edit these files/ })).toBeNull();
+  });
+});
+
+function allowedKeys(): string[] {
+  const raw = globalThis.localStorage?.getItem("kalcode.ownership.allowed.v2");
+  return raw ? (JSON.parse(raw) as [string, string[]][]).map(([key]) => key) : [];
+}

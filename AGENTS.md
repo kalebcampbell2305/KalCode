@@ -64,6 +64,30 @@ MANUAL USER NAMES ALWAYS WIN OVER AUTOMATIC NAMING."
 - **A view, never a copy.** Agents read `agentStateOf` through `useCodingAgents`; Browser is the real `BrowserPane` and native session (one per workspace dock; "Move to a Code pane" moves that same session); Runs/Queue/Services/Environments/Tests read the shared Operations feed (`useDeckData`); Needs You is the attention model; usage is the provider account authority (never invented); KalVoice is the canonical service. Every row is actionable and opens the exact terminal, run, blocker or account.
 - **Behaviour.** Agents is the default tab. Until the person chooses, the dock follows the agents (open while one works or needs them, its rail otherwise; a rail on the Dashboard and on narrow windows). Only surfaces this build ships are offered. Tabs mount on first view and then stay mounted hidden, so switching is instant. Resizing writes the width to the element during the drag and fits terminals once at the end (`beginLiveResize`); terminals keep a usable minimum width and small windows overlay the dock. Dock changes never restart, rebind or re-render coding-agent sessions.
 
+## Agent File Ownership (owner directive 2026-10-07)
+
+Parallel coding agents see likely edit collisions early, while independent work stays fast and unlocked. Ownership is soft: it warns and never locks ordinary work.
+
+- **One projection.** `apps/desktop/src/runtime/ownership/model.ts` (`deriveOwnership`) derives every agent's claim and every overlap from real state on each read and stores nothing. Its inputs are:
+  - Git worktree facts (`thread_worktree_states` `changedPaths`);
+  - provider-reported edits of shared-folder agents (`thread_touched_paths`, while their session runs);
+  - Squad members' declared `ownedPaths`;
+  - handoffs in flight;
+  - Git's pairwise merge answer (`agent_pair_conflicts`);
+  - the person's "Allow both" overrides (`ownership/allowed.ts`).
+
+  It is mounted once in the shared Dashboard data provider (`useOwnership`) and read by the Fleet, the Code pane header, file views, Squads pre-launch checks and Needs You. Never add a second ownership model or a per-surface copy.
+- **Risk, most expensive first:**
+  - `live`: the same files in one folder.
+  - `conflict`: Git confirms the conflict.
+  - `same-files`.
+  - `area`: one agent entered another's declared area.
+  - `compatible`: Git merges both cleanly. Shown quietly, never raised.
+
+  Only risky, un-allowed overlaps reach Needs You. An allowed overlap warns again only when it grows to new files.
+- **Claims end with the work.** Archived agents drop out. Merged work leaves `changedPaths` by itself. Declared areas and shared-folder edits release when the session ends. A stopped agent's unmerged worktree changes stay, because Git still has them. An active handoff passes the sender's files to the receiver, and the pair never warns about each other.
+- **Provider-agnostic.** Every input is KalCode state. Never key ownership on a provider name.
+
 ## Permanent futuristic space design system (owner directive 2026-10-05)
 
 "KALCODE'S VISUAL IDENTITY IS A FUTURISTIC AI ENGINEERING COMMAND CENTER INSPIRED BY DEEP SPACE.

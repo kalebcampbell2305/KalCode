@@ -1,6 +1,7 @@
 import type { Chain, ChainStep, Notification, OperationRecord, ThreadSummary } from "@kalcode/protocol";
 import { describe, expect, it } from "vitest";
 import { waitingAgents } from "../../runtime/actions.ts";
+import type { OwnershipOverlap } from "../../runtime/ownership/model.ts";
 import {
   type AttentionOperation,
   attentionItems,
@@ -311,33 +312,75 @@ describe("attentionItems", () => {
     });
   });
 
-  it("shows one ownership warning per overlapping pair with both exact agents", () => {
-    const list = items({
-      agents: [
-        agent({ id: "billing", name: "Billing Fix" }),
-        agent({ id: "pricing", name: "Pricing Update", providerName: "Claude Code" }),
-      ],
-      overlaps: [
-        {
-          agentIds: ["billing", "pricing"],
-          workspaceId: "w1",
-          files: ["README.md", "src/pricing.ts"],
-          incomplete: false,
-        },
-      ],
-    });
+  const pair = [
+    agent({ id: "billing", name: "Billing Fix" }),
+    agent({ id: "pricing", name: "Pricing Update", providerName: "Claude Code" }),
+  ];
+  const overlap = (patch: Partial<OwnershipOverlap> = {}): OwnershipOverlap => ({
+    key: "ownership:billing:pricing",
+    agentIds: ["billing", "pricing"],
+    workspaceId: "w1",
+    risk: "same-files",
+    files: ["README.md", "src/pricing.ts"],
+    incomplete: false,
+    area: null,
+    allowed: false,
+    ...patch,
+  });
+
+  it("shows one ownership warning per overlapping pair with both exact agents and Allow both", () => {
+    const list = items({ agents: pair, overlaps: [overlap()] });
     expect(list).toHaveLength(1);
     expect(list[0]).toMatchObject({
       key: "ownership:billing:pricing",
       kind: "blocked",
       source: "Ownership",
-      what: "Billing Fix and Pricing Update overlap",
+      what: "Billing Fix and Pricing Update changed the same files",
       actions: [
         { id: "open-agent", agentId: "billing", workspaceId: "w1" },
         { id: "open-agent", agentId: "pricing", workspaceId: "w1" },
+        {
+          id: "allow-overlap",
+          label: "Allow both",
+          overlapKey: "ownership:billing:pricing",
+          files: ["README.md", "src/pricing.ts"],
+        },
       ],
     });
     expect(list[0]?.why).toContain("README.md, src/pricing.ts");
+  });
+
+  it("words each risk and ranks live and conflict above same files and area", () => {
+    const risks = [
+      overlap({ key: "ownership:a:b", risk: "same-files" }),
+      overlap({ key: "ownership:c:d", risk: "conflict" }),
+      overlap({ key: "ownership:e:f", risk: "live" }),
+    ];
+    const list = items({ agents: pair, overlaps: risks });
+    expect(list.map((item) => item.key)).toEqual(["ownership:c:d", "ownership:e:f", "ownership:a:b"]);
+    expect(list[0]?.what).toBe("Billing Fix and Pricing Update will conflict");
+    expect(list[1]?.what).toBe("Billing Fix and Pricing Update are editing the same files");
+  });
+
+  it("explains an area entry and lists at most three files", () => {
+    const [item] = items({
+      agents: pair,
+      overlaps: [
+        overlap({
+          risk: "area",
+          files: ["src/billing/a.ts", "src/billing/b.ts", "src/billing/c.ts", "src/billing/d.ts"],
+          area: { owner: "billing", entrant: "pricing", pattern: "src/billing/**" },
+        }),
+      ],
+    });
+    expect(item?.what).toBe("Pricing Update entered Billing Fix's area");
+    expect(item?.why).toContain("src/billing/a.ts, src/billing/b.ts, src/billing/c.ts and 1 more");
+    expect(item?.why).not.toContain("src/billing/d.ts");
+  });
+
+  it("keeps compatible and allowed overlaps out of Needs You", () => {
+    expect(items({ agents: pair, overlaps: [overlap({ risk: "compatible" })] })).toEqual([]);
+    expect(items({ agents: pair, overlaps: [overlap({ risk: "live", allowed: true })] })).toEqual([]);
   });
 
   it("surfaces failed and incomplete shared reads instead of a false all-clear", () => {

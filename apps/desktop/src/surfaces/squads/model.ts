@@ -11,6 +11,7 @@ import {
   type StatusTone,
   type ThreadSummary,
 } from "@kalcode/protocol";
+import { type AgentClaim, areaBase, inArea } from "../../runtime/ownership/model.ts";
 
 export interface SquadMemberTruth {
   member: SquadLaunchMember;
@@ -261,6 +262,48 @@ export function ownershipCollisions(
       undeclared: collision.undeclared,
     }))
     .sort((left, right) => left.path.localeCompare(right.path));
+}
+
+export interface LiveClaimCollision {
+  /** The running agent that already holds the paths. */
+  agentId: string;
+  /** The members' owned paths (as declared) that enter its claim, sorted. */
+  paths: string[];
+  memberKeys: string[];
+}
+
+/**
+ * Paths a Squad member is asked to own that a RUNNING agent in the same project already holds:
+ * files it changed (`inArea`) or an area it was given (same prefix semantics as `ownershipCollisions`).
+ * Guidance only; launching is never blocked.
+ */
+export function liveClaimCollisions(
+  members: readonly Pick<SquadMemberDefinition, "key" | "ownedPaths">[],
+  claims: Iterable<AgentClaim>,
+  workspaceId: string,
+): LiveClaimCollision[] {
+  const found: LiveClaimCollision[] = [];
+  for (const claim of claims) {
+    if (!claim.active || claim.workspaceId !== workspaceId) continue;
+    const paths = new Set<string>();
+    const keys = new Set<string>();
+    for (const member of members) {
+      for (const raw of member.ownedPaths) {
+        const owned = ownedPath(raw);
+        if (!owned) continue;
+        const hitsFile = claim.files.some((file) => inArea(file, owned));
+        const hitsArea = claim.areas.some((area) => {
+          const base = areaBase(area).toLocaleLowerCase();
+          return base !== "" && (base === owned || base.startsWith(`${owned}/`) || owned.startsWith(`${base}/`));
+        });
+        if (!hitsFile && !hitsArea) continue;
+        paths.add(owned);
+        keys.add(member.key);
+      }
+    }
+    if (paths.size > 0) found.push({ agentId: claim.agentId, paths: [...paths].toSorted(), memberKeys: [...keys] });
+  }
+  return found.sort((a, b) => a.agentId.localeCompare(b.agentId));
 }
 
 export function memberOperation(

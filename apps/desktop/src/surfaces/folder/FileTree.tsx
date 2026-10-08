@@ -9,6 +9,7 @@ import { FilePreview } from "../../shell/context/FilePreview.tsx";
 import { FavoriteButton } from "../../shell/favorites/FavoriteActions.tsx";
 import styles from "./Folder.module.css";
 import { fileSize, splitPath } from "./folderModel.ts";
+import { OwnerMarker, useOwnerLookup } from "./ownerMarker.tsx";
 
 interface Listing {
   state: "loading" | "ready" | "error";
@@ -52,6 +53,7 @@ export function FileTree({ workspaceId }: { workspaceId: string }) {
     },
     [lifecycle],
   );
+  const owners = useOwnerLookup(workspaceId);
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
   const [focusKey, setFocusKey] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -240,6 +242,7 @@ export function FileTree({ workspaceId }: { workspaceId: string }) {
                     ? "empty"
                     : null
               : null;
+          const held = owners ? (entry.isDir ? owners.folder(row.key) : owners.file(row.key)) : null;
           return (
             <ContentContextMenu
               key={row.key}
@@ -271,7 +274,7 @@ export function FileTree({ workspaceId }: { workspaceId: string }) {
                 style={{ paddingLeft: `calc(${row.level - 1} * 0.875rem + 0.375rem)` }}
                 data-ignored={entry.ignored || undefined}
                 data-selected={selected === row.key || undefined}
-                aria-label={`${name}${entry.isDir ? ", folder" : ""}${entry.ignored ? ", ignored" : ""}${childNote === "empty" ? ", empty" : ""}`}
+                aria-label={`${name}${entry.isDir ? ", folder" : ""}${entry.ignored ? ", ignored" : ""}${childNote === "empty" ? ", empty" : ""}${held ? `, ${held.label}` : ""}`}
                 onClick={() => {
                   cancelFocus();
                   setFocusKey(row.key);
@@ -291,6 +294,7 @@ export function FileTree({ workspaceId }: { workspaceId: string }) {
                   {entry.isDir ? isOpen ? <FolderOpen /> : <Folder /> : <File />}
                 </span>
                 <span className={styles.fileName}>{name}</span>
+                {held ? <OwnerMarker view={held} /> : null}
                 {entry.ignored ? <span className={styles.ignored}>ignored</span> : null}
                 {childNote ? <span className={styles.fileNote}>{childNote}</span> : null}
                 {entry.isDir ? null : <span className={styles.fileSize}>{fileSize(entry.bytes)}</span>}

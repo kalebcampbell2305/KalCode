@@ -45,7 +45,7 @@ import { useOptionalUiIntents } from "../../runtime/uiIntents.tsx";
 import { HUB_SECTIONS } from "../../shell/AccountHub.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
 import { ChainComposer } from "../chains/ChainComposer.tsx";
-import { useCodingAgents } from "../dashboard/data/DashboardData.tsx";
+import { useCodingAgents, useOptionalOwnership } from "../dashboard/data/DashboardData.tsx";
 import { STATUS_META } from "../dashboard/data/status.ts";
 import { focusSection } from "../dashboard/useNow.ts";
 import styles from "./HandOffDialog.module.css";
@@ -130,6 +130,7 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
   const { navigate } = useNavigation();
   const uiIntents = useOptionalUiIntents();
   const codingAgents = useCodingAgents();
+  const ownership = useOptionalOwnership();
   const id = useId();
   const [targetId, setTargetId] = useState("");
   const [task, setTask] = useState<HandoffTask>("review");
@@ -153,6 +154,8 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
   const allAgents = codingAgents.state.status === "ready" ? codingAgents.state.data : [];
   const recipients = useMemo(() => allAgents.filter((agent) => agent.id !== source.id), [allAgents, source.id]);
   const selectedTarget = recipients.find((agent) => agent.id === targetId) ?? null;
+  const sourceClaim = ownership?.claims.get(source.id);
+  const sourceFiles = sourceClaim?.files.length ?? 0;
   const staleTarget = targetId.length > 0 && selectedTarget === null;
   const soleRecipientId = recipients.length === 1 ? (recipients[0]?.id ?? null) : null;
 
@@ -460,6 +463,12 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
                           : "Source state not reported"}
                     </Badge>
                   </fieldset>
+
+                  {sourceFiles > 0 ? (
+                    <p className={styles.takeover} data-handoff-files>
+                      {`${selectedTarget?.name ?? "The receiving agent"} takes over ${sourceClaim?.filesIncomplete ? "at least " : ""}${sourceFiles} ${sourceFiles === 1 ? "file" : "files"} ${source.name} changed.`}
+                    </p>
+                  ) : null}
 
                   {preview.warnings.length > 0 ? (
                     <div className={styles.warnings} role="status">

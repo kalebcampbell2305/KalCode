@@ -180,6 +180,9 @@ pub(crate) const COMMANDS: &[&str] = &[
     "thread_get",
     // Agent Fleet: Git facts for threads in their own worktrees (read-only).
     "thread_worktree_states",
+    // Agent File Ownership: provider-reported edited files and pairwise branch conflicts (read-only).
+    "thread_touched_paths",
+    "agent_pair_conflicts",
     // Agent Fleet: commit an isolated agent's work on its own branch (user action).
     "thread_worktree_commit",
     "thread_messages",

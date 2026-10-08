@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { OperationsClient } from "../../../ipc/operations.ts";
 import { useOptionalRuntime } from "../../../runtime/RuntimeProvider.tsx";
 import { useOptionalDeckData } from "../../../shell/deck/DeckData.tsx";
+import { useOptionalOwnership } from "../data/DashboardData.tsx";
 import { agentOutcome, linkedRuns, type OutcomeRow } from "./outcomeModel.ts";
 
 /**
@@ -60,10 +61,19 @@ export function useAgentOutcome(
     };
   }, [expanded, worktree, thread.worktreeId, thread.id, client]);
 
+  // Git-confirmed conflicts with other agents (Agent File Ownership), as names; stable while unchanged.
+  const overlaps = useOptionalOwnership()?.byAgent.get(thread.id);
+  const conflictKey = JSON.stringify(
+    (overlaps ?? [])
+      .filter(({ overlap }) => overlap.risk === "conflict")
+      .map(({ other }) => other.name.trim() || other.providerName),
+  );
+  const conflictsWith = useMemo<readonly string[]>(() => JSON.parse(conflictKey), [conflictKey]);
+
   const facts = worktree ?? ownWorktree;
   const results = tests && tests.key === testKey ? tests.results : null;
   return useMemo(
-    () => agentOutcome(thread, facts, { runs, tests: results, environments }),
-    [thread, facts, runs, results, environments],
+    () => agentOutcome(thread, facts, { runs, tests: results, environments, conflictsWith }),
+    [thread, facts, runs, results, environments, conflictsWith],
   );
 }

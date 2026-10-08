@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-thread-touched-paths"
+description = "Enables the thread_touched_paths command without any pre-configured scope."
+commands.allow = ["thread_touched_paths"]
+
+[[permission]]
+identifier = "deny-thread-touched-paths"
+description = "Denies the thread_touched_paths command without any pre-configured scope."
+commands.deny = ["thread_touched_paths"]

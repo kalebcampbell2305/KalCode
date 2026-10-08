@@ -42,3 +42,28 @@ describe("thread worktree IPC arguments", () => {
     expect(states[0]).toMatchObject({ threadId: thread.id, worktreeId: thread.worktreeId });
   });
 });
+
+describe("agent file ownership IPC", () => {
+  it("wraps the arguments in `args`, as the native commands expect", async () => {
+    const invoke = vi.fn(async () => []);
+    const client = new KalCodeClient({ invoke, subscribe: async () => async () => undefined } as unknown as Transport);
+    const pairs = [{ leftThreadId: "a", rightThreadId: "b" }];
+    await client.threadTouchedPaths(["a", "b"]);
+    await client.agentPairConflicts(pairs);
+    expect(invoke).toHaveBeenNthCalledWith(1, "thread_touched_paths", { args: { threadIds: ["a", "b"] } });
+    expect(invoke).toHaveBeenNthCalledWith(2, "agent_pair_conflicts", { args: { pairs } });
+  });
+
+  it("the in-memory runtime answers unknown for pairs and validates like native", async () => {
+    const transport = createMemoryTransport("default", { detectDelayMs: 0 });
+    const client = new KalCodeClient(transport);
+    await client.detectProviders();
+    const [a, b] = [crypto.randomUUID(), crypto.randomUUID()];
+    expect(await client.threadTouchedPaths([a])).toEqual([]);
+    const [pair] = await client.agentPairConflicts([{ leftThreadId: a, rightThreadId: b }]);
+    expect(pair).toMatchObject({ leftThreadId: a, rightThreadId: b, conflicts: null, files: [] });
+    await expect(client.agentPairConflicts([{ leftThreadId: a, rightThreadId: a }])).rejects.toMatchObject({
+      code: "invalid_thread_pairs",
+    });
+  });
+});

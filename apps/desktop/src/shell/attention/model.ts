@@ -14,6 +14,7 @@ import {
   type OperationRecord,
   type ThreadSummary,
 } from "@kalcode/protocol";
+import { describeOverlap, needsAttention, type OwnershipOverlap } from "../../runtime/ownership/model.ts";
 
 export type AttentionKind = "question" | "approval" | "blocked" | "failed" | "auth" | "stalled" | "review";
 
@@ -33,6 +34,7 @@ export type AttentionAction =
   | { id: "open-chain"; label: string; chainId: string }
   | { id: "retry-agents"; label: string }
   | { id: "retry-ownership"; label: string }
+  | { id: "allow-overlap"; label: string; overlapKey: string; files: readonly string[]; risk: OwnershipOverlap["risk"] }
   | { id: "open-approvals"; label: string }
   | { id: "sign-in"; label: string; providerId: string }
   | { id: "dismiss"; label: string };
@@ -116,12 +118,8 @@ export interface AttentionInput {
  */
 export type AttentionOperation = OperationRecord & { attentionReason?: string | null };
 
-export interface AttentionOverlap {
-  agentIds: readonly [string, string];
-  workspaceId: string;
-  files: readonly string[];
-  incomplete: boolean;
-}
+/** An Agent File Ownership overlap (the canonical `runtime/ownership` projection). */
+export type AttentionOverlap = OwnershipOverlap;
 
 function at(iso: string | null | undefined): number {
   const t = iso ? Date.parse(iso) : Number.NaN;
@@ -320,30 +318,63 @@ function chainSupersededItem(chain: Chain): Omit<AttentionItem, "rank"> | null {
   };
 }
 
+/** Live and confirmed conflicts block work now; same files and area entries are early warnings. */
+const OVERLAP_RANK: Record<OwnershipOverlap["risk"], number> = {
+  live: RANK.blocked + 1,
+  conflict: RANK.blocked + 1,
+  "same-files": RANK.blocked - 4,
+  area: RANK.blocked - 4,
+  compatible: 0,
+};
+
 function overlapItem(
   overlap: AttentionOverlap,
   agents: ReadonlyMap<string, ThreadSummary>,
-): Omit<AttentionItem, "rank"> | null {
+): (Omit<AttentionItem, "rank"> & { rank: number }) | null {
+  if (!needsAttention(overlap)) return null;
   const [leftId, rightId] = overlap.agentIds;
   const left = agents.get(leftId);
   const right = agents.get(rightId);
   if (!left || !right) return null;
-  const count = `${overlap.incomplete ? "at least " : ""}${overlap.files.length} ${
-    overlap.files.length === 1 ? "file" : "files"
-  }`;
+  const nameOf = (id: string) => agents.get(id)?.name.trim() || agents.get(id)?.providerName || "An agent";
   const shown = overlap.files.slice(0, 3);
   const more = overlap.files.length - shown.length;
   const paths = `${shown.join(", ")}${more > 0 ? ` and ${more} more` : ""}`;
+  const [a, b] = [nameOf(leftId), nameOf(rightId)];
+  let what: string;
+  let next: string;
+  switch (overlap.risk) {
+    case "live":
+      what = `${a} and ${b} are editing the same files`;
+      next = "Let one finish first, or give each its own worktree.";
+      break;
+    case "conflict":
+      what = `${a} and ${b} will conflict`;
+      next = "Decide which change should land first, or ask one agent to rebase.";
+      break;
+    case "area": {
+      const entrant = overlap.area?.entrant ?? rightId;
+      const owner = overlap.area?.owner ?? leftId;
+      what = `${nameOf(entrant)} entered ${nameOf(owner)}'s area`;
+      next = "Redirect one of them, or allow both if this is intended.";
+      break;
+    }
+    default:
+      what = `${a} and ${b} changed the same files`;
+      next = "Coordinate ownership before either change merges, or allow both if this is intended.";
+  }
   return {
-    key: `ownership:${[leftId, rightId].toSorted().join(":")}`,
+    key: overlap.key,
     kind: "blocked",
+    rank: OVERLAP_RANK[overlap.risk],
     source: "Ownership",
     workspaceName: left.workspaceName || right.workspaceName || null,
-    what: `${left.name} and ${right.name} overlap`,
-    why: `Both changed ${count}${paths ? `: ${paths}` : ""}. Coordinate ownership before either change merges.`,
+    what,
+    why: `${describeOverlap(overlap, nameOf)}${paths ? ` Files: ${paths}.` : ""} ${next}`,
     actions: [
-      { id: "open-agent", label: `Open ${left.name}`, agentId: left.id, workspaceId: left.workspaceId },
-      { id: "open-agent", label: `Open ${right.name}`, agentId: right.id, workspaceId: right.workspaceId },
+      { id: "open-agent", label: `Open ${a}`, agentId: left.id, workspaceId: left.workspaceId },
+      { id: "open-agent", label: `Open ${b}`, agentId: right.id, workspaceId: right.workspaceId },
+      { id: "allow-overlap", label: "Allow both", overlapKey: overlap.key, files: overlap.files, risk: overlap.risk },
     ],
     at: at(left.lastActivityAt) >= at(right.lastActivityAt) ? left.lastActivityAt : right.lastActivityAt,
     agentId: null,
@@ -522,7 +553,7 @@ export function attentionItems({
   }
   for (const overlap of overlaps) {
     const item = overlapItem(overlap, agentsById);
-    if (item) items.push({ ...item, rank: RANK.blocked });
+    if (item) items.push(item);
   }
   if (ownershipFailed || ownershipIncomplete) {
     items.push({

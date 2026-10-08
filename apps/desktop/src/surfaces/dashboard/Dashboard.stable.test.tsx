@@ -153,7 +153,7 @@ describe("Stable Dashboard", () => {
       "Approval: Needs your permission",
       "Approval: Needs your permission",
       "Question: Asked you a question",
-      "Blocked: Fix flaky checkout test and Write invoices migration overlap",
+      "Blocked: Fix flaky checkout test and Write invoices migration changed the same files",
       "Failed: Failed",
       "Failed: Package desktop failed",
       "Review: Finished · 12 files changed",
