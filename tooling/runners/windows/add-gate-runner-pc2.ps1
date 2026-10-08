@@ -89,13 +89,17 @@ try {
     # Every account that runs those jobs may create and open lock files; nothing else is stored here.
     $locks = 'C:\ProgramData\KalCodePC2\locks'
     New-Item -ItemType Directory -Force -Path $locks | Out-Null
-    $lockAccounts = @('kalcode-ci', 'kalcode-ci-2b', 'kalcode-ci-2c', 'kalcode-ci-2d', $Account)
+    # kalcode-qa: the update-proof runner and the gate runners kalcode-win-gate-2c/-2d run as that signed-in
+    # account (a Startup shortcut, not a service, so the service lookup below never finds it). Without it they
+    # cannot open locks the gate accounts created (gate 37710308604: browser.lock access denied).
+    $lockAccounts = @('kalcode-ci', 'kalcode-ci-2b', 'kalcode-ci-2c', 'kalcode-ci-2d', 'kalcode-qa', $Account)
     $qa = Get-CimInstance Win32_Service -Filter "Name LIKE 'actions.runner.%kalcode-win-desktop-qa'" -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($qa -and $qa.StartName -match '^\.\\(.+)$') { $lockAccounts += $Matches[1] }
     foreach ($name in ($lockAccounts | Select-Object -Unique)) {
         $sid = (Get-LocalUser -Name $name -ErrorAction SilentlyContinue).SID.Value
         if (-not $sid) { continue }
-        & icacls $locks /grant "*${sid}:(OI)(CI)M" | Out-Null
+        # /T: lock files that already exist get the grant too, not only ones created later.
+        & icacls $locks /grant "*${sid}:(OI)(CI)M" /T | Out-Null
         if ($LASTEXITCODE) { Refuse "lock_acl_$name" }
     }
     $result.lockFolder = [ordered]@{ path = $locks; accounts = @($lockAccounts | Select-Object -Unique) }

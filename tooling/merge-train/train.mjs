@@ -40,7 +40,9 @@ export function assertCandidateWorkflow(source) {
   const windows = workflow.match(/^ {2}windows:\n([\s\S]*?)(?=^ {2}[a-zA-Z][\w-]*:|$(?![\s\S]))/m)?.[1] ?? "";
   if (
     !/ {2}push:\n(?:\s+#.*\n)* {4}branches: \[(?:main, )?"merge-train\/\*\*"\]/.test(workflow) ||
-    !/ {4}runs-on: \[self-hosted, Windows, (?:kalcode-gate(?:, kalcode-main-pc)?|kalcode-gate-pc2)\]\n/.test(windows) ||
+    !/ {4}runs-on: \[self-hosted, Windows, (?:kalcode-gate(?:, kalcode-main-pc)?|kalcode-gate-pc2|kalcode-gate-pool)\]\n/.test(
+      windows,
+    ) ||
     !windows.includes("name: Gate\n") ||
     !windows.includes("trailers:key=Merge-Train-Base,valueonly")
   ) {
@@ -48,16 +50,17 @@ export function assertCandidateWorkflow(source) {
       "candidate gate workflow must trigger merge-train pushes on a Windows gate runner and gate its recorded base",
     );
   }
-  // A split gate's second-PC half must gate the same recorded base on the second PC's runner.
+  // A split gate's JS/web job must gate the same recorded base on a gate runner (the second PC's, or the
+  // elastic pool's since 2026-10-08).
   const pc2 = workflow.match(/^ {2}pc2:\n([\s\S]*?)(?=^ {2}[a-zA-Z][\w-]*:|$(?![\s\S]))/m)?.[1];
   if (
     pc2 !== undefined &&
-    (!/ {4}runs-on: \[self-hosted, Windows, kalcode-gate-pc2\]\n/.test(pc2) ||
+    (!/ {4}runs-on: \[self-hosted, Windows, (?:kalcode-gate-pc2|kalcode-gate-pool)\]\n/.test(pc2) ||
       !pc2.includes("name: Gate\n") ||
       !pc2.includes("trailers:key=Merge-Train-Base,valueonly"))
   ) {
     throw new Error(
-      "candidate gate workflow: its second-PC half must run on kalcode-gate-pc2 and gate the same recorded base",
+      "candidate gate workflow: its JS/web job must run on a gate runner (kalcode-gate-pc2 or kalcode-gate-pool) and gate the same recorded base",
     );
   }
 }
