@@ -910,15 +910,14 @@ fn operation_request(
         ));
     }
     if let Some(model) = &model
-        && !provider.models.is_empty()
-        && !provider
-            .models
-            .iter()
-            .any(|available| &available.id == model)
+        && !kalcode_providers::catalog::valid_model_selector(provider_id.as_str(), model)
     {
         return Err(KalError::validation(
             "invalid_model",
-            format!("That model isn't available for {}.", provider.display_name),
+            format!(
+                "That model selection isn't valid for {}.",
+                provider.display_name
+            ),
         ));
     }
     let mut request = resolved_create_request(
@@ -2336,8 +2335,13 @@ mod tests {
             );
         }
         assert_eq!(
+            operation_effort(ProviderId::CODEX, Some(" Future-Fast "))
+                .expect("bounded provider-native future effort"),
+            Some("future-fast".into())
+        );
+        assert_eq!(
             operation_effort(ProviderId::CODEX, Some("high' -c web_search='live"))
-                .expect_err("unknown effort")
+                .expect_err("unsafe effort token")
                 .code,
             "invalid_effort"
         );
@@ -2623,7 +2627,9 @@ mod tests {
                         &now,
                     )?;
                     if let Some(session_id) = session_id {
-                        kalcode_threads::store::set_provider_session(tx, id, session_id, None)?;
+                        kalcode_threads::store::set_provider_session(
+                            tx, id, session_id, None, None,
+                        )?;
                     }
                 }
                 Ok(((), Vec::new()))
@@ -3693,6 +3699,69 @@ mod tests {
             assert_eq!(request.permission_mode, mode);
         }
         assert_eq!(DEFAULT_CODING_PERMISSION_MODE, PermissionMode::Bypass);
+        runtime.shutdown();
+    }
+
+    #[test]
+    fn operation_agents_preserve_safe_exact_models_outside_documented_aliases() {
+        let fixture = AccountFixture::new();
+        let account = fixture
+            .store
+            .create(ProviderId::GEMINI_CLI, "School")
+            .expect("account");
+        fixture
+            .store
+            .mark_authentication(&account.id, AuthState::Authenticated, None, None)
+            .expect("authenticated account");
+
+        let mut status = kalcode_providers::catalog::statuses()
+            .into_iter()
+            .find(|status| status.id.as_str() == ProviderId::GEMINI_CLI)
+            .expect("Gemini status");
+        status.detection = Some(ProviderDetection {
+            provider_id: status.id.clone(),
+            display_name: status.display_name.clone(),
+            state: DetectionState::Installed,
+            display_path: None,
+            version: None,
+            minimum_version: None,
+            auth: AuthState::Authenticated,
+            message: None,
+            checked_at: "cached".into(),
+        });
+        let providers = Arc::new(ProviderRegistry::new());
+        providers.register(Arc::new(CapabilitySpy::from_status(&status)));
+        let runtime = ThreadRuntime::new(
+            fixture.core.clone(),
+            providers,
+            Arc::new(CoreWorkspaces::new(fixture.core.clone())),
+            Arc::new(kalcode_contracts::permissions::AskUnlessReadGate),
+        )
+        .expect("runtime");
+
+        let exact_model = "gemini-2.5-pro-exp-03-25";
+        assert!(
+            !status
+                .capabilities
+                .models
+                .iter()
+                .any(|model| model.id == exact_model),
+            "regression requires an exact model outside static documented aliases"
+        );
+        let mut spec = agent_operation_spec();
+        spec.workspace_id = fixture.workspace_id.clone();
+        spec.provider_id = Some(ProviderId::GEMINI_CLI.into());
+        spec.provider_account_id = Some(account.id);
+        spec.model = Some(exact_model.into());
+
+        let request = operation_request(
+            &fixture.core,
+            &runtime,
+            &spec,
+            DEFAULT_CODING_PERMISSION_MODE,
+        )
+        .expect("safe exact provider model");
+        assert_eq!(request.model.as_deref(), Some(exact_model));
         runtime.shutdown();
     }
 

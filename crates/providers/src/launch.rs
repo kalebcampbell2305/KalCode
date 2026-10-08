@@ -16,12 +16,9 @@
 //!    - A script target (`.js`, `.cjs`, `.mjs`) is started as `<node.exe> <script> <args…>`,
 //!      with `node.exe` taken from the shim's own folder, else from the **absolute** `PATH`
 //!      entries of the provider environment. Never `node.cmd`, never a relative folder.
-//! 2. Only when a shim can't be understood is it run as-is, and then with the hardened
-//!    environment ([`crate::env::harden`]): `NoDefaultCurrentDirectoryInExePath=1` (so
-//!    `cmd.exe` does not search the working directory for bare names) and a `PATH` with only
-//!    absolute entries. The Rust standard library starts batch files with the `cmd.exe` from
-//!    the system directory (not one found on `PATH` or in the working directory) and `/d`
-//!    (no AutoRun).
+//! 2. If a shim can't be understood, resolution returns [`LaunchKind::ShimUnresolved`]. Provider
+//!    launch boundaries refuse that result before `cmd.exe` can reinterpret model names or other
+//!    provider arguments.
 //!
 //! Why not start the shim in an empty KalCode-owned folder instead? Claude Code has no flag
 //! that sets its project folder separately from its working directory (`claude --help`
@@ -56,8 +53,7 @@ pub enum LaunchKind {
     ShimNative,
     /// A `.cmd`/`.bat` shim whose script is started with an absolute `node.exe`.
     ShimNode,
-    /// A `.cmd`/`.bat` shim KalCode couldn't resolve; run through `cmd.exe` with the hardened
-    /// environment.
+    /// A `.cmd`/`.bat` shim KalCode couldn't resolve. Provider launch boundaries refuse it.
     ShimUnresolved,
     /// Unix: a `#!/usr/bin/env node` script started as `<absolute node> <script>`.
     #[cfg(unix)]

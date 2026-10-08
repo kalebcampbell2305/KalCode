@@ -51,7 +51,7 @@ export function notChecked(accountId: string, reason: string | null = null): Acc
 
 /**
  * Whether a usage window limits work on `model`. A model-scoped weekly window (`weekly_<slug>`,
- * e.g. `weekly_opus`, `weekly_fable`) applies only when the selected model id contains that slug;
+ * e.g. `weekly_opus`, `weekly_fable`) applies only when the model id contains that complete token sequence;
  * every other window (`weekly`, `five_hour`, Codex `primary`/`secondary`…) always applies. With no
  * explicit model (provider default) no model-scoped window applies. The one rule every low-usage
  * warning and account suggestion uses, so an unrelated model's limit never triggers them.
@@ -59,7 +59,7 @@ export function notChecked(accountId: string, reason: string | null = null): Acc
 export function windowAppliesToModel(window: Pick<UsageWindow, "id">, model: string | null | undefined): boolean {
   const scope = modelScope(window.id);
   if (scope === null) return true;
-  return model ? normalizeModel(model).includes(scope) : false;
+  return model ? `_${normalizeModel(model)}_`.includes(`_${scope}_`) : false;
 }
 
 /** The model slug of a model-scoped weekly window id, or null for windows that apply to every model. */

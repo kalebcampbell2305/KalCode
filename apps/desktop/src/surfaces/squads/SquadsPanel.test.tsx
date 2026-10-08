@@ -329,9 +329,32 @@ describe("SquadsPanel", () => {
 
     expect((await screen.findAllByRole("heading", { name: "Orion Release Crew" }))[0]).toBeVisible();
     expect(screen.getByText("The Claude Code account needs to sign in again.")).toBeVisible();
-    expect(screen.getByTitle(/Lead · implementation · Codex · Work · gpt-6\.1-sol · High effort/)).toBeVisible();
+    expect(
+      screen.getByTitle(/Lead · implementation · Codex · Work · gpt-6\.1-sol \(selected\) · high \(selected\)/),
+    ).toBeVisible();
     await userEvent.setup().click(screen.getByRole("button", { name: "Open terminal" }));
     expect(seams.focus).toHaveBeenCalledWith({ kind: "agent", agentId: "thread-lead", workspaceId: "workspace" });
+  });
+
+  it("shows the live provider selector and current account nickname while keeping the task name primary", async () => {
+    seams.agents = [
+      {
+        ...agent("thread-lead", "Lead"),
+        accountLabel: "Old nickname",
+        activeModel: "provider/model-v2",
+        activeEffort: "ultra",
+      } as ThreadSummary & { activeModel: string; activeEffort: string },
+    ];
+    const current = connectedAccount("codex-work", "codex", "Current nickname");
+    view(squads(), operations(), async () => [current]);
+
+    const rows = await screen.findAllByTestId("squad-member-row");
+    const row = rows.find((candidate) => within(candidate).queryByText("Lead", { selector: "strong" }));
+    expect(row).toBeDefined();
+    if (!row) return;
+    expect(within(row).getByText("Lead", { selector: "strong" })).toBeVisible();
+    expect(row).toHaveTextContent("implementation · Codex · Current nickname · provider/model-v2 · ultra");
+    expect(row).not.toHaveTextContent("gpt-6.1-sol");
   });
 
   it("freezes the dependent Recipe consent and makes a stale set explicit before deletion", async () => {
@@ -570,6 +593,8 @@ describe("SquadsPanel", () => {
         {
           models: {
             status: "available",
+            source: "runtime",
+            observedAt: Date.now(),
             reason: null,
             items: [
               {
@@ -595,6 +620,8 @@ describe("SquadsPanel", () => {
         {
           models: {
             status: "available",
+            source: "runtime",
+            observedAt: Date.now(),
             reason: null,
             items: [
               {
@@ -625,7 +652,7 @@ describe("SquadsPanel", () => {
     const model = within(dialog).getAllByLabelText("Model")[0] as HTMLSelectElement;
     const effort = within(dialog).getAllByLabelText("Effort")[0] as HTMLSelectElement;
 
-    expect(within(model).getByRole("option", { name: "Model B" })).toBeVisible();
+    expect(within(model).getByRole("option", { name: "Model B · gpt-6.1-fast" })).toBeVisible();
     expect(model).toHaveValue("gpt-6.1-sol");
     expect(effort).toHaveValue("high");
     await user.selectOptions(model, "");
@@ -648,6 +675,152 @@ describe("SquadsPanel", () => {
     expect(seams.discoverModels).not.toHaveBeenCalled();
   });
 
+  it("preserves saved efforts when fresh runtime models omit effort capability metadata", async () => {
+    const codex = connectedAccount("codex-work", "codex", "Personal");
+    const claude = connectedAccount("claude-work", "claude-code", "Work");
+    const codexProvider = options.providers[0];
+    if (!codexProvider) throw new Error("Missing Codex provider fixture");
+    const accountOptions: ThreadOptions = {
+      ...options,
+      providers: [
+        { ...codexProvider, models: [] },
+        { ...codexProvider, id: "claude-code", displayName: "Claude Code", models: [] },
+      ],
+    };
+    seams.accountStates = new Map([
+      [
+        codex.id,
+        {
+          models: {
+            status: "available",
+            source: "runtime",
+            observedAt: Date.now(),
+            reason: null,
+            items: [
+              {
+                id: "gpt-6.1-sol",
+                displayName: "Model A",
+                isDefault: true,
+                defaultEffort: null,
+              },
+            ],
+          },
+        },
+      ],
+      [
+        claude.id,
+        {
+          models: {
+            status: "available",
+            source: "runtime",
+            observedAt: Date.now(),
+            reason: null,
+            items: [
+              {
+                id: "claude-opus-4-6",
+                displayName: "Opus",
+                isDefault: true,
+                defaultEffort: null,
+              },
+            ],
+          },
+        },
+      ],
+    ]);
+    const client = squads();
+    const user = userEvent.setup();
+    view(
+      client,
+      operations(),
+      async () => [codex, claude],
+      async () => accountOptions,
+    );
+    await screen.findAllByRole("heading", { name: "Orion Release Crew" });
+    const library = document.querySelector<HTMLElement>(`[data-squad-id="${squad.id}"]`);
+    expect(library).not.toBeNull();
+    await user.click(within(library as HTMLElement).getByRole("button", { name: "Edit" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Orion Release Crew" });
+
+    expect(within(dialog).queryByText(/This effort is unavailable/i)).toBeNull();
+    expect(within(dialog).getAllByLabelText("Effort")[0]).toHaveValue("high");
+    await user.click(within(dialog).getByRole("button", { name: "Save squad" }));
+    await waitFor(() => expect(client.save).toHaveBeenCalledTimes(1));
+  });
+
+  it("rejects a saved effort when fresh runtime metadata explicitly reports no supported efforts", async () => {
+    const codex = connectedAccount("codex-work", "codex", "Personal");
+    const claude = connectedAccount("claude-work", "claude-code", "Work");
+    const codexProvider = options.providers[0];
+    if (!codexProvider) throw new Error("Missing Codex provider fixture");
+    const accountOptions: ThreadOptions = {
+      ...options,
+      providers: [
+        { ...codexProvider, models: [] },
+        { ...codexProvider, id: "claude-code", displayName: "Claude Code", models: [] },
+      ],
+    };
+    seams.accountStates = new Map([
+      [
+        codex.id,
+        {
+          models: {
+            status: "available",
+            source: "runtime",
+            observedAt: Date.now(),
+            reason: null,
+            items: [
+              {
+                id: "gpt-6.1-sol",
+                displayName: "Model A",
+                isDefault: true,
+                defaultEffort: null,
+                supportedEfforts: [],
+              },
+            ],
+          },
+        },
+      ],
+      [
+        claude.id,
+        {
+          models: {
+            status: "available",
+            source: "runtime",
+            observedAt: Date.now(),
+            reason: null,
+            items: [
+              {
+                id: "claude-opus-4-6",
+                displayName: "Opus",
+                isDefault: true,
+                defaultEffort: "high",
+                supportedEfforts: ["high"],
+              },
+            ],
+          },
+        },
+      ],
+    ]);
+    const client = squads();
+    const user = userEvent.setup();
+    view(
+      client,
+      operations(),
+      async () => [codex, claude],
+      async () => accountOptions,
+    );
+    await screen.findAllByRole("heading", { name: "Orion Release Crew" });
+    const library = document.querySelector<HTMLElement>(`[data-squad-id="${squad.id}"]`);
+    expect(library).not.toBeNull();
+    await user.click(within(library as HTMLElement).getByRole("button", { name: "Edit" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Orion Release Crew" });
+
+    expect(within(dialog).getByText(/This effort is unavailable for Model A/i)).toBeVisible();
+    await user.click(within(dialog).getByRole("button", { name: "Save squad" }));
+    expect(client.save).not.toHaveBeenCalled();
+    expect(within(dialog).getByRole("alert")).toHaveTextContent(/Lead's High effort is unavailable for Model A/);
+  });
+
   it("keeps an unavailable saved exact model visible and blocks silent replacement", async () => {
     const codex = connectedAccount("codex-work", "codex", "Personal");
     const claude = connectedAccount("claude-work", "claude-code", "Work");
@@ -657,6 +830,8 @@ describe("SquadsPanel", () => {
         {
           models: {
             status: "available",
+            source: "runtime",
+            observedAt: Date.now(),
             reason: null,
             items: [
               {
@@ -733,6 +908,112 @@ describe("SquadsPanel", () => {
     expect(seams.discoverModels).not.toHaveBeenCalled();
     fireEvent.focus(within(dialog).getAllByLabelText("Model")[42] as HTMLElement);
     expect(seams.discoverModels).toHaveBeenCalledExactlyOnceWith("codex-42");
+  });
+
+  it("keeps stale account models visible and refreshes them only when the member selector is focused", async () => {
+    const codex = connectedAccount("codex-work", "codex", "Personal");
+    const claude = connectedAccount("claude-work", "claude-code", "Work");
+    seams.accountStates = new Map([
+      [
+        codex.id,
+        {
+          models: {
+            status: "stale",
+            source: "runtime",
+            observedAt: 1,
+            reason: "Model availability may have changed. Refresh models to check.",
+            items: [
+              {
+                id: "gpt-6.1-sol",
+                displayName: "Saved model",
+                isDefault: true,
+                defaultEffort: "high",
+                supportedEfforts: ["high"],
+              },
+            ],
+          },
+        },
+      ],
+      [
+        claude.id,
+        {
+          models: {
+            status: "stale",
+            source: "runtime",
+            observedAt: 1,
+            reason: "Model availability may have changed. Refresh models to check.",
+            items: [],
+          },
+        },
+      ],
+    ]);
+    const user = userEvent.setup();
+    view(squads(), operations(), async () => [codex, claude]);
+    await screen.findAllByRole("heading", { name: "Orion Release Crew" });
+    const library = document.querySelector<HTMLElement>(`[data-squad-id="${squad.id}"]`);
+    expect(library).not.toBeNull();
+    await user.click(within(library as HTMLElement).getByRole("button", { name: "Edit" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Orion Release Crew" });
+    const model = within(dialog).getAllByLabelText("Model")[0] as HTMLSelectElement;
+    expect(within(model).getByRole("option", { name: "Saved model · gpt-6.1-sol" })).toBeVisible();
+    expect(within(dialog).getAllByText(/Model availability may have changed/).length).toBeGreaterThan(0);
+    expect(seams.discoverModels).not.toHaveBeenCalled();
+    fireEvent.focus(model);
+    expect(seams.discoverModels).toHaveBeenCalledExactlyOnceWith(codex.id);
+  });
+
+  it("does not treat documented aliases as an exhaustive account model catalog", async () => {
+    const codex = connectedAccount("codex-work", "codex", "Personal");
+    const claude = connectedAccount("claude-work", "claude-code", "Work");
+    seams.accountStates = new Map([
+      [
+        codex.id,
+        {
+          models: {
+            status: "available",
+            source: "documented_aliases",
+            observedAt: Date.now(),
+            reason: null,
+            supportedEfforts: ["max"],
+            items: [
+              {
+                id: "documented-alias",
+                displayName: "Documented alias",
+                isDefault: true,
+                defaultEffort: "high",
+                supportedEfforts: ["high"],
+              },
+            ],
+          },
+        },
+      ],
+      [
+        claude.id,
+        {
+          models: {
+            status: "available",
+            source: "documented_aliases",
+            observedAt: Date.now(),
+            reason: null,
+            items: [],
+          },
+        },
+      ],
+    ]);
+    const client = squads();
+    const user = userEvent.setup();
+    view(client, operations(), async () => [codex, claude]);
+    await screen.findAllByRole("heading", { name: "Orion Release Crew" });
+    const library = document.querySelector<HTMLElement>(`[data-squad-id="${squad.id}"]`);
+    expect(library).not.toBeNull();
+    await user.click(within(library as HTMLElement).getByRole("button", { name: "Edit" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Orion Release Crew" });
+    expect(within(dialog).queryByText(/This exact model is unavailable/)).toBeNull();
+    const effort = within(dialog).getAllByLabelText("Effort")[0] as HTMLSelectElement;
+    expect(within(effort).getByRole("option", { name: "Max" })).toBeVisible();
+    expect(within(effort).queryByRole("option", { name: "Medium" })).toBeNull();
+    await user.click(within(dialog).getByRole("button", { name: "Save squad" }));
+    await waitFor(() => expect(client.save).toHaveBeenCalledTimes(1));
   });
 
   it("keeps every create entry disabled when Squads are unavailable on the current plan", async () => {

@@ -69,6 +69,27 @@ export interface UsageWindow {
   resets: string;
 }
 
+const WEEKLY_WINDOW_LABEL = /^(weekly|7-day)$/i;
+const isReportedUsage = (left: number) => Number.isFinite(left) && left >= 0 && left <= 100;
+
+/**
+ * The account's all-model weekly window. Compact demo surfaces mirror the desktop authority:
+ * rolling, daily, monthly and model-scoped weekly limits never stand in for weekly remaining.
+ */
+export function weeklyWindow(account: Pick<Account, "windows">): UsageWindow | null {
+  return (
+    account.windows.find((window) => isReportedUsage(window.left) && WEEKLY_WINDOW_LABEL.test(window.label.trim())) ??
+    null
+  );
+}
+
+/** The tightest reported window is used only for launch recommendations, never primary usage. */
+function limitingWindow(account: Pick<Account, "windows">): UsageWindow | null {
+  return account.windows
+    .filter((window) => isReportedUsage(window.left))
+    .reduce<UsageWindow | null>((lowest, window) => (!lowest || window.left < lowest.left ? window : lowest), null);
+}
+
 export interface Account {
   id: string;
   provider: ProviderId;
@@ -1049,13 +1070,18 @@ export function chooseAccount(state: State, accountId: string) {
 /** A low account (under 20% left) and a same-provider account with more room: the app's suggestion. */
 export function accountSuggestion(state: State, accountId: string): Account | null {
   const account = accountOf(state, accountId);
-  const left = account?.windows[0]?.left ?? 100;
-  if (!account || left >= 20) return null;
+  const left = account ? limitingWindow(account)?.left : null;
+  if (!account || left == null || left >= 20) return null;
   return (
     state.accounts
       .filter((a) => a.provider === account.provider && a.id !== account.id)
-      .sort((a, b) => (b.windows[0]?.left ?? 0) - (a.windows[0]?.left ?? 0))[0] ?? null
+      .sort((a, b) => (limitingWindow(b)?.left ?? -1) - (limitingWindow(a)?.left ?? -1))[0] ?? null
   );
+}
+
+/** Taskless agents use the desktop runtime's clean provider name ("Gemini CLI" becomes "Gemini"). */
+function providerAgentName(provider: ProviderId): string {
+  return PROVIDER_NAME[provider].replace(/ CLI$/, "");
 }
 
 function freshAgent(state: State, spec: Launcher, mode: Mode): Agent {
@@ -1063,8 +1089,7 @@ function freshAgent(state: State, spec: Launcher, mode: Mode): Agent {
   const agentId = id(state, "a");
   return {
     id: agentId,
-    // The app names a new agent "New agent" until its first prompt gives it a task name.
-    name: "New agent",
+    name: providerAgentName(spec.provider),
     provider: spec.provider,
     account: spec.account,
     model: spec.model,

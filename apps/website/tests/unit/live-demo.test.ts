@@ -32,6 +32,7 @@ import {
   SURFACES,
   tick,
   tidyIdle,
+  weeklyWindow,
 } from "../../src/lib/live/model";
 import { renderApp } from "../../src/lib/live/render";
 
@@ -93,9 +94,31 @@ describe("the live demo's sample workspace", () => {
       expect(tab?.kind).toBe("agent");
       expect(state.agents[id]?.provider).toBe("codex");
     }
-    // As in the app, a fresh session is "New agent" until its first prompt names the task.
-    expect(created.map((id) => state.agents[id]?.name)).toEqual(["New agent", "New agent", "New agent"]);
+    // As in the app, taskless sessions use the clean provider name, never alphabetic placeholders.
+    expect(created.map((id) => state.agents[id]?.name)).toEqual(["Codex", "Codex", "Codex"]);
     expect(state.surface).toBe("code");
+  });
+
+  it("uses only the account's all-model weekly window for compact usage", () => {
+    const state = initialState();
+    const account = (id: string) => {
+      const found = state.accounts.find((candidate) => candidate.id === id);
+      if (!found) throw new Error(`Missing sample account ${id}`);
+      return found;
+    };
+    expect(weeklyWindow(account("claude-personal"))?.left).toBe(81);
+    expect(weeklyWindow(account("codex-personal"))?.left).toBe(73);
+    expect(weeklyWindow(account("gemini-personal"))).toBeNull();
+
+    let html = renderApp(state, cfg);
+    expect(html).toContain("81% left");
+    expect(html).not.toContain("64% left");
+
+    openLauncher(state, "gemini");
+    html = renderApp(state, cfg);
+    expect(html).toContain("Weekly usage unavailable");
+    expect(html).not.toContain("88% left");
+    expect(html).not.toContain("0% left");
   });
 
   it("launches up to ten agents at once, as the desktop launcher does", () => {
@@ -223,6 +246,29 @@ describe("the live demo's sample workspace", () => {
     expect(agentState(state.agents[id ?? ""] ?? ({} as never))).toBe("done");
     promptAgent(state, id ?? "", "Write tests for Login");
     expect(state.agents[id ?? ""]?.name).toBe("Dark Mode Toggle");
+  });
+
+  it("shows task titles first and truthful simulated selector metadata and weekly usage in Agent Fleet", () => {
+    const state = initialState();
+    go(state, "dashboard");
+    const html = renderApp(state, cfg);
+
+    expect(html).toContain("Dashboard Redesign");
+    expect(html).toContain("Claude Code · Personal · model: opus (selected) · effort: high (selected)");
+    expect(html).toContain(
+      "Claude Code · Work · model: sonnet (selected) · effort: provider default (resolved level not reported)",
+    );
+    expect(html).toContain(
+      "Codex · Personal · model: provider default (resolved ID not reported) · reasoning: medium (selected)",
+    );
+    expect(html).toContain(
+      "Gemini CLI · Personal · model: provider auto (resolved ID not reported) · reasoning: provider-controlled (not reported)",
+    );
+    expect(html).not.toContain("Claude Code · Personal · Opus ·");
+    expect(html).not.toContain("Claude Code · Work · Sonnet ·");
+    expect(html).toContain("81% weekly left");
+    expect(html).toContain("Weekly usage unavailable");
+    expect(html).toContain("Simulated workspace");
   });
 
   it("answers KalVoice commands by acting on the workspace", () => {

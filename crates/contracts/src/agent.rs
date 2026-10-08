@@ -36,6 +36,26 @@ impl std::fmt::Display for ProviderId {
     }
 }
 
+/// Whether a provider model selector is safe to pass as one opaque argv value.
+///
+/// This deliberately does not decide whether a provider or account supports the selector. The
+/// provider remains authoritative for exact aliases, versions, profiles, and future model IDs.
+pub fn safe_model_selector(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 512
+        && !value.starts_with('-')
+        && !value.chars().any(|character| {
+            character.is_control()
+                || matches!(
+                    character,
+                    '\u{200b}'..='\u{200f}'
+                        | '\u{202a}'..='\u{202e}'
+                        | '\u{2066}'..='\u{2069}'
+                        | '\u{feff}'
+                )
+        })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
@@ -285,6 +305,9 @@ pub enum AgentEvent {
     SessionStarted {
         provider_session_id: String,
         model: Option<String>,
+        /// Provider-confirmed active reasoning effort. Null means the provider did not report it.
+        #[serde(default)]
+        effort: Option<String>,
     },
     Status {
         status: ThreadStatus,
@@ -495,5 +518,31 @@ mod tests {
         .expect("legacy config");
         assert_eq!(config.provider_account_id, None);
         assert_eq!(config.effort, None);
+    }
+
+    #[test]
+    fn model_selectors_are_bounded_opaque_argv_values() {
+        for selector in [
+            "future+tools",
+            "anthropic.claude-v5/profile:exact",
+            "模型/éclair:β+tools",
+            "model name;provider-owned",
+        ] {
+            assert!(safe_model_selector(selector), "{selector:?}");
+        }
+        assert!(safe_model_selector(&"m".repeat(512)));
+
+        for selector in [
+            "",
+            "--provider-option",
+            "line\nbreak",
+            "zero\u{200b}width",
+            "bidi\u{202e}override",
+            "isolate\u{2066}text",
+            "bom\u{feff}text",
+        ] {
+            assert!(!safe_model_selector(selector), "{selector:?}");
+        }
+        assert!(!safe_model_selector(&"m".repeat(513)));
     }
 }

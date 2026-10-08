@@ -10,12 +10,33 @@ const agents = vi.hoisted(() => ({
   state: { status: "ready", data: [] as unknown[] } as { status: string; data?: unknown[]; error?: unknown },
   reload: () => {},
 }));
+const providerSessions = vi.hoisted(() => ({
+  accounts: [
+    {
+      id: "source-account",
+      providerId: "claude-code",
+      displayName: "Source Work",
+      authenticationState: "authenticated",
+      archivedAt: null,
+    },
+    {
+      id: "target-account",
+      providerId: "claude-code",
+      displayName: "Review Work",
+      authenticationState: "authenticated",
+      archivedAt: null,
+    },
+  ],
+}));
 vi.mock("../../runtime/RuntimeProvider.tsx", () => ({ useRuntime: () => runtime }));
 vi.mock("../../account/AccountProvider.tsx", () => ({ useOptionalAccount: () => null }));
 vi.mock("../../runtime/uiIntents.tsx", () => ({ useOptionalUiIntents: () => null }));
 vi.mock("../../shell/navigation.tsx", () => ({ useNavigation: () => ({ navigate: () => {} }) }));
 vi.mock("../../shell/AccountHub.tsx", () => ({ HUB_SECTIONS: { account: "account" } }));
 vi.mock("../dashboard/data/DashboardData.tsx", () => ({ useCodingAgents: () => agents }));
+vi.mock("../providers/ProviderAccountSessions.tsx", () => ({
+  useOptionalProviderAccountSessions: () => providerSessions,
+}));
 
 const agent = (id: string, name: string, createdAt: string): ThreadSummary =>
   ({
@@ -33,6 +54,22 @@ const agent = (id: string, name: string, createdAt: string): ThreadSummary =>
 
 const SOURCE = agent("source", "Implement Dashboard", "2026-10-01T00:00:00.000Z");
 const TARGET = agent("target", "Review Dashboard", "2026-10-01T00:01:00.000Z");
+Object.assign(SOURCE, {
+  providerAccountId: "source-account",
+  accountLabel: "Old source",
+  model: "selected/source-v1",
+  effort: "high",
+  activeModel: "provider/source-v2",
+  activeEffort: "X-High",
+});
+Object.assign(TARGET, {
+  providerAccountId: "target-account",
+  accountLabel: "Old target",
+  model: "selected/review-v1",
+  effort: "medium",
+  activeModel: "provider/review-v3[reasoning=max]",
+  activeEffort: "Max",
+});
 
 const record = (status: HandoffRecord["status"]): HandoffRecord => ({
   id: `h-${status}`,
@@ -93,6 +130,21 @@ afterEach(() => {
 });
 
 describe("HandOffDialog", () => {
+  it("shows canonical source and recipient provider, account, model and reasoning identity", async () => {
+    client({});
+    dialog();
+
+    expect(screen.getByText("Claude Code · Source Work · provider/source-v2 · X-High")).toBeVisible();
+    const group = await screen.findByRole("group", { name: "Handoff recipient" });
+    const recipient = within(group).getByRole("radio").closest("label");
+    expect(recipient).toHaveTextContent("Review Dashboard");
+    expect(recipient).toHaveTextContent("Claude Code · Review Work · provider/review-v3[reasoning=max] · Max");
+    expect(recipient?.querySelector("[data-handoff-recipient-identity]")).toHaveAttribute(
+      "title",
+      expect.stringContaining("Selected model: selected/review-v1."),
+    );
+  });
+
   it("preselects the only valid recipient so Prepare is one click away", async () => {
     client({});
     dialog();

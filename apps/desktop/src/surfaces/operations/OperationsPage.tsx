@@ -76,13 +76,22 @@ import {
 } from "../../kalvoice/sceneOperations.ts";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { HUB_SECTIONS } from "../../shell/AccountHub.tsx";
-import { accountProviderName } from "../../shell/accountCommands.ts";
 import { FavoriteButton, FavoriteToggle } from "../../shell/favorites/FavoriteActions.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
 import { useOpenInPane } from "../../shell/panes/useOpenInPane.ts";
+import {
+  effortForModel,
+  effortLabel,
+  effortsForModel,
+  type ModelEffortInfo,
+  modelCatalogCanVerifyCapabilities,
+  modelEffortsAreKnown,
+} from "../code/panes/agentLaunch.ts";
+import type { PaneProviderId } from "../code/panes/paneChannel.ts";
 import { PERMISSION_MODE_HINTS, PERMISSION_MODE_LABELS } from "../dashboard/data/format.ts";
 import { focusSection } from "../dashboard/useNow.ts";
-import { accountFullLabel, accountName, accountSignIn, sortAccounts } from "../providers/accountIdentity.ts";
+import { accountName, accountSignIn, sortAccounts } from "../providers/accountIdentity.ts";
+import { useOptionalProviderAccountSessions } from "../providers/ProviderAccountSessions.tsx";
 import { SquadsPanel } from "../squads/SquadsPanel.tsx";
 import {
   type ActivityRange,
@@ -102,6 +111,7 @@ import {
   timeLabel,
 } from "./model.ts";
 import styles from "./OperationsPage.module.css";
+import { type ObservedOperationRecord, operationUsesLiveIdentity, useOperationIdentity } from "./operationIdentity.ts";
 import { useOperations } from "./useOperations.ts";
 
 export interface OperationsPageProps {
@@ -192,27 +202,35 @@ function dependencyLabel(owner: OperationRecord, dependencyId: string, records: 
   return `${dependency.spec.name} (${state})`;
 }
 
-/** "Claude Code · Work" when the work is bound to an account, "Claude Code" on the provider default. */
-function runtimeAccount(record: OperationRecord): string | null {
-  const providerId = record.spec.providerId;
-  if (!providerId) return null;
-  const account = record.accountLabel?.trim();
-  return account ? accountFullLabel({ providerId, displayName: account }) : accountProviderName(providerId);
-}
-
-/** The bound account only ("Claude Code · Work"); null when the work runs on the provider default. */
-function boundAccount(record: OperationRecord): string | null {
-  return record.accountLabel?.trim() ? runtimeAccount(record) : null;
-}
-
 /** An account in a picker whose provider is already chosen: "Work · Default", "Work · Signed out". */
 function accountOptionLabel(account: ProviderAccount): string {
   const signIn = account.authenticationState === "authenticated" ? null : accountSignIn(account).label;
   return [accountName(account), account.isDefault ? "Default" : null, signIn].filter(Boolean).join(" · ");
 }
 
+function modelOptionLabel(model: Pick<ModelEffortInfo, "id" | "displayName">): string {
+  return model.displayName === model.id ? model.id : `${model.displayName} · ${model.id}`;
+}
+
+function RuntimeMetadata({ record }: { record: ObservedOperationRecord }) {
+  const identity = useOperationIdentity(record);
+  const observed = identity.model.source === "provider" || identity.effort.source === "provider";
+  const label = observed ? (operationUsesLiveIdentity(record) ? "Runtime" : "Observed runtime") : "Launch settings";
+  return (
+    <div>
+      <dt>{label}</dt>
+      <dd title={identity.detail}>{identity.compact}</dd>
+    </div>
+  );
+}
+
+function OperationIdentityContext({ record }: { record: ObservedOperationRecord }) {
+  const providerId = record.observedProviderId ?? record.spec.providerId;
+  const identity = useOperationIdentity(record);
+  return providerId ? ` · ${identity.compact}` : null;
+}
+
 function Metadata({ record }: { record: OperationRecord }) {
-  const provider = [runtimeAccount(record), record.spec.model, record.spec.effort].filter(Boolean).join(" · ");
   return (
     <dl className={styles.metadata}>
       <div>
@@ -231,12 +249,7 @@ function Metadata({ record }: { record: OperationRecord }) {
         <dt>Duration</dt>
         <dd>{operationDurationLabel(record)}</dd>
       </div>
-      {provider ? (
-        <div>
-          <dt>Runtime</dt>
-          <dd>{provider}</dd>
-        </div>
-      ) : null}
+      {record.observedProviderId || record.spec.providerId ? <RuntimeMetadata record={record} /> : null}
     </dl>
   );
 }
@@ -776,7 +789,7 @@ function RunsView({
                     <span className={styles.runContext}>
                       {run.workspaceName}
                       {run.branch ? ` · ${run.branch}` : ""}
-                      {boundAccount(run) ? ` · ${boundAccount(run)}` : ""}
+                      <OperationIdentityContext record={run} />
                     </span>
                     <span className={styles.runAction}>
                       {run.currentAction ??
@@ -1001,7 +1014,7 @@ function QueueView({
                 </div>
                 <p>
                   {titleCase(item.spec.kind)} · {item.workspaceName}
-                  {boundAccount(item) ? ` · ${boundAccount(item)}` : ""} · Priority {item.spec.priority}
+                  <OperationIdentityContext record={item} /> · Priority {item.spec.priority}
                 </p>
                 {item.spec.dependencies.length > 0 ? (
                   <p>Depends on {item.spec.dependencies.map((id) => dependencyLabel(item, id, records)).join(", ")}</p>
@@ -1177,6 +1190,7 @@ function TaskEditor({
   onCancel: () => void;
   onSave: (spec: OperationSpec) => Promise<void>;
 }) {
+  const providerSessions = useOptionalProviderAccountSessions();
   const formId = useId();
   const [options, setOptions] = useState<ThreadOptions | null>(null);
   const [accounts, setAccounts] = useState<ProviderAccount[]>([]);
@@ -1217,9 +1231,78 @@ function TaskEditor({
   const providerAccountsForSelection = sortAccounts(
     accounts.filter((account) => account.providerId === spec.providerId),
   );
+  const accountModels = spec.providerAccountId
+    ? (providerSessions?.states.get(spec.providerAccountId)?.models ?? null)
+    : null;
+  const modelOptions = spec.providerAccountId ? (accountModels?.items ?? []) : (provider?.models ?? []);
+  const runtimeModelAbsence = Boolean(spec.providerAccountId && modelCatalogCanVerifyCapabilities(accountModels ?? {}));
+  const modelUnavailable = Boolean(
+    spec.model && runtimeModelAbsence && !modelOptions.some((model) => model.id === spec.model),
+  );
+  const selectedModel: ModelEffortInfo | null = spec.model
+    ? (modelOptions.find((model) => model.id === spec.model) ?? {
+        id: spec.model,
+        displayName: spec.model,
+        isDefault: false,
+      })
+    : (modelOptions.find((model) => model.isDefault) ?? null);
+  const effortOptions = effortsForModel(
+    spec.providerId as PaneProviderId,
+    selectedModel,
+    accountModels?.supportedEfforts,
+  );
+  const effortUnavailable = Boolean(
+    spec.effort &&
+      runtimeModelAbsence &&
+      modelEffortsAreKnown(selectedModel, accountModels?.supportedEfforts) &&
+      !effortOptions.includes(spec.effort),
+  );
+  const modelHint = modelUnavailable
+    ? "This exact model is unavailable for the selected account. Choose a compatible model or Provider default."
+    : accountModels?.status === "checking"
+      ? "Checking exact models for this account…"
+      : accountModels?.status === "stale"
+        ? (accountModels.reason ?? "Model availability may have changed. Focus this field to refresh models.")
+        : accountModels?.status === "unavailable"
+          ? (accountModels.reason ?? "Exact models are unavailable. Provider default lets the provider choose.")
+          : accountModels?.source === "documented_aliases"
+            ? "Suggested model aliases; the provider may expose additional exact models."
+            : undefined;
+  const effortTarget = selectedModel ? modelOptionLabel(selectedModel) : "the provider default";
+  const effortHint = effortUnavailable
+    ? `This effort is unavailable for ${effortTarget}. Choose a supported effort or Provider default.`
+    : accountModels?.status === "checking"
+      ? "Checking exact effort support for this account…"
+      : accountModels?.status === "stale"
+        ? "Effort availability may have changed. The saved exact effort is preserved until fresh runtime metadata is available."
+        : accountModels?.status === "unavailable"
+          ? "Effort discovery is unavailable. Provider default lets the provider choose; a saved exact effort is preserved."
+          : accountModels?.source === "documented_aliases"
+            ? "Suggested effort metadata may be incomplete; the provider remains authoritative."
+            : runtimeModelAbsence &&
+                modelEffortsAreKnown(selectedModel, accountModels?.supportedEfforts) &&
+                effortOptions.length === 0
+              ? `This account does not advertise effort selection for ${effortTarget}. Provider default lets the provider choose.`
+              : undefined;
+  const discoverSelectedModels = () => {
+    const accountId = spec.providerAccountId;
+    if (!accountId || !providerSessions?.discoverModels) return;
+    if (
+      !accountModels ||
+      accountModels.status === "stale" ||
+      accountModels.status === "unavailable" ||
+      accountModels.source !== "runtime"
+    ) {
+      void providerSessions.discoverModels(accountId);
+    }
+  };
   const isAgent = spec.kind === "agent";
   const valid = Boolean(
-    spec.name.trim() && spec.workspaceId && (isAgent ? spec.prompt?.trim() && spec.providerId : spec.command?.trim()),
+    spec.name.trim() &&
+      spec.workspaceId &&
+      !modelUnavailable &&
+      !effortUnavailable &&
+      (isAgent ? spec.prompt?.trim() && spec.providerId : spec.command?.trim()),
   );
 
   const submit = (event: FormEvent) => {
@@ -1233,7 +1316,7 @@ function TaskEditor({
       providerId: isAgent ? spec.providerId : null,
       providerAccountId: isAgent ? spec.providerAccountId : null,
       model: isAgent ? spec.model : null,
-      effort: null,
+      effort: isAgent ? spec.effort : null,
       urls: urls
         .split(",")
         .map((value) => value.trim())
@@ -1303,6 +1386,7 @@ function TaskEditor({
                 workspaceId: event.target.value,
                 providerAccountId: null,
                 model: null,
+                effort: null,
               });
               setOptionsRevision((value) => value + 1);
             }}
@@ -1372,7 +1456,13 @@ function TaskEditor({
                 id={`${formId}-provider`}
                 value={spec.providerId ?? ""}
                 onChange={(event) =>
-                  setSpec({ ...spec, providerId: event.target.value || null, providerAccountId: null, model: null })
+                  setSpec({
+                    ...spec,
+                    providerId: event.target.value || null,
+                    providerAccountId: null,
+                    model: null,
+                    effort: null,
+                  })
                 }
                 required
               >
@@ -1388,7 +1478,21 @@ function TaskEditor({
               <Select
                 id={`${formId}-account`}
                 value={spec.providerAccountId ?? ""}
-                onChange={(event) => setSpec({ ...spec, providerAccountId: event.target.value || null })}
+                onChange={(event) => {
+                  const providerAccountId = event.target.value || null;
+                  setSpec({ ...spec, providerAccountId, model: null, effort: null });
+                  const models = providerAccountId ? providerSessions?.states.get(providerAccountId)?.models : null;
+                  if (
+                    providerAccountId &&
+                    providerSessions?.discoverModels &&
+                    (!models ||
+                      models.status === "stale" ||
+                      models.status === "unavailable" ||
+                      models.source !== "runtime")
+                  ) {
+                    void providerSessions.discoverModels(providerAccountId);
+                  }
+                }}
               >
                 <option value="">Provider default</option>
                 {providerAccountsForSelection.map((account) => (
@@ -1398,27 +1502,56 @@ function TaskEditor({
                 ))}
               </Select>
             </Field>
-            <Field htmlFor={`${formId}-model`} label="Model">
+            <Field htmlFor={`${formId}-model`} label="Model" hint={modelHint}>
               <Select
                 id={`${formId}-model`}
                 value={spec.model ?? ""}
-                onChange={(event) => setSpec({ ...spec, model: event.target.value || null })}
+                aria-busy={accountModels?.status === "checking" || undefined}
+                onFocus={discoverSelectedModels}
+                onChange={(event) => {
+                  const modelId = event.target.value || null;
+                  const nextModel = modelId ? (modelOptions.find((model) => model.id === modelId) ?? null) : null;
+                  setSpec((current) => ({
+                    ...current,
+                    model: modelId,
+                    effort: modelId
+                      ? effortForModel(
+                          current.providerId as PaneProviderId,
+                          nextModel,
+                          current.effort,
+                          accountModels?.supportedEfforts,
+                        ) || null
+                      : null,
+                  }));
+                }}
               >
                 <option value="">Provider default</option>
-                {provider?.models.map((model) => (
+                {modelOptions.map((model) => (
                   <option key={model.id} value={model.id}>
-                    {model.displayName}
+                    {modelOptionLabel(model)}
                   </option>
                 ))}
+                {spec.model && !modelOptions.some((model) => model.id === spec.model) ? (
+                  <option value={spec.model}>{spec.model}</option>
+                ) : null}
               </Select>
             </Field>
-            <Field
-              htmlFor={`${formId}-effort`}
-              label="Effort"
-              hint="This provider runtime does not advertise effort selection."
-            >
-              <Select id={`${formId}-effort`} value="" disabled>
+            <Field htmlFor={`${formId}-effort`} label="Effort" hint={effortHint}>
+              <Select
+                id={`${formId}-effort`}
+                value={spec.effort ?? ""}
+                disabled={effortOptions.length === 0 && !spec.effort}
+                onChange={(event) => setSpec({ ...spec, effort: event.target.value || null })}
+              >
                 <option value="">Provider default</option>
+                {effortOptions.map((effort) => (
+                  <option key={effort} value={effort}>
+                    {effortLabel(effort)}
+                  </option>
+                ))}
+                {spec.effort && !effortOptions.includes(spec.effort) ? (
+                  <option value={spec.effort}>{spec.effort}</option>
+                ) : null}
               </Select>
             </Field>
           </div>

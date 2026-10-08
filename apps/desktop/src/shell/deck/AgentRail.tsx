@@ -15,6 +15,7 @@ import { useKalTidy } from "../../surfaces/code/kaltidy/kalTidyContext.ts";
 import { useLaunchAgent } from "../../surfaces/code/useLaunchAgent.ts";
 import { useCodingAgents } from "../../surfaces/dashboard/data/DashboardData.tsx";
 import { useClock } from "../../surfaces/dashboard/useNow.ts";
+import { useSessionIdentity } from "../../surfaces/providers/useSessionIdentity.ts";
 import { useNavigation } from "../navigation.tsx";
 import styles from "./AgentRail.module.css";
 import { type AgentSections, agentSections, runningAgentCount, shortElapsed } from "./deckModel.ts";
@@ -211,6 +212,7 @@ function AgentRow({
   /** Present for agents whose session is over: the row's X clears them. */
   onDismiss?: (t: ThreadSummary) => void;
 }) {
+  const identity = useSessionIdentity(thread);
   const state = agentStateOf(thread);
   const tone = AGENT_STATE_TONE[state];
   const label = AGENT_STATE_TEXT[state];
@@ -219,6 +221,7 @@ function AgentRow({
   const elapsed = Number.isNaN(since) ? null : shortElapsed(now - since);
   const live = isAgentBusy(state);
   const detail = live && thread.currentActivity ? `${label} · ${thread.currentActivity}` : label;
+  const identityDetail = `${identity.detail} Workspace: ${thread.workspaceName}.`;
   const dismissible = onDismiss !== undefined && isClearableAgent(thread);
   const isLeaving = leaving?.has(thread.id) ?? false;
   return (
@@ -235,7 +238,8 @@ function AgentRow({
         data-group={state === "needs_you" ? "attention" : state}
         data-state={state}
         onClick={() => onOpen(thread)}
-        aria-label={`${thread.name}, ${label}, ${thread.providerName} in ${thread.workspaceName}. Open agent`}
+        aria-label={`${thread.name}, ${label}. ${identityDetail} Open agent`}
+        title={identityDetail}
       >
         {/* The warm edge on an inert element, not ::before (see AgentRail.module.css). */}
         {state === "needs_you" ? <span className={styles.attentionEdge} aria-hidden="true" /> : null}
@@ -250,7 +254,7 @@ function AgentRow({
           </span>
           <span className={styles.rowDetail}>{detail}</span>
           <span className={styles.rowMeta}>
-            {thread.providerName} · {thread.workspaceName}
+            {identity.compact} · {thread.workspaceName}
             {thread.pendingApprovals > 0 && thread.status !== "waiting_for_permission" ? (
               <span className={styles.rowFlag}>
                 {thread.pendingApprovals} {thread.pendingApprovals === 1 ? "approval" : "approvals"}

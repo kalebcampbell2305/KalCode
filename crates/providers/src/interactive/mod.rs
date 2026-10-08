@@ -94,6 +94,20 @@ mod effort_tests {
         ] {
             assert!(normalize_effort(provider, Some("high")).is_err());
         }
+        for provider in [ProviderId::CLAUDE_CODE, ProviderId::CODEX] {
+            assert_eq!(
+                normalize_effort(provider, Some(" Future-Fast "))
+                    .expect("safe provider-native future effort"),
+                Some("future-fast".into())
+            );
+            assert!(normalize_effort(provider, Some("high' -c web_search='live")).is_err());
+            let too_long = if provider == ProviderId::CODEX {
+                65
+            } else {
+                33
+            };
+            assert!(normalize_effort(provider, Some(&"e".repeat(too_long))).is_err());
+        }
     }
 }
 

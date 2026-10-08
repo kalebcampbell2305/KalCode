@@ -93,6 +93,27 @@ it("suggests on known sign-in failures but never treats a passive metadata failu
   expect(suggest([account("a", { lastErrorCode: "provider_error" }), account("b")], [])).toBeNull();
 });
 
+it("scopes quota advice to the reported model after a native model switch", () => {
+  const source = { ...thread, activeModel: "claude-opus-4-6" };
+  const scoped = (id: string) =>
+    usage("a", 0, {
+      windows: [{ id, label: id, remainingPercent: 0, resetsAt: null }],
+    });
+  expect(suggest(undefined, [scoped("weekly_opus")], source)?.condition).toBe("low");
+  expect(suggest(undefined, [scoped("weekly_sonnet")], source)).toBeNull();
+  const result = suggest(
+    undefined,
+    [
+      scoped("weekly_opus"),
+      usage("b", 0, {
+        windows: [{ id: "weekly_opus", label: "Weekly Opus", remainingPercent: 0, resetsAt: null }],
+      }),
+    ],
+    source,
+  );
+  expect(result?.alternatives).toEqual([]);
+});
+
 it("excludes foreign, archived, expired, unknown-auth and low accounts while preserving known sign-in", () => {
   const result = suggest(
     [

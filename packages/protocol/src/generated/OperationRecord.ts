@@ -6,7 +6,27 @@ export type OperationRecord = { id: string, spec: OperationSpec,
 /**
  * operations, thread, terminal, or background; observed records cannot be queued twice.
  */
-source: string, status: OperationStatus, workspaceName: string, branch: string | null, version: string | null, accountLabel: string | null, terminalId: string | null, threadId: string | null, createdAt: string, startedAt: string | null, endedAt: string | null, currentAction: string | null,
+source: string, status: OperationStatus, workspaceName: string, branch: string | null, version: string | null, accountLabel: string | null, terminalId: string | null, threadId: string | null,
+/**
+ * Provider observed for this exact run; absence means there is no bounded historical proof.
+ */
+observedProviderId?: string,
+/**
+ * Account binding observed for this exact run.
+ */
+observedProviderAccountId?: string,
+/**
+ * Account nickname captured with the observed binding; current account metadata may rename it.
+ */
+observedAccountLabel?: string,
+/**
+ * Provider-reported selector observed inside this exact run's durable event bounds.
+ */
+observedModel?: string,
+/**
+ * Provider-reported reasoning observed inside this exact run's durable event bounds.
+ */
+observedEffort?: string, createdAt: string, startedAt: string | null, endedAt: string | null, currentAction: string | null,
 /**
  * Durable, actionable reason this task needs the user's decision. Dependency blockers are
  * represented separately in `blockers`; ordinary user-paused work leaves this absent.

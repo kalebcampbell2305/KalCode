@@ -1,9 +1,24 @@
-import type { ThreadSummary } from "@kalcode/protocol";
+import type { ProviderAccount, ThreadSummary } from "@kalcode/protocol";
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Profiler } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentCard, type AgentCardProps, sameAgentCardProps, startedText } from "./AgentCard.tsx";
+
+const providerSessions = vi.hoisted(() => ({
+  value: null as null | { accounts: ProviderAccount[]; usage: ReadonlyMap<string, unknown> },
+}));
+vi.mock("../providers/ProviderAccountSessions.tsx", () => ({
+  useOptionalProviderAccountSessions: () => providerSessions.value,
+}));
+
+const CURRENT_ACCOUNT = {
+  id: "0192f3c4-0000-7000-8000-000000000b02",
+  providerId: "gemini-cli",
+  displayName: "Gemini Current",
+  authenticationState: "authenticated",
+  archivedAt: null,
+} as ProviderAccount;
 
 function thread(accountLabel: string | null): ThreadSummary {
   return {
@@ -13,7 +28,7 @@ function thread(accountLabel: string | null): ThreadSummary {
     providerName: "Gemini CLI",
     model: null,
     effort: null,
-    providerAccountId: accountLabel ? "0192f3c4-0000-7000-8000-000000000b02" : null,
+    providerAccountId: accountLabel?.trim() ? "0192f3c4-0000-7000-8000-000000000b02" : null,
     accountLabel,
     workspaceId: "0192f3c4-0000-7000-8000-00000000a001",
     workspaceName: "kalcode",
@@ -52,6 +67,10 @@ function mount(summary: ThreadSummary, extra: Partial<Parameters<typeof AgentCar
   );
 }
 
+afterEach(() => {
+  providerSessions.value = null;
+});
+
 describe("AgentCard account label", () => {
   it("leads with the provider account, then the provider and workspace", () => {
     mount(thread("Gemini B"));
@@ -80,6 +99,69 @@ describe("AgentCard account label", () => {
     unmount();
     mount(thread("   "));
     expect(screen.queryByTitle(/^Account:/)).toBeNull();
+  });
+
+  it("uses the exact canonical account, runtime model and weekly usage without a card-level fetch", () => {
+    providerSessions.value = {
+      accounts: [CURRENT_ACCOUNT],
+      usage: new Map([
+        [
+          CURRENT_ACCOUNT.id,
+          {
+            accountId: CURRENT_ACCOUNT.id,
+            status: "fresh",
+            windows: [
+              { id: "five_hour", label: "5-hour", remainingPercent: 8, resetsAt: null },
+              { id: "weekly", label: "Weekly", remainingPercent: 73, resetsAt: null },
+            ],
+            checkedAt: "2026-09-28T12:00:00Z",
+            reason: null,
+          },
+        ],
+      ]),
+    };
+    mount({
+      ...thread("Old nickname"),
+      model: "selected/model-v1",
+      effort: "high",
+      activeModel: "provider/model-v2[reasoning=max]",
+      activeEffort: "X-High",
+    } as ThreadSummary);
+
+    const card = screen.getByRole("article", { name: "Research" });
+    expect(screen.getByTitle("Account: Gemini Current")).toBeVisible();
+    expect(screen.queryByTitle("Account: Old nickname")).not.toBeInTheDocument();
+    expect(card.querySelector("[data-session-identity]")).toHaveTextContent("provider/model-v2[reasoning=max]");
+    expect(card.querySelector("[data-session-identity]")).toHaveTextContent("X-High");
+    expect(card.querySelector("[data-session-identity]")).toHaveAttribute(
+      "title",
+      expect.stringContaining("Selected model: selected/model-v1."),
+    );
+    expect(screen.getByText("73% left")).toBeVisible();
+    expect(screen.queryByText("8% left")).not.toBeInTheDocument();
+  });
+
+  it("says weekly usage is unavailable instead of substituting another usage window", () => {
+    providerSessions.value = {
+      accounts: [CURRENT_ACCOUNT],
+      usage: new Map([
+        [
+          CURRENT_ACCOUNT.id,
+          {
+            accountId: CURRENT_ACCOUNT.id,
+            status: "fresh",
+            windows: [{ id: "five_hour", label: "5-hour", remainingPercent: 8, resetsAt: null }],
+            checkedAt: "2026-09-28T12:00:00Z",
+            reason: null,
+          },
+        ],
+      ]),
+    };
+    mount(thread("Old nickname"));
+
+    expect(screen.getByText("Weekly usage unavailable")).toBeVisible();
+    expect(screen.queryByText("8% left")).not.toBeInTheDocument();
+    expect(screen.queryByText("0% left")).not.toBeInTheDocument();
   });
 });
 
@@ -259,8 +341,8 @@ describe("AgentCard Fleet controls", () => {
       { onToggleExpanded: onToggle },
     );
     const card = screen.getByRole("article", { name: "Research" });
-    expect(card.textContent).toContain("claude-opus-4-1");
-    expect(card.textContent).toContain("effort high");
+    expect(card.textContent).toContain("claude-opus-4-1 (selected)");
+    expect(card.textContent).toContain("reasoning high (selected)");
     const toggle = screen.getByRole("button", { name: "Show details for Research" });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     await userEvent.click(toggle);
@@ -281,7 +363,8 @@ describe("AgentCard Fleet controls", () => {
     );
     expect(screen.getByRole("button", { name: "Hide details for Research" })).toHaveAttribute("aria-expanded", "true");
     expect(card.textContent).toContain("Permission mode Approve");
-    expect(card.textContent).toContain("claude-opus-4-1 · high effort");
+    expect(card.textContent).toContain("Modelclaude-opus-4-1 (selected)");
+    expect(card.textContent).toContain("Reasoninghigh (selected)");
   });
 
   it("a failed agent offers Retry and the one-click clear, and clicking the clear never opens it", async () => {

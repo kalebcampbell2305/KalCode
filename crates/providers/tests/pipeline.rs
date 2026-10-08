@@ -679,7 +679,8 @@ fn text_turn_flows_from_process_to_normalized_events() {
     );
     assert!(events.contains(&AgentEvent::SessionStarted {
         provider_session_id: id.clone(),
-        model: Some("claude-sonnet-5".into())
+        model: Some("claude-sonnet-5".into()),
+        effort: None,
     }));
     let deltas: String = events
         .iter()
@@ -994,7 +995,8 @@ fn resume_passes_the_session_id_and_plan_mode_keeps_research() {
     let events = until(&rx, turn_done);
     assert!(events.contains(&AgentEvent::SessionStarted {
         provider_session_id: resume_id.into(),
-        model: Some("claude-sonnet-5".into())
+        model: Some("claude-sonnet-5".into()),
+        effort: None,
     }));
     let args: Vec<String> = serde_json::from_value(fake.read_json("last-args.json")).expect("args");
     assert!(args.windows(2).any(|w| w == ["--resume", resume_id]));

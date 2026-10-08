@@ -271,6 +271,7 @@ export type { ProviderChoice } from "./ProviderChoice.ts";
 export type { ProviderDetection } from "./ProviderDetection.ts";
 export type { ProviderHealth } from "./ProviderHealth.ts";
 export type { ProviderId } from "./ProviderId.ts";
+export type { ProviderModelCatalogSource } from "./ProviderModelCatalogSource.ts";
 export type { ProviderOption } from "./ProviderOption.ts";
 export type { ProviderPaneRequest } from "./ProviderPaneRequest.ts";
 export type { ProviderRow } from "./ProviderRow.ts";

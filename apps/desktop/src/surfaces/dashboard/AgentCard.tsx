@@ -32,11 +32,13 @@ import { type MouseEvent, memo, useEffect, useId, useRef, useState } from "react
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
 import { FavoriteButton, useFavoriteMenuItems } from "../../shell/favorites/FavoriteActions.tsx";
 import { MODE_LABELS } from "../permissions/labels.ts";
+import { AccountUsageBadge } from "../providers/AccountUsageBadge.tsx";
+import { useSessionIdentity } from "../providers/useSessionIdentity.ts";
 import { isWaitingForResources, presentThread } from "../threads/model.ts";
 import styles from "./AgentCard.module.css";
 import { ACTION_LABELS, availableActions, type ThreadAction } from "./data/actions.ts";
 import { fleetGroupOf } from "./data/board.ts";
-import { formatElapsed, providerName, runDurationMs } from "./data/format.ts";
+import { formatElapsed, runDurationMs } from "./data/format.ts";
 import { CommitChanges } from "./fleet/CommitChanges.tsx";
 import type { MergeReadiness } from "./fleet/fleetModel.ts";
 import { OverlapNote } from "./fleet/OverlapNote.tsx";
@@ -202,10 +204,12 @@ export const AgentCard = memo(function AgentCard({
   const agentState = agentStateOf(thread);
   const tone = ready ? "working" : (resourceWait?.tone ?? AGENT_STATE_TONE[agentState]);
   const group = fleetGroupOf(thread);
-  // The provider account the agent runs on (text, never a credential), e.g. "Claude A".
-  // SEAM(kalcode-e4): show this account's usage via useAccountUsage(thread.providerAccountId) once it lands.
-  const accountLabel = thread.accountLabel?.trim() || null;
-  const provider = thread.providerName || providerName(thread.providerId);
+  const identity = useSessionIdentity(thread);
+  // A missing binding stays visibly distinct from an unmanaged provider session. The shared
+  // account registry supplies current nicknames without a request from every Fleet card.
+  const hasAccountIdentity = Boolean(thread.providerAccountId || thread.accountLabel?.trim());
+  const accountLabel = hasAccountIdentity ? identity.accountName : null;
+  const provider = identity.providerName;
   const [confirmStop, setConfirmStop] = useState(false);
   const stopRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLButtonElement>(null);
@@ -316,6 +320,11 @@ export const AgentCard = memo(function AgentCard({
         ) : (
           <span className={styles.who}>{provider}</span>
         )}
+        {identity.account ? (
+          <span className={styles.usage} data-agent-usage>
+            <AccountUsageBadge account={identity.account} size="xs" interactive />
+          </span>
+        ) : null}
         <span className={styles.state} data-tone={archived ? "muted" : tone} data-kind="state">
           {archived ? <Archive aria-hidden="true" className={styles.stateGlyph} /> : null}
           {ready ? <GitMerge aria-hidden="true" className={styles.stateGlyph} /> : null}
@@ -384,15 +393,15 @@ export const AgentCard = memo(function AgentCard({
         </span>
       </p>
 
-      {thread.model || thread.effort || thread.branch ? (
-        <p className={styles.tech}>
-          {thread.model ? <span className={styles.model}>{thread.model}</span> : null}
-          {thread.effort ? (
-            <span className={styles.effort}>
-              <span className="visually-hidden">effort </span>
-              {thread.effort}
-            </span>
-          ) : null}
+      {identity.model.label || identity.effort.label || thread.branch ? (
+        <p className={styles.tech} title={identity.detail} data-session-identity>
+          <span className={styles.model} data-source={identity.model.source}>
+            {identity.model.label}
+          </span>
+          <span className={styles.effort} data-source={identity.effort.source}>
+            <span className="visually-hidden">reasoning </span>
+            {identity.effort.label}
+          </span>
           {thread.branch ? (
             <span
               className={styles.branch}
@@ -494,10 +503,11 @@ export const AgentCard = memo(function AgentCard({
           </div>
           <div>
             <dt>Model</dt>
-            <dd>
-              {thread.model ?? "Provider default"}
-              {thread.effort ? ` · ${thread.effort} effort` : ""}
-            </dd>
+            <dd title={identity.detail}>{identity.model.label}</dd>
+          </div>
+          <div>
+            <dt>Reasoning</dt>
+            <dd title={identity.detail}>{identity.effort.label}</dd>
           </div>
           <div>
             <dt>Runs in</dt>

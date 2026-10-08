@@ -270,11 +270,11 @@ fn capabilities_from_help(
     app_server_help: &str,
     reasoning_effort_schema: Option<config_schema::ReasoningEffortSchema>,
 ) -> CodexCapabilities {
-    let reasoning_effort_complete = reasoning_effort_schema.as_ref().is_some_and(|schema| {
-        crate::codex::argv::EFFORT_LEVELS
-            .iter()
-            .all(|effort| schema.supports(effort))
-    });
+    // `ReasoningEffortSchema::read` returns `Some` only for a bounded, structurally understood,
+    // nonempty string contract. The provider owns that contract: removing a historical KalCode
+    // token is not removal of reasoning support, and selection admission below still checks the
+    // exact retained schema before launch.
+    let reasoning_effort_available = reasoning_effort_schema.is_some();
     let reasoning_effort_values = reasoning_effort_schema
         .as_ref()
         .map(|schema| schema.sampled_values().clone())
@@ -317,7 +317,7 @@ fn capabilities_from_help(
         (interactive_model, "interactive model selection"),
         (headless_model, "headless model selection"),
         (skip_git_repo_check, "headless non-Git workspace support"),
-        (reasoning_effort_complete, "reasoning effort configuration"),
+        (reasoning_effort_available, "reasoning effort configuration"),
         #[cfg(windows)]
         (no_daemon, "no-daemon"),
     ] {
@@ -340,7 +340,7 @@ fn capabilities_from_help(
         resume: supported(resume),
         model_selection: supported(interactive_model && headless_model),
         skip_git_repo_check: supported(skip_git_repo_check),
-        reasoning_effort: supported(reasoning_effort_complete),
+        reasoning_effort: supported(reasoning_effort_available),
         reasoning_effort_values,
         reasoning_effort_schema,
         mcp: supported(has_command(root_help, "mcp")),
@@ -1338,9 +1338,9 @@ Options:
     }
 
     #[test]
-    fn future_cli_missing_a_reasoning_value_is_incompatible_before_launch() {
-        let partial = Some(config_schema::ReasoningEffortSchema::closed_for_test(&[
-            "minimal", "low", "medium", "high",
+    fn future_closed_reasoning_schema_is_authoritative_without_historical_tokens() {
+        let future = Some(config_schema::ReasoningEffortSchema::closed_for_test(&[
+            "low", "medium", "high", "ultra",
         ]));
         let found = capabilities_from_help(
             Version::parse("0.999.0").expect("version"),
@@ -1349,18 +1349,36 @@ Options:
             RESUME_HELP,
             INTERACTIVE_RESUME_HELP,
             APP_SERVER_HELP,
-            partial,
+            future,
         );
-        assert_eq!(found.reasoning_effort, CapabilitySupport::Unsupported);
+        assert_eq!(found.reasoning_effort, CapabilitySupport::Supported);
         assert!(found.supports_reasoning_effort("high"));
+        assert!(found.supports_reasoning_effort("ultra"));
         assert!(!found.supports_reasoning_effort("xhigh"));
-        assert!(!found.managed_profiles);
+        assert!(found.managed_profiles);
         assert!(
-            found
+            !found
                 .missing_required
                 .contains(&"reasoning effort configuration")
         );
-        assert_eq!(found.compatibility(), CodexCompatibility::Incompatible);
+        assert_eq!(found.compatibility(), CodexCompatibility::Compatible);
+
+        let missing = capabilities_from_help(
+            Version::parse("0.999.0").expect("version"),
+            ROOT_HELP,
+            EXEC_HELP,
+            RESUME_HELP,
+            INTERACTIVE_RESUME_HELP,
+            APP_SERVER_HELP,
+            None,
+        );
+        assert_eq!(missing.reasoning_effort, CapabilitySupport::Unsupported);
+        assert!(!missing.managed_profiles);
+        assert!(
+            missing
+                .missing_required
+                .contains(&"reasoning effort configuration")
+        );
     }
 
     #[test]

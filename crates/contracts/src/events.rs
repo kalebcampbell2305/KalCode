@@ -266,6 +266,17 @@ pub enum EventPayload {
     },
     #[serde(rename = "thread.started")]
     ThreadStarted { thread_id: String },
+    /// The runtime identity boundary for a native session or account binding. Provider-confirmed
+    /// values are exact; `None` explicitly invalidates older evidence until the provider reports.
+    #[serde(rename = "thread.runtime_identity_changed")]
+    ThreadRuntimeIdentityChanged {
+        thread_id: String,
+        provider_id: ProviderId,
+        provider_account_id: Option<String>,
+        account_label: Option<String>,
+        active_model: Option<String>,
+        active_effort: Option<String>,
+    },
     #[serde(rename = "thread.status_changed")]
     ThreadStatusChanged {
         thread_id: String,
@@ -662,6 +673,7 @@ impl EventPayload {
             Self::ProviderCapacityChanged { .. } => "provider.capacity_changed",
             Self::ThreadCreated { .. } => "thread.created",
             Self::ThreadStarted { .. } => "thread.started",
+            Self::ThreadRuntimeIdentityChanged { .. } => "thread.runtime_identity_changed",
             Self::ThreadStatusChanged { .. } => "thread.status_changed",
             Self::ThreadRenamed { .. } => "thread.renamed",
             Self::ThreadMoved { .. } => "thread.moved",
@@ -871,6 +883,14 @@ mod tests {
                 workspace_id: s(),
             },
             EventPayload::ThreadStarted { thread_id: s() },
+            EventPayload::ThreadRuntimeIdentityChanged {
+                thread_id: s(),
+                provider_id: p(),
+                provider_account_id: Some(s()),
+                account_label: Some(s()),
+                active_model: Some(s()),
+                active_effort: None,
+            },
             EventPayload::ThreadStatusChanged {
                 thread_id: s(),
                 from: ThreadStatus::Idle,
@@ -1171,7 +1191,7 @@ mod tests {
         }
         // Keep in step with the enum: the `type_name` match is exhaustive, so a new variant
         // compiles only once named there — and this count must be raised with a new sample.
-        assert_eq!(samples.len(), 83);
+        assert_eq!(samples.len(), 84);
     }
 
     #[test]

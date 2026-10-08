@@ -4,6 +4,7 @@ import type {
   OperationsSnapshot,
   ProviderAccount,
   ThreadOptions,
+  ThreadSummary,
 } from "@kalcode/protocol";
 import { ToastProvider } from "@kalcode/ui/components";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -25,6 +26,10 @@ const seams = vi.hoisted(() => ({
   snapshot: null as OperationsSnapshot | null,
   navigate: vi.fn(),
   account: null as { snapshot: { phase: AccountPhase; tier: AccountTier | null } } | null,
+  agents: [] as ThreadSummary[],
+  providerAccounts: [] as ProviderAccount[],
+  accountStates: new Map<string, { models?: unknown }>(),
+  discoverModels: vi.fn(),
 }));
 
 vi.mock("./useOperations.ts", () => ({
@@ -55,6 +60,17 @@ vi.mock("../../shell/navigation.tsx", () => ({
   useNavigation: () => ({ current: "operations", navigate: seams.navigate }),
 }));
 vi.mock("../../account/AccountProvider.tsx", () => ({ useOptionalAccount: () => seams.account }));
+vi.mock("../dashboard/data/DashboardData.tsx", () => ({
+  useCodingAgents: () => ({ state: { status: "ready", data: seams.agents } }),
+  useOptionalAllThreads: () => seams.agents,
+}));
+vi.mock("../providers/ProviderAccountSessions.tsx", () => ({
+  useOptionalProviderAccountSessions: () => ({
+    accounts: seams.providerAccounts,
+    states: seams.accountStates,
+    discoverModels: seams.discoverModels,
+  }),
+}));
 vi.mock("../squads/SquadsPanel.tsx", () => ({
   SquadsPanel: ({ workspaceId }: { workspaceId: string }) => <div>Squads for {workspaceId}</div>,
 }));
@@ -211,7 +227,264 @@ describe("OperationsPage", () => {
   beforeEach(() => {
     seams.snapshot = baseSnapshot();
     seams.account = null;
+    seams.agents = [];
+    seams.providerAccounts = [];
+    seams.accountStates = new Map();
+    seams.discoverModels.mockClear();
     vi.clearAllMocks();
+  });
+
+  it("shows a live run's provider-reported selector and current exact account nickname", async () => {
+    const run = queued("live-identity", 1);
+    run.status = "running";
+    run.startedAt = run.createdAt;
+    run.threadId = "thread-live-identity";
+    run.accountLabel = "Old nickname";
+    run.spec = {
+      ...run.spec,
+      kind: "agent",
+      providerId: "codex",
+      providerAccountId: "codex-work",
+      model: "configured/model-v1",
+      effort: "high",
+    };
+    seams.snapshot = { ...baseSnapshot(), items: [run] };
+    seams.providerAccounts = [account("codex-work", "Current nickname")];
+    seams.agents = [
+      {
+        id: run.threadId,
+        name: "Live identity",
+        providerId: "codex",
+        providerName: "Codex",
+        providerAccountId: "codex-work",
+        accountLabel: "Old nickname",
+        model: "configured/model-v1",
+        effort: "high",
+        activeModel: "provider/model-v2",
+        activeEffort: "ultra",
+      } as ThreadSummary & { activeModel: string; activeEffort: string },
+    ];
+    const client = operations();
+    vi.mocked(client.detail).mockResolvedValue({
+      run,
+      timeline: [],
+      logs: null,
+      files: [],
+      artifacts: [],
+      tests: [],
+      relatedServices: [],
+      relatedDeployments: [],
+      notes: [],
+    });
+
+    renderPage(client);
+    await userEvent.setup().click(screen.getByRole("button", { name: /^Task live-identity/ }));
+    const detail = await screen.findByRole("complementary", { name: "Run details" });
+    expect(within(detail).getByText("Runtime")).toBeVisible();
+    expect(within(detail).getByText("Codex · Current nickname · provider/model-v2 · ultra")).toBeVisible();
+    expect(within(detail).getByText("Codex · Current nickname · provider/model-v2 · ultra")).toHaveAttribute(
+      "title",
+      expect.stringContaining("Selected model: configured/model-v1"),
+    );
+  });
+
+  it("labels a queued or historical run's unconfirmed launch selectors as selected", async () => {
+    const run = queued("configured-identity", 1);
+    run.status = "succeeded";
+    run.startedAt = run.createdAt;
+    run.endedAt = run.createdAt;
+    run.accountLabel = "Work";
+    run.spec = {
+      ...run.spec,
+      kind: "agent",
+      providerId: "codex",
+      providerAccountId: "codex-work",
+      model: "configured/model-v1",
+      effort: "high",
+    };
+    seams.snapshot = { ...baseSnapshot(), items: [run] };
+    const client = operations();
+    vi.mocked(client.detail).mockResolvedValue({
+      run,
+      timeline: [],
+      logs: null,
+      files: [],
+      artifacts: [],
+      tests: [],
+      relatedServices: [],
+      relatedDeployments: [],
+      notes: [],
+    });
+
+    renderPage(client);
+    await userEvent.setup().click(screen.getByRole("button", { name: /^Task configured-identity/ }));
+    const detail = await screen.findByRole("complementary", { name: "Run details" });
+    expect(within(detail).getByText("Launch settings")).toBeVisible();
+    expect(within(detail).getByText("Codex · Work · configured/model-v1 (selected) · high (selected)")).toBeVisible();
+  });
+
+  it("keeps a completed run's observed selector when its thread is reused by a later run", async () => {
+    const run = queued("historical-identity", 1) as OperationRecord & {
+      observedProviderId?: string | null;
+      observedProviderAccountId?: string | null;
+      observedAccountLabel?: string | null;
+      observedModel?: string | null;
+      observedEffort?: string | null;
+    };
+    run.status = "succeeded";
+    run.startedAt = run.createdAt;
+    run.endedAt = run.createdAt;
+    run.threadId = "thread-reused";
+    run.observedProviderId = "codex";
+    run.observedProviderAccountId = "codex-history";
+    run.observedAccountLabel = "Old historical nickname";
+    run.observedModel = "provider/model-a";
+    run.observedEffort = "high";
+    run.spec = {
+      ...run.spec,
+      kind: "agent",
+      providerId: "codex",
+      providerAccountId: "codex-work",
+      model: "configured/model-v1",
+      effort: "medium",
+    };
+    seams.snapshot = { ...baseSnapshot(), items: [run] };
+    seams.providerAccounts = [account("codex-history", "Current historical nickname"), account("codex-work", "Work")];
+    seams.agents = [
+      {
+        id: run.threadId,
+        name: "Later run",
+        providerId: "codex",
+        providerName: "Codex",
+        providerAccountId: "codex-work",
+        accountLabel: "Work",
+        model: "configured/model-v2",
+        effort: "ultra",
+        activeModel: "provider/model-b",
+        activeEffort: "ultra",
+      } as ThreadSummary & { activeModel: string; activeEffort: string },
+    ];
+    const client = operations();
+    vi.mocked(client.detail).mockResolvedValue({
+      run,
+      timeline: [],
+      logs: null,
+      files: [],
+      artifacts: [],
+      tests: [],
+      relatedServices: [],
+      relatedDeployments: [],
+      notes: [],
+    });
+
+    renderPage(client);
+    expect(screen.getByRole("button", { name: /^Task historical-identity/ })).toHaveTextContent(
+      "provider/model-a · high",
+    );
+    expect(screen.getByRole("button", { name: /^Task historical-identity/ })).not.toHaveTextContent("provider/model-b");
+    await userEvent.setup().click(screen.getByRole("button", { name: /^Task historical-identity/ }));
+    const detail = await screen.findByRole("complementary", { name: "Run details" });
+    expect(within(detail).getByText("Observed runtime")).toBeVisible();
+    expect(within(detail).getByText("Codex · Current historical nickname · provider/model-a · high")).toBeVisible();
+  });
+
+  it("does not revive an earlier observed selector after the live thread resets it to unknown", () => {
+    const run = queued("reset-live-identity", 1);
+    run.status = "running";
+    run.startedAt = run.createdAt;
+    run.threadId = "thread-reset";
+    run.observedProviderId = "codex";
+    run.observedProviderAccountId = "codex-old";
+    run.observedModel = "provider/model-old";
+    run.observedEffort = "high";
+    run.spec = {
+      ...run.spec,
+      kind: "agent",
+      providerId: "codex",
+      providerAccountId: "codex-old",
+      model: "configured/model-old",
+      effort: "high",
+    };
+    seams.snapshot = { ...baseSnapshot(), items: [run] };
+    seams.providerAccounts = [account("codex-new", "Current account")];
+    seams.agents = [
+      {
+        id: run.threadId,
+        name: "Reset live identity",
+        providerId: "codex",
+        providerName: "Codex",
+        providerAccountId: "codex-new",
+        accountLabel: "Current account",
+        model: "configured/model-new",
+        effort: "medium",
+        activeModel: null,
+        activeEffort: null,
+      } as ThreadSummary & { activeModel: null; activeEffort: null },
+    ];
+
+    renderPage(operations());
+    const row = screen.getByRole("button", { name: /^Task reset-live-identity/ });
+    expect(row).toHaveTextContent("Codex · Current account · configured/model-new (selected) · medium (selected)");
+    expect(row).not.toHaveTextContent("provider/model-old");
+  });
+
+  it("preserves a historically observed unbound account instead of borrowing the configured account", () => {
+    const run = queued("historical-unbound", 1);
+    run.status = "succeeded";
+    run.startedAt = run.createdAt;
+    run.endedAt = run.createdAt;
+    run.observedProviderId = "codex";
+    run.observedModel = "provider/model-a";
+    run.spec = {
+      ...run.spec,
+      kind: "agent",
+      providerId: "codex",
+      providerAccountId: "codex-configured",
+      model: "configured/model-v1",
+    };
+    seams.snapshot = { ...baseSnapshot(), items: [run] };
+    seams.providerAccounts = [account("codex-configured", "Configured account")];
+
+    renderPage(operations());
+    const row = screen.getByRole("button", { name: /^Task historical-unbound/ });
+    expect(row).toHaveTextContent("Codex · Account unavailable · provider/model-a");
+    expect(row).not.toHaveTextContent("Configured account");
+  });
+
+  it("keeps durable identity on an unresolved historical turn when the thread later reports another run", () => {
+    const run = queued("unresolved-history", 1);
+    run.source = "thread";
+    run.status = "unknown";
+    run.startedAt = run.createdAt;
+    run.endedAt = null;
+    run.threadId = "thread-reused-unknown";
+    run.observedProviderId = "codex";
+    run.observedProviderAccountId = "codex-history";
+    run.observedAccountLabel = "Historical";
+    run.observedModel = "provider/model-a";
+    run.observedEffort = "high";
+    run.spec = { ...run.spec, kind: "agent", providerId: "codex" };
+    seams.snapshot = { ...baseSnapshot(), items: [run] };
+    seams.providerAccounts = [account("codex-history", "Historical")];
+    seams.agents = [
+      {
+        id: run.threadId,
+        name: "Later run",
+        providerId: "codex",
+        providerName: "Codex",
+        providerAccountId: "codex-later",
+        accountLabel: "Later",
+        model: "configured/model-b",
+        effort: "ultra",
+        activeModel: "provider/model-b",
+        activeEffort: "ultra",
+      } as ThreadSummary & { activeModel: string; activeEffort: string },
+    ];
+
+    renderPage(operations());
+    const row = screen.getByRole("button", { name: /^Task unresolved-history/ });
+    expect(row).toHaveTextContent("Codex · Historical · provider/model-a · high");
+    expect(row).not.toHaveTextContent("provider/model-b");
   });
 
   it("resumes a paused queue from its header badge", async () => {
@@ -1188,25 +1461,537 @@ describe("OperationsPage", () => {
     ).toEqual(["Provider default", "Codex 3 · Default", "Codex 1 · Not checked", "Codex 2 · Signed out", "Codex 10"]);
   });
 
+  it("uses the selected account's runtime model catalog instead of provider-wide defaults", async () => {
+    const selected = account("codex-work", "Work");
+    seams.accountStates = new Map([
+      [
+        selected.id,
+        {
+          models: {
+            status: "available",
+            source: "runtime",
+            observedAt: Date.now(),
+            reason: null,
+            items: [
+              {
+                id: "account/model-v2",
+                displayName: "Account Model V2",
+                isDefault: true,
+                defaultEffort: null,
+                supportedEfforts: [],
+              },
+            ],
+          },
+        },
+      ],
+    ]);
+    const user = userEvent.setup();
+    render(
+      <ToastProvider>
+        <OperationsPage
+          client={operations()}
+          threadOptions={async () => options}
+          providerAccounts={async () => [selected]}
+        />
+      </ToastProvider>,
+    );
+
+    await user.click(screen.getByRole("tab", { name: "Queue" }));
+    await user.click(screen.getByRole("button", { name: "New task" }));
+    await user.selectOptions(screen.getByRole("combobox", { name: "Kind" }), "agent");
+    await user.selectOptions(await screen.findByRole("combobox", { name: "Provider" }), "codex");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Account" }), selected.id);
+    const model = screen.getByRole("combobox", { name: "Model" });
+    expect(within(model).getByRole("option", { name: "Account Model V2 · account/model-v2" })).toBeVisible();
+    expect(within(model).queryByRole("option", { name: "GPT-6" })).toBeNull();
+  });
+
+  it("describes provider default as provider-controlled when account discovery fails", async () => {
+    const selected = account("codex-work", "Work");
+    seams.accountStates = new Map([
+      [
+        selected.id,
+        {
+          models: {
+            status: "unavailable",
+            source: "runtime",
+            observedAt: null,
+            reason: null,
+            items: [],
+          },
+        },
+      ],
+    ]);
+    const user = userEvent.setup();
+    render(
+      <ToastProvider>
+        <OperationsPage
+          client={operations()}
+          threadOptions={async () => options}
+          providerAccounts={async () => [selected]}
+        />
+      </ToastProvider>,
+    );
+
+    await user.click(screen.getByRole("tab", { name: "Queue" }));
+    await user.click(screen.getByRole("button", { name: "New task" }));
+    await user.selectOptions(screen.getByRole("combobox", { name: "Kind" }), "agent");
+    await user.selectOptions(await screen.findByRole("combobox", { name: "Provider" }), "codex");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Account" }), selected.id);
+    expect(screen.getByText("Exact models are unavailable. Provider default lets the provider choose.")).toBeVisible();
+    expect(screen.queryByText(/Provider default remains available/i)).not.toBeInTheDocument();
+  });
+
+  it("persists the exact account model and effort selected for an agent task", async () => {
+    const selected = account("codex-work", "Work");
+    seams.accountStates = new Map([
+      [
+        selected.id,
+        {
+          models: {
+            status: "available",
+            source: "runtime",
+            observedAt: Date.now(),
+            reason: null,
+            supportedEfforts: ["medium", "high"],
+            items: [
+              {
+                id: "account/model-v2",
+                displayName: "Account Model V2",
+                isDefault: true,
+                defaultEffort: "medium",
+                supportedEfforts: ["medium", "high"],
+              },
+            ],
+          },
+        },
+      ],
+    ]);
+    const client = operations();
+    vi.mocked(client.enqueue).mockResolvedValue(queued("created", 3));
+    const user = userEvent.setup();
+    render(
+      <ToastProvider>
+        <OperationsPage client={client} threadOptions={async () => options} providerAccounts={async () => [selected]} />
+      </ToastProvider>,
+    );
+
+    await user.click(screen.getByRole("tab", { name: "Queue" }));
+    await user.click(screen.getByRole("button", { name: "New task" }));
+    await user.type(screen.getByRole("textbox", { name: "Name" }), "Inspect runtime");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Kind" }), "agent");
+    await user.selectOptions(await screen.findByRole("combobox", { name: "Provider" }), "codex");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Account" }), selected.id);
+    const model = screen.getByRole("combobox", { name: "Model" });
+    expect(within(model).getByRole("option", { name: "Account Model V2 · account/model-v2" })).toBeVisible();
+    await user.selectOptions(model, "account/model-v2");
+    const effort = screen.getByRole("combobox", { name: "Effort" });
+    expect(effort).toHaveValue("medium");
+    await user.selectOptions(effort, "high");
+    await user.type(screen.getByRole("textbox", { name: "Prompt" }), "Inspect the runtime");
+    await user.click(screen.getByRole("button", { name: "Add to queue" }));
+
+    await waitFor(() => expect(client.enqueue).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(client.enqueue).mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        providerId: "codex",
+        providerAccountId: selected.id,
+        model: "account/model-v2",
+        effort: "high",
+      }),
+    );
+  });
+
+  it("preserves a saved exact effort while account model metadata is stale", async () => {
+    const selected = account("codex-work", "Work");
+    const pending = queued("stale-effort", 1);
+    pending.spec = {
+      ...pending.spec,
+      kind: "agent",
+      prompt: "Continue",
+      command: null,
+      providerId: "codex",
+      providerAccountId: selected.id,
+      model: "saved/model-v1",
+      effort: "future-fast",
+    };
+    seams.snapshot = { ...baseSnapshot(), items: [pending] };
+    seams.accountStates = new Map([
+      [
+        selected.id,
+        {
+          models: {
+            status: "stale",
+            source: "runtime",
+            observedAt: 1,
+            reason: "Model availability may have changed. Refresh models to check.",
+            supportedEfforts: [],
+            items: [],
+          },
+        },
+      ],
+    ]);
+    const client = operations();
+    vi.mocked(client.update).mockResolvedValue(pending);
+    const user = userEvent.setup();
+    render(
+      <ToastProvider>
+        <OperationsPage client={client} threadOptions={async () => options} providerAccounts={async () => [selected]} />
+      </ToastProvider>,
+    );
+
+    await user.click(screen.getByRole("tab", { name: "Queue" }));
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    const effort = await screen.findByRole("combobox", { name: "Effort" });
+    expect(effort).toBeEnabled();
+    expect(effort).toHaveValue("future-fast");
+    await user.click(screen.getByRole("button", { name: "Save task" }));
+
+    await waitFor(() => expect(client.update).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(client.update).mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({ model: "saved/model-v1", effort: "future-fast" }),
+    );
+  });
+
+  it("preserves a saved exact effort when fresh runtime metadata omits effort capabilities", async () => {
+    const selected = account("codex-work", "Work");
+    const pending = queued("unknown-effort-capability", 1);
+    pending.spec = {
+      ...pending.spec,
+      kind: "agent",
+      prompt: "Continue",
+      command: null,
+      providerId: "codex",
+      providerAccountId: selected.id,
+      model: "account/model-v2",
+      effort: "future-fast",
+    };
+    seams.snapshot = { ...baseSnapshot(), items: [pending] };
+    seams.accountStates = new Map([
+      [
+        selected.id,
+        {
+          models: {
+            status: "available",
+            source: "runtime",
+            observedAt: Date.now(),
+            reason: null,
+            items: [
+              {
+                id: "account/model-v2",
+                displayName: "Account Model V2",
+                isDefault: true,
+                defaultEffort: null,
+              },
+            ],
+          },
+        },
+      ],
+    ]);
+    const client = operations();
+    vi.mocked(client.update).mockResolvedValue(pending);
+    const user = userEvent.setup();
+    render(
+      <ToastProvider>
+        <OperationsPage client={client} threadOptions={async () => options} providerAccounts={async () => [selected]} />
+      </ToastProvider>,
+    );
+
+    await user.click(screen.getByRole("tab", { name: "Queue" }));
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    const effort = await screen.findByRole("combobox", { name: "Effort" });
+    expect(effort).toHaveValue("future-fast");
+    expect(screen.queryByText(/This effort is unavailable/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save task" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Save task" }));
+
+    await waitFor(() => expect(client.update).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(client.update).mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({ model: "account/model-v2", effort: "future-fast" }),
+    );
+  });
+
+  it.each([
+    ["preserves", undefined, false],
+    ["rejects", [] as readonly string[], true],
+  ] as const)(
+    "%s a saved effort for Provider default according to its fresh default-model metadata",
+    async (_behavior, supportedEfforts, unavailable) => {
+      const selected = account("codex-work", "Work");
+      const pending = queued(`default-model-effort-${unavailable ? "unsupported" : "unknown"}`, 1);
+      pending.spec = {
+        ...pending.spec,
+        kind: "agent",
+        prompt: "Continue",
+        command: null,
+        providerId: "codex",
+        providerAccountId: selected.id,
+        model: null,
+        effort: "future-fast",
+      };
+      seams.snapshot = { ...baseSnapshot(), items: [pending] };
+      seams.accountStates = new Map([
+        [
+          selected.id,
+          {
+            models: {
+              status: "available",
+              source: "runtime",
+              observedAt: Date.now(),
+              reason: null,
+              items: [
+                {
+                  id: "account/default-v2",
+                  displayName: "Account Default V2",
+                  isDefault: true,
+                  defaultEffort: null,
+                  ...(supportedEfforts === undefined ? {} : { supportedEfforts }),
+                },
+              ],
+            },
+          },
+        ],
+      ]);
+      const client = operations();
+      vi.mocked(client.update).mockResolvedValue(pending);
+      const user = userEvent.setup();
+      render(
+        <ToastProvider>
+          <OperationsPage
+            client={client}
+            threadOptions={async () => options}
+            providerAccounts={async () => [selected]}
+          />
+        </ToastProvider>,
+      );
+
+      await user.click(screen.getByRole("tab", { name: "Queue" }));
+      await user.click(screen.getByRole("button", { name: "Edit" }));
+      expect(await screen.findByRole("combobox", { name: "Model" })).toHaveValue("");
+      expect(screen.getByRole("combobox", { name: "Effort" })).toHaveValue("future-fast");
+      const save = screen.getByRole("button", { name: "Save task" });
+      if (unavailable) {
+        expect(
+          screen.getByText(/This effort is unavailable for Account Default V2 · account\/default-v2/i),
+        ).toBeVisible();
+        expect(save).toBeDisabled();
+        expect(client.update).not.toHaveBeenCalled();
+      } else {
+        expect(screen.queryByText(/This effort is unavailable/i)).not.toBeInTheDocument();
+        expect(save).toBeEnabled();
+        await user.click(save);
+        await waitFor(() => expect(client.update).toHaveBeenCalledTimes(1));
+        expect(vi.mocked(client.update).mock.calls[0]?.[1]).toEqual(
+          expect.objectContaining({ model: null, effort: "future-fast" }),
+        );
+      }
+    },
+  );
+
+  it("blocks only an effort that fresh runtime metadata proves unavailable", async () => {
+    const selected = account("codex-work", "Work");
+    const pending = queued("missing-effort", 1);
+    pending.spec = {
+      ...pending.spec,
+      kind: "agent",
+      prompt: "Continue",
+      command: null,
+      providerId: "codex",
+      providerAccountId: selected.id,
+      model: "account/model-v2",
+      effort: "future-fast",
+    };
+    seams.snapshot = { ...baseSnapshot(), items: [pending] };
+    seams.accountStates = new Map([
+      [
+        selected.id,
+        {
+          models: {
+            status: "available",
+            source: "runtime",
+            observedAt: Date.now(),
+            reason: null,
+            supportedEfforts: [],
+            items: [
+              {
+                id: "account/model-v2",
+                displayName: "Account Model V2",
+                isDefault: true,
+                defaultEffort: null,
+                supportedEfforts: [],
+              },
+            ],
+          },
+        },
+      ],
+    ]);
+    const user = userEvent.setup();
+    render(
+      <ToastProvider>
+        <OperationsPage
+          client={operations()}
+          threadOptions={async () => options}
+          providerAccounts={async () => [selected]}
+        />
+      </ToastProvider>,
+    );
+
+    await user.click(screen.getByRole("tab", { name: "Queue" }));
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    expect(
+      await screen.findByText(/This effort is unavailable for Account Model V2 · account\/model-v2/i),
+    ).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "Effort" })).toHaveValue("future-fast");
+    expect(screen.getByRole("button", { name: "Save task" })).toBeDisabled();
+  });
+
+  it("keeps a stale exact model visible and refreshes only when its selector is focused", async () => {
+    const selected = account("codex-work", "Work");
+    const pending = queued("stale-model", 1);
+    pending.spec = {
+      ...pending.spec,
+      kind: "agent",
+      prompt: "Continue",
+      command: null,
+      providerId: "codex",
+      providerAccountId: selected.id,
+      model: "saved/model-v1",
+    };
+    pending.accountLabel = "Work";
+    seams.snapshot = { ...baseSnapshot(), items: [pending] };
+    seams.accountStates = new Map([
+      [
+        selected.id,
+        {
+          models: {
+            status: "stale",
+            source: "runtime",
+            observedAt: 1,
+            reason: "Model availability may have changed. Refresh models to check.",
+            items: [],
+          },
+        },
+      ],
+    ]);
+    const user = userEvent.setup();
+    render(
+      <ToastProvider>
+        <OperationsPage
+          client={operations()}
+          threadOptions={async () => options}
+          providerAccounts={async () => [selected]}
+        />
+      </ToastProvider>,
+    );
+
+    await user.click(screen.getByRole("tab", { name: "Queue" }));
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    const model = await screen.findByRole("combobox", { name: "Model" });
+    expect(model).toHaveValue("saved/model-v1");
+    expect(within(model).getByRole("option", { name: "saved/model-v1" })).toBeVisible();
+    expect(screen.getByText(/Model availability may have changed/)).toBeVisible();
+    expect(seams.discoverModels).not.toHaveBeenCalled();
+    fireEvent.focus(model);
+    expect(seams.discoverModels).toHaveBeenCalledExactlyOnceWith(selected.id);
+  });
+
+  it("requires a compatible choice only when fresh runtime discovery disproves the saved model", async () => {
+    const selected = account("codex-work", "Work");
+    const pending = queued("missing-model", 1);
+    pending.spec = {
+      ...pending.spec,
+      kind: "agent",
+      prompt: "Continue",
+      command: null,
+      providerId: "codex",
+      providerAccountId: selected.id,
+      model: "saved/model-v1",
+    };
+    pending.accountLabel = "Work";
+    seams.snapshot = { ...baseSnapshot(), items: [pending] };
+    seams.accountStates = new Map([
+      [
+        selected.id,
+        {
+          models: {
+            status: "available",
+            source: "runtime",
+            observedAt: Date.now(),
+            reason: null,
+            items: [
+              {
+                id: "account/model-v2",
+                displayName: "Account Model V2",
+                isDefault: true,
+                defaultEffort: null,
+                supportedEfforts: [],
+              },
+            ],
+          },
+        },
+      ],
+    ]);
+    const user = userEvent.setup();
+    render(
+      <ToastProvider>
+        <OperationsPage
+          client={operations()}
+          threadOptions={async () => options}
+          providerAccounts={async () => [selected]}
+        />
+      </ToastProvider>,
+    );
+
+    await user.click(screen.getByRole("tab", { name: "Queue" }));
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    expect(await screen.findByText(/exact model is unavailable for the selected account/i)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Save task" })).toBeDisabled();
+  });
+
   it("names a bound account as provider and account in Queue and Runs", async () => {
     const pending = queued("bound", 1);
-    pending.spec = { ...pending.spec, kind: "agent", providerId: "claude-code", providerAccountId: "a-work" };
+    pending.spec = {
+      ...pending.spec,
+      kind: "agent",
+      providerId: "claude-code",
+      providerAccountId: "a-work",
+      model: "claude-opus-4-1",
+      effort: "high",
+    };
     pending.accountLabel = "Work";
     const run = queued("bound-run", 2);
     run.status = "succeeded";
     run.startedAt = "2026-09-30T12:00:00Z";
-    run.spec = { ...run.spec, name: "Bound run", kind: "agent", providerId: "codex", providerAccountId: "a-2" };
+    run.spec = {
+      ...run.spec,
+      name: "Bound run",
+      kind: "agent",
+      providerId: "codex",
+      providerAccountId: "a-2",
+      model: "gpt-6.1-sol",
+      effort: "xhigh",
+    };
     run.accountLabel = "Codex 2";
     seams.snapshot = { ...baseSnapshot(), items: [pending, run] };
+    seams.providerAccounts = [
+      account("a-work", "Current work", { providerId: "claude-code" }),
+      account("a-2", "Current 2"),
+    ];
     const client = operations();
     vi.mocked(client.detail).mockReturnValue(new Promise(() => undefined));
     const user = userEvent.setup();
     renderPage(client);
 
-    expect(screen.getByRole("button", { name: /^Bound run/ })).toHaveTextContent("KalCode · main · Codex · Codex 2");
+    expect(screen.getByRole("button", { name: /^Bound run/ })).toHaveTextContent(
+      "KalCode · main · Codex · Current 2 · gpt-6.1-sol (selected) · xhigh (selected)",
+    );
     await user.click(screen.getByRole("tab", { name: "Queue" }));
     const pendingList = screen.getByRole("list", { name: "Pending tasks" });
-    expect(within(pendingList).getByText("Agent · KalCode · Claude Code · Work · Priority 0")).toBeVisible();
+    expect(
+      within(pendingList).getByText(
+        "Agent · KalCode · Claude Code · Current work · claude-opus-4-1 (selected) · high (selected) · Priority 0",
+      ),
+    ).toBeVisible();
   });
 });
 

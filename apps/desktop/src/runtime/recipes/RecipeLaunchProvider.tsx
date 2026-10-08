@@ -17,7 +17,13 @@ import { useNavigation } from "../../shell/navigation.tsx";
 import type { BuiltinPreset } from "../../shell/panes/model.ts";
 import { activateAndDispatchPaneCommand, type PaneCommandResult } from "../../shell/panes/paneCommands.ts";
 import { browserContent } from "../../surfaces/browser/browserModel.ts";
-import { launchAccounts, preselectLaunchAccount, readLaunchMemory } from "../../surfaces/code/panes/agentLaunch.ts";
+import {
+  type LaunchMemory,
+  launchAccounts,
+  readLaunchMemory,
+  rememberedLaunch,
+  resolveLaunchAccount,
+} from "../../surfaces/code/panes/agentLaunch.ts";
 import {
   isPaneProvider,
   PANE_PROVIDERS,
@@ -151,6 +157,21 @@ const sleep = (ms: number, signal: AbortSignal) =>
     }, ms);
     signal.addEventListener("abort", onAbort, { once: true });
   });
+
+/** Resolve an implicit Recipe account inside the Recipe's own project identity boundary. */
+export function resolveRecipeDefaultAccount(
+  accounts: readonly ProviderAccount[],
+  bindings: readonly ProviderAccountBinding[] | null,
+  memory: LaunchMemory,
+  providerId: string,
+  workspaceId: string | null,
+): ProviderAccount | null {
+  if (!workspaceId || !isPaneProvider(providerId)) return null;
+  const candidates = launchAccounts(accounts, providerId);
+  const remembered = rememberedLaunch(memory, workspaceId, providerId);
+  const accountId = resolveLaunchAccount(accounts, bindings, providerId, workspaceId, remembered);
+  return candidates.find((account) => account.id === accountId) ?? null;
+}
 
 export function RecipesProvider({ children }: { children: ReactNode }) {
   const { client } = useRuntime();
@@ -317,40 +338,38 @@ export function RecipesProvider({ children }: { children: ReactNode }) {
   const live = useRef({ workspaces, navigation });
   live.current = { workspaces, navigation };
 
-  const loadEnvironment = useCallback(async (): Promise<RecipeEnvironment> => {
-    const [workspaceList, accounts, providers, bindings, squads] = await Promise.all([
-      client.listWorkspaces(),
-      client.listProviderAccounts(),
-      client.listProviders().catch(() => [] as ProviderStatus[]),
-      client.listProviderAccountBindings().catch(() => [] as ProviderAccountBinding[]),
-      client.squads.snapshot().catch(() => null),
-    ]);
-    const activeWorkspaceId = live.current.workspaces.active?.id ?? null;
-    // Capability check at runtime: a provider joins once its adapter runs interactively.
-    // A provider KalCode lists only as "planned" (no working adapter, no interactive support) can't
-    // start; every implemented pane provider can, including ones added after this Recipe was saved.
-    const capable = new Set(
-      providers.filter((p) => p.capabilities.interactive || p.adapter === "implemented").map((p) => p.id as string),
-    );
-    const listed = new Set(providers.map((p) => p.id as string));
-    const agentProviders = PANE_PROVIDERS.filter((id) => !listed.has(id) || capable.has(id));
-    const memory = readLaunchMemory();
-    return {
-      activeWorkspaceId,
-      workspaces: workspaceList,
-      accounts,
-      agentProviders,
-      squadIds: squads ? new Set(squads.squads.map((squad) => squad.id)) : null,
-      defaultAccount: (providerId) => {
-        const candidates = launchAccounts(accounts, providerId);
-        const remembered = isPaneProvider(providerId) ? memory.byProvider[providerId]?.accountId : undefined;
-        const id =
-          (remembered && candidates.some((a) => a.id === remembered) ? remembered : null) ??
-          (activeWorkspaceId ? preselectLaunchAccount(accounts, bindings, providerId, activeWorkspaceId) : null);
-        return candidates.find((a) => a.id === id) ?? null;
-      },
-    };
-  }, [client]);
+  const loadEnvironment = useCallback(
+    async (recipeWorkspaceId: string | null): Promise<RecipeEnvironment> => {
+      const [workspaceList, accounts, providers, bindings, squads] = await Promise.all([
+        client.listWorkspaces(),
+        client.listProviderAccounts(),
+        client.listProviders().catch(() => [] as ProviderStatus[]),
+        client.listProviderAccountBindings(),
+        client.squads.snapshot().catch(() => null),
+      ]);
+      const activeWorkspaceId = live.current.workspaces.active?.id ?? null;
+      const targetWorkspaceId = recipeWorkspaceId ?? activeWorkspaceId;
+      // Capability check at runtime: a provider joins once its adapter runs interactively.
+      // A provider KalCode lists only as "planned" (no working adapter, no interactive support) can't
+      // start; every implemented pane provider can, including ones added after this Recipe was saved.
+      const capable = new Set(
+        providers.filter((p) => p.capabilities.interactive || p.adapter === "implemented").map((p) => p.id as string),
+      );
+      const listed = new Set(providers.map((p) => p.id as string));
+      const agentProviders = PANE_PROVIDERS.filter((id) => !listed.has(id) || capable.has(id));
+      const memory = readLaunchMemory();
+      return {
+        activeWorkspaceId,
+        workspaces: workspaceList,
+        accounts,
+        agentProviders,
+        squadIds: squads ? new Set(squads.squads.map((squad) => squad.id)) : null,
+        defaultAccount: (providerId) =>
+          resolveRecipeDefaultAccount(accounts, bindings, memory, providerId, targetWorkspaceId),
+      };
+    },
+    [client],
+  );
 
   const ports = useMemo<RecipePorts>(
     () => ({
@@ -595,7 +614,7 @@ ${thread.providerAccountId}`;
       setPhase({ kind: "preparing", recipeName: recipe.name });
       let environment: RecipeEnvironment;
       try {
-        environment = await loadEnvironment();
+        environment = await loadEnvironment(recipe.workspaceId);
       } catch (cause) {
         if (cancelled()) return { ok: false, message: "Launch cancelled.", launched: true };
         setPhase({ kind: "idle" });
@@ -667,7 +686,7 @@ ${thread.providerAccountId}`;
   const refreshEnvironment = useCallback(async () => {
     const current = phaseRef.current;
     if (current.kind !== "review") return;
-    const environment = await loadEnvironment();
+    const environment = await loadEnvironment(current.preflight.recipe.workspaceId);
     setEnv(environment);
     const latest = phaseRef.current;
     if (latest.kind !== "review") return;

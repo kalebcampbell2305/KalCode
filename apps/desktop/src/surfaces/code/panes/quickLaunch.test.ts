@@ -1,6 +1,6 @@
-import type { ModelInfo, ProviderAccount, ProviderAccountBinding } from "@kalcode/protocol";
+import type { ProviderAccount, ProviderAccountBinding } from "@kalcode/protocol";
 import { describe, expect, it } from "vitest";
-import type { LaunchMemory, RememberedLaunch } from "./agentLaunch.ts";
+import type { LaunchMemory, ModelEffortInfo, RememberedLaunch } from "./agentLaunch.ts";
 import type { PaneProviderId } from "./paneChannel.ts";
 import { type QuickLaunchContext, resolveQuickLaunch } from "./quickLaunch.ts";
 
@@ -31,14 +31,32 @@ const remembered = (partial: Partial<RememberedLaunch> = {}): RememberedLaunch =
 const memoryOf = (...entries: RememberedLaunch[]): LaunchMemory => ({
   last: entries.at(-1) ?? null,
   byProvider: Object.fromEntries(entries.map((e) => [e.providerId, e])),
+  byContext: Object.fromEntries(entries.map((e, index) => [String(index), e])),
 });
 
-const MODELS: Record<string, ModelInfo[]> = {
+const MODELS: Record<string, ModelEffortInfo[]> = {
   "claude-code": [
-    { id: "claude-opus-5-5", displayName: "Opus 5.5", isDefault: true },
-    { id: "claude-sonnet-5-5", displayName: "Sonnet 5.5", isDefault: false },
+    {
+      id: "claude-opus-5-5",
+      displayName: "Opus 5.5",
+      isDefault: true,
+      supportedEfforts: ["low", "medium", "high", "xhigh", "max"],
+    },
+    {
+      id: "claude-sonnet-5-5",
+      displayName: "Sonnet 5.5",
+      isDefault: false,
+      supportedEfforts: ["low", "medium", "high", "xhigh", "max"],
+    },
   ],
-  codex: [{ id: "gpt-6-codex", displayName: "GPT-6 Codex", isDefault: true }],
+  codex: [
+    {
+      id: "gpt-6-codex",
+      displayName: "GPT-6 Codex",
+      isDefault: true,
+      supportedEfforts: ["minimal", "low", "medium", "high", "xhigh"],
+    },
+  ],
 };
 
 function context(partial: Partial<QuickLaunchContext> = {}): QuickLaunchContext {
@@ -60,7 +78,7 @@ describe("one-click New agent", () => {
     expect(result).toEqual({
       kind: "ready",
       spec: { providerId: "claude-code", count: 1, providerAccountId: "work", model: null, effort: null },
-      summary: "Claude Code · work · Opus 5.5",
+      summary: "Claude Code · work · Opus 5.5 · claude-opus-5-5",
     });
   });
 
@@ -79,7 +97,36 @@ describe("one-click New agent", () => {
       model: "claude-sonnet-5-5",
       effort: "xhigh",
     });
-    expect(result.summary).toBe("Claude Code · personal · Sonnet 5.5 · Extra high");
+    expect(result.summary).toBe("Claude Code · personal · Sonnet 5.5 · claude-sonnet-5-5 · Extra high");
+  });
+
+  it("uses only the exact project's account-specific model and effort preference", () => {
+    const ctx = context({
+      accounts: [account("work"), account("personal")],
+      memory: memoryOf(
+        remembered({
+          workspaceId: "other-project",
+          accountId: "work",
+          model: "claude-opus-5-5",
+          effort: "high",
+        }),
+        remembered({ accountId: "personal", model: "claude-sonnet-5-5", effort: "xhigh" }),
+      ),
+    });
+
+    const result = resolveQuickLaunch(ctx);
+    expect(result.kind === "ready" && result.spec).toMatchObject({
+      providerAccountId: "personal",
+      model: "claude-sonnet-5-5",
+      effort: "xhigh",
+    });
+  });
+
+  it("keeps an explicitly selected model id even when the account reports it as default", () => {
+    const result = resolveQuickLaunch(
+      context({ memory: memoryOf(remembered({ model: "claude-opus-5-5", modelName: "Opus 5.5" })) }),
+    );
+    expect(result.kind === "ready" && result.spec.model).toBe("claude-opus-5-5");
   });
 
   it("starts an explicit count of an explicit provider", () => {
@@ -92,7 +139,7 @@ describe("one-click New agent", () => {
       model: null,
       effort: null,
     });
-    expect(result.kind === "ready" && result.summary).toBe("6 × Codex · cx · GPT-6 Codex");
+    expect(result.kind === "ready" && result.summary).toBe("6 × Codex · cx · GPT-6 Codex · gpt-6-codex");
   });
 
   it("never guesses between several accounts", () => {
@@ -131,24 +178,149 @@ describe("one-click New agent", () => {
     });
   });
 
+  it.each([
+    ["removed", [account("personal", { isDefault: true })]],
+    ["archived", [account("work", { archivedAt: "2026-10-07T12:00:00Z" }), account("personal", { isDefault: true })]],
+  ])("asks for an account when the remembered account was %s instead of switching identities", (_state, accounts) => {
+    const ctx = context({ accounts, memory: memoryOf(remembered({ accountId: "work" })) });
+    expect(resolveQuickLaunch(ctx)).toEqual({
+      kind: "choose",
+      providerId: "claude-code",
+      reason: "The saved Claude Code account is no longer available. Choose another account.",
+    });
+  });
+
   it("asks when the remembered model is no longer offered, or the models aren't known yet", () => {
     const gone = context({
       memory: memoryOf(remembered({ model: "claude-retired-1", modelName: "Retired 1" })),
     });
     expect(resolveQuickLaunch(gone)).toMatchObject({
       kind: "choose",
-      reason: "Retired 1 isn't offered by this account any more.",
+      reason: "Retired 1 · claude-retired-1 isn't offered by this account any more.",
     });
     const unknown = context({ memory: memoryOf(remembered({ model: "claude-sonnet-5-5" })), modelsOf: () => null });
     expect(resolveQuickLaunch(unknown).kind).toBe("choose");
-    // The default model needs no list.
-    expect(resolveQuickLaunch(context({ modelsOf: () => null })).kind).toBe("ready");
+    expect(resolveQuickLaunch(context({ modelsOf: () => null }))).toMatchObject({
+      kind: "choose",
+      reason: "Checking which Claude Code models this account offers.",
+    });
   });
 
-  it("drops an effort the provider doesn't accept", () => {
-    const ctx = context({ memory: memoryOf(remembered({ effort: "ludicrous" })) });
-    const result = resolveQuickLaunch(ctx);
-    expect(result.kind === "ready" && result.spec.effort).toBeNull();
+  it("opens the chooser when the exact model no longer accepts the remembered effort", () => {
+    const ctx = context({
+      memory: memoryOf(remembered({ model: "claude-opus-5-5", effort: "high" })),
+      modelsOf: () => [
+        {
+          id: "claude-opus-5-5",
+          displayName: "Opus 5.5",
+          isDefault: true,
+          supportedEfforts: [],
+        },
+      ],
+    });
+    expect(resolveQuickLaunch(ctx)).toMatchObject({
+      kind: "choose",
+      reason: "High effort isn't available for Opus 5.5 · claude-opus-5-5.",
+    });
+  });
+
+  it("preserves an exact remembered model when a documented alias list cannot verify its absence", () => {
+    const exact = "custom/provider-model-v9";
+    const result = resolveQuickLaunch(
+      context({
+        memory: memoryOf(remembered({ model: exact, modelName: exact, effort: "future" })),
+        modelCatalogOf: () => ({
+          models: MODELS["claude-code"] ?? [],
+          source: "documented_aliases",
+          supportedEfforts: ["medium"],
+        }),
+      }),
+    );
+    expect(result.kind === "ready" && result.spec).toMatchObject({ model: exact, effort: "future" });
+  });
+
+  it("uses catalog effort fallback including an explicitly empty capability", () => {
+    const result = resolveQuickLaunch(
+      context({
+        memory: memoryOf(remembered({ model: "claude-opus-5-5", effort: "high" })),
+        modelCatalogOf: () => ({
+          models: [{ id: "claude-opus-5-5", displayName: "Opus 5.5", isDefault: true }],
+          source: "runtime",
+          status: "available",
+          supportedEfforts: [],
+        }),
+      }),
+    );
+    expect(result).toMatchObject({
+      kind: "choose",
+      reason: "High effort isn't available for Opus 5.5 · claude-opus-5-5.",
+    });
+  });
+
+  it("preserves an exact effort when a fresh runtime catalog has no effort metadata", () => {
+    const result = resolveQuickLaunch(
+      context({
+        memory: memoryOf(remembered({ model: "claude-opus-5-5", effort: "future" })),
+        modelCatalogOf: () => ({
+          models: [{ id: "claude-opus-5-5", displayName: "Opus 5.5", isDefault: true }],
+          source: "runtime",
+          status: "available",
+        }),
+      }),
+    );
+    expect(result.kind === "ready" && result.spec).toMatchObject({
+      model: "claude-opus-5-5",
+      effort: "future",
+    });
+  });
+
+  it("launches the provider default when the adapter reports models are not discoverable", () => {
+    const result = resolveQuickLaunch(
+      context({
+        modelCatalogOf: () => ({ models: null, source: "not_discoverable", supportedEfforts: [] }),
+      }),
+    );
+    expect(result.kind === "ready" && result.spec).toMatchObject({ model: null, effort: null });
+  });
+
+  it.each(["stale", "checking"] as const)("preserves exact choices while a runtime catalog is %s", (status) => {
+    const exact = "provider/model-from-last-refresh";
+    const result = resolveQuickLaunch(
+      context({
+        memory: memoryOf(remembered({ model: exact, modelName: exact, effort: "future" })),
+        modelCatalogOf: () => ({
+          models: MODELS["claude-code"] ?? [],
+          source: "runtime",
+          status,
+          supportedEfforts: ["low"],
+        }),
+      }),
+    );
+    expect(result.kind === "ready" && result.spec).toMatchObject({ model: exact, effort: "future" });
+  });
+
+  it("rejects a disappeared effort only from a fresh runtime account catalog", () => {
+    const result = resolveQuickLaunch(
+      context({
+        memory: memoryOf(remembered({ model: "claude-opus-5-5", effort: "future" })),
+        modelCatalogOf: () => ({
+          models: [
+            {
+              id: "claude-opus-5-5",
+              displayName: "Opus 5.5",
+              isDefault: true,
+              supportedEfforts: ["low"],
+            },
+          ],
+          source: "runtime",
+          status: "available",
+        }),
+      }),
+    );
+    expect(result).toMatchObject({
+      kind: "choose",
+      reason: "Future effort isn't available for Opus 5.5 · claude-opus-5-5.",
+    });
   });
 
   it("asks for an account when a provider has none, and refuses providers this build can't run", () => {
@@ -162,7 +334,7 @@ describe("one-click New agent", () => {
     expect(resolveQuickLaunch(context(), { providerId: "gemini-cli" })).not.toHaveProperty("providerId");
   });
 
-  it("never launches Cursor before its account's models are known", () => {
+  it("never launches any provider before its account's models are known", () => {
     const ctx = context({ accounts: [account("cur", { providerId: "cursor" })], modelsOf: () => null });
     expect(resolveQuickLaunch(ctx, { providerId: "cursor" })).toMatchObject({ kind: "choose", providerId: "cursor" });
   });

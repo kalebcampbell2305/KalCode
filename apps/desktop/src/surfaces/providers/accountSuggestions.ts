@@ -9,6 +9,7 @@ import {
   windowAppliesToModel,
 } from "./accountUsage.ts";
 import { USAGE_STALE_AFTER_MS } from "./accountUsageReader.ts";
+import { sessionIdentity } from "./sessionIdentity.ts";
 
 /** A mismatched response must never borrow another account's usage or plan. */
 export function usageForAccount(usage: ReadonlyMap<string, AccountUsageState>, accountId: string): AccountUsageState {
@@ -57,7 +58,8 @@ export function suggestAccounts(
 ): AccountSuggestion | null {
   if (!thread.providerAccountId || thread.archivedAt !== null || thread.permissionMode === "custom") return null;
   const current = accounts.find((account) => account.id === thread.providerAccountId);
-  const window = currentWindow(usageForAccount(usage, thread.providerAccountId), thread.model, now);
+  const model = sessionIdentity(thread, accounts).model.value;
+  const window = currentWindow(usageForAccount(usage, thread.providerAccountId), model, now);
   // A native provider can report a failed turn without exposing numeric quota. Do not infer
   // account limits from prose or retain a previous turn's failure after work has resumed.
   const failure =
@@ -99,7 +101,7 @@ export function suggestAccounts(
       account.authenticationState !== "authenticated"
     )
       continue;
-    const available = currentWindow(usageForAccount(usage, account.id), thread.model, now);
+    const available = currentWindow(usageForAccount(usage, account.id), model, now);
     if (available && available.remainingPercent < LOW_USAGE_PERCENT) continue;
     alternatives.push({
       account,

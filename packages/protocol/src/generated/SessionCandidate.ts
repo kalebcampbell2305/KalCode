@@ -10,8 +10,25 @@ export type SessionCandidate = { threadId: string, name: string, providerId: Pro
 /**
  * The thread's provider-account label ("Gemini B"); `null` for threads without one.
  */
-accountLabel: string | null, workspaceId: string, workspaceName: string, status: ThreadStatus,
+accountLabel: string | null,
 /**
- * "Name · Provider · Account" (the account part is left out when the thread has none).
+ * Exact launch-time model selection. This is configuration, not proof of the active model.
+ */
+model?: string,
+/**
+ * Provider-reported active model when the runtime exposes it.
+ */
+activeModel?: string,
+/**
+ * Exact launch-time reasoning selection. This is configuration, not proof of active effort.
+ */
+effort?: string,
+/**
+ * Provider-reported active reasoning effort when the runtime exposes it.
+ */
+activeEffort?: string, workspaceId: string, workspaceName: string, status: ThreadStatus,
+/**
+ * Full provider/account/model/effort identity. Unreported configured values are marked
+ * `selected`; unknown active values are explicitly provider-controlled.
  */
 label: string, };

@@ -25,7 +25,7 @@
 
 use std::ffi::OsString;
 
-use kalcode_contracts::agent::{MappingFidelity, PermissionMapping};
+use kalcode_contracts::agent::{MappingFidelity, PermissionMapping, safe_model_selector};
 use kalcode_contracts::permissions::PermissionMode;
 
 use crate::version::Version;
@@ -202,8 +202,9 @@ pub enum CodexExecError {
     InvalidSessionId,
 }
 
-/// Current KalCode effort choices. Capability negotiation can admit additional provider-native
-/// values that satisfy [`valid_effort_name`].
+/// Codex reasoning-effort values shown when runtime model metadata is unavailable. Runtime model
+/// catalogs remain authoritative and may advertise newer bounded tokens that satisfy
+/// [`valid_effort_name`].
 pub const EFFORT_LEVELS: &[&str] = &["minimal", "low", "medium", "high", "xhigh"];
 
 /// Accepts only the bounded token grammar that is safe inside KalCode's quoted TOML override.
@@ -216,6 +217,12 @@ pub fn valid_effort_name(effort: &str) -> bool {
         && effort
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_-".contains(&byte))
+}
+
+/// Whether `model` is a Codex runtime model selector. The supported app-server catalog bounds
+/// selectors to 512 bytes; launch passes this as one direct argv element without a shell.
+pub fn valid_model_name(model: &str) -> bool {
+    safe_model_selector(model)
 }
 
 /// The argv (after the program) for one headless turn. The prompt is written to stdin (`-`).
@@ -246,7 +253,7 @@ pub(crate) fn exec_args_with_overrides(
     out.extend([OsString::from("-c"), OsString::from(SUBAGENT_CONFIG)]);
     out.extend(sandbox_args(mode).into_iter().map(OsString::from));
     if let Some(model) = model {
-        if !crate::claude::argv::valid_model_name(model) {
+        if !valid_model_name(model) {
             return Err(CodexExecError::InvalidModel);
         }
         out.push("--model".into());
@@ -452,6 +459,14 @@ mod tests {
             exec_args(PermissionMode::Approve, Some("-c"), None, None),
             Err(CodexExecError::InvalidModel)
         );
+        let future_model_args =
+            exec_args(PermissionMode::Approve, Some("future+tools"), None, None)
+                .expect("future runtime model");
+        assert!(
+            future_model_args
+                .windows(2)
+                .any(|pair| pair == ["--model", "future+tools"])
+        );
         let args = exec_args(PermissionMode::Approve, None, Some("high"), None).expect("effort");
         let args: Vec<String> = args
             .into_iter()
@@ -461,10 +476,15 @@ mod tests {
             args.windows(2)
                 .any(|pair| { pair == ["-c", "model_reasoning_effort='high'"] })
         );
-        for effort in EFFORT_LEVELS {
-            assert!(exec_args(PermissionMode::Approve, None, Some(effort), None).is_ok());
-        }
-        for effort in ["max", "ultra", "adaptive_2", "extra-high", "2high"] {
+        for effort in EFFORT_LEVELS.iter().copied().chain([
+            "max",
+            "ultra",
+            "future-fast",
+            "reasoning_7",
+            "adaptive_2",
+            "extra-high",
+            "2high",
+        ]) {
             assert!(exec_args(PermissionMode::Approve, None, Some(effort), None).is_ok());
         }
         for effort in [
@@ -472,12 +492,33 @@ mod tests {
             "HIGH",
             "high effort",
             "high' -c web_search='live",
-            "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklm",
+            "future.effort",
         ] {
             assert_eq!(
                 exec_args(PermissionMode::Approve, None, Some(effort), None),
                 Err(CodexExecError::InvalidEffort)
             );
         }
+        let too_long_effort = "e".repeat(65);
+        assert_eq!(
+            exec_args(PermissionMode::Approve, None, Some(&too_long_effort), None),
+            Err(CodexExecError::InvalidEffort)
+        );
+
+        let catalog_limit_model = "m".repeat(512);
+        assert!(
+            exec_args(
+                PermissionMode::Approve,
+                Some(&catalog_limit_model),
+                None,
+                None
+            )
+            .is_ok()
+        );
+        let oversized_model = "m".repeat(513);
+        assert_eq!(
+            exec_args(PermissionMode::Approve, Some(&oversized_model), None, None),
+            Err(CodexExecError::InvalidModel)
+        );
     }
 }

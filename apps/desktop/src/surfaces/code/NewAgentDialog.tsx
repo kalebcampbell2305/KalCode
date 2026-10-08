@@ -1,4 +1,4 @@
-import type { ModelInfo, ProviderAccount, ProviderAccountBinding, Workspace } from "@kalcode/protocol";
+import type { ModelInfo, ModelSource, ProviderAccount, ProviderAccountBinding, Workspace } from "@kalcode/protocol";
 import { Button, IconButton, ProviderGlyph } from "@kalcode/ui/components";
 import {
   Bot,
@@ -49,7 +49,10 @@ import {
   launchAccounts,
   launchLabel,
   MAX_AGENTS_PER_LAUNCH,
+  modelCatalogCanVerifyCapabilities,
+  modelEffortsAreKnown,
   readLaunchMemory,
+  rememberedLaunch,
   rememberLaunch,
   resolveLaunchAccount,
   sameSignIns,
@@ -124,6 +127,11 @@ function rowStatus(session: ReturnType<typeof accountSessionState>): { label: st
 
 const optionId = (base: string, choice: Choice) => `${base}-opt-${choice.providerId}-${choice.accountId || "add"}`;
 
+/** Friendly model name plus the exact provider-native id whenever they differ. */
+function exactModelLabel(model: Pick<ModelInfo, "id" | "displayName">): string {
+  return model.displayName === model.id ? model.id : `${model.displayName} · ${model.id}`;
+}
+
 /**
  * Code's + launcher: every account of every coding-agent provider at a glance with its real
  * usage, then exact model, effort and count, then launch. The last launch per provider is
@@ -167,13 +175,13 @@ export function NewAgentDialog({
   // fallback to Claude Code while Codex is still being detected).
   const [requested, setRequested] = useState<PaneProviderId>(initialProvider);
   const [picked, setPicked] = useState<Choice | null>(null);
-  const [config, setConfig] = useState<{ providerId: PaneProviderId; model?: string; effort?: string }>({
-    providerId: initialProvider,
-  });
+  const [drafts, setDrafts] = useState<Record<string, { model?: string; effort?: string }>>({});
   // What the person typed; the launch uses it clamped, so editing "1" to "5" never passes through 15.
   const [countText, setCountText] = useState(() =>
     String(
-      initialCount !== undefined ? clampAgentCount(initialCount) : (memory.byProvider[initialProvider]?.count ?? 1),
+      initialCount !== undefined
+        ? clampAgentCount(initialCount)
+        : (rememberedLaunch(memory, workspace.id, initialProvider)?.count ?? 1),
     ),
   );
   const [countTouched, setCountTouched] = useState(initialCount !== undefined);
@@ -274,19 +282,32 @@ export function NewAgentDialog({
   );
 
   const candidates = groups.find((g) => g.providerId === providerId)?.accounts ?? [];
-  const remembered = memory.byProvider[providerId];
+  const rememberedAccount = rememberedLaunch(memory, workspace.id, providerId);
+  const rememberedAccountUnavailable =
+    !!rememberedAccount && !candidates.some((candidate) => candidate.id === rememberedAccount.accountId);
   const selectedAccountId =
     picked?.providerId === providerId && candidates.some((a) => a.id === picked.accountId)
       ? picked.accountId
       : restoredAccounts && !providerPending
-        ? resolveLaunchAccount(restoredAccounts, bindings, providerId, workspace.id, remembered)
+        ? resolveLaunchAccount(restoredAccounts, bindings, providerId, workspace.id, rememberedAccount)
         : "";
+  const preferenceAccountId =
+    selectedAccountId || (rememberedAccountUnavailable ? (rememberedAccount?.accountId ?? "") : "");
+  const remembered = preferenceAccountId
+    ? rememberedLaunch(memory, workspace.id, providerId, preferenceAccountId)
+    : null;
   const account = candidates.find((a) => a.id === selectedAccountId);
   const sessionOf = (a: ProviderAccount) => sessions?.states.get(a.id)?.health ?? accountSessionState(a);
   const usageOf = (accountId: string) =>
     sessions?.states.get(accountId)?.usage ?? usages.get(accountId) ?? notChecked(accountId);
   const selectedSession = account ? sessionOf(account) : null;
-  const activeChoice: Choice | null = providerPending ? null : { providerId, accountId: account?.id ?? "" };
+  const activeChoice: Choice | null = providerPending
+    ? null
+    : account
+      ? { providerId, accountId: account.id }
+      : candidates.length === 0
+        ? { providerId, accountId: "" }
+        : null;
 
   // Exact models belong to the real account/runtime, never another account's provider-wide
   // catalog or launch memory.
@@ -317,11 +338,19 @@ export function NewAgentDialog({
     };
   }, [client, cursorAccountId, discoverModels, authenticationState]);
   const canonicalModels = sessions?.states.get(selectedAccountId)?.models;
+  const canonicalCatalog = canonicalModels as
+    | (NonNullable<typeof canonicalModels> & {
+        source?: ModelSource;
+        supportedEfforts?: readonly string[];
+      })
+    | null
+    | undefined;
+  const canonicalStatus = canonicalModels?.status as string | undefined;
   const currentCursorModels = sharedSessions
-    ? canonicalModels && (canonicalModels.status !== "checking" || canonicalModels.items.length > 0)
+    ? canonicalModels && (canonicalStatus !== "checking" || canonicalModels.items.length > 0)
       ? {
           models: canonicalModels.items,
-          error: canonicalModels.status === "unavailable" ? canonicalModels.reason : null,
+          error: canonicalStatus === "unavailable" || canonicalStatus === "stale" ? canonicalModels.reason : null,
         }
       : null
     : cursorModels?.accountId === selectedAccountId
@@ -334,9 +363,9 @@ export function NewAgentDialog({
   // accounts use only their account-scoped catalog, including while its first read is pending.
   const providerModels =
     sharedSessions && authenticationState !== "not_authenticated"
-      ? canonicalModels?.status === "available"
-        ? canonicalModels.items
-        : canonicalModels?.status === "checking" && canonicalModels.items.length > 0
+      ? canonicalStatus === "available" || canonicalStatus === "stale"
+        ? (canonicalModels?.items ?? null)
+        : canonicalStatus === "checking" && canonicalModels && canonicalModels.items.length > 0
           ? canonicalModels.items
           : null
       : providerId === "cursor"
@@ -344,49 +373,92 @@ export function NewAgentDialog({
           ? null
           : (currentCursorModels?.models ?? null)
         : (models?.get(providerId) ?? null);
+  const modelSource = canonicalCatalog?.source;
+  const catalogEfforts = canonicalCatalog?.supportedEfforts;
   const defaultModel = providerModels?.find((m) => m.isDefault) ?? null;
-  const rawModel =
-    config.providerId === providerId && config.model !== undefined ? config.model : (remembered?.model ?? "");
+  const draftKey = JSON.stringify([workspace.id, providerId, preferenceAccountId]);
+  const draft = drafts[draftKey];
+  const rawModel = draft?.model !== undefined ? draft.model : (remembered?.model ?? "");
   const model = rawModel;
-  const exactModel = providerModels?.find((candidate) => candidate.id === model) ?? (!model ? defaultModel : null);
-  const unavailableModel = !!rawModel && !!providerModels && !exactModel;
+  const offeredExactModel = providerModels?.find((candidate) => candidate.id === model) ?? null;
+  const canVerifyModelAbsence =
+    providerModels !== null &&
+    modelCatalogCanVerifyCapabilities(
+      {
+        source: modelSource,
+        status: canonicalStatus as "checking" | "available" | "stale" | "unavailable" | undefined,
+      },
+      !sharedSessions,
+    );
+  const preserveUnverifiedModel = !!model && !offeredExactModel && !canVerifyModelAbsence;
+  const exactModel =
+    offeredExactModel ??
+    (!model
+      ? defaultModel
+      : preserveUnverifiedModel
+        ? { id: model, displayName: remembered?.modelName ?? model, isDefault: false }
+        : null);
+  const unavailableModel = !!rawModel && canVerifyModelAbsence && !offeredExactModel;
   const modelDiscoveryError =
-    canonicalModels?.status === "unavailable"
-      ? canonicalModels.reason
+    canonicalStatus === "unavailable" || canonicalStatus === "stale"
+      ? (canonicalModels?.reason ?? null)
       : providerId === "cursor"
         ? (currentCursorModels?.error ?? null)
         : null;
-  const modelPending = canonicalModels?.status === "checking" || (providerModels === null && !modelDiscoveryError);
-  const modelOptions: { value: string; label: string }[] = [
-    { value: "", label: defaultModel ? `Provider default · ${defaultModel.displayName}` : "Provider default" },
+  const modelPending = canonicalStatus === "checking" || (providerModels === null && !modelDiscoveryError);
+  const savedModelLabel = model ? exactModelLabel({ id: model, displayName: remembered?.modelName ?? model }) : null;
+  const modelOptions: { value: string; label: string; title?: string }[] = [
+    {
+      value: "",
+      label: defaultModel ? `Provider default · ${exactModelLabel(defaultModel)}` : "Provider default",
+      ...(defaultModel ? { title: defaultModel.id } : {}),
+    },
     ...(providerModels
-      ? providerModels.map((m) => ({
-          value: m.id,
-          label:
-            providerId === "cursor" && m.displayName !== m.id && !m.displayName.endsWith(`(${m.id})`)
-              ? `${m.displayName} (${m.id})`
-              : `${m.displayName}${m.isDefault ? " · reported default" : ""}`,
-        }))
+      ? [
+          ...providerModels.map((m) => ({
+            value: m.id,
+            label: `${exactModelLabel(m)}${m.isDefault ? " · reported default" : ""}`,
+            title: m.id,
+          })),
+          ...(preserveUnverifiedModel ? [{ value: model, label: savedModelLabel ?? model, title: model }] : []),
+        ]
       : model
-        ? [{ value: model, label: remembered?.modelName ?? model }]
+        ? [{ value: model, label: savedModelLabel ?? model, title: model }]
         : []),
-    ...(unavailableModel ? [{ value: model, label: `Unavailable · ${remembered?.modelName ?? model}` }] : []),
+    ...(unavailableModel ? [{ value: model, label: `Unavailable · ${savedModelLabel ?? model}`, title: model }] : []),
   ];
-  const modelName = model ? (modelOptions.find((o) => o.value === model)?.label ?? model) : null;
-  const efforts = effortsForModel(providerId, exactModel);
-  const configuredEffort = config.providerId === providerId ? config.effort : undefined;
+  const modelName = model ? (exactModel ? exactModelLabel(exactModel) : (remembered?.modelName ?? model)) : null;
+  const efforts = effortsForModel(providerId, exactModel, catalogEfforts);
+  const configuredEffort = draft?.effort;
   // Provider default remains provider-owned. Catalog arrival must never turn a remembered/default
   // null into a concrete effort; the reported default is applied only after an explicit model pick.
   const effort = configuredEffort !== undefined ? configuredEffort : (remembered?.effort ?? "");
-  const unavailableEffort = !!effort && !!providerModels && !!exactModel && !efforts.includes(effort);
+  const canVerifyEffortCapability =
+    modelCatalogCanVerifyCapabilities(
+      {
+        source: modelSource,
+        status: canonicalStatus as "checking" | "available" | "stale" | "unavailable" | undefined,
+      },
+      !sharedSessions,
+    ) && modelEffortsAreKnown(exactModel, catalogEfforts);
+  const unavailableEffort =
+    !!effort && canVerifyEffortCapability && !!providerModels && !!exactModel && !efforts.includes(effort);
+  const preservedEffort = effort && !canVerifyEffortCapability && !efforts.includes(effort) ? effort : null;
+  const modelSourceNote =
+    modelSource === "runtime"
+      ? `Models reported by ${account ? accountName(account) : "this account"}.`
+      : modelSource === "documented_aliases"
+        ? "Documented model aliases. Exact availability is checked when the agent starts."
+        : modelSource === "not_discoverable"
+          ? "This provider does not expose a model catalog. Saved exact IDs are checked when the agent starts."
+          : null;
   const count = fixedCount ?? clampAgentCount(Number(countText));
 
   const choose = (choice: Choice) => {
     if (busy || signingIn) return;
     if (choice.providerId !== providerId) {
-      setConfig({ providerId: choice.providerId });
       if (!countTouched && fixedCount === undefined) {
-        setCountText(String(memory.byProvider[choice.providerId]?.count ?? 1));
+        setCountText(String(rememberedLaunch(memory, workspace.id, choice.providerId)?.count ?? 1));
       }
     }
     setRequested(choice.providerId);
@@ -427,7 +499,10 @@ export function NewAgentDialog({
     } finally {
       submitting.current = false;
     }
-    const rememberedCount = fixedCount === undefined ? spec.count : (memory.byProvider[spec.providerId]?.count ?? 1);
+    const rememberedCount =
+      fixedCount === undefined
+        ? spec.count
+        : (rememberedLaunch(memory, workspace.id, spec.providerId, spec.providerAccountId ?? "")?.count ?? 1);
     setMemory(
       rememberLaunch({
         providerId: spec.providerId,
@@ -458,34 +533,66 @@ export function NewAgentDialog({
   const submitNow = () => formRef.current?.requestSubmit();
 
   // RECENT: the last launch, one click (or Enter when it is the highlighted config) to repeat.
-  const last = purpose === "standard" ? memory.last : null;
+  const last =
+    purpose === "standard"
+      ? providers
+          .map((candidate) => rememberedLaunch(memory, workspace.id, candidate))
+          .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+          .reduce((newest, entry) => (!newest || entry.at >= newest.at ? entry : newest), null as LaunchMemory["last"])
+      : null;
   const recentAccount =
     last && providers.includes(last.providerId)
       ? launchAccounts(restoredAccounts ?? [], last.providerId).find((a) => a.id === last.accountId)
       : undefined;
   const recent = last && recentAccount ? { ...last, account: recentAccount } : null;
   const recentAccountModels = recent ? sessions?.states.get(recent.accountId)?.models : null;
+  const recentCatalog = recentAccountModels as
+    | (NonNullable<typeof recentAccountModels> & {
+        source?: ModelSource;
+        supportedEfforts?: readonly string[];
+      })
+    | null;
+  const recentCatalogStatus = recentAccountModels?.status as string | undefined;
   const recentModels = recent
-    ? recentAccountModels?.status === "available"
-      ? recentAccountModels.items
-      : recentAccountModels?.status === "unavailable"
+    ? recentCatalogStatus === "available" || recentCatalogStatus === "stale"
+      ? recentAccountModels?.items
+      : recentCatalogStatus === "unavailable"
         ? undefined
         : recent.providerId === "cursor" && cursorModels?.accountId === recent.accountId
           ? cursorModels.models
           : models?.get(recent.providerId)
     : undefined;
   const recentModelUnavailable = Boolean(
-    recent?.model && recentAccountModels?.status === "available" && !recentModels?.some((m) => m.id === recent.model),
+    recent?.model &&
+      modelCatalogCanVerifyCapabilities(
+        {
+          source: recentCatalog?.source,
+          status: recentCatalogStatus as "checking" | "available" | "stale" | "unavailable" | undefined,
+        },
+        !sharedSessions,
+      ) &&
+      !recentModels?.some((m) => m.id === recent.model),
   );
   const recentModel = recentModelUnavailable ? null : (recent?.model ?? null);
   const recentExactModel = recentModel
-    ? (recentModels?.find((candidate) => candidate.id === recentModel) ?? null)
+    ? (recentModels?.find((candidate) => candidate.id === recentModel) ?? {
+        id: recentModel,
+        displayName: recent?.modelName ?? recentModel,
+        isDefault: false,
+      })
     : (recentModels?.find((candidate) => candidate.isDefault) ?? null);
   const recentEffortUnavailable = Boolean(
     recent?.effort &&
-      recentAccountModels?.status === "available" &&
+      modelCatalogCanVerifyCapabilities(
+        {
+          source: recentCatalog?.source,
+          status: recentCatalogStatus as "checking" | "available" | "stale" | "unavailable" | undefined,
+        },
+        !sharedSessions,
+      ) &&
       recentExactModel &&
-      !effortsForModel(recent.providerId, recentExactModel).includes(recent.effort),
+      modelEffortsAreKnown(recentExactModel, recentCatalog?.supportedEfforts) &&
+      !effortsForModel(recent.providerId, recentExactModel, recentCatalog?.supportedEfforts).includes(recent.effort),
   );
   const recentSession = recent ? sessionOf(recent.account) : null;
   const recentIsSelected =
@@ -658,7 +765,11 @@ export function NewAgentDialog({
                     aria-label={`Repeat last: ${[
                       providerIdentity(recent.providerId).name,
                       accountName(recent.account),
-                      recentModel ? (recent.modelName ?? recentModel) : "default model",
+                      recentModel
+                        ? recentExactModel
+                          ? exactModelLabel(recentExactModel)
+                          : (recent.modelName ?? recentModel)
+                        : "default model",
                       recent.effort ? effortLabel(recent.effort) : null,
                       (fixedCount ?? recent.count) > 1 ? `${fixedCount ?? recent.count} agents` : null,
                     ]
@@ -675,9 +786,9 @@ export function NewAgentDialog({
                       <span className={styles.sep}>·</span>
                       <span>
                         {recentModel
-                          ? (recentModels?.find((m) => m.id === recentModel)?.displayName ??
-                            recent.modelName ??
-                            recentModel)
+                          ? recentExactModel
+                            ? exactModelLabel(recentExactModel)
+                            : (recent.modelName ?? recentModel)
                           : "Default model"}
                       </span>
                       {recent.effort ? (
@@ -816,6 +927,11 @@ export function NewAgentDialog({
                     {requestedName} isn't available here yet. Choose another account.
                   </p>
                 ) : null}
+                {rememberedAccountUnavailable && !account ? (
+                  <p className={styles.note} role="status">
+                    Your saved {providerName} account is no longer available. Choose another account.
+                  </p>
+                ) : null}
                 {alternative && account && lowWindow ? (
                   <p className={styles.lowHint}>
                     <span>
@@ -877,14 +993,21 @@ export function NewAgentDialog({
                   onChange={(next) => {
                     const nextModel =
                       providerModels?.find((candidate) => candidate.id === next) ?? (!next ? defaultModel : null);
-                    setConfig((current) => ({
+                    setDrafts((current) => ({
                       ...current,
-                      providerId,
-                      model: next,
-                      effort: next ? effortForModel(providerId, nextModel, effort || undefined) : "",
+                      [draftKey]: {
+                        ...current[draftKey],
+                        model: next,
+                        effort: next ? effortForModel(providerId, nextModel, effort || undefined, catalogEfforts) : "",
+                      },
                     }));
                   }}
                 />
+                {modelSourceNote ? (
+                  <p className={styles.signInText} role="status">
+                    {modelSourceNote}
+                  </p>
+                ) : null}
                 {modelDiscoveryError ? (
                   <p className={styles.signInText} role="status">
                     {modelDiscoveryError} Provider default remains available.
@@ -901,17 +1024,23 @@ export function NewAgentDialog({
                     supported effort.
                   </p>
                 ) : null}
-                {efforts.length > 0 ? (
+                {efforts.length > 0 || preservedEffort || unavailableEffort ? (
                   <ChipGroup
                     label="Effort"
                     value={effort}
                     options={[
                       { value: "", label: "Default" },
                       ...efforts.map((level) => ({ value: level, label: effortLabel(level) })),
+                      ...(preservedEffort ? [{ value: preservedEffort, label: effortLabel(preservedEffort) }] : []),
                       ...(unavailableEffort ? [{ value: effort, label: `Unavailable · ${effortLabel(effort)}` }] : []),
                     ]}
                     disabled={busy || signingIn || providerPending}
-                    onChange={(next) => setConfig((c) => ({ ...c, providerId, effort: next }))}
+                    onChange={(next) =>
+                      setDrafts((current) => ({
+                        ...current,
+                        [draftKey]: { ...current[draftKey], effort: next },
+                      }))
+                    }
                   />
                 ) : null}
                 {fixedCount === undefined ? (
@@ -1101,7 +1230,7 @@ function ChipGroup({
 }: {
   label: string;
   value: string;
-  options: readonly { value: string; label: string }[];
+  options: readonly { value: string; label: string; title?: string }[];
   disabled?: boolean;
   pending?: boolean;
   onChange: (value: string) => void;
@@ -1151,6 +1280,7 @@ function ChipGroup({
             aria-checked={index === selectedIndex}
             tabIndex={index === selectedIndex ? 0 : -1}
             className={styles.chip}
+            title={option.title}
             disabled={disabled}
             onClick={() => onChange(option.value)}
           >

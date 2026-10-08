@@ -232,6 +232,7 @@ impl TurnNormalizer for CodexNormalizer {
                     vec![AgentEvent::SessionStarted {
                         provider_session_id: id.to_ascii_lowercase(),
                         model: None,
+                        effort: None,
                     }]
                 } else {
                     // Not a UUID: KalCode can't pass it back to `resume` safely.
@@ -345,7 +346,8 @@ mod tests {
             events[0],
             AgentEvent::SessionStarted {
                 provider_session_id: "0199a213-81c0-7800-8aa1-bbab2a035a53".into(),
-                model: None
+                model: None,
+                effort: None,
             }
         );
         assert!(events.contains(&AgentEvent::MessageCompleted {

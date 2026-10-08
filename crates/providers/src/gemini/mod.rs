@@ -512,6 +512,19 @@ mod tests {
             headless_args(PermissionMode::Approve, Some("--yolo"), None),
             Err(GeminiArgsError::InvalidModel)
         );
+        for model in ["gemini-4.0-pro+tools", "模型/gemini:exact"] {
+            let args = strings(
+                headless_args(PermissionMode::Approve, Some(model), None).expect("exact model"),
+            );
+            let at = args.iter().position(|arg| arg == "--model").expect("model");
+            assert_eq!(args[at + 1], model);
+        }
+        for model in ["model\u{200b}name", "bidi\u{202e}override"] {
+            assert_eq!(
+                headless_args(PermissionMode::Approve, Some(model), None),
+                Err(GeminiArgsError::InvalidModel)
+            );
+        }
     }
 
     #[test]

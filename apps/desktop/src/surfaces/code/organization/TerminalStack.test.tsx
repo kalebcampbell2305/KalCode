@@ -62,6 +62,23 @@ beforeEach(() => {
 });
 
 describe("TerminalStack", () => {
+  it("saves an unchanged agent name to preserve explicit manual ownership", async () => {
+    const user = userEvent.setup();
+    const rename = vi.fn(async () => {});
+    const agent = {
+      ...item("1"),
+      key: "agent:a",
+      content: { kind: "agent", agentId: "a" } as PaneContent,
+      kind: "agent" as const,
+      title: "Codex",
+    };
+    render(<Stack initial={[agent]} rename={rename} />);
+    await user.click(screen.getByRole("button", { name: /^Show the terminal stack/ }));
+    await user.dblClick(screen.getByRole("button", { name: /^Codex, coding agent/ }));
+    await user.keyboard("{Enter}");
+    expect(rename).toHaveBeenCalledWith({ kind: "agent", agentId: "a" }, "Codex");
+  });
+
   it("moves focus into the narrow-canvas overlay and back to the rail when Escape closes it", async () => {
     const user = userEvent.setup();
     render(<Stack initial={four()} />);

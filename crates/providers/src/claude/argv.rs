@@ -16,7 +16,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use kalcode_contracts::agent::{MappingFidelity, PermissionMapping};
+use kalcode_contracts::agent::{MappingFidelity, PermissionMapping, safe_model_selector};
 use kalcode_contracts::permissions::PermissionMode;
 
 use crate::version::Version;
@@ -343,26 +343,21 @@ pub enum ArgsError {
     InvalidWorkingDirectory,
 }
 
-/// Model names are provider aliases or full names (`sonnet`, `opus[1m]`, `claude-sonnet-5`).
-fn valid_model(model: &str) -> bool {
-    !model.is_empty()
-        && model.len() <= 128
-        && !model.starts_with('-')
-        && model
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"._:[]-".contains(&b))
-}
-
 /// Whether `model` is a model name KalCode passes to a provider (shared with interactive panes).
 pub fn valid_model_name(model: &str) -> bool {
-    valid_model(model)
+    safe_model_selector(model)
 }
 
-/// Claude Code effort values certified by KalCode's launch policy.
+/// Claude Code effort values shown when account model metadata is unavailable. The provider may
+/// add newer bounded tokens; it remains authoritative for whether the selected model accepts one.
 pub const EFFORT_LEVELS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 
 pub fn valid_effort_name(effort: &str) -> bool {
-    EFFORT_LEVELS.contains(&effort)
+    !effort.is_empty()
+        && effort.len() <= 32
+        && effort.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+        })
 }
 
 /// Session ids KalCode passes are canonical UUIDs (its own, or ones Claude Code reported).
@@ -389,7 +384,7 @@ pub fn session_args(args: &SessionArgs) -> Result<Vec<OsString>, ArgsError> {
         out.push(config.as_os_str().to_owned());
     }
     if let Some(model) = &args.model {
-        if !valid_model(model) {
+        if !valid_model_name(model) {
             return Err(ArgsError::InvalidModel);
         }
         out.push("--model".into());
@@ -663,13 +658,7 @@ mod tests {
             },
             mcp_config: None,
         };
-        for model in [
-            "--dangerously-skip-permissions",
-            "",
-            "sonnet opus",
-            "a;b",
-            "x\n",
-        ] {
+        for model in ["--dangerously-skip-permissions", "", "x\n", "x\u{202e}txt"] {
             let args = SessionArgs {
                 model: Some(model.into()),
                 ..base.clone()
@@ -680,27 +669,56 @@ mod tests {
                 "{model:?}"
             );
         }
-        for model in ["sonnet", "opus[1m]", "claude-sonnet-5", "haiku"] {
+        for model in [
+            "sonnet",
+            "opus[1m]",
+            "claude-sonnet-5",
+            "haiku",
+            "anthropic.claude-v5/profile:exact",
+            "模型/éclair:β+tools",
+            "sonnet opus",
+            "a;b",
+        ] {
             let args = SessionArgs {
                 model: Some(model.into()),
                 ..base.clone()
             };
-            assert!(session_args(&args).is_ok(), "{model:?}");
+            let argv = session_args(&args).expect("model selector");
+            let argv: Vec<_> = argv
+                .into_iter()
+                .map(|arg| arg.into_string().expect("utf8"))
+                .collect();
+            assert_eq!(value_after(&argv, "--model").as_deref(), Some(model));
         }
-        for effort in EFFORT_LEVELS {
+        for effort in EFFORT_LEVELS
+            .iter()
+            .copied()
+            .chain(["ultra", "future-fast", "reasoning_7"])
+        {
             let args = SessionArgs {
-                effort: Some((*effort).into()),
+                effort: Some(effort.into()),
                 ..base.clone()
             };
-            assert!(session_args(&args).is_ok(), "{effort:?}");
+            let argv = session_args(&args).expect("effort token");
+            let argv: Vec<_> = argv
+                .into_iter()
+                .map(|arg| arg.into_string().expect("utf8"))
+                .collect();
+            assert_eq!(value_after(&argv, "--effort").as_deref(), Some(effort));
         }
-        for effort in ["", "HIGH", "ultra", "high --model opus"] {
+        for effort in ["", "HIGH", "future.effort", "high --model opus"] {
             let args = SessionArgs {
                 effort: Some(effort.into()),
                 ..base.clone()
             };
             assert_eq!(session_args(&args), Err(ArgsError::InvalidEffort));
         }
+        let too_long_effort = "e".repeat(33);
+        let args = SessionArgs {
+            effort: Some(too_long_effort),
+            ..base.clone()
+        };
+        assert_eq!(session_args(&args), Err(ArgsError::InvalidEffort));
         for id in ["--resume", "latest", "", "../x"] {
             let args = SessionArgs {
                 start: SessionStart::Resume {

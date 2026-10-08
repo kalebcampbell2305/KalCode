@@ -258,6 +258,12 @@ export function describeEvent(event: EventEnvelope): EventDescription {
       return { title: "Thread created", detail: event.payload.name, tone: "success" };
     case "thread.started":
       return { title: "Thread started", detail: null, tone: "live" };
+    case "thread.runtime_identity_changed":
+      return {
+        title: "Runtime identity updated",
+        detail: event.payload.activeModel ?? null,
+        tone: "live",
+      };
     case "thread.status_changed":
       return {
         title: "Thread status changed",
