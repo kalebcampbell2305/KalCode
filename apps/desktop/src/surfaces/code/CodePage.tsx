@@ -44,7 +44,8 @@ import { type FormEvent, memo, type ReactNode, useEffect, useId, useRef, useStat
 import { toKalCodeError } from "../../ipc/errors.ts";
 import { formatShortcut } from "../../platform/keyboard.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
-import { useOptionalRecipeLibrary } from "../../runtime/recipes/RecipeLaunchProvider.tsx";
+import { useOptionalRecipeLibrary, useOptionalRecipeRequest } from "../../runtime/recipes/RecipeLaunchProvider.tsx";
+import { requestRecipeCapture } from "../../runtime/recipes/useRecipeCapture.ts";
 import { useWorkspaces, useWorkspaceVisible, WorkspaceScope } from "../../runtime/WorkspaceProvider.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
 import { TASK_DESCRIPTIONS, TASK_LABELS, TASK_LAYOUTS } from "../../shell/panes/adaptiveCanvas.ts";
@@ -332,15 +333,36 @@ function ToolbarPlaceholder() {
   );
 }
 
-/** Opens the Recipe library: saved working desks that launch in one click. */
-function RecipesButton() {
-  const recipes = useOptionalRecipeLibrary();
-  if (!recipes) return null;
-  const { library } = recipes;
+/**
+ * Launch Recipes inside the Layout menu: a Recipe is a saved desk, and living here keeps the
+ * Code header exactly as wide as before (its controls are tuned never to overflow).
+ */
+function RecipeMenuItems() {
+  const library = useOptionalRecipeLibrary();
+  const request = useOptionalRecipeRequest();
+  if (!library || !request) return null;
+  const shown = library.recipes.slice(0, 5);
   return (
-    <Tooltip content="Recipes: launch a saved desk">
-      <IconButton size="sm" label="Recipes" icon={<LayoutTemplate />} onClick={() => library.open()} />
-    </Tooltip>
+    <>
+      <DropdownMenuSeparator />
+      <DropdownMenuLabel>Recipes</DropdownMenuLabel>
+      {shown.map((recipe) => (
+        <DropdownMenuItem
+          key={recipe.id}
+          icon={<LayoutTemplate />}
+          description={recipe.pinned ? "Pinned" : undefined}
+          onSelect={() => void request({ recipeId: recipe.id })}
+        >
+          {`Launch ${recipe.name}`}
+        </DropdownMenuItem>
+      ))}
+      <DropdownMenuItem icon={<LayoutTemplate />} onSelect={() => requestRecipeCapture()}>
+        Save desk as Recipe
+      </DropdownMenuItem>
+      <DropdownMenuItem icon={<Settings2 />} onSelect={() => library.library.open()}>
+        Manage Recipes…
+      </DropdownMenuItem>
+    </>
   );
 }
 
@@ -525,7 +547,6 @@ const Toolbar = memo(function Toolbar({ api, available }: { api: CodeCanvasApi; 
         </DropdownMenu>
       </SplitControl>
       <BrowserButton controller={controller} />
-      <RecipesButton />
       <WidgetsMenu controller={controller} />
       <RunTestsButton controller={controller} organization={api.organization} />
       <KalTidyActions />
@@ -604,6 +625,7 @@ const Toolbar = memo(function Toolbar({ api, available }: { api: CodeCanvasApi; 
               </DropdownMenuRadioItem>
             ))}
           </DropdownMenuRadioGroup>
+          <RecipeMenuItems />
           {presets.length > 0 ? (
             <>
               <DropdownMenuSeparator />
