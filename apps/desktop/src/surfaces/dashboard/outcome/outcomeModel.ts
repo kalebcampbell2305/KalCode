@@ -50,6 +50,12 @@ export interface OutcomeEvidence {
   tests?: readonly OperationTestResult[] | null;
   /** Environments Operations observed (only those a linked run deployed are used). */
   environments?: readonly OperationEnvironment[];
+  /**
+   * Other agents whose committed work Git confirms conflicts with this agent's (Agent File
+   * Ownership): this branch still merges into its base, but whichever of them lands second needs
+   * a fix. Compatible agents never appear here.
+   */
+  conflictsWith?: readonly string[];
 }
 
 export const STAGE_LABEL: Record<OutcomeStage, string> = {
@@ -190,7 +196,11 @@ function testsRow(thread: ThreadSummary, evidence: OutcomeEvidence): Draft {
   }
 }
 
-function mergeRow(thread: ThreadSummary, worktree: ThreadWorktreeState | undefined): Draft {
+function mergeRow(
+  thread: ThreadSummary,
+  worktree: ThreadWorktreeState | undefined,
+  conflictsWith: readonly string[] = [],
+): Draft {
   const row = (value: string, tone: OutcomeTone, known: boolean, detail: string | null = null): Draft => ({
     stage: "merge",
     label: STAGE_LABEL.merge,
@@ -203,7 +213,14 @@ function mergeRow(thread: ThreadSummary, worktree: ThreadWorktreeState | undefin
   if (!worktree) return row("Not checked yet", "muted", false);
   const base = worktree.baseBranch ?? "the base branch";
   const readiness = mergeReadiness(thread, worktree);
-  if (readiness.ready) return row("Ready to merge", "accent", true, `${plural(readiness.ahead, "commit")} → ${base}`);
+  if (readiness.ready) {
+    const [first, ...rest] = conflictsWith;
+    if (first !== undefined) {
+      const who = rest.length > 0 ? `${first} and ${plural(rest.length, "other agent")}` : first;
+      return row("Ready to merge", "waiting", true, `Conflicts with ${who}: the second to merge needs a fix`);
+    }
+    return row("Ready to merge", "accent", true, `${plural(readiness.ahead, "commit")} → ${base}`);
+  }
   const dirty = worktree.changed + worktree.untracked;
   if (worktree.conflicts === true) return row("Would conflict", "failed", true, `With ${base}`);
   if (readiness.reason === "Still working") return row("Not yet", "muted", false, "The agent is still working");
@@ -264,7 +281,7 @@ export function agentOutcome(
     agentRow(thread),
     changesRow(thread, worktree),
     testsRow(thread, evidence),
-    mergeRow(thread, worktree),
+    mergeRow(thread, worktree, evidence.conflictsWith),
   ];
   return (release ? [...drafts, release] : drafts).map((row) => ({
     ...row,

@@ -267,7 +267,7 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
   );
 
   const { states: worktrees, apply: applyWorktree } = useAgentWorktreeStates();
-  const overlaps = useAgentOverlaps({ threads: threads ?? NO_THREADS, states: worktrees }).byAgent;
+  const overlaps = useAgentOverlaps().byAgent;
   const onReviewApprovals = useCallback(() => permissions.setPanelOpen(true), [permissions.setPanelOpen]);
   const onDismiss = useCallback((thread: ThreadSummary) => void cleanup.dismissAgent(thread.id), [cleanup]);
 

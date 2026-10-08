@@ -49,6 +49,7 @@ import { useThreadsIntent } from "../threads/intent.tsx";
 import { FileTree } from "./FileTree.tsx";
 import styles from "./Folder.module.css";
 import { changeOf, projectAgentCounts, type RecentFile, recentFilesFrom, splitPath } from "./folderModel.ts";
+import { OwnerMarker, useOwnerLookup } from "./ownerMarker.tsx";
 
 function fail(cause: unknown) {
   const e = toKalCodeError(cause);
@@ -409,6 +410,7 @@ function GitPanel({
   const [preview, setPreview] = useState<FileRef | null>(null);
   const fileRows = useRef(new Map<string, HTMLLIElement>());
   const openInPane = useOpenInPane();
+  const owners = useOwnerLookup(workspaceId);
   const count = git.state === "ready" ? (git.value.files.totalEstimate ?? git.value.files.items.length) : undefined;
   return (
     <Panel
@@ -458,6 +460,7 @@ function GitPanel({
           {git.value.files.items.map((file) => {
             const change = changeOf(file);
             const { dir, name } = splitPath(file.path);
+            const held = owners?.file(file.path) ?? null;
             return (
               <ContentContextMenu
                 key={file.path}
@@ -489,6 +492,8 @@ function GitPanel({
                     <span className={styles.dir}>{dir}</span>
                     {name}
                   </span>
+                  {held ? <span className="visually-hidden">{`${held.label}. `}</span> : null}
+                  {held ? <OwnerMarker view={held} /> : null}
                   {change.staged ? <span className={styles.staged}>staged</span> : null}
                 </li>
               </ContentContextMenu>

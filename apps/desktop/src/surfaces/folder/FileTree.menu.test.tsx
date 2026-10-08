@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({ listFiles: vi.fn(), readWorkspaceFile: vi.fn()
 vi.mock("../../runtime/RuntimeProvider.tsx", () => ({ useRuntime: () => ({ client: mocks }) }));
 vi.mock("../dashboard/data/DashboardData.tsx", () => ({
   useCodingAgents: () => ({ state: { status: "ready", data: [] } }),
+  useOptionalOwnership: () => null,
 }));
 vi.mock("../../runtime/uiIntents.tsx", () => ({ useUiIntents: () => ({ focus: vi.fn() }) }));
 vi.mock("@kalcode/ui/components", async (original) => ({

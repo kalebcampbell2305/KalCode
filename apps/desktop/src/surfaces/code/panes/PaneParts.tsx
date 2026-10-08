@@ -1,4 +1,5 @@
 import type { ProviderAccount, StatusTone, ThreadStatus, ThreadSummary } from "@kalcode/protocol";
+import { Tooltip } from "@kalcode/ui/components";
 import {
   Brain,
   Circle,
@@ -20,7 +21,10 @@ import {
   SquareTerminal,
   Wrench,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { describeOverlap, needsAttention } from "../../../runtime/ownership/model.ts";
+import { useOptionalUiIntents } from "../../../runtime/uiIntents.tsx";
+import { useOptionalOwnership } from "../../dashboard/data/DashboardData.tsx";
 import { accountName } from "../../providers/accountIdentity.ts";
 import styles from "./Panes.module.css";
 import { type PaneToolView, paneStatus, paneToolActivity } from "./paneLabels.ts";
@@ -189,5 +193,101 @@ export function PaneToolChip({ status, activity }: { status: ThreadStatus; activ
         {phaseLabel}
       </span>
     </span>
+  );
+}
+
+type OwnershipChipView = {
+  tone: "danger" | "waiting" | "info";
+  label: string;
+  /** Plain sentences for the tooltip and the accessible name. */
+  lines: string[];
+  files: readonly string[];
+  /** The agent a click goes to. */
+  otherId: string;
+};
+
+const TOOLTIP_FILES = 6;
+
+/**
+ * Where this agent stands with the others over files: an overlap worth attention (red when edits
+ * can collide, amber when they may), or a quiet note about an active handoff. Renders nothing
+ * otherwise, so an agent without overlaps keeps the header exactly as it was.
+ */
+export function PaneOwnershipChip({ thread }: { thread: Pick<ThreadSummary, "id" | "name" | "workspaceId"> }) {
+  const ownership = useOptionalOwnership();
+  const intents = useOptionalUiIntents();
+  const view = useMemo<OwnershipChipView | null>(() => {
+    if (!ownership) return null;
+    const nameOf = (id: string) =>
+      id === thread.id ? thread.name : (ownership.claims.get(id)?.name ?? "another agent");
+    const attention = (ownership.byAgent.get(thread.id) ?? []).filter((entry) => needsAttention(entry.overlap));
+    const worst = attention[0];
+    if (worst) {
+      const more = attention.length - 1;
+      const risky = worst.overlap.risk === "live" || worst.overlap.risk === "conflict";
+      const sentences = attention.slice(0, 3).map((entry) => describeOverlap(entry.overlap, nameOf));
+      return {
+        tone: risky ? "danger" : "waiting",
+        label: `Overlaps ${worst.other.name}${more > 0 ? ` +${more}` : ""}`,
+        lines: attention.length > 3 ? [...sentences, `And ${attention.length - 3} more.`] : sentences,
+        files: worst.overlap.files,
+        otherId: worst.other.id,
+      };
+    }
+    const claim = ownership.claims.get(thread.id);
+    if (claim?.received) {
+      const from = nameOf(claim.received.from);
+      return {
+        tone: "info",
+        label: `From ${from}`,
+        lines: [`${thread.name} took over ${from}'s work through a handoff.`],
+        files: claim.received.files,
+        otherId: claim.received.from,
+      };
+    }
+    if (claim?.handedTo) {
+      const to = nameOf(claim.handedTo.to);
+      return {
+        tone: "info",
+        label: `Handed to ${to}`,
+        lines: [`${thread.name} handed its work to ${to}.`],
+        files: claim.files,
+        otherId: claim.handedTo.to,
+      };
+    }
+    return null;
+  }, [ownership, thread.id, thread.name]);
+  if (!view) return null;
+  const shown = view.files.slice(0, TOOLTIP_FILES);
+  const rest = view.files.length - shown.length;
+  const focus = intents
+    ? () => void intents.focus({ kind: "agent", agentId: view.otherId, workspaceId: thread.workspaceId })
+    : undefined;
+  return (
+    <Tooltip
+      content={
+        <span className={styles.ownershipTip}>
+          {view.lines.map((line, index) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: static lines of one tooltip.
+            <span key={index}>{line}</span>
+          ))}
+          {shown.map((file) => (
+            <code key={file}>{file}</code>
+          ))}
+          {rest > 0 ? <span>{`and ${rest} more`}</span> : null}
+        </span>
+      }
+    >
+      <button
+        type="button"
+        className={styles.ownership}
+        data-tone={view.tone}
+        data-pane-ownership={view.tone}
+        aria-label={`${view.label}. ${view.lines.join(" ")}`}
+        onClick={focus}
+      >
+        <span className={styles.ownershipLabel}>{view.label}</span>
+      </button>
+    </Tooltip>
   );
 }

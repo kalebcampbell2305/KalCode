@@ -57,7 +57,7 @@ import { effortForModel, effortLabel, effortsForModel, type ModelEffortInfo } fr
 import type { PaneProviderId } from "../code/panes/paneChannel.ts";
 import { providerIdentity } from "../code/panes/paneLabels.ts";
 import { useLaunchAgent } from "../code/useLaunchAgent.ts";
-import { useCodingAgents } from "../dashboard/data/DashboardData.tsx";
+import { useCodingAgents, useOptionalOwnership } from "../dashboard/data/DashboardData.tsx";
 import { OverlapNote } from "../dashboard/fleet/OverlapNote.tsx";
 import { useAgentOverlaps } from "../dashboard/fleet/useAgentOverlaps.ts";
 import { AgentOutcome } from "../dashboard/outcome/AgentOutcome.tsx";
@@ -65,7 +65,14 @@ import { accountName, accountSessionState, sortAccounts } from "../providers/acc
 import { LaunchSignIn } from "../providers/LaunchAccountPicker.tsx";
 import { useOptionalProviderAccountSessions } from "../providers/ProviderAccountSessions.tsx";
 import type { ProviderAccountState } from "../providers/providerAccountState.ts";
-import { launchTruth, memberDisplay, ownershipCollisions, type SquadLaunchTruth } from "./model.ts";
+import {
+  type LiveClaimCollision,
+  launchTruth,
+  liveClaimCollisions,
+  memberDisplay,
+  ownershipCollisions,
+  type SquadLaunchTruth,
+} from "./model.ts";
 import styles from "./SquadsPanel.module.css";
 
 const REFRESH_MS = 2_500;
@@ -320,6 +327,18 @@ export function SquadsPanel({
   const tier = planTier(account?.snapshot);
   const available = account ? planIncludes(tier === "owner" ? "max2x" : tier, feature) : true;
   const agents = codingAgents.state.status === "ready" ? codingAgents.state.data : [];
+  const claims = useOptionalOwnership()?.claims;
+  /** Running agents in this project already holding paths the members would own (guidance only). */
+  const liveWarnings = useCallback(
+    (members: SquadDefinition["members"]): LiveWarning[] =>
+      claims
+        ? liveClaimCollisions(members, claims.values(), workspaceId).map((collision: LiveClaimCollision) => ({
+            name: agents.find((agent) => agent.id === collision.agentId)?.name.trim() || "A running agent",
+            paths: collision.paths,
+          }))
+        : [],
+    [claims, agents, workspaceId],
+  );
 
   const reloadAccounts = useCallback(async () => {
     if (!providerAccounts) {
@@ -804,6 +823,7 @@ export function SquadsPanel({
           <div className={styles.library}>
             {snapshot.squads.map((squad) => {
               const conflicts = ownershipCollisions(squad.members);
+              const live = liveWarnings(squad.members);
               const review = deleteReview?.squadId === squad.id ? deleteReview : null;
               return (
                 <article key={squad.id} className={styles.squadCard} data-squad-id={squad.id}>
@@ -830,6 +850,12 @@ export function SquadsPanel({
                         </li>
                       ))}
                     </ul>
+                    {live.length > 0 ? (
+                      <div className={styles.ownershipNote} role="status">
+                        <ShieldAlert aria-hidden="true" />
+                        <span>{live.map(liveWarningText).join(" ")}</span>
+                      </div>
+                    ) : null}
                     {conflicts.length > 0 ? (
                       <div className={styles.ownershipNote}>
                         <ShieldAlert aria-hidden="true" />
@@ -972,6 +998,7 @@ export function SquadsPanel({
         <SquadEditor
           headingId={editorHeading}
           value={editor}
+          liveWarnings={liveWarnings(editor.members)}
           providers={providers}
           accounts={accounts}
           accountModelStates={accountModelStates}
@@ -1168,6 +1195,7 @@ function LaunchRow({
                 {agent && (overlaps.get(agent.id)?.length ?? 0) > 0 ? (
                   <OverlapNote
                     overlaps={overlaps.get(agent.id) ?? []}
+                    selfName={agent.name.trim() || agent.providerName}
                     onFocus={(other) => onOpen(other.id, other.workspaceId)}
                   />
                 ) : null}
@@ -1504,9 +1532,19 @@ function Recipes({
   );
 }
 
+interface LiveWarning {
+  name: string;
+  paths: string[];
+}
+
+function liveWarningText(warning: LiveWarning): string {
+  return `${warning.name} is already working in ${warning.paths.join(", ")}. Launching still works; edits may overlap.`;
+}
+
 function SquadEditor({
   headingId,
   value,
+  liveWarnings,
   providers,
   accounts,
   accountModelStates,
@@ -1525,6 +1563,7 @@ function SquadEditor({
 }: {
   headingId: string;
   value: SquadDefinition;
+  liveWarnings: readonly LiveWarning[];
   providers: readonly ProviderOption[];
   accounts: readonly ProviderAccount[];
   accountModelStates: ReadonlyMap<string, ProviderAccountState> | null;
@@ -1973,11 +2012,14 @@ function SquadEditor({
                 );
               })}
             </div>
-            {collisions.length > 0 ? (
+            {collisions.length > 0 || liveWarnings.length > 0 ? (
               <div className={styles.collision} role="status">
                 <ShieldAlert aria-hidden="true" />
                 <div>
                   <strong>Ownership guidance before launch</strong>
+                  {liveWarnings.map((warning) => (
+                    <span key={`live:${warning.name}:${warning.paths.join(",")}`}>{liveWarningText(warning)}</span>
+                  ))}
                   {collisions.map((collision) => (
                     <span key={`${collision.path}:${collision.undeclared}`}>
                       <code>{collision.path}</code> ·{" "}

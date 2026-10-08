@@ -831,3 +831,64 @@
     animation: pane-breathe var(--dur-pulse) var(--ease-in-out) infinite;
   }
 }
+
+/* ---------- Ownership chip: only exists while the agent overlaps another or holds a handoff ---------- */
+
+.ownership {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  min-width: 0;
+  max-width: 12rem;
+  height: var(--pane-chip-h);
+  padding: 0 var(--space-1-5);
+  border: 1px solid var(--status-recovering-line);
+  border-radius: var(--pane-chip-radius);
+  background: var(--status-recovering-soft);
+  color: var(--status-recovering-text);
+  font: inherit;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ownership:hover {
+  filter: brightness(1.15);
+}
+
+.ownership:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 1px var(--color-border-focus);
+}
+
+.ownership[data-tone="danger"] {
+  border-color: var(--status-failed-line);
+  background: var(--status-failed-soft);
+  color: var(--status-failed-text);
+}
+
+.ownership[data-tone="waiting"] {
+  border-color: var(--status-waiting-line);
+  background: var(--status-waiting-soft);
+  color: var(--status-waiting-text);
+}
+
+.ownershipLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ownershipTip {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-width: 22rem;
+}
+
+.ownershipTip code {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+}

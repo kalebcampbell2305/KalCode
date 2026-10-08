@@ -61,7 +61,9 @@ test("lists what finished, failed and needs permission, with an unread count", a
   const live = center(page).getByRole("region", { name: "Needs you now" });
   await expect(live.getByRole("listitem")).toHaveCount(8);
   await expect(
-    live.getByRole("listitem", { name: /Blocked:\s*Fix flaky checkout test and Write invoices migration overlap/ }),
+    live.getByRole("listitem", {
+      name: /Blocked:\s*Fix flaky checkout test and Write invoices migration changed the same files/,
+    }),
   ).toContainText("apps/web/checkout/cart.ts");
   await expect(live.getByRole("listitem", { name: /Failed:\s*Package desktop failed/ })).toContainText("Operations");
   await expect(summary(page)).toContainText("4 unread updates");

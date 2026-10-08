@@ -254,6 +254,14 @@ fn branch_comparison_and_merge_prediction() {
         worktree::merge_conflicts(&fx.git, &repo, base, branch).expect("predict"),
         Some(true)
     );
+    assert_eq!(
+        worktree::merge_conflict_files(&fx.git, &repo, base, branch).expect("files"),
+        Some(vec!["README.md".to_owned()])
+    );
+    assert_eq!(
+        worktree::merge_conflict_files(&fx.git, &repo, base, base).expect("files"),
+        Some(Vec::new())
+    );
     assert_eq!(fx.git_plain(&["rev-parse", "HEAD"]), head);
     assert_eq!(fx.read("README.md"), b"main hello\n");
     assert!(
@@ -272,10 +280,15 @@ fn branch_comparison_and_merge_prediction() {
         worktree::merge_conflicts(&fx.git, &configured, base, branch).expect("predict"),
         None
     );
+    assert_eq!(
+        worktree::merge_conflict_files(&fx.git, &configured, base, branch).expect("files"),
+        None
+    );
 
     // Unsafe revisions never reach git.
     assert!(worktree::ahead_behind(&fx.git, &repo, "--all", branch).is_err());
     assert!(worktree::merge_conflicts(&fx.git, &repo, base, "a..b").is_err());
+    assert!(worktree::merge_conflict_files(&fx.git, &repo, "--all", branch).is_err());
 
     // Rolling back a new worktree deletes its branch only while nothing was committed on it.
     let rollback = worktree::create_managed(

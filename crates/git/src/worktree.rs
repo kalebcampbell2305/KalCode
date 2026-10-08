@@ -823,6 +823,64 @@ pub fn merge_conflicts(git: &Git, repo: &Repo, base: &str, branch: &str) -> Resu
     })
 }
 
+/// Most conflicting files [`merge_conflict_files`] lists.
+const MAX_CONFLICT_FILES: usize = 50;
+
+/// Like [`merge_conflicts`] for two branch tips, naming the conflicting files: `Some(files)`
+/// (repository-relative, sorted, at most 50; empty when the merge is clean) or `None` when
+/// unknown, under the same conditions as [`merge_conflicts`].
+pub fn merge_conflict_files(
+    git: &Git,
+    repo: &Repo,
+    left: &str,
+    right: &str,
+) -> Result<Option<Vec<String>>> {
+    validate_revision(left)?;
+    validate_revision(right)?;
+    if git.version() < MERGE_TREE_WRITE_TREE || repo.defines_merge_driver() {
+        return Ok(None);
+    }
+    let out = repo
+        .cmd(git)
+        .args([
+            "merge-tree",
+            "--write-tree",
+            "--name-only",
+            "--no-messages",
+            "-z",
+            left,
+            right,
+        ])
+        .run()?;
+    Ok(match out.status.code() {
+        Some(0) => Some(Vec::new()),
+        Some(1) => {
+            // NUL-separated: the would-be merge tree id, then each conflicted file.
+            let mut files: Vec<String> = out
+                .stdout
+                .split(|byte| *byte == 0)
+                .skip(1)
+                .filter(|name| !name.is_empty())
+                .map(|name| String::from_utf8_lossy(name).into_owned())
+                .collect();
+            files.sort();
+            files.dedup();
+            files.truncate(MAX_CONFLICT_FILES);
+            // A conflict Git names no file for is still a conflict, but this function's answer
+            // would read as clean: say unknown instead.
+            (!files.is_empty()).then_some(files)
+        }
+        code => {
+            tracing::warn!(
+                event = "git.merge_prediction_unknown",
+                exit_code = code,
+                stderr = %out.stderr
+            );
+            None
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

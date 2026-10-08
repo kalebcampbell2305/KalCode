@@ -7,20 +7,32 @@
   list-style: none;
 }
 
-/* An amber early-warning chip: quiet enough for a card, unmistakable at a glance. */
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+/* A risk-toned chip: quiet enough for a card, unmistakable at a glance. Amber is the default. */
 .chip {
+  --chip-line: var(--status-waiting-line);
+  --chip-soft: var(--status-waiting-soft);
+  --chip-edge: var(--status-waiting);
+  --chip-text: var(--status-waiting-text);
   position: relative;
   z-index: 1;
   display: flex;
   align-items: center;
   gap: var(--space-1-5);
+  min-width: 0;
   max-width: 100%;
   min-height: 1.625rem;
   padding: 0 var(--space-2);
-  border: 1px solid var(--status-waiting-line);
+  border: 1px solid var(--chip-line);
   border-radius: var(--radius-md);
-  background: var(--status-waiting-soft);
-  color: var(--status-waiting-text);
+  background: var(--chip-soft);
+  color: var(--chip-text);
   font: inherit;
   font-size: var(--type-small);
   text-align: left;
@@ -31,9 +43,71 @@
     box-shadow var(--dur-fast) var(--ease-out);
 }
 
+.chip[data-tone="live"],
+.chip[data-tone="conflict"] {
+  --chip-line: var(--status-failed-line);
+  --chip-soft: var(--status-failed-soft);
+  --chip-edge: var(--status-failed);
+  --chip-text: var(--status-failed-text);
+}
+
+/* Merges cleanly, or allowed by the person: present, never loud. */
+.chip[data-tone="quiet"] {
+  --chip-line: var(--color-border-subtle);
+  --chip-soft: transparent;
+  --chip-edge: var(--color-border);
+  --chip-text: var(--color-text-muted);
+}
+
 .chip:hover {
-  border-color: var(--status-waiting);
-  box-shadow: 0 0 0 3px var(--status-waiting-soft);
+  border-color: var(--chip-edge);
+  box-shadow: 0 0 0 3px var(--chip-soft);
+}
+
+.control {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.625rem;
+  height: 1.625rem;
+  padding: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+
+.control:hover {
+  border-color: var(--color-border);
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.control:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 2px;
+}
+
+.control svg {
+  width: 0.8125rem;
+  height: 0.8125rem;
+}
+
+.claim {
+  margin: 0;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: var(--type-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chip:focus-visible {
@@ -63,7 +137,7 @@
 .count {
   flex: none;
   margin-left: auto;
-  color: var(--status-waiting-text);
+  color: var(--chip-text);
   font-variant-numeric: tabular-nums;
   font-weight: var(--weight-semibold);
 }

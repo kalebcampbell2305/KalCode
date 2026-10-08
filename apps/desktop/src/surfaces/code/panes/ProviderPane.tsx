@@ -39,6 +39,7 @@ import { PaneAccountSuggestion } from "./PaneAccountSuggestion.tsx";
 import {
   PaneAccountChip,
   type PaneAccountIdentity,
+  PaneOwnershipChip,
   PaneStatusChip,
   PaneToolChip,
   paneAccountLabel,
@@ -635,6 +636,7 @@ function PaneHeader({
             <span className="visually-hidden">Permission mode </span>
             <span>{MODE_LABELS[thread.permissionMode]}</span>
           </span>
+          <PaneOwnershipChip thread={thread} />
           <PaneToolChip status={thread.status} activity={thread.currentActivity} />
           <PaneStatusChip thread={thread} qualifier={waitingReason(thread)} />
           <ChainPaneChip threadId={thread.id} />

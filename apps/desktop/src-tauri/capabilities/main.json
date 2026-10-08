@@ -153,6 +153,8 @@
     "allow-session-resolve",
     "allow-thread-get",
     "allow-thread-worktree-states",
+    "allow-thread-touched-paths",
+    "allow-agent-pair-conflicts",
     "allow-thread-worktree-commit",
     "allow-thread-messages",
     "allow-thread-tool-calls",
