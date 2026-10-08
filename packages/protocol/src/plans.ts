@@ -760,7 +760,15 @@ export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
         status: "available",
         verifiedIn: "0.1.10+2242",
       },
-      { id: "agent-files", label: "Agent File Ownership and collision warnings", from: "max", status: "coming_soon" },
+      {
+        id: "agent-files",
+        label: "Agent File Ownership and collision warnings",
+        detail:
+          "See which agent is working on which files, and get an early warning when two agents' changes will collide.",
+        from: "max",
+        status: "available",
+        verifiedIn: "0.1.10+2310",
+      },
       { id: "stuck-agents", label: "Stuck Agent Detector", from: "max", status: "coming_soon" },
       {
         id: "mission-control",
