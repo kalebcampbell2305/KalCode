@@ -94,6 +94,17 @@ export function samplePayloads(fx: Fixtures = createFixtures()): {
       payload: { threadId, name: "Fix flaky login test", providerId: "claude-code", workspaceId },
     },
     "thread.started": { type: "thread.started", payload: { threadId } },
+    "thread.runtime_identity_changed": {
+      type: "thread.runtime_identity_changed",
+      payload: {
+        threadId,
+        providerId: "codex",
+        providerAccountId: "0192f3c4-0000-7000-8000-000000000201",
+        accountLabel: "Codex A",
+        activeModel: "gpt-5-codex",
+        activeEffort: "high",
+      },
+    },
     "thread.status_changed": {
       type: "thread.status_changed",
       payload: { threadId, from: "thinking", to: "running_command", detail: "Running npm test" },
