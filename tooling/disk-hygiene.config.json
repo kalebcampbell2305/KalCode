@@ -3,8 +3,9 @@
   "warnGb": 150,
   "criticalGb": 25,
   "idleHours": 24,
-  "mainIdleHours": 168,
+  "mainIdleHours": 48,
   "incrementalDays": 7,
+  "tempDays": 2,
   "protect": [
     "kc-release-*-notes-*",
     "kc-release-unified-*",

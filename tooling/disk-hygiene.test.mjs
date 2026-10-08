@@ -25,7 +25,7 @@ const config = {
   warnGb: 150,
   criticalGb: 25,
   idleHours: 24,
-  mainIdleHours: 168,
+  mainIdleHours: 48,
   incrementalDays: 7,
   protect: ["kc-release-*"],
   retain: [],
@@ -273,7 +273,7 @@ test("custom cargo target dirs marked with CACHEDIR.TAG are found, node_modules 
   assert.deepEqual(targetDirs(wt.path).sort(), [custom, join(wt.path, "target")].sort());
 });
 
-test("leaked test fixtures and old Claude snapshot stores in temp are found; anything else is not", (t) => {
+test("temp leftovers: leaked fixtures after a day, idle unreferenced entries after tempDays, never live state", (t) => {
   const tmp = fixture(t);
   const dir = (name, files, ageHours) => {
     const path = join(tmp, name);
@@ -284,12 +284,19 @@ test("leaked test fixtures and old Claude snapshot stores in temp are found; any
   };
   const leaked = dir(".tmpAbC123", ["kalcode.db", "kalcode.lock"], 30);
   dir(".tmpFresh1", ["kalcode.db"], 2);
-  dir(".tmpOther1", ["notes.txt"], 300);
+  const scratch = dir(".tmpOther1", ["notes.txt"], 300);
+  const held = dir("playwright-artifacts-held", ["trace.zip"], 300);
+  dir("vite-recent", ["x"], 30);
   dir(".tmpTooLongName", ["kalcode.db"], 300);
   const oldSnapshot = dir(join("claude", "bash-edit-diff", "1-2-old"), ["index"], 100);
   dir(join("claude", "bash-edit-diff", "1-2-live"), ["index"], 5);
   dir(join("claude", "C--project", "session"), ["x.output"], 500);
-  assert.deepEqual(staleTempLeftovers({ tmp, now: NOW }).sort(), [leaked, oldSnapshot].sort());
+  const tooLong = join(tmp, ".tmpTooLongName");
+  const lines = [pathKey(`node --trace ${join(held, "trace.zip")}`)];
+  assert.deepEqual(
+    staleTempLeftovers({ tmp, now: NOW, tempDays: 2, commandLines: lines }).sort(),
+    [leaked, scratch, tooLong, oldSnapshot].sort(),
+  );
 });
 
 test("only the newest release seeds are retained; older idle, unreferenced seeds are SAFE", (t) => {

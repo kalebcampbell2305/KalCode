@@ -83,6 +83,7 @@ export function loadConfig(path = join(ROOT, "tooling", "disk-hygiene.config.jso
     idleHours: number("KALCODE_DISK_IDLE_HOURS", config.idleHours),
     mainIdleHours: number("KALCODE_DISK_MAIN_IDLE_HOURS", config.mainIdleHours),
     incrementalDays: number("KALCODE_DISK_INCREMENTAL_DAYS", config.incrementalDays),
+    tempDays: number("KALCODE_DISK_TEMP_DAYS", config.tempDays),
     protect: config.protect ?? [],
     retain: config.retain ?? [],
   };
@@ -430,15 +431,33 @@ function newestShallow(dir) {
  *   - `.tmpXXXXXX` dirs holding a `kalcode.db`: Core fixtures of Rust tests (tempfile) whose
  *     cleanup failed, idle for a day. On Windows a TempDir silently survives when a file in it
  *     was still open at drop, and gates leaked ~17,000 of them (14 GB) in one day;
+ *   - any other top-level entry idle for `tempDays` that no running process names (test
+ *     artifacts, bundler and browser-profile scratch, crash leftovers);
  *   - `claude/bash-edit-diff/*`: Claude Code's per-session file snapshot stores (~0.65 GB each)
- *     untouched for 3 days, long after their session ended.
+ *     untouched for 3 days, long after their session ended. The rest of `claude/` (live session
+ *     state) and this tool's own state are never touched.
  */
-export function staleTempLeftovers({ tmp = tmpdir(), now = Date.now() } = {}) {
+export function staleTempLeftovers({
+  tmp = tmpdir(),
+  now = Date.now(),
+  tempDays = 2,
+  commandLines = [],
+  platform = process.platform,
+} = {}) {
   const stale = [];
-  for (const entry of directories(tmp)) {
-    if (!/^\.tmp[A-Za-z0-9]{6}$/.test(entry.name)) continue;
-    const dir = join(tmp, entry.name);
-    if (existsSync(join(dir, "kalcode.db")) && now - newestShallow(dir) > DAY) stale.push(dir);
+  let entries;
+  try {
+    entries = readdirSync(tmp, { withFileTypes: true });
+  } catch {
+    entries = [];
+  }
+  for (const entry of entries) {
+    if (entry.name === "claude" || entry.name === "kalcode-disk-hygiene") continue;
+    const path = join(tmp, entry.name);
+    const age = now - (entry.isDirectory() ? newestShallow(path) : mtime(path));
+    const fixture = /^\.tmp[A-Za-z0-9]{6}$/.test(entry.name) && existsSync(join(path, "kalcode.db"));
+    if (fixture ? age > DAY : age > tempDays * DAY && !mentionedBy(pathKey(path, platform), commandLines))
+      stale.push(path);
   }
   const snapshots = join(tmp, "claude", "bash-edit-diff");
   for (const entry of directories(snapshots)) {
@@ -612,7 +631,7 @@ function main(argv) {
       const trim = entry.trim?.length ? `; ${entry.trim.length} stale incremental dirs` : "";
       process.stdout.write(`${entry.verdict.padEnd(4)} ${entry.path}  (${entry.reason}${trim})\n`);
     }
-    const leftovers = staleTempLeftovers();
+    const leftovers = staleTempLeftovers({ tempDays: config.tempDays, commandLines: processCommandLines() });
     process.stdout.write(`SAFE ${leftovers.length} leaked temp dirs in ${tmpdir()}\n`);
     if (!apply) {
       const safe = plan.filter((entry) => entry.verdict === "SAFE").length;
