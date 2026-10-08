@@ -60,3 +60,39 @@ jobs:
           } finally { Pop-Location }
           "VERIFY $env:RUNNER_NAME: $($v -join ' / ')"
           if ($v[0] -notmatch '^rustc 1\.97\.1 ' -or $v[1] -notmatch '^clippy 0\.1\.97' -or $v[2] -notmatch '^cargo-deny 0\.20\.2' -or $v[3] -notmatch '^cargo-audit(-audit)? 0\.22\.2') { throw "version check failed: $($v -join ' / ')" }
+      - name: Preflight what desktop-native-e2e and desktop-ui need on this runner (no suites)
+        if: always()
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $rows = New-Object System.Collections.Generic.List[string]
+          function Check([string]$name, [bool]$ok, [string]$detail) { $rows.Add(("{0} {1}: {2}" -f $(if ($ok) { 'PASS' } else { 'FAIL' }), $name, $detail)) }
+          $wv = Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -ErrorAction SilentlyContinue
+          Check 'WebView2 runtime' ([bool]$wv.pv) "$($wv.pv)"
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vc = if (Test-Path $vswhere) { & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath } else { '' }
+          Check 'MSVC x64 tools' ([bool]$vc) "$vc"
+          foreach ($t in 'git', 'node', 'pnpm') { $c = Get-Command $t -ErrorAction SilentlyContinue; $v = if ($c) { (& $t --version 2>$null | Select-Object -First 1) } else { '' }; Check $t ([bool]$c) "$v" }
+          foreach ($u in 'https://github.com/Kitware/CMake/releases', 'https://github.com/llvm/llvm-project/releases') {
+            try { $r = Invoke-WebRequest -UseBasicParsing -Method Head -Uri $u -TimeoutSec 20; Check "reach $u" ($r.StatusCode -lt 400) "$($r.StatusCode)" } catch { Check "reach $u" $false $_.Exception.Message }
+          }
+          $pw = Join-Path $env:LOCALAPPDATA 'ms-playwright'
+          Check 'Playwright browser cache (the gate also installs per run)' (Test-Path $pw) "$pw: $((Get-ChildItem $pw -Directory -ErrorAction SilentlyContinue | ForEach-Object Name) -join ',')"
+          try { $d = Join-Path ([IO.Path]::GetTempPath()) ("kalcode-e2e-preflight-" + [guid]::NewGuid()); New-Item -ItemType Directory -Path $d | Out-Null; Remove-Item -Recurse -Force $d; Check 'temp dir writable (KALCODE_DATA_DIR)' $true ([IO.Path]::GetTempPath()) } catch { Check 'temp dir writable' $false $_.Exception.Message }
+          foreach ($n in 'browser.lock', 'rust.lock', 'gate.lock') {
+            $f = "C:\ProgramData\KalCodePC2\locks\$n"
+            try { $h = [IO.File]::Open($f, 'OpenOrCreate', 'ReadWrite', 'ReadWrite'); $h.Dispose(); Check "lock $n read-write" $true $f } catch { Check "lock $n read-write" ($_.Exception.Message -match 'being used') $_.Exception.Message }
+          }
+          $slot = switch ($env:RUNNER_NAME) { 'kalcode-win-gate-2' { 0 } 'kalcode-win-gate-2b' { 1 } default { -1 } }
+          if ($slot -ge 0) {
+            $o = 20 * $slot
+            foreach ($port in @(4691 + $o), @(4692 + $o), @(9701 + $o), @(1791 + $o), @(39333 + $o)) {
+              $busy = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
+              Check "port $port free" ($busy.Count -eq 0) $(if ($busy) { "pid $($busy[0].OwningProcess)" } else { 'free' })
+            }
+          }
+          $free = [math]::Round((Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'").FreeSpace / 1GB, 1)
+          Check 'C: free > 40 GB' ($free -gt 40) "$free GB"
+          "PREFLIGHT $env:RUNNER_NAME"
+          $rows | ForEach-Object { "  $_" }
+          exit 0
