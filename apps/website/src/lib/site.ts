@@ -185,10 +185,10 @@ export const PAGES = [
       "KalCode product updates: Windows releases, KalVoice progress, provider workspace improvements and meaningful product news without the engineering noise.",
   },
   {
-    path: "/games/campus-founder",
-    title: "Campus Founder — A KalCode Game",
+    path: "/games/kal-university",
+    title: "KAL University — A KalCode Game",
     description:
-      "Campus Founder is a single-player campus adventure and business game from KalCode, in development for Windows and macOS. Start with $200 and a dorm room at KAL University.",
+      "KAL University is a single-player campus adventure and business game from KalCode, in development for Windows and macOS. Start in your dorm with $200 and build your future.",
   },
   {
     path: "/security",
@@ -266,7 +266,7 @@ export const FOOTER_NAV = {
     { href: "/updates", label: "Updates" },
   ],
   /** Games from KalCode: separate products, kept out of the KalCode header and pricing. */
-  games: [{ href: "/games/campus-founder", label: "Campus Founder" }],
+  games: [{ href: "/games/kal-university", label: "KAL University" }],
   docs: [
     { href: "/docs", label: "Overview" },
     { href: "/docs/permissions", label: "Permissions" },

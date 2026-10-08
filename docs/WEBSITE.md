@@ -26,7 +26,7 @@ Status: built and tested in Z0 · Canonical origin: **https://kalcoded.com**
 | `/download` | Build status per OS from the release manifest, the early-access form, what to expect. |
 | `/updates` | Product news and release communication. `/changelog` permanently redirects here, and historic release anchors remain valid. |
 | `/docs/*`, `/security`, `/privacy`, `/terms` | Content pages; docs carry a one-line "Describes the design" chip. |
-| `/games/campus-founder` | Campus Founder, "A KalCode Game" (see "Games" below). |
+| `/games/kal-university` | KAL University ("Build your future."), "A KalCode Game" (see "Games" below). |
 
 Rules the pages follow:
 
@@ -89,7 +89,8 @@ Rules the pages follow:
 
 ## Games
 
-`/games/campus-founder` presents Campus Founder, a separate single-player game, as "A KalCode Game".
+`/games/kal-university` presents KAL University, a separate single-player game (tagline "Build your
+future."), as "A KalCode Game".
 It is a world page reached from the footer's Games column; the header navigation and `/pricing`
 stay KalCode-only. Rules:
 
@@ -97,8 +98,10 @@ stay KalCode-only. Rules:
   on the page; release news points to the existing X account in `SOCIAL`.
 - **Truthful state.** While no game build is published, the Windows and macOS download controls are
   disabled "Coming soon" buttons, no price is shown, and the story arc tags each chapter as "In the
-  development build" or "Planned".
-- **Real captures only.** `public/assets/games/campus-founder/*` are frames from the game's real
+  development build" or "Planned". Features beyond the current build (a laptop to work anywhere on
+  campus, fictional AI tools and an AI company, a fictional stock market and IPO, regions inspired by
+  California, Florida and New York) sit together under "Where it's headed", each tagged Planned.
+- **Real captures only.** `public/assets/games/kal-university/*` are frames from the game's real
   development build (1920×1080 PNG converted with sharp to AVIF and WebP at 960 and 1920 widths),
   each captioned "In-game capture · development build" and given a descriptive alt. Never a mock-up,
   and never a frame that shows retired KalCode branding.
