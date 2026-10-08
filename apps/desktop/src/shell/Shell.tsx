@@ -30,10 +30,10 @@ import { ThreadsSurface } from "../surfaces/threads/ThreadsSurface.tsx";
 import { useAppearance } from "./appearance.ts";
 import { CodeStartup } from "./CodeStartup.tsx";
 import { CommandPalette } from "./CommandPalette.tsx";
-import { AgentRail } from "./deck/AgentRail.tsx";
 import { CommandBar } from "./deck/CommandBar.tsx";
 import { DeckDataProvider } from "./deck/DeckData.tsx";
 import { DeckUiProvider } from "./deck/DeckUi.tsx";
+import { ShellDock } from "./dock/WorkspaceDock.tsx";
 import { NavigationBar } from "./NavigationBar.tsx";
 import { destinationMeta, NavigationProvider, useNavigation } from "./navigation.tsx";
 import { NotificationCenter } from "./notifications/NotificationCenter.tsx";
@@ -240,7 +240,7 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
                     </div>
                   ) : null}
                 </main>
-                <AgentRail />
+                <ShellDock />
               </div>
               <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
               {kalvoice ? <FloatingAssistant /> : null}
