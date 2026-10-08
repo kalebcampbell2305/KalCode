@@ -1122,7 +1122,12 @@ SAFE when all of these hold:
 Only regenerable output goes: `deps`, `build`, `incremental`, `.fingerprint` and loose build products. `bundle/`,
 evidence and every other file stay. Each entry is renamed aside first, so anything a build holds open is
 skipped. Kept profiles that no process uses, the main checkout's `target/debug` included, also shed per-crate
-incremental dirs untouched for 7 days. The sweep also clears leaked temp dirs: `.tmpXXXXXX` Core test
+incremental dirs untouched for 7 days, and superseded unit variants: every Cargo.lock, feature or flag change
+gives a crate a new hash and cargo never deletes the old one, so a target other worktrees build into through
+`CARGO_TARGET_DIR` grew to 110 GB with 82 `kalcode_core` variants. Beyond a crate's 4 newest variants, one idle
+for 3 days goes (its `deps` files, `.fingerprint`, `build` and incremental dirs), only from a profile nothing
+wrote to for an hour, never from release seeds or their origins, and never a unit a build-script output points
+into; a build that needs one again just recompiles it. The first run recovered 48 GB. The sweep also clears leaked temp dirs: `.tmpXXXXXX` Core test
 fixtures holding a `kalcode.db` and idle for a day (Windows leaves a TempDir behind when a file in it is still
 open at drop; one day of gates leaked 17,000 of them, 14 GB), Claude Code `bash-edit-diff` snapshot stores
 untouched for 3 days, and any other top-level temp entry idle for 2 days that no running process names. Dev and test builds use `debug = "line-tables-only"` (root

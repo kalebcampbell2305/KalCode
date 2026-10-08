@@ -6,6 +6,8 @@
   "mainIdleHours": 48,
   "incrementalDays": 7,
   "tempDays": 2,
+  "variantDays": 3,
+  "keepVariants": 4,
   "protect": [
     "kc-release-*-notes-*",
     "kc-release-unified-*",

@@ -22,6 +22,10 @@
 // products). bundle/ installers, evidence and every other file stay. A kept profile no process
 // uses (the main checkout's target/debug included) still sheds per-crate incremental caches
 // rustc has not touched for `incrementalDays`; they are never reused and grow without bound.
+// It also sheds superseded unit variants: every Cargo.lock, feature or flag change gives a crate
+// a new metadata hash and cargo never deletes the old one, so a target several worktrees build
+// into (CARGO_TARGET_DIR pointed at the main checkout) kept 82 variants of kalcode_core and grew
+// to 110 GB. Beyond the newest `keepVariants` of a crate, a variant idle for `variantDays` goes.
 import { spawn, spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -84,6 +88,8 @@ export function loadConfig(path = join(ROOT, "tooling", "disk-hygiene.config.jso
     mainIdleHours: number("KALCODE_DISK_MAIN_IDLE_HOURS", config.mainIdleHours),
     incrementalDays: number("KALCODE_DISK_INCREMENTAL_DAYS", config.incrementalDays),
     tempDays: number("KALCODE_DISK_TEMP_DAYS", config.tempDays),
+    variantDays: number("KALCODE_DISK_VARIANT_DAYS", config.variantDays ?? 3),
+    keepVariants: number("KALCODE_DISK_KEEP_VARIANTS", config.keepVariants ?? 4),
     protect: config.protect ?? [],
     retain: config.retain ?? [],
   };
@@ -292,9 +298,11 @@ export function planSweep({
 
   // Seeds copied from another target keep pointing at it; that origin must survive.
   const referencedBy = new Map();
+  const outputKeys = [];
   for (const profile of profiles) {
     for (const path of buildOutputPaths(profile.path)) {
       const key = pathKey(path, platform);
+      outputKeys.push(key);
       if (key.startsWith(`${profile.key}/`)) continue;
       const origin = profiles.find((other) => other !== profile && key.startsWith(`${other.key}/`));
       if (origin && !referencedBy.has(origin.key)) referencedBy.set(origin.key, profile.path);
@@ -310,13 +318,31 @@ export function planSweep({
   }
 
   return profiles.map((profile) => {
-    // A kept profile that no process uses still sheds incremental caches untouched for a week.
-    const keep = (reason, trimmable = true) => ({
-      ...profile,
-      verdict: "KEEP",
-      reason,
-      trim: trimmable ? staleIncremental(profile.path, now - config.incrementalDays * DAY) : [],
-    });
+    // A kept profile that no process uses still sheds incremental caches untouched for a week
+    // and the superseded variants of its units.
+    const keep = (reason, trimmable = true) => {
+      if (!trimmable) return { ...profile, verdict: "KEEP", reason, trim: [], prune: [] };
+      const trim = staleIncremental(profile.path, now - config.incrementalDays * DAY);
+      const trimmed = new Set(trim);
+      // Release seeds and the targets they were copied from stay whole: a seed is only worth
+      // keeping if the next release build finds every unit fresh in it.
+      const seed =
+        config.retain.some((rule) => matchesAny(basename(profile.worktree), [rule.match])) ||
+        referencedBy.has(profile.key);
+      // A build may run here without naming the target on its command line (CARGO_TARGET_DIR) and
+      // can have judged an old unit fresh, so variants only go from a profile idle for an hour.
+      const activity = profileActivity(profile.path);
+      const prune =
+        seed || now - activity < HOUR
+          ? []
+          : supersededVariants(profile.path, {
+              before: now - (config.variantDays ?? 3) * DAY,
+              keep: config.keepVariants ?? 4,
+              referenced: outputKeys,
+              platform,
+            }).filter((path) => !trimmed.has(path));
+      return { ...profile, verdict: "KEEP", reason, trim, prune, activity };
+    };
     const name = basename(profile.worktree);
     if (!profile.main && matchesAny(name, config.protect)) return keep(`protected worktree (${name})`, false);
     if (inUse(profile, commandLines, platform)) return keep("a running process uses it", false);
@@ -343,6 +369,64 @@ export function staleIncremental(profile, before) {
     .filter(
       (dir) => Math.max(mtime(dir), ...directories(dir).map((session) => mtime(join(dir, session.name)))) < before,
     );
+}
+
+const UNIT_ENTRY = /^(.+)-([0-9a-f]{16})(\.[^-]+)?$/;
+
+/**
+ * Entries of superseded unit variants in a profile. A unit is one crate build under one metadata
+ * hash: `deps/<crate>-<hash>.*` (`lib` prefix on .rlib/.rmeta), `.fingerprint/<pkg>-<hash>` and
+ * `build/<pkg>-<hash>`. Incremental dirs (`incremental/<crate>-<hash>`) count as variants of their
+ * own. A variant goes when its crate has `keep` newer variants and nothing in it was written since
+ * `before`; a build that needs it again just recompiles that unit. Units a build-script output of
+ * any target points into (`referenced`, pathKeys) always stay.
+ */
+export function supersededVariants(profile, { before, keep = 4, referenced = [], platform = process.platform } = {}) {
+  const units = new Map();
+  const add = (id, crate, path, activity) => {
+    const unit = units.get(id) ?? { crate, paths: [], activity: 0 };
+    unit.paths.push(path);
+    unit.activity = Math.max(unit.activity, activity);
+    units.set(id, unit);
+  };
+  for (const sub of ["deps", ".fingerprint", "build"]) {
+    let entries;
+    try {
+      entries = readdirSync(join(profile, sub), { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const match = entry.name.match(UNIT_ENTRY);
+      if (!match) continue;
+      const [, name, hash, ext = ""] = match;
+      const crate = (/^\.(rlib|rmeta)$/i.test(ext) ? name.replace(/^lib/, "") : name).replaceAll("-", "_");
+      const path = join(profile, sub, entry.name);
+      add(hash, crate, path, entry.isDirectory() ? newestShallow(path) : mtime(path));
+    }
+  }
+  const incremental = join(profile, "incremental");
+  for (const entry of directories(incremental)) {
+    const dash = entry.name.lastIndexOf("-");
+    if (dash <= 0) continue;
+    const path = join(incremental, entry.name);
+    const activity = Math.max(mtime(path), ...directories(path).map((session) => mtime(join(path, session.name))));
+    add(`incremental:${entry.name}`, `incremental:${entry.name.slice(0, dash)}`, path, activity);
+  }
+
+  const byCrate = new Map();
+  for (const unit of units.values()) byCrate.set(unit.crate, [...(byCrate.get(unit.crate) ?? []), unit]);
+  const superseded = [];
+  for (const variants of byCrate.values()) {
+    variants.sort((a, b) => b.activity - a.activity);
+    for (const unit of variants.slice(keep)) {
+      if (unit.activity >= before) continue;
+      const keys = unit.paths.map((path) => pathKey(path, platform));
+      if (referenced.some((ref) => keys.some((key) => ref === key || ref.startsWith(`${key}/`)))) continue;
+      superseded.push(...unit.paths);
+    }
+  }
+  return superseded;
 }
 
 /** What applySweep removes from one profile dir: regenerable dirs and loose build products only. */
@@ -400,21 +484,34 @@ export function applySweep(plan, { now = Date.now, rename = renameSync, remove =
     if (moved > 0) removed.push(profile.path);
   }
   const trimmed = [];
-  for (const profile of plan.filter((entry) => entry.verdict === "KEEP" && entry.trim?.length)) {
+  const pruned = [];
+  for (const profile of plan.filter(
+    (entry) => entry.verdict === "KEEP" && (entry.trim?.length || entry.prune?.length),
+  )) {
     if (!recheck(profile)) continue;
-    const trash = join(profile.target, TRASH, `${now()}-trim-${trimmed.length}`);
+    // Superseded variants wait for the next sweep if anything was built here since the plan.
+    const prune = profileActivity(profile.path) > profile.activity ? [] : (profile.prune ?? []);
+    if (prune.length < (profile.prune?.length ?? 0))
+      skipped.push({ path: profile.path, reason: "built since the plan" });
+    const trash = join(profile.target, TRASH, `${now()}-trim-${trimmed.length}-${pruned.length}`);
     mkdirSync(trash, { recursive: true });
-    for (const dir of profile.trim) {
-      try {
-        rename(dir, join(trash, basename(dir)));
-        trimmed.push(dir);
-      } catch (error) {
-        skipped.push({ path: dir, reason: error?.code ?? "rename failed" });
+    for (const [paths, done] of [
+      [profile.trim ?? [], trimmed],
+      [prune, pruned],
+    ]) {
+      for (const [index, path] of paths.entries()) {
+        try {
+          // deps/ and .fingerprint/ share entry names, so each gets its own slot in the trash.
+          rename(path, join(trash, `${done === pruned ? "p" : "t"}${index}-${basename(path)}`));
+          done.push(path);
+        } catch (error) {
+          skipped.push({ path, reason: error?.code ?? "rename failed" });
+        }
       }
     }
     remove(trash, { recursive: true, force: true, maxRetries: 2 });
   }
-  return { removed, trimmed, skipped };
+  return { removed, trimmed, pruned, skipped };
 }
 
 /** Newest write to a directory or any of its direct children. */
@@ -629,14 +726,19 @@ function main(argv) {
     const plan = planSweep({ config });
     for (const entry of plan) {
       const trim = entry.trim?.length ? `; ${entry.trim.length} stale incremental dirs` : "";
-      process.stdout.write(`${entry.verdict.padEnd(4)} ${entry.path}  (${entry.reason}${trim})\n`);
+      const prune = entry.prune?.length ? `; ${entry.prune.length} superseded variant entries` : "";
+      process.stdout.write(`${entry.verdict.padEnd(4)} ${entry.path}  (${entry.reason}${trim}${prune})\n`);
     }
     const leftovers = staleTempLeftovers({ tempDays: config.tempDays, commandLines: processCommandLines() });
     process.stdout.write(`SAFE ${leftovers.length} leaked temp dirs in ${tmpdir()}\n`);
     if (!apply) {
       const safe = plan.filter((entry) => entry.verdict === "SAFE").length;
       const trims = plan.reduce((sum, entry) => sum + (entry.trim?.length ?? 0), 0);
-      process.stdout.write(`${safe} SAFE profiles, ${trims} stale incremental dirs; dry run, nothing deleted\n`);
+      const prunes = plan.reduce((sum, entry) => sum + (entry.prune?.length ?? 0), 0);
+      process.stdout.write(
+        `${safe} SAFE profiles, ${trims} stale incremental dirs, ${prunes} superseded variant entries; ` +
+          "dry run, nothing deleted\n",
+      );
       return 0;
     }
     const cleared = removeAll(leftovers);
@@ -647,7 +749,8 @@ function main(argv) {
     const recovered = freeBytes() - before;
     appendBounded(join(stateDir(process.env), "sweep.jsonl"), { at: Date.now(), recovered, cleared, ...result });
     process.stdout.write(
-      `removed ${result.removed.length} profiles, ${result.trimmed.length} incremental dirs and ` +
+      `removed ${result.removed.length} profiles, ${result.trimmed.length} incremental dirs, ` +
+        `${result.pruned.length} superseded variant entries and ` +
         `${cleared} leaked temp dirs, recovered ${formatGb(recovered)}; skipped ${result.skipped.length}\n`,
     );
     return 0;
