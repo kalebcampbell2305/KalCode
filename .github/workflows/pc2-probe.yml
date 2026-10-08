@@ -1,8 +1,7 @@
 name: PC2 extra gate runners bootstrap (throwaway)
 
-# Throwaway branch only (never merged). Pins the kalcode-qa-account gate runners kalcode-win-gate-2c/-2d to
-# the toolchain main is checked on (rustc 1.97.1): a fresh `stable` (1.99) clippy failed gate 37708150586.
-# RUSTUP_TOOLCHAIN in each runner's .env beats rust-toolchain.toml; the listeners restart to read it.
+# Throwaway branch only (never merged). Diagnose and, where this account may, fix kalcode-qa's access to the
+# second PC's gate lock folder (2c/2d run as kalcode-qa; browser.lock access was denied in gate 37710308604).
 
 on:
   push:
@@ -12,49 +11,36 @@ permissions:
   contents: read
 
 jobs:
-  pin:
+  locks:
     runs-on: [self-hosted, Windows, kalcode-desktop-qa]
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
-      - name: Pin 2c and 2d to rustc 1.97.1 and restart their listeners
+      - name: Lock folder access for kalcode-qa
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
-          $ErrorActionPreference = 'Stop'
-          $cargoBin = Join-Path $env:USERPROFILE '.cargo\bin'
-          $env:PATH = "$cargoBin;$env:PATH"
-          & rustup toolchain install 1.97.1 --profile minimal --component clippy --component rustfmt
-          if ($LASTEXITCODE) { throw "rustup install 1.97.1 failed ($LASTEXITCODE)" }
-          $env:RUSTUP_TOOLCHAIN = '1.97.1'
-          $rustc = (& rustc --version | Out-String).Trim(); $clippy = (& cargo clippy --version | Out-String).Trim()
-          "under RUSTUP_TOOLCHAIN=1.97.1: $rustc / $clippy"
-          if ($rustc -notmatch '^rustc 1\.97\.1 ') { throw "pinned rustc is not 1.97.1: $rustc" }
-          Remove-Item Env:RUSTUP_TOOLCHAIN
-          # Restarted listeners must not inherit this job's runner identity.
-          Get-ChildItem Env: | Where-Object { $_.Name -match '^(RUNNER_|ACTIONS_|GITHUB_)' } | ForEach-Object { Remove-Item -LiteralPath ("Env:" + $_.Name) }
-          $env:PATH = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
-          foreach ($x in '2c', '2d') {
-            $dir = "C:\kalcode-ci-$x\runner"
-            $envFile = Join-Path $dir '.env'
-            $lines = @(if (Test-Path -LiteralPath $envFile) { Get-Content -LiteralPath $envFile | Where-Object { $_ -notmatch '^RUSTUP_TOOLCHAIN=' } })
-            Set-Content -LiteralPath $envFile -Value (@($lines) + 'RUSTUP_TOOLCHAIN=1.97.1') -Encoding ascii
-            "$x .env: " + ((Get-Content -LiteralPath $envFile) -join ' | ')
-            $all = @(Get-CimInstance Win32_Process)
-            $worker = @($all | Where-Object { $_.Name -eq 'Runner.Worker.exe' -and $_.ExecutablePath -and $_.ExecutablePath.StartsWith($dir + '\', [StringComparison]::OrdinalIgnoreCase) })
-            if ($worker.Count -gt 0) { throw "kalcode-win-gate-$x is running a job (Runner.Worker $($worker[0].ProcessId)); not restarting it" }
-            # The run.cmd / run-helper.cmd shells and the listener of this runner.
-            $tree = @($all | Where-Object {
-              ($_.ExecutablePath -and $_.ExecutablePath.StartsWith($dir + '\', [StringComparison]::OrdinalIgnoreCase)) -or
-              ($_.Name -eq 'cmd.exe' -and $_.CommandLine -and $_.CommandLine.IndexOf($dir, [StringComparison]::OrdinalIgnoreCase) -ge 0)
-            })
-            foreach ($p in $tree) {
-              "stop $($p.ProcessId) $($p.Name)"
-              $ErrorActionPreference = 'Continue'; & taskkill.exe /T /F /PID $p.ProcessId *> $null; $ErrorActionPreference = 'Stop'
-            }
-            Start-Sleep -Seconds 3
-            $env:RUNNER_TRACKING_ID = '0'
-            Start-Process -FilePath (Join-Path $dir 'run.cmd') -WorkingDirectory $dir -WindowStyle Hidden
-            Start-Sleep -Seconds 15
-            $listener = @(Get-CimInstance Win32_Process -Filter "Name='Runner.Listener.exe'" | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($dir + '\', [StringComparison]::OrdinalIgnoreCase) })
-            "kalcode-win-gate-$x restarted: $($listener.Count) listener(s)"
-            if ($listener.Count -eq 0) { throw "kalcode-win-gate-$x did not restart" }
+          $ErrorActionPreference = 'Continue'
+          "whoami: $(whoami)"
+          $dir = 'C:\ProgramData\KalCodePC2\locks'
+          foreach ($p in @('C:\ProgramData\KalCodePC2', $dir)) { "== $p"; & icacls.exe $p }
+          $files = @(Get-ChildItem -Force -LiteralPath $dir -File -ErrorAction SilentlyContinue)
+          foreach ($f in $files) {
+            $owner = (Get-Acl -LiteralPath $f.FullName).Owner
+            $ok = $false
+            try { $h = [IO.File]::Open($f.FullName, 'OpenOrCreate', 'ReadWrite', 'ReadWrite'); $h.Dispose(); $ok = $true } catch { $err = $_.Exception.Message }
+            "file $($f.Name) owner=$owner openReadWrite=$ok $(if (-not $ok) { $err })"
           }
+          "== try granting kalcode-qa Modify (dir, inherit) and on each file"
+          & icacls.exe $dir /grant 'kalcode-qa:(OI)(CI)M' 2>&1 | ForEach-Object { "  dir: $_" }
+          foreach ($f in $files) { & icacls.exe $f.FullName /grant 'kalcode-qa:M' 2>&1 | ForEach-Object { "  $($f.Name): $_" } }
+          "== after"
+          foreach ($f in $files) {
+            $ok = $false
+            try { $h = [IO.File]::Open($f.FullName, 'OpenOrCreate', 'ReadWrite', 'ReadWrite'); $h.Dispose(); $ok = $true } catch { }
+            "file $($f.Name) openReadWrite=$ok"
+          }
+          # Machine lock (gate.lock) is opened shared for read by gate jobs; check that mode too.
+          foreach ($n in 'gate.lock', 'qa-intent.lock', 'browser.lock', 'rust.lock') {
+            $p = Join-Path $dir $n
+            try { $h = [IO.File]::Open($p, 'OpenOrCreate', 'Read', 'Read'); $h.Dispose(); "$n read-open OK" } catch { "$n read-open FAILED: $($_.Exception.Message)" }
+          }
+          exit 0
