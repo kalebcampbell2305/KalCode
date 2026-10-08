@@ -784,6 +784,53 @@ export function arrangeContents(layout: PaneLayout, requested: readonly PaneCont
   return { ...base, root: balanced([...leaves(base.root), ...targets]), maximizedPaneId: null };
 }
 
+/** Most panes a Recipe opens side by side; further items join those panes as tabs. */
+export const DESK_VISIBLE_PANES = 8;
+
+/**
+ * Opens a Recipe's desk. On an empty canvas a named preset gives the shape and items fill its
+ * panes in reading order (overflow becomes tabs, round-robin). Beside existing work, the preset
+ * is ignored so nothing already open is rearranged, closed or stopped.
+ */
+export function arrangeDesk(
+  layout: PaneLayout,
+  requested: readonly PaneContent[],
+  preset: BuiltinPreset | null = null,
+): PaneLayout | null {
+  const seen = new Set<string>();
+  const contents = requested.filter((content) => {
+    const key = contentKey(content);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  if (contents.length === 0) return layout;
+  const hasExistingWork = leaves(layout.root).some((leaf) => leaf.tabs.length > 0) || layout.dock.length > 0;
+  const fill = (base: PaneLayout, paneIds: string[]): PaneLayout => {
+    let next = base;
+    contents.forEach((content, index) => {
+      next = addTab(next, paneIds[index % paneIds.length] as string, content, index < paneIds.length);
+    });
+    return next;
+  };
+  if (preset && !hasExistingWork) {
+    const base = { ...layout, root: presetShape(preset), maximizedPaneId: null };
+    return fill(
+      base,
+      leaves(base.root).map((leaf) => leaf.paneId),
+    );
+  }
+  const visible = contents.slice(0, DESK_VISIBLE_PANES);
+  const arranged = arrangeContents(layout, visible);
+  if (!arranged) return null;
+  const paneIds = visible.map((content) => findContent(arranged, contentKey(content))?.paneId as string);
+  let next = arranged;
+  contents.slice(DESK_VISIBLE_PANES).forEach((content, index) => {
+    next = addTab(next, paneIds[index % paneIds.length] as string, content, false);
+  });
+  return next;
+}
+
 /** Which built-in preset a layout's shape matches, if any (for showing the current choice). */
 export function matchingPreset(layout: PaneLayout): BuiltinPreset | null {
   const signature = (node: PaneNode): string =>

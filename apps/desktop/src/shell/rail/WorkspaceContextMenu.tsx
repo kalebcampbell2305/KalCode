@@ -11,6 +11,7 @@ import {
   FolderOpen,
   FolderPlus,
   Globe,
+  LayoutTemplate,
   PanelRight,
   Pin,
   PinOff,
@@ -22,6 +23,8 @@ import { type ReactElement, useRef } from "react";
 import { toKalCodeError } from "../../ipc/errors.ts";
 import { OperationsClient } from "../../ipc/operations.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
+import { sortRecipes } from "../../runtime/recipes/model.ts";
+import { useOptionalRecipeLibrary, useOptionalRecipeRequest } from "../../runtime/recipes/RecipeLaunchProvider.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { browserContent } from "../../surfaces/browser/browserModel.ts";
 import { useDeckData } from "../deck/DeckData.tsx";
@@ -55,6 +58,8 @@ export function WorkspaceContextMenu({
   const { client, info } = useRuntime();
   const { operations } = useDeckData();
   const openInPane = useOpenInPane();
+  const requestRecipe = useOptionalRecipeRequest();
+  const recipeLibrary = useOptionalRecipeLibrary();
   const toast = useToast();
   const pending = useRef(new Set<string>());
   const action = (key: string, title: string, run: () => Promise<unknown>) => {
@@ -212,6 +217,25 @@ export function WorkspaceContextMenu({
           onSelect: () => void rail.reveal(entry.workspaceId),
         },
       ],
+    });
+  const recipes = sortRecipes(
+    (recipeLibrary?.recipes ?? []).filter((r) => r.workspaceId === entry.workspaceId || r.workspaceId === null),
+  );
+  if (entry.available && recipes.length && requestRecipe)
+    items.push({
+      id: "launch-recipe",
+      label: "Launch Recipe",
+      icon: <LayoutTemplate />,
+      children: recipes.map((recipe) => ({
+        id: recipe.id,
+        label: recipe.name,
+        onSelect: () =>
+          action(`recipe:${recipe.id}`, `Launching ${recipe.name}`, async () => {
+            // A Recipe without a project launches in the active one, so activate this project first.
+            if (recipe.workspaceId === null && !(await activate(entry.workspaceId))) return;
+            await requestRecipe({ recipeId: recipe.id });
+          }),
+      })),
     });
   items.push(
     { id: "danger", separator: true },

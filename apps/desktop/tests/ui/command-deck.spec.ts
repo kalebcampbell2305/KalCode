@@ -58,9 +58,9 @@ test("an agent row opens its coding terminal in Code, and a chat thread is never
   await open(page, "threads");
   await toOperations(page);
   // With no agent running, the rail stays a strip until one works or the person opens it.
-  const strip = page.getByRole("complementary", { name: "Agents (collapsed)" });
+  const strip = page.getByRole("complementary", { name: "Workspace dock (collapsed)" });
   await expect(strip).toBeVisible();
-  await strip.getByRole("button", { name: "Show agents", exact: true }).click();
+  await strip.getByRole("button", { name: "Show dock", exact: true }).click();
   await expect(agents(page).getByText("No agents running")).toBeVisible();
   await expect(agents(page).getByRole("button", { name: /^Fix OAuth Callback Race, / })).toHaveCount(0);
 
@@ -82,6 +82,10 @@ test("an agent row opens its coding terminal in Code, and a chat thread is never
 
   // It shows in the rail and opens its own terminal pane, not Threads.
   await toOperations(page);
+  // The dock remembers its choice per project; the new project has not been opened yet, and an
+  // idle agent leaves it as the rail.
+  const newStrip = page.getByRole("complementary", { name: "Workspace dock (collapsed)" });
+  if (await newStrip.isVisible()) await newStrip.getByRole("button", { name: "Show dock", exact: true }).click();
   await agents(page).getByRole("button", { name: /^Idle/ }).click();
   await agents(page)
     .getByRole("button", { name: /^Claude Code, .*Claude Code in deck-agent\. Open agent$/ })
@@ -94,13 +98,13 @@ test("an agent row opens its coding terminal in Code, and a chat thread is never
 test("the agents rail hides to a strip of live counts and is remembered", async ({ page }) => {
   await open(page, "busy");
   // On the Dashboard, whose board lists every agent, the rail is its strip until asked.
-  const collapsed = page.getByRole("complementary", { name: "Agents (collapsed)" });
-  await expect(collapsed.getByRole("button", { name: "3 working. Show agents" })).toBeVisible();
-  await collapsed.getByRole("button", { name: "Show agents", exact: true }).click();
+  const collapsed = page.getByRole("complementary", { name: "Workspace dock (collapsed)" });
+  await expect(collapsed.getByRole("button", { name: /^Agents, .*\d+ working/ })).toBeVisible();
+  await collapsed.getByRole("button", { name: "Show dock", exact: true }).click();
   await expect(agents(page)).toBeVisible();
 
   await toOperations(page);
-  await agents(page).getByRole("button", { name: "Hide agents" }).click();
+  await agents(page).getByRole("button", { name: "Collapse dock" }).click();
   await expect(collapsed).toBeVisible();
   await page.reload();
   await toOperations(page);

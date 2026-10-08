@@ -29,8 +29,14 @@ const parts: { icon: Parameters<typeof icon>[0]; title: string; text: string; fe
   {
     icon: "dashboard",
     title: "Agent Fleet and Needs You",
-    text: "Every agent you run, on every provider, with one state: starting, working, waiting, needs you, ready, done or failed. Needs You collects what's waiting on you.",
+    text: "Every agent you run, on every provider, with one state and its outcome: files changed, tests and whether it's ready to merge. Needs You is one inbox for what's waiting on you, each with the next step, and \u201cOverlaps with\u201d flags agents changing the same files.",
     feature: getPlanFeature("agent-fleet"),
+  },
+  {
+    icon: "users",
+    title: "Squads",
+    text: "Launch a whole team of real coding agents at once, each with its own provider account, model and effort, with roles, tasks and dependencies. Save a Squad Recipe to relaunch it with a new goal.",
+    feature: getPlanFeature("squads"),
   },
   {
     icon: "operations",
@@ -59,7 +65,7 @@ const parts: { icon: Parameters<typeof icon>[0]; title: string; text: string; fe
   {
     icon: "kalvoice",
     title: "KalVoice",
-    text: `Hold ${KALVOICE.pushToTalkKey}, or Fn on a Mac, and speak: words go into the focused agent, commands run KalCode. Dictation stays on your device and is unlimited.`,
+    text: `Hold ${KALVOICE.pushToTalkKey}, or Fn on a Mac, and speak: words go into the focused agent, commands run KalCode. Say \u201cStart three Codex agents\u201d and a streak shows where it landed. Dictation stays on your device and is unlimited.`,
     feature: getPlanFeature("kalvoice-dictation"),
   },
   {
@@ -67,6 +73,24 @@ const parts: { icon: Parameters<typeof icon>[0]; title: string; text: string; fe
     title: "Navigation",
     text: "Back and Forward, breadcrumbs, one quick switcher for everything, keyboard shortcuts, workspace favorites and global pins.",
     feature: getPlanFeature("quick-switcher"),
+  },
+  {
+    icon: "history",
+    title: "Continue where you left off",
+    text: "After a restart, KalCode brings back your panes, their names and layout, Browser pages and drafts, and resumes the coding agents that can be resumed, automatically or when you choose.",
+    feature: getPlanFeature("terminal-smart"),
+  },
+  {
+    icon: "layout",
+    title: "Terminal Stack",
+    text: "Every terminal and agent in one stack: rename inline, drag between groups, reorder groups. Names you choose always win, and the sessions behind them never restart.",
+    feature: getPlanFeature("terminal-basics"),
+  },
+  {
+    icon: "package",
+    title: "Native tools and integrations",
+    text: "Web search, your MCP servers, plugins and slash commands work exactly as in your own terminal, plus your own APIs and remote MCP servers through the Integration Hub.",
+    feature: getPlanFeature("native-parity"),
   },
   {
     icon: "handoff",
@@ -90,7 +114,7 @@ const soonCount = roadmap.reduce((n, g) => n + g.features.length - g.available, 
   <PageHead
     backdrop="orbital"
     title="The workspace for coding agents."
-    lead="Claude Code, Codex, Cursor and Gemini CLI in real terminals, and everything around them: Agent Fleet, Operations, Unified Memory, Live Browser, accounts and KalVoice."
+    lead="Claude Code, Codex, Cursor and Gemini CLI in real terminals, and everything around them: Squads, Needs You, the Agent Fleet, Operations, Unified Memory, Live Browser, accounts and KalVoice."
     status={buildStatus()}
     statusKind={stable ? "built" : "dev"}
   >
@@ -108,11 +132,12 @@ const soonCount = roadmap.reduce((n, g) => n + g.features.length - g.available, 
         <h2 id="code-title" class="h2">Every agent is a real coding terminal.</h2>
         <p class="body-lg">
           An agent in KalCode is the provider's own CLI in its own terminal pane, never a chat thread.
-          Open New agent, pick the provider, account, model and effort, and launch up to ten at once.
+          New agent starts the setup you used last in one click; its arrow opens every provider, account, model and effort, up to ten agents at once.
         </p>
         <ul class="prod__list" role="list">
           <li><Icon name="check" /> Tabbed terminal panes you split, stack into groups and rename</li>
-          <li><Icon name="check" /> Smart Close asks before stopping busy work; New like this repeats a launch</li>
+          <li><Icon name="check" /> Closing a pane stops its agent, and asks first when work is still running; New like this repeats a launch</li>
+          <li><Icon name="check" /> Rename and regroup terminals in the Terminal Stack without touching the sessions behind them</li>
           <li><Icon name="check" /> Image attachments, automatic localhost detection and a Browser pane beside agents</li>
           <li><Icon name="check" /> Unlimited local agents and terminals on every plan</li>
         </ul>

@@ -36,7 +36,9 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   # Each physical worker assigns isolated ports below. Bound nested check fan-out.
-  KALCODE_GATE_JOBS: "2"
+  # One check at a time per job: every gate job runs on PC2, a laptop, three jobs at once (2026-10-08:
+  # two checks per job, six heavy processes, timed out desktop-unit, website-unit and api-unit hooks).
+  KALCODE_GATE_JOBS: "1"
   # Rust compiles need real parallelism: one Rust gate at a time per gate PC (rust.lock) at below-normal
   # priority; a cold first build still fits in 8 jobs (2 jobs could not, gate 37345525181).
   CARGO_BUILD_JOBS: "8"
@@ -58,7 +60,9 @@ jobs:
       matrix:
         half: [main, native]
     # Never run code from a fork on our machines.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # A PR in the merge queue is gated inside its exact merge-train candidate; its own branch gate would only
+    # hold the runners the candidates need (the train also cancels such runs when it builds).
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository && !contains(github.event.pull_request.labels.*.name, 'merge-queue')
     runs-on: [self-hosted, Windows, kalcode-gate-pc2]
     # A cold first Rust build on the second PC's runners fits; warm runs take a fraction.
     timeout-minutes: 300
@@ -104,7 +108,7 @@ jobs:
           $gateHost = {
             param($j)
             ($j.labels -contains 'self-hosted') -and ($j.labels -contains 'Windows') -and (
-              ($j.runner_name -in @('kalcode-win-gate-2', 'kalcode-win-gate-2b') -and ($j.labels -contains 'kalcode-gate-pc2') -and -not ($j.labels -contains 'kalcode-main-pc')) -or
+              ($j.runner_name -in @('kalcode-win-gate-2', 'kalcode-win-gate-2b', 'kalcode-win-gate-2c', 'kalcode-win-gate-2d') -and ($j.labels -contains 'kalcode-gate-pc2') -and -not ($j.labels -contains 'kalcode-main-pc')) -or
               ($j.runner_name -match '^kalcode-win-gate(-w[1-5])?$' -and ($j.labels -contains 'kalcode-gate') -and ($j.labels -contains 'kalcode-main-pc')))
           }
           try {
@@ -122,7 +126,7 @@ jobs:
               # A split gate also needs the second PC's job green on the same SHA; a legacy run has none.
               $pc2 = @($jobs | Where-Object { $_.name -eq 'Gate (Windows, PC2)' })
               $pc2Green = $pc2.Count -eq 0 -or @($pc2 | Where-Object {
-                $_.conclusion -eq 'success' -and $_.head_sha -eq $env:GITHUB_SHA -and $_.runner_name -in @('kalcode-win-gate-2', 'kalcode-win-gate-2b') -and
+                $_.conclusion -eq 'success' -and $_.head_sha -eq $env:GITHUB_SHA -and $_.runner_name -in @('kalcode-win-gate-2', 'kalcode-win-gate-2b', 'kalcode-win-gate-2c', 'kalcode-win-gate-2d') -and
                 ($_.labels -contains 'self-hosted') -and ($_.labels -contains 'Windows') -and ($_.labels -contains 'kalcode-gate-pc2') -and
                 -not ($_.labels -contains 'kalcode-main-pc') -and
                 ($_.steps | Where-Object { $_.name -eq 'Gate' -and $_.conclusion -eq 'success' })
@@ -167,9 +171,16 @@ jobs:
       # The gate PC must not throttle or sleep mid-gate (owner, 2026-10-07: PC2 stays plugged in and idle for
       # gates). Evidence only: it warns and never fails the job.
       - name: Record the gate PC's power state
-        if: steps.reuse.outputs.reused != 'true' && matrix.half == 'main'
+        if: steps.reuse.outputs.reused != 'true'
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
+          # Capacity and live load at job start: how many gate runners this PC can carry.
+          try {
+            $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+            $cpu = @(Get-CimInstance Win32_Processor -ErrorAction Stop)
+            $load = [math]::Round(($cpu | Measure-Object -Property LoadPercentage -Average).Average)
+            Write-Output ("Capacity: {0} logical CPUs, {1:N1} GiB RAM ({2:N1} GiB free); CPU load {3}%" -f ($cpu | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum, ($os.TotalVisibleMemorySize / 1MB), ($os.FreePhysicalMemory / 1MB), $load)
+          } catch { }
           $scheme = (powercfg /getactivescheme | Out-String).Trim()
           Write-Output "Power plan: $scheme"
           if ($scheme -notmatch '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c|High performance|Ultimate') { Write-Output '::warning::The gate PC is not on the High Performance power plan.' }
@@ -213,7 +224,7 @@ jobs:
           if ($env:GATE_HALF -notin @('main', 'native')) { throw "Unknown Windows gate half: $env:GATE_HALF" }
           # The second PC's two gate runners each have a fixed port block (slot 1 adds 20), shared with the
           # PC2 job below: a runner runs one job at a time.
-          $pc2Slot = switch ($env:RUNNER_NAME) { 'kalcode-win-gate-2' { 0 } 'kalcode-win-gate-2b' { 1 } default { throw 'Unknown second-PC gate worker' } }
+          $pc2Slot = switch ($env:RUNNER_NAME) { 'kalcode-win-gate-2' { 0 } 'kalcode-win-gate-2b' { 1 } 'kalcode-win-gate-2c' { 2 } 'kalcode-win-gate-2d' { 3 } default { throw 'Unknown second-PC gate worker' } }
           $portOffset = 20 * $pc2Slot
           $head = (git rev-parse HEAD | Out-String).Trim()
           if ($LASTEXITCODE -or $head -ne $env:GITHUB_SHA) { throw 'Checkout does not match the immutable event SHA' }
@@ -372,9 +383,11 @@ jobs:
   pc2:
     name: Gate (Windows, PC2)
     # Never run code from a fork on our machines.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # A PR in the merge queue is gated inside its exact merge-train candidate; its own branch gate would only
+    # hold the runners the candidates need (the train also cancels such runs when it builds).
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository && !contains(github.event.pull_request.labels.*.name, 'merge-queue')
     # The JS/web share of the same exact candidate, on the second Windows PC like the jobs above (owner,
-    # 2026-10-07: all gates there). Its runners are kalcode-win-gate-2 and kalcode-win-gate-2b, each with
+    # 2026-10-07: all gates there). Its runners are kalcode-win-gate-2, -2b, -2c and -2d, each with
     # its own account, checkout and port block.
     runs-on: [self-hosted, Windows, kalcode-gate-pc2]
     timeout-minutes: 120
@@ -420,7 +433,7 @@ jobs:
           $gateHost = {
             param($j)
             ($j.labels -contains 'self-hosted') -and ($j.labels -contains 'Windows') -and (
-              ($j.runner_name -in @('kalcode-win-gate-2', 'kalcode-win-gate-2b') -and ($j.labels -contains 'kalcode-gate-pc2') -and -not ($j.labels -contains 'kalcode-main-pc')) -or
+              ($j.runner_name -in @('kalcode-win-gate-2', 'kalcode-win-gate-2b', 'kalcode-win-gate-2c', 'kalcode-win-gate-2d') -and ($j.labels -contains 'kalcode-gate-pc2') -and -not ($j.labels -contains 'kalcode-main-pc')) -or
               ($j.runner_name -match '^kalcode-win-gate(-w[1-5])?$' -and ($j.labels -contains 'kalcode-gate') -and ($j.labels -contains 'kalcode-main-pc')))
           }
           try {
@@ -438,7 +451,7 @@ jobs:
               # A split gate also needs the second PC's job green on the same SHA; a legacy run has none.
               $pc2 = @($jobs | Where-Object { $_.name -eq 'Gate (Windows, PC2)' })
               $pc2Green = $pc2.Count -eq 0 -or @($pc2 | Where-Object {
-                $_.conclusion -eq 'success' -and $_.head_sha -eq $env:GITHUB_SHA -and $_.runner_name -in @('kalcode-win-gate-2', 'kalcode-win-gate-2b') -and
+                $_.conclusion -eq 'success' -and $_.head_sha -eq $env:GITHUB_SHA -and $_.runner_name -in @('kalcode-win-gate-2', 'kalcode-win-gate-2b', 'kalcode-win-gate-2c', 'kalcode-win-gate-2d') -and
                 ($_.labels -contains 'self-hosted') -and ($_.labels -contains 'Windows') -and ($_.labels -contains 'kalcode-gate-pc2') -and
                 -not ($_.labels -contains 'kalcode-main-pc') -and
                 ($_.steps | Where-Object { $_.name -eq 'Gate' -and $_.conclusion -eq 'success' })
@@ -503,7 +516,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           # No build-PC pool hooks here. The second PC has two gate runners; each gets its own fixed port block
           # (pool base + 200, plus 20 for the second runner) so both can gate at once.
-          $pc2Slot = switch ($env:RUNNER_NAME) { 'kalcode-win-gate-2' { 0 } 'kalcode-win-gate-2b' { 1 } default { throw 'Unknown second-PC gate worker' } }
+          $pc2Slot = switch ($env:RUNNER_NAME) { 'kalcode-win-gate-2' { 0 } 'kalcode-win-gate-2b' { 1 } 'kalcode-win-gate-2c' { 2 } 'kalcode-win-gate-2d' { 3 } default { throw 'Unknown second-PC gate worker' } }
           $portOffset = 20 * $pc2Slot
           $head = (git rev-parse HEAD | Out-String).Trim()
           if ($LASTEXITCODE -or $head -ne $env:GITHUB_SHA) { throw 'Checkout does not match the immutable event SHA' }

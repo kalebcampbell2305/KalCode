@@ -19,6 +19,7 @@ import { describeBuiltin, renderBuiltin } from "./builtinContent.tsx";
 import { type PaneRenderContext, registeredRenderer, subscribeRegistry, type TabInfo } from "./contentRegistry.ts";
 import {
   allContents,
+  arrangeDesk,
   CANVAS_GEOMETRY,
   canSplit as canSplitPane,
   computeGeometry,
@@ -959,6 +960,17 @@ export function runCommand(
     case "even":
       controller.even();
       return { handled: true };
+    case "open-desk": {
+      const next = arrangeDesk(controller.layout, command.contents, command.preset);
+      if (!next) return { handled: false, message: "There isn't room to show this desk. Close a few panes first." };
+      controller.replace(
+        next,
+        `Opened ${command.contents.length} ${command.contents.length === 1 ? "pane" : "panes"}.`,
+      );
+      const first = command.contents[0] ? findContent(next, contentKey(command.contents[0])) : null;
+      if (first) controller.focusPane(first.paneId);
+      return { handled: true };
+    }
     case "arrange-providers":
     case "open-provider-panes":
     case "open-agent-launcher":

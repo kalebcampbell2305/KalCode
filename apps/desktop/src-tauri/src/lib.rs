@@ -53,6 +53,7 @@ mod provider_commands;
 mod provider_health_commands;
 mod provider_pane_commands;
 mod provider_usage_commands;
+mod recipe_commands;
 mod remote;
 mod remote_commands;
 mod resource_commands;
@@ -921,6 +922,10 @@ pub fn run(removed_overrides: Vec<String>) {
                 squad_commands::recipe_delete,
                 squad_commands::squads_launch,
                 squad_commands::recipe_launch,
+                recipe_commands::launch_recipes_snapshot,
+                recipe_commands::launch_recipe_save,
+                recipe_commands::launch_recipe_delete,
+                recipe_commands::launch_recipe_reorder,
                 squad_commands::squads_reassign_manager,
                 operations_commands::operations_snapshot,
                 operations_commands::operations_detail,
