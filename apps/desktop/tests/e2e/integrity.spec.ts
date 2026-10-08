@@ -73,8 +73,8 @@ interface EventLite {
   payload: Record<string, unknown>;
 }
 
-/** The schema version this build migrates to (through v26 Squads). */
-const LATEST = 26;
+/** The schema version this build migrates to (through v27 Launch Recipes). */
+const LATEST = 27;
 
 test("a v1 database from the released app is upgraded to the latest schema with a backup and nothing lost", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-"));
@@ -448,7 +448,7 @@ print(m[0], m[1], n, e[0], e[1])`,
   }
 });
 
-/** Representative tables the migrations after v6 add through v26 Squads, sorted by name. */
+/** Representative tables the migrations after v6 add through v27 Launch Recipes, sorted by name. */
 const POST_V6_TABLES = [
   "checkpoints",
   "context_firewall_log",
@@ -456,6 +456,7 @@ const POST_V6_TABLES = [
   "context_never_share",
   "context_packages",
   "git_worktrees",
+  "launch_recipes",
   "layout_presets",
   "squad_definitions",
   "squad_launch_members",

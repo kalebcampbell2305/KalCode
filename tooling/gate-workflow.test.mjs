@@ -7,7 +7,8 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const workflow = readFileSync(new URL("../.github/workflows/gate.yml", import.meta.url), "utf8");
-// Two Windows jobs test the same SHA: the build PC's pool ("windows") and the second PC ("pc2").
+// The Windows jobs test the same SHA, all on the second PC's gate runners (owner, 2026-10-07): the
+// two-job "windows" matrix and the JS/web "pc2" job.
 const windows = workflow.split("\n  pc2:")[0];
 const pc2Job = workflow.split("\n  pc2:")[1].split("\n  macos:")[0];
 const steps = windows.split(/\n {6}- /).slice(1);
@@ -41,7 +42,7 @@ foreach ($script in $scripts) {
   assert.equal(result.status, 0, result.stdout + result.stderr);
 });
 
-test("main reuses only an exact successful candidate on a trusted pool worker", {
+test("main reuses only an exact successful candidate on a trusted gate host", {
   skip: process.platform !== "win32",
 }, () => {
   const reuse = script(steps.find((step) => step.startsWith("name: Reuse the merge-train")));
@@ -98,7 +99,8 @@ test("main reuses only an exact successful candidate on a trusted pool worker", 
     ["split-pc2-wrong-runner", { pc2: { runner_name: "kalcode-win-gate-w1" } }, false],
     // The second PC's second runner is equally trusted; any other name is not.
     ["split-pc2-second-runner", { pc2: { runner_name: "kalcode-win-gate-2b" } }, true],
-    ["split-pc2-unknown-runner", { pc2: { runner_name: "kalcode-win-gate-2c" } }, false],
+    ["split-pc2-third-runner", { pc2: { runner_name: "kalcode-win-gate-2c" } }, true],
+    ["split-pc2-unknown-runner", { pc2: { runner_name: "kalcode-win-gate-2e" } }, false],
     ["split-pc2-other-sha", { pc2: { head_sha: "b".repeat(40) } }, false],
     ["split-pc2-skipped-check", { pc2: { steps: [{ name: "Gate", conclusion: "skipped" }] } }, false],
     // A two-job build-PC half needs its native job green on a pool worker too.
@@ -108,6 +110,46 @@ test("main reuses only an exact successful candidate on a trusted pool worker", 
     ["native-missing-host-label", { pc2: {}, native: { labels: ["self-hosted", "Windows", "kalcode-gate"] } }, false],
     ["native-other-sha", { pc2: {}, native: { head_sha: "b".repeat(40) } }, false],
     ["native-skipped-check", { pc2: {}, native: { steps: [{ name: "Gate", conclusion: "skipped" }] } }, false],
+    // Owner, 2026-10-07: every gate job runs on the second PC's runners; those are trusted hosts too.
+    [
+      "pc2-hosted",
+      { job: { runner_name: "kalcode-win-gate-2", labels: ["self-hosted", "Windows", "kalcode-gate-pc2"] } },
+      true,
+    ],
+    [
+      "pc2-hosted-all",
+      {
+        job: { runner_name: "kalcode-win-gate-2b", labels: ["self-hosted", "Windows", "kalcode-gate-pc2"] },
+        pc2: {},
+        native: { runner_name: "kalcode-win-gate-2", labels: ["self-hosted", "Windows", "kalcode-gate-pc2"] },
+      },
+      true,
+    ],
+    [
+      "pc2-label-pool-name",
+      { job: { runner_name: "kalcode-win-gate-w1", labels: ["self-hosted", "Windows", "kalcode-gate-pc2"] } },
+      false,
+    ],
+    [
+      "pc2-name-main-pc-label",
+      {
+        job: {
+          runner_name: "kalcode-win-gate-2",
+          labels: ["self-hosted", "Windows", "kalcode-gate-pc2", "kalcode-main-pc"],
+        },
+      },
+      false,
+    ],
+    [
+      "pc2-fourth-runner",
+      { job: { runner_name: "kalcode-win-gate-2d", labels: ["self-hosted", "Windows", "kalcode-gate-pc2"] } },
+      true,
+    ],
+    [
+      "pc2-unknown-runner",
+      { job: { runner_name: "kalcode-win-gate-2e", labels: ["self-hosted", "Windows", "kalcode-gate-pc2"] } },
+      false,
+    ],
   ];
   for (const [name, patch, expected] of cases) {
     const fixture = {
@@ -138,6 +180,8 @@ ${reuse}`,
         GH_TOKEN: "fixture-only",
         GITHUB_API_URL: "https://example.invalid",
         GITHUB_REPOSITORY: "fixture/repo",
+        // The main-push path: never the job's own event (a pull_request gate runs this suite too).
+        GITHUB_EVENT_NAME: "push",
         GITHUB_SHA: sha,
         GITHUB_RUN_ID: "456",
         GITHUB_OUTPUT: output,
@@ -307,7 +351,7 @@ test("the second PC's half is self-contained and gates the same exact candidate"
   const plan = script(pc2Steps[names.indexOf("Plan change-based gate")]);
   assert.match(
     plan,
-    /'kalcode-win-gate-2' \{ 0 \} 'kalcode-win-gate-2b' \{ 1 \} default \{ throw 'Unknown second-PC gate worker' \}/,
+    /'kalcode-win-gate-2' \{ 0 \} 'kalcode-win-gate-2b' \{ 1 \} 'kalcode-win-gate-2c' \{ 2 \} 'kalcode-win-gate-2d' \{ 3 \} default \{ throw 'Unknown second-PC gate worker' \}/,
   );
   assert.match(plan, /trailers:key=Merge-Train-Base,valueonly/);
   assert.match(plan, /Checkout does not match the immutable event SHA/);
@@ -351,6 +395,15 @@ test("each second-PC runner gets its own port block, and no other runner is acce
     second.stdout,
     /KALCODE_E2E_PORT=4711 KALCODE_E2E_MAIL_PORT=4712 KALCODE_E2E_INSPECTOR_PORT=9721 KALCODE_UI_TEST_PORT=1811 KALCODE_E2E_CDP_PORT=39353/,
   );
+  const third = run("kalcode-win-gate-2c");
+  assert.equal(third.status, 0, third.stderr);
+  assert.match(
+    third.stdout,
+    /KALCODE_E2E_PORT=4731 KALCODE_E2E_MAIL_PORT=4732 KALCODE_E2E_INSPECTOR_PORT=9741 KALCODE_UI_TEST_PORT=1831 KALCODE_E2E_CDP_PORT=39373/,
+  );
+  const fourth = run("kalcode-win-gate-2d");
+  assert.equal(fourth.status, 0, fourth.stderr);
+  assert.match(fourth.stdout, /KALCODE_E2E_PORT=4751 .*KALCODE_E2E_CDP_PORT=39393/);
   const unknown = run("kalcode-win-gate-w1");
   assert.notEqual(unknown.status, 0);
   assert.match(unknown.stderr + unknown.stdout, /Unknown second-PC gate worker/);
@@ -389,17 +442,12 @@ test("the gate split runs every selected check exactly once across the three job
   const { main, native, pc2 } = splitGateIds(all);
   assert.deepEqual([...main, ...native, ...pc2].sort(), [...all].sort());
   assert.equal(new Set([...main, ...native, ...pc2]).size, all.length);
-  // Checkout writers and the pool-only Cargo tools run in the build PC's native job.
+  // Checkout writers and the Cargo tools run in the native job.
   for (const id of ["rust", "desktop-native-e2e", "cargo-deny", "cargo-audit"])
-    assert.ok(native.includes(id), `${id} runs in the build PC's native job`);
-  // The desktop readers run in the build PC's main job, in parallel with the native chain.
-  for (const id of ["desktop-frontend", "desktop-ui"])
-    assert.ok(main.includes(id), `${id} stays in the build PC's main job`);
-  assert.deepEqual(
-    splitGateIds(["a-check-added-later"]).main,
-    ["a-check-added-later"],
-    "new checks default to the build PC's main job",
-  );
+    assert.ok(native.includes(id), `${id} runs in the native job`);
+  // The desktop readers run in the main job, in parallel with the native chain.
+  for (const id of ["desktop-frontend", "desktop-ui"]) assert.ok(main.includes(id), `${id} stays in the main job`);
+  assert.deepEqual(splitGateIds(["a-check-added-later"]).main, ["a-check-added-later"], "new checks default to main");
   assert.deepEqual(splitGateIds([]), { main: [], native: [], pc2: [] });
   const cli = (machine, ids) =>
     spawnSync(
@@ -416,7 +464,7 @@ test("the gate split runs every selected check exactly once across the three job
   assert.equal(cli("elsewhere", "rust").status, 2);
 });
 
-test("the build PC's gate runs as two matrix jobs that never cancel each other", () => {
+test("the Windows gate runs as two matrix jobs that never cancel each other", () => {
   const header = windows.split(/\n {4}steps:/)[0];
   assert.match(
     header,
@@ -426,7 +474,7 @@ test("the build PC's gate runs as two matrix jobs that never cancel each other",
   assert.match(header, /half: \[main, native\]/);
   const plan = script(steps.find((step) => step.startsWith("name: Plan change-based gate")));
   assert.match(plan, /gate-split\.mjs \$env:GATE_HALF/);
-  assert.match(plan, /Unknown build-PC gate half/);
+  assert.match(plan, /Unknown Windows gate half/);
   const evidence = steps.find((step) => step.startsWith("name: Preserve exact candidate evidence"));
   assert.match(
     evidence,
@@ -455,4 +503,48 @@ test("every gate job keeps bounded Playwright failure evidence, on failure only"
     assert.ok(upload.includes("apps/desktop/test-results/"));
     assert.match(upload, /retention-days: 7/);
   }
+});
+
+test("every Windows gate job runs on the second PC, without the build PC's pool hooks", () => {
+  // Owner, 2026-10-07: "all gates on PC 2 ... We use this computer to build ... the other one to pass the
+  // gates and ship to users."
+  const header = windows.split(/\n {4}steps:/)[0];
+  assert.match(header, /^ {4}runs-on: \[self-hosted, Windows, kalcode-gate-pc2\]$/m);
+  assert.match(pc2Job, /^ {4}runs-on: \[self-hosted, Windows, kalcode-gate-pc2\]$/m);
+  assert.doesNotMatch(workflow, /kalcode-main-pc\]/, "no job targets the build PC's pool");
+  const jobBody = windows.split(/\n {4}steps:/)[1];
+  assert.doesNotMatch(
+    jobBody,
+    /KalCodeGatePool|Assert-GateWorkerHost|gate-worker-hook|Get-GateWorkerPlan|KALCODE_GATE_SLOT/,
+  );
+  const names = steps.map((step) => step.match(/^name: (.+)$/m)?.[1] ?? "");
+  const plan = script(steps[names.indexOf("Plan change-based gate")]);
+  assert.match(
+    plan,
+    /'kalcode-win-gate-2' \{ 0 \} 'kalcode-win-gate-2b' \{ 1 \} 'kalcode-win-gate-2c' \{ 2 \} 'kalcode-win-gate-2d' \{ 3 \} default \{ throw 'Unknown second-PC gate worker' \}/,
+  );
+  assert.match(plan, /KALCODE_GATE_LOCK_DIR=C:\\ProgramData\\KalCodePC2\\locks/);
+  for (const port of ["4691", "4692", "9701", "1791", "39333"]) assert.ok(plan.includes(port), `fixed port ${port}`);
+  const gate = script(steps[names.indexOf("Gate")]);
+  assert.match(gate, /BelowNormal/);
+  // One Rust gate at a time on that PC, and never alongside its Windows update proof.
+  assert.match(gate, /KalCodePC2\\locks\\rust\.lock/);
+  assert.match(gate, /Enter-Pc2MachineLock -Mode Shared/);
+  assert.match(gate, /Exit-Pc2MachineLock \$lock/);
+  const pc2Names = pc2Steps.map((step) => step.match(/^name: (.+)$/m)?.[1] ?? "");
+  assert.match(script(pc2Steps[pc2Names.indexOf("Gate")]), /Enter-Pc2MachineLock -Mode Shared/);
+});
+
+test("the Windows jobs' plan and gate scripts take the same port block per runner as the PC2 job", {
+  skip: process.platform !== "win32",
+}, () => {
+  const lines = (list) => {
+    const names = list.map((step) => step.match(/^name: (.+)$/m)?.[1] ?? "");
+    const plan = script(list[names.indexOf("Plan change-based gate")]);
+    return plan
+      .split("\n")
+      .filter((line) => /\$pc2Slot =|\$portOffset =|_PORT=\$\(/.test(line))
+      .map((l) => l.trim().replace(/,$/, ""));
+  };
+  assert.deepEqual(lines(steps), lines(pc2Steps));
 });

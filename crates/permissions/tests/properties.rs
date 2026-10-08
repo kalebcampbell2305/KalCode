@@ -532,8 +532,10 @@ fn random_dialect_soup_never_panics_and_is_deterministic() {
         assert_eq!(first, second, "{text:?} is not deterministic");
         assert!(!first.scopes.is_empty(), "{text:?}");
     }
+    // A pathological classifier takes minutes; the budget leaves room for a slow gate machine's
+    // debug build (PC2, a laptop, took 67.8 s on 2026-10-08 where the build PC takes a fraction).
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(60),
+        started.elapsed() < std::time::Duration::from_secs(120),
         "{:?}",
         started.elapsed()
     );

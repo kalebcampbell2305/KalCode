@@ -97,11 +97,18 @@ test.describe("live demo (desktop)", () => {
     await app(page).getByRole("button", { name: "Close Dashboard Redesign" }).click();
     const close = app(page).getByRole("alertdialog", { name: "Close active work?" });
     await expect(close).toBeVisible();
-    await close.getByRole("button", { name: "Keep Running" }).click();
-    await expect(app(page).getByRole("button", { name: "Dashboard Redesign", exact: true, pressed: true })).toHaveCount(
-      0,
-    );
-    await expect(app(page).getByRole("complementary", { name: "Agents" })).toContainText("Dashboard Redesign");
+    // As in the app since 0.1.9+2168: Stop and Close or Cancel; closing a pane stops its agent.
+    await expect(close.getByRole("button", { name: "Keep Running" })).toHaveCount(0);
+    await close.getByRole("button", { name: "Cancel" }).click();
+    await expect(
+      app(page).getByRole("button", { name: "Dashboard Redesign", exact: true, pressed: true }),
+    ).toBeVisible();
+    await app(page).getByRole("button", { name: "Close Dashboard Tests" }).click();
+    await app(page)
+      .getByRole("alertdialog", { name: "Close active work?" })
+      .getByRole("button", { name: "Stop and Close" })
+      .click();
+    await expect(app(page).getByRole("complementary", { name: "Agents" })).not.toContainText("Dashboard Tests");
     await app(page).getByRole("button", { name: "Open quick switcher" }).click();
     await page.keyboard.type("dashboard redesign");
     await page.keyboard.press("Enter");
@@ -118,8 +125,11 @@ test.describe("live demo (desktop)", () => {
     await expect(picker).toContainText("Choose an account for your next coding session.");
     await picker.getByRole("button", { name: /^Work/ }).click();
     await picker.getByRole("button", { name: "Start with Work" }).click();
-    // Code Review already runs on Work; the fresh session joins it, and the original keeps running.
-    await expect(app(page).getByRole("button", { name: "Work. Switch Claude Code account" })).toHaveCount(2);
+    // The fresh session starts on Work beside the original, which keeps running (Code Review was already on Work).
+    await expect(app(page).getByRole("button", { name: "Work. Switch Claude Code account" }).first()).toBeVisible();
+    const agents = app(page).getByRole("complementary", { name: "Agents" });
+    await expect(agents).toContainText("Dashboard Redesign");
+    await expect(agents).toContainText("Code Review");
     expect(errors).toEqual([]);
   });
 

@@ -127,9 +127,9 @@ export async function lifecycleMain(argv, io = {}) {
       worker: process.env.RUNNER_NAME,
       plan: g.plan,
     });
-    // On the gate pool, the browser-driven desktop suites never overlap across its jobs (machine-lock.mjs).
-    const machineLock =
-      capacity && process.env.KALCODE_GATE_LOCK_DIR ? { dir: process.env.KALCODE_GATE_LOCK_DIR } : undefined;
+    // On a gate PC (gate.yml sets the folder), the browser-driven desktop suites never overlap across its
+    // jobs (machine-lock.mjs).
+    const machineLock = process.env.KALCODE_GATE_LOCK_DIR ? { dir: process.env.KALCODE_GATE_LOCK_DIR } : undefined;
     const outcome = await runGates(g.plan, {
       repo: g.top,
       log,

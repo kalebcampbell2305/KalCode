@@ -8,6 +8,7 @@ import { after, describe, test } from "node:test";
 import {
   createGitHubProvider,
   gateStateFrom,
+  isQueuedPrGateRun,
   MAIN_PC_GATE_RUNNER,
   NATIVE_GATE_JOB,
   PC2_GATE_JOB,
@@ -927,7 +928,9 @@ describe("merge train pieces", () => {
       "success",
       "its second runner is trusted",
     );
-    assert.equal(state(main, { ...pc2, runner_name: "kalcode-win-gate-2c" }), "stale", "no other name is");
+    for (const name of ["kalcode-win-gate-2c", "kalcode-win-gate-2d"])
+      assert.equal(state(main, { ...pc2, runner_name: name }), "success", `${name} is trusted`);
+    assert.equal(state(main, { ...pc2, runner_name: "kalcode-win-gate-2e" }), "stale", "no other name is");
     assert.equal(
       state(main, { ...pc2, labels: ["self-hosted", "Windows", "kalcode-gate-pc2", "kalcode-main-pc"] }),
       "stale",
@@ -938,7 +941,27 @@ describe("merge train pieces", () => {
       "stale",
     );
     assert.equal(state(main, { ...pc2, conclusion: "cancelled" }), "stale");
-    assert.equal(state({ ...pc2, name: "Gate (Windows)" }), "stale", "the second PC never satisfies the build-PC half");
+    // Owner, 2026-10-07: every gate job runs on the second PC, so its runners satisfy every job.
+    assert.equal(state({ ...pc2, name: "Gate (Windows)" }), "success", "a second-PC Gate (Windows) is evidence");
+    const pc2Native = { ...pc2, name: NATIVE_GATE_JOB, runner_name: "kalcode-win-gate-2b" };
+    assert.equal(
+      state({ ...pc2, name: "Gate (Windows)" }, pc2Native, pc2),
+      "success",
+      "all three jobs on the second PC",
+    );
+    assert.equal(
+      state({ ...pc2, name: "Gate (Windows)", runner_name: "kalcode-win-gate-2e" }, pc2Native, pc2),
+      "stale",
+      "only the second PC's own runners",
+    );
+    assert.equal(
+      state({
+        ...pc2,
+        name: "Gate (Windows)",
+        labels: ["self-hosted", "Windows", "kalcode-gate-pc2", "kalcode-main-pc"],
+      }),
+      "stale",
+    );
     // The build PC's two-job half: its native job must be green on a pool worker too.
     const native = { ...main, name: NATIVE_GATE_JOB, runner_name: "kalcode-win-gate-w4" };
     assert.equal(state(main, native, pc2), "success", "all three jobs green");
@@ -1073,11 +1096,10 @@ describe("merge train pieces", () => {
       workflow,
       /if: github\.event_name != 'pull_request' \|\| github\.event\.pull_request\.head\.repo\.full_name == github\.repository/,
     );
-    assert.match(workflow, /runs-on: \[self-hosted, Windows, kalcode-gate, kalcode-main-pc\]\n/);
+    // Owner, 2026-10-07: every Windows gate job runs on the second PC's gate runners.
+    assert.doesNotMatch(workflow, /kalcode-main-pc\]/);
     assert.match(workflow, /name: Plan change-based gate/);
-    assert.match(workflow, /Assert-GateWorkerHost/);
-    assert.ok(workflow.includes("'^kalcode-win-gate(-w[1-5])?$'"));
-    assert.match(workflow, /Runner name does not match its configured slot/);
+    assert.match(workflow, /Unknown second-PC gate worker/);
     assert.match(
       workflow,
       /--base \$env:KALCODE_GATE_BASE --only \$env:KALCODE_GATE_ONLY --jobs \$env:KALCODE_GATE_JOBS --keep-going/,
@@ -1085,7 +1107,7 @@ describe("merge train pieces", () => {
     // The split: the second PC's half gates the same exact candidate and recorded base.
     assert.match(workflow, /name: Gate \(Windows, PC2\)/);
     assert.match(workflow, /runs-on: \[self-hosted, Windows, kalcode-gate-pc2\]\n/);
-    // The build PC's share runs as two matrix jobs (main, native), each gating its half of the split.
+    // The Windows gate runs as two matrix jobs (main, native), each gating its half of the split.
     assert.match(workflow, /half: \[main, native\]/);
     assert.match(workflow, /gate-split\.mjs \$env:GATE_HALF/);
     assert.match(workflow, /gate-split\.mjs pc2/);
@@ -1126,12 +1148,16 @@ test("bootstrap refuses pushing a candidate with no usable main-PC push workflow
   for (const invalid of [
     "",
     workflow.replace('"merge-train/**"', '"unrelated/**"'),
-    workflow.replace(/Windows, kalcode-gate(?:, kalcode-main-pc)?\]/, "Windows, kalcode-gate-2]"),
-    workflow.replace("trailers:key=Merge-Train-Base,valueonly", "wrong-base"),
+    // The two-job Windows gate on an unknown runner label, then the PC2 job.
     workflow.replace(
       "runs-on: [self-hosted, Windows, kalcode-gate-pc2]",
       "runs-on: [self-hosted, Windows, kalcode-gate-2]",
     ),
+    workflow.replace("trailers:key=Merge-Train-Base,valueonly", "wrong-base"),
+    (() => {
+      const at = workflow.lastIndexOf("runs-on: [self-hosted, Windows, kalcode-gate-pc2]");
+      return `${workflow.slice(0, at)}runs-on: [self-hosted, Windows, kalcode-gate-2]${workflow.slice(at + 49)}`;
+    })(),
   ]) {
     const env = setup();
     openPr(env, 1, { ".github/workflows/gate.yml": invalid });
@@ -1216,4 +1242,65 @@ test("GitHub cancellation binds exact candidate push and rechecks status without
   });
   assert.deepEqual(await provider.cancelGates(sha, branch), [1]);
   assert.deepEqual(mutations, ["repos/fixture/repository/actions/runs/1/cancel"]);
+});
+
+test("the train cancels only queued PRs' own active branch gates, re-reading each before cancelling", async () => {
+  const item = { number: 7, headRef: "feat/thing" };
+  const base = {
+    event: "pull_request",
+    path: ".github/workflows/gate.yml",
+    head_branch: "feat/thing",
+    status: "in_progress",
+  };
+  assert.equal(isQueuedPrGateRun(base, item), true);
+  for (const wrong of [
+    { event: "push" },
+    { path: ".github/workflows/other.yml" },
+    { head_branch: "feat/other" },
+    { status: "completed" },
+  ])
+    assert.equal(isQueuedPrGateRun({ ...base, ...wrong }, item), false);
+  assert.equal(isQueuedPrGateRun(base, { number: 7, headRef: "" }), false);
+  const runs = [
+    { ...base, id: 1 },
+    { ...base, id: 2, status: "queued" },
+    { ...base, id: 3, status: "completed" },
+    { ...base, id: 4, event: "push" },
+    { ...base, id: 5 },
+  ];
+  const mutations = [];
+  const provider = await createGitHubProvider({
+    repo: ".",
+    slug: "fixture/repository",
+    gh: async (args) => {
+      if (args.includes("POST")) {
+        mutations.push(args.at(-1));
+        return { code: 0, stdout: "", stderr: "" };
+      }
+      if (args[1].includes("/runs?")) {
+        assert.match(args[1], /event=pull_request&branch=feat%2Fthing/);
+        return { stdout: JSON.stringify({ workflow_runs: runs }) };
+      }
+      const id = Number(args[1].split("/").at(-1));
+      const run = { ...runs.find((r) => r.id === id) };
+      if (id === 5) run.status = "completed";
+      return { stdout: JSON.stringify(run) };
+    },
+  });
+  assert.deepEqual(await provider.cancelPrGates([item, { number: 8 }]), [1, 2]);
+  assert.deepEqual(mutations, [
+    "repos/fixture/repository/actions/runs/1/cancel",
+    "repos/fixture/repository/actions/runs/2/cancel",
+  ]);
+});
+
+test("gate.yml skips a queued PR's own branch gate (the train gates its exact candidate)", () => {
+  const workflow = readFileSync(new URL("../../.github/workflows/gate.yml", import.meta.url), "utf8").replaceAll(
+    "\r\n",
+    "\n",
+  );
+  const guards = workflow.match(/^ {4}if: github\.event_name != 'pull_request' .*$/gm) ?? [];
+  assert.equal(guards.length, 2, "the windows matrix and the PC2 job");
+  for (const guard of guards)
+    assert.ok(guard.includes("!contains(github.event.pull_request.labels.*.name, 'merge-queue')"));
 });
