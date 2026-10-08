@@ -94,6 +94,26 @@ pub struct OperationRecord {
     pub account_label: Option<String>,
     pub terminal_id: Option<String>,
     pub thread_id: Option<String>,
+    /// Provider observed for this exact run; absence means there is no bounded historical proof.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub observed_provider_id: Option<String>,
+    /// Account binding observed for this exact run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub observed_provider_account_id: Option<String>,
+    /// Account nickname captured with the observed binding; current account metadata may rename it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub observed_account_label: Option<String>,
+    /// Provider-reported selector observed inside this exact run's durable event bounds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub observed_model: Option<String>,
+    /// Provider-reported reasoning observed inside this exact run's durable event bounds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub observed_effort: Option<String>,
     pub created_at: String,
     pub started_at: Option<String>,
     pub ended_at: Option<String>,

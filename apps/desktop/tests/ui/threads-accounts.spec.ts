@@ -59,11 +59,9 @@ test.describe("thread accounts", () => {
       .getByRole("button", { name: /Release notes pass/ })
       .and(page.locator(NOT_FAVORITE));
     await expect(row).toContainText("Gemini CLI · Personal · ");
-    await expect(
-      detail(page)
-        .locator("dd")
-        .filter({ hasText: /^Gemini CLI · Personal$/ }),
-    ).toBeVisible();
+    await expect(detail(page).getByTestId("thread-provider-identity")).toHaveText(
+      "Gemini CLI · Personal · Model controlled by provider",
+    );
 
     // The menu opens from the keyboard and names the thread's account as Active, in text.
     await accountButton(page, "Personal").focus();

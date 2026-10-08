@@ -1,6 +1,7 @@
 import type {
   LaunchRecipe,
   ProviderAccount,
+  ProviderAccountBinding,
   RecipeComponent,
   RecipeVariable,
   SquadDefinition,
@@ -31,11 +32,18 @@ import {
   RECIPE_LAYOUTS,
   VARIABLE_KEY,
 } from "../../runtime/recipes/model.ts";
-import { useRecipeLibrary } from "../../runtime/recipes/RecipeLaunchProvider.tsx";
+import { resolveRecipeDefaultAccount, useRecipeLibrary } from "../../runtime/recipes/RecipeLaunchProvider.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { WIDGETS } from "../../shell/widgets/registry.tsx";
-import { AGENT_EFFORTS, effortLabel } from "../code/panes/agentLaunch.ts";
+import {
+  effortLabel,
+  effortsForModel,
+  modelCatalogCanVerifyCapabilities,
+  modelEffortsAreKnown,
+  readLaunchMemory,
+} from "../code/panes/agentLaunch.ts";
 import { isPaneProvider } from "../code/panes/paneChannel.ts";
+import { useOptionalProviderAccountSessions } from "../providers/ProviderAccountSessions.tsx";
 import styles from "./RecipeEditor.module.css";
 
 const PROVIDERS = ["claude-code", "codex", "cursor", "gemini-cli"] as const;
@@ -126,6 +134,7 @@ export function RecipeEditor() {
 function EditorForm({ initial }: { initial: LaunchRecipe | null }) {
   const library = useRecipeLibrary();
   const { client } = useRuntime();
+  const providerSessions = useOptionalProviderAccountSessions();
   const { active } = useWorkspaces();
   const workspaces = useWorkspaces();
   const uid = useId();
@@ -137,6 +146,10 @@ function EditorForm({ initial }: { initial: LaunchRecipe | null }) {
   const [saving, setSaving] = useState(false);
   const [squads, setSquads] = useState<SquadDefinition[]>([]);
   const [accounts, setAccounts] = useState<Record<string, ProviderAccount[]>>({});
+  const [bindings, setBindings] = useState<ProviderAccountBinding[] | null>(null);
+  const [bindingError, setBindingError] = useState<string | null>(null);
+  const [bindingRequest, setBindingRequest] = useState(0);
+  const launchMemory = useMemo(() => readLaunchMemory(), []);
 
   useEffect(() => {
     let live = true;
@@ -148,6 +161,27 @@ function EditorForm({ initial }: { initial: LaunchRecipe | null }) {
       live = false;
     };
   }, [client]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: bindingRequest is the explicit retry signal.
+  useEffect(() => {
+    let live = true;
+    setBindings(null);
+    setBindingError(null);
+    client
+      .listProviderAccountBindings()
+      .then((list) => {
+        if (!live) return;
+        setBindings(list);
+      })
+      .catch(() => {
+        if (!live) return;
+        setBindings(null);
+        setBindingError("Default account couldn't be resolved because project account choices are unavailable.");
+      });
+    return () => {
+      live = false;
+    };
+  }, [bindingRequest, client]);
 
   const providersUsed = [...new Set(draft.components.flatMap((p) => (p.kind === "agent" ? [p.providerId] : [])))];
   const requested = useRef(new Set<string>());
@@ -172,6 +206,68 @@ function EditorForm({ initial }: { initial: LaunchRecipe | null }) {
     }
   }, [client, providerKey]);
 
+  const fallbackAccounts = useMemo(() => Object.values(accounts).flat(), [accounts]);
+  const availableAccounts = providerSessions?.accounts ?? fallbackAccounts;
+  const targetWorkspaceId = draft.workspaceId ?? active?.id ?? null;
+  const effectiveAccounts = useMemo(() => {
+    const resolved = new Map<string, ProviderAccount>();
+    for (const part of draft.components) {
+      if (part.kind !== "agent") continue;
+      const explicit = part.providerAccountId
+        ? availableAccounts.find(
+            (account) =>
+              account.id === part.providerAccountId &&
+              account.providerId === part.providerId &&
+              account.archivedAt === null,
+          )
+        : null;
+      const account = part.providerAccountId
+        ? explicit
+        : bindings !== null
+          ? resolveRecipeDefaultAccount(availableAccounts, bindings, launchMemory, part.providerId, targetWorkspaceId)
+          : null;
+      if (account) resolved.set(part.key, account);
+    }
+    return resolved;
+  }, [availableAccounts, bindings, draft.components, launchMemory, targetWorkspaceId]);
+  const discoveryAccountIds = useMemo(
+    () => [...new Set([...effectiveAccounts.values()].map((account) => account.id))].sort(),
+    [effectiveAccounts],
+  );
+  const discoveryKey = JSON.stringify(discoveryAccountIds);
+  const discoverModels = providerSessions?.discoverModels;
+  useEffect(() => {
+    if (!discoverModels) return;
+    for (const accountId of JSON.parse(discoveryKey) as string[]) void discoverModels(accountId);
+  }, [discoverModels, discoveryKey]);
+
+  const agentCapabilities = new Map<
+    string,
+    { efforts: readonly string[]; unavailableEffort: boolean; modelId: string | null }
+  >();
+  for (const part of draft.components) {
+    if (part.kind !== "agent" || !isPaneProvider(part.providerId)) continue;
+    const account = effectiveAccounts.get(part.key);
+    const catalog = account ? (providerSessions?.states.get(account.id)?.models ?? null) : null;
+    const model = part.model
+      ? (catalog?.items.find((candidate) => candidate.id === part.model) ?? null)
+      : (catalog?.items.find((candidate) => candidate.isDefault) ?? null);
+    const efforts = effortsForModel(part.providerId, model, catalog?.supportedEfforts);
+    const unavailableEffort = Boolean(
+      part.effort &&
+        catalog &&
+        modelCatalogCanVerifyCapabilities(catalog) &&
+        (!part.model || model !== null) &&
+        modelEffortsAreKnown(model, catalog.supportedEfforts) &&
+        !efforts.includes(part.effort),
+    );
+    agentCapabilities.set(part.key, {
+      efforts,
+      unavailableEffort,
+      modelId: part.model ?? model?.id ?? null,
+    });
+  }
+
   const patch = (partial: Partial<LaunchRecipe>) => {
     setError(null);
     setDraft((current) => ({ ...current, ...partial }));
@@ -193,7 +289,18 @@ function EditorForm({ initial }: { initial: LaunchRecipe | null }) {
   const setVariable = (index: number, change: Partial<RecipeVariable>) =>
     patch({ variables: draft.variables.map((v, i) => (i === index ? { ...v, ...change } : v)) });
 
-  const problems = useMemo(() => validateRecipe(draft), [draft]);
+  const problems = [
+    ...validateRecipe(draft),
+    ...draft.components.flatMap((part) => {
+      if (part.kind !== "agent" || !part.effort) return [];
+      const capability = agentCapabilities.get(part.key);
+      if (!capability?.unavailableEffort) return [];
+      const model = capability.modelId ? ` for model "${capability.modelId}"` : "";
+      return [
+        `${providerName(part.providerId)} no longer reports effort "${part.effort}"${model}. Choose a reported effort or Provider default.`,
+      ];
+    }),
+  ];
   const save = async () => {
     if (problems.length > 0) {
       setError(problems[0] ?? null);
@@ -311,6 +418,12 @@ function EditorForm({ initial }: { initial: LaunchRecipe | null }) {
               {draft.components.map((part, index) => {
                 const meta = KINDS.find((k) => k.kind === part.kind);
                 const Icon = meta?.icon ?? Sparkles;
+                const effortCapability = agentCapabilities.get(part.key);
+                const reportedEfforts = effortCapability?.efforts ?? [];
+                const offeredEfforts =
+                  part.kind === "agent" && part.effort && !reportedEfforts.includes(part.effort)
+                    ? [...reportedEfforts, part.effort]
+                    : reportedEfforts;
                 return (
                   <li key={part.key} className={styles.part} data-kind={part.kind}>
                     <div className={styles.partHead}>
@@ -380,6 +493,19 @@ function EditorForm({ initial }: { initial: LaunchRecipe | null }) {
                                 </option>
                               ))}
                             </Select>
+                            {!part.providerAccountId && bindingError ? (
+                              <p className={styles.error} role="alert">
+                                {bindingError}{" "}
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => setBindingRequest((request) => request + 1)}
+                                >
+                                  Retry account choices
+                                </Button>
+                              </p>
+                            ) : null}
                           </PartField>
                           <PartField id={id(`${part.key}-model`)} label="Model" optional>
                             <TextInput
@@ -396,10 +522,11 @@ function EditorForm({ initial }: { initial: LaunchRecipe | null }) {
                               onChange={(event) => setPart(part.key, { effort: event.target.value || null })}
                             >
                               <option value="">Provider default</option>
-                              {/* Provider-native efforts only; a provider without effort keeps its default. */}
-                              {(isPaneProvider(part.providerId) ? AGENT_EFFORTS[part.providerId] : []).map((effort) => (
+                              {offeredEfforts.map((effort) => (
                                 <option key={effort} value={effort}>
-                                  {effortLabel(effort)}
+                                  {effortCapability?.unavailableEffort && effort === part.effort
+                                    ? `Unavailable · ${effortLabel(effort)}`
+                                    : effortLabel(effort)}
                                 </option>
                               ))}
                             </Select>

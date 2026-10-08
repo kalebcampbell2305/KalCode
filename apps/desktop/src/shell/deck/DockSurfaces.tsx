@@ -34,8 +34,14 @@ import {
   operationStatusLabel,
   queueSections,
 } from "../../surfaces/operations/model.ts";
+import { useOperationIdentity } from "../../surfaces/operations/operationIdentity.ts";
 import { UsageMeter } from "../../surfaces/providers/AccountUsageBadge.tsx";
-import { accountName, sortAccounts } from "../../surfaces/providers/accountIdentity.ts";
+import {
+  accountFullLabel,
+  accountName,
+  accountSignIn,
+  sortAccounts,
+} from "../../surfaces/providers/accountIdentity.ts";
 import { notChecked, usageSummary } from "../../surfaces/providers/accountUsage.ts";
 import { useOptionalProviderAccountSessions } from "../../surfaces/providers/ProviderAccountSessions.tsx";
 import { openProviderAccounts } from "../../surfaces/providers/providersTab.ts";
@@ -304,35 +310,52 @@ function MissionControl({ workspaceId, onOpenBrowser }: Pick<DockSurfaceProps, "
   );
 }
 
-/** Account health in one line: accounts that need sign-in, then any running low (weekly left). */
+/** Account health in one line: canonical session state first, then any running low (weekly left). */
 function AccountHealth() {
   const sessions = useOptionalProviderAccountSessions();
   const navigation = useNavigation();
   const accounts = sessions?.accounts;
   if (!sessions || !accounts || accounts.length === 0) return null;
-  const signedOut = accounts.filter((account) => account.authenticationState !== "authenticated");
+  const accountStates = sortAccounts(accounts).map((account) => ({
+    account,
+    health: sessions.states.get(account.id)?.health,
+  }));
+  const signedOut = accountStates.filter(({ health }) => health?.state === "expired");
+  const unsettled = accountStates.filter(
+    ({ health }) => health === undefined || (health.state !== "connected" && health.state !== "expired"),
+  );
   const low = sortAccounts(accounts).filter(
     (account) => usageSummary(sessions.usage.get(account.id) ?? notChecked(account.id)).low,
   );
-  const tone = signedOut.length > 0 ? "failed" : low.length > 0 ? "waiting" : "done";
+  const tone =
+    signedOut.length > 0 || unsettled.some(({ health }) => health?.state === "error")
+      ? "failed"
+      : unsettled.length > 0 || low.length > 0
+        ? "waiting"
+        : "done";
   const line =
     signedOut.length > 0
       ? `${signedOut.length} ${signedOut.length === 1 ? "account needs" : "accounts need"} sign-in`
-      : low.length > 0
-        ? low
+      : unsettled.length > 0
+        ? unsettled
             .slice(0, 2)
-            .map(
-              (account) =>
-                `${accountName(account)} · ${usageSummary(sessions.usage.get(account.id) ?? notChecked(account.id)).short}`,
-            )
+            .map(({ account, health }) => `${accountName(account)} · ${health?.label ?? "Not checked"}`)
             .join(", ")
-        : `${accounts.length} ${accounts.length === 1 ? "account" : "accounts"} ready`;
+        : low.length > 0
+          ? low
+              .slice(0, 2)
+              .map(
+                (account) =>
+                  `${accountName(account)} · ${usageSummary(sessions.usage.get(account.id) ?? notChecked(account.id)).short}`,
+              )
+              .join(", ")
+          : `${accounts.length} ${accounts.length === 1 ? "account" : "accounts"} ready`;
   return (
     <button
       type="button"
       className={styles.environmentCard}
       onClick={() => {
-        const first = signedOut[0] ?? low[0];
+        const first = signedOut[0]?.account ?? unsettled[0]?.account ?? low[0];
         if (first) openProviderAccounts({ providerId: first.providerId, accountId: first.id });
         navigation.navigate("providers");
       }}
@@ -343,7 +366,13 @@ function AccountHealth() {
       </span>
       <strong>{line}</strong>
       <StatusIndicator tone={tone}>
-        {signedOut.length > 0 ? "Sign-in needed" : low.length > 0 ? "Low" : "Healthy"}
+        {signedOut.length > 0
+          ? "Sign-in needed"
+          : unsettled.length > 0
+            ? (unsettled[0]?.health?.label ?? "Not checked")
+            : low.length > 0
+              ? "Low"
+              : "Healthy"}
       </StatusIndicator>
     </button>
   );
@@ -365,6 +394,12 @@ function NeedsYou() {
 
 function sortRuns(items: readonly OperationRecord[]): OperationRecord[] {
   return [...items].sort((a, b) => Date.parse(b.startedAt ?? b.createdAt) - Date.parse(a.startedAt ?? a.createdAt));
+}
+
+function OperationIdentityLine({ record }: { record: OperationRecord }) {
+  const identity = useOperationIdentity(record);
+  const providerId = record.observedProviderId ?? record.spec.providerId;
+  return providerId ? <small title={identity.detail}>{identity.compact}</small> : null;
 }
 
 function OperationRows({ items, empty }: { items: readonly OperationRecord[]; empty: string }) {
@@ -398,6 +433,7 @@ function OperationRows({ items, empty }: { items: readonly OperationRecord[]; em
             <span className={styles.rowCopy}>
               <strong>{run.spec.name}</strong>
               <small>{run.currentAction ?? run.outcome ?? operationDurationLabel(run)}</small>
+              <OperationIdentityLine record={run} />
             </span>
             <span className={styles.rowState}>
               <StatusIndicator tone={STATUS_TONE[run.status]} pulse={isActiveRun(run)}>
@@ -486,6 +522,7 @@ function Queue({ workspaceId }: { workspaceId: string | null }) {
                     <span className={styles.rowCopy}>
                       <strong>{item.spec.name}</strong>
                       <small>{item.blockers[0] ?? item.currentAction ?? item.spec.lane}</small>
+                      <OperationIdentityLine record={item} />
                     </span>
                     <StatusIndicator tone={STATUS_TONE[item.status]}>
                       {operationStatusLabel(item.status)}
@@ -665,6 +702,7 @@ function ProviderUsage() {
       <ul className={styles.usageList}>
         {sortAccounts(sessions.accounts).map((account) => {
           const usage = sessions.usage.get(account.id) ?? notChecked(account.id);
+          const session = sessions.states.get(account.id)?.health;
           return (
             <li key={account.id}>
               <button
@@ -676,9 +714,11 @@ function ProviderUsage() {
               >
                 <ProviderGlyph provider={account.providerId} size="sm" />
                 <span className={styles.rowCopy}>
-                  <strong>{accountName(account)}</strong>
+                  <strong>{accountFullLabel(account)}</strong>
                   <small>
-                    {usage.plan ?? (account.authenticationState === "authenticated" ? "Weekly usage" : "Signed out")}
+                    {session?.state === "connected"
+                      ? (usage.plan ?? "Weekly usage")
+                      : (session?.label ?? accountSignIn(account).label)}
                   </small>
                 </span>
                 <UsageMeter usage={usage} />

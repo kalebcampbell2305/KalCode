@@ -8,6 +8,7 @@ import type { KalCodeClient } from "../../ipc/client.ts";
 import type { AccountUsageState } from "../providers/accountUsage.ts";
 import { ProviderAccountSessionsProvider } from "../providers/ProviderAccountSessions.tsx";
 import { NewAgentDialog } from "./NewAgentDialog.tsx";
+import { rememberLaunch } from "./panes/agentLaunch.ts";
 
 const render = (ui: ReactNode) => renderView(<ToastProvider>{ui}</ToastProvider>);
 
@@ -432,7 +433,7 @@ describe("restored accounts in the Code launcher", () => {
     const user = userEvent.setup();
     const view = render(dialog({ onLaunch: first }));
     await user.click(await screen.findByRole("option", { name: /Work/ }));
-    await user.click(await screen.findByRole("radio", { name: "Opus" }));
+    await user.click(await screen.findByRole("radio", { name: /^Opus · opus/ }));
     await user.click(screen.getByRole("radio", { name: "High" }));
     await user.click(screen.getByRole("button", { name: "One more agent" }));
     await user.click(screen.getByRole("button", { name: "Launch 2 Claude Code agents" }));
@@ -449,10 +450,12 @@ describe("restored accounts in the Code launcher", () => {
     const second = vi.fn(async () => true);
     render(dialog({ onLaunch: second }));
     expect(await screen.findByRole("option", { name: /Work/ })).toHaveAttribute("aria-selected", "true");
-    expect(await screen.findByRole("radio", { name: "Opus" })).toHaveAttribute("aria-checked", "true");
+    expect(await screen.findByRole("radio", { name: /^Opus · opus/ })).toHaveAttribute("aria-checked", "true");
     expect(screen.getByRole("radio", { name: "High" })).toHaveAttribute("aria-checked", "true");
     expect(screen.getByLabelText("Agents", { exact: true })).toHaveValue(2);
-    const recent = screen.getByRole("button", { name: "Repeat last: Claude Code · Work · Opus · High · 2 agents" });
+    const recent = screen.getByRole("button", {
+      name: "Repeat last: Claude Code · Work · Opus · opus · High · 2 agents",
+    });
     await user.click(recent);
     expect(second).toHaveBeenCalledWith({
       providerId: "claude-code",
@@ -461,6 +464,60 @@ describe("restored accounts in the Code launcher", () => {
       model: "opus",
       effort: "high",
     });
+  });
+
+  it("restores model and effort only for the exact project and account", async () => {
+    const work = makeAccount("work", "Work", true);
+    runtime.client = clientWith([work], async () => threadOptions(["claude-code"]));
+    rememberLaunch({
+      providerId: "claude-code",
+      accountId: work.id,
+      model: "opus",
+      modelName: "Opus",
+      effort: "high",
+      count: 1,
+      workspaceId: "project-a",
+      boundAccountId: null,
+      at: "2026-10-07T12:00:00Z",
+    });
+    rememberLaunch({
+      providerId: "claude-code",
+      accountId: work.id,
+      model: "sonnet",
+      modelName: "Sonnet",
+      effort: "low",
+      count: 1,
+      workspaceId: "project-b",
+      boundAccountId: null,
+      at: "2026-10-07T12:01:00Z",
+    });
+
+    const projectA = render(dialog({ workspace: { id: "project-a", name: "Project A" } as Workspace }));
+    expect(await screen.findByRole("radio", { name: /^Opus · opus/ })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "High" })).toBeChecked();
+    projectA.unmount();
+
+    render(dialog({ workspace: { id: "project-b", name: "Project B" } as Workspace }));
+    expect(await screen.findByRole("radio", { name: /^Sonnet · sonnet/ })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "Low" })).toBeChecked();
+  });
+
+  it("retains separate pending model and effort choices while switching accounts", async () => {
+    const work = makeAccount("work", "Work", true);
+    const personal = makeAccount("personal", "Personal", false);
+    runtime.client = clientWith([work, personal], async () => threadOptions(["claude-code"]));
+    const user = userEvent.setup();
+    render(dialog({}));
+
+    await user.click(await screen.findByRole("radio", { name: /^Opus · opus/ }));
+    await user.click(screen.getByRole("radio", { name: "High" }));
+    await user.click(screen.getByRole("option", { name: /Personal/ }));
+    await user.click(screen.getByRole("radio", { name: /^Sonnet · sonnet/ }));
+    await user.click(screen.getByRole("radio", { name: "Low" }));
+    await user.click(screen.getByRole("option", { name: /Work/ }));
+
+    expect(screen.getByRole("radio", { name: /^Opus · opus/ })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "High" })).toBeChecked();
   });
 
   it("lets an Account Center binding made after the last launch win over the remembered account", async () => {
@@ -488,6 +545,40 @@ describe("restored accounts in the Code launcher", () => {
     await waitFor(() =>
       expect(screen.getByRole("option", { name: /Studio/ })).toHaveAttribute("aria-selected", "true"),
     );
+  });
+
+  it("preserves a removed account preference as an explicit blocked choice instead of selecting another account", async () => {
+    const personal = makeAccount("personal", "Personal", true);
+    runtime.client = clientWith([personal], async () => threadOptions(["claude-code"]));
+    rememberLaunch({
+      providerId: "claude-code",
+      accountId: "removed-work",
+      model: "opus",
+      modelName: "Opus",
+      effort: "high",
+      count: 1,
+      workspaceId: "ws",
+      boundAccountId: null,
+      at: "2026-10-07T12:00:00Z",
+    });
+
+    render(dialog({}));
+
+    const personalOption = await screen.findByRole("option", { name: /Personal/ });
+    expect(personalOption).toHaveAttribute("aria-selected", "false");
+    expect(
+      screen.getByText("Your saved Claude Code account is no longer available. Choose another account."),
+    ).toBeVisible();
+    expect(screen.getByRole("radio", { name: /^Opus/ })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "High" })).toBeChecked();
+    expect(screen.getByRole("button", { name: "Launch Claude Code agent" })).toBeDisabled();
+
+    await userEvent.setup().click(personalOption);
+    expect(personalOption).toHaveAttribute("aria-selected", "true");
+    expect(
+      screen.queryByText("Your saved Claude Code account is no longer available. Choose another account."),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Launch Claude Code agent" })).toBeEnabled();
   });
 
   it("flags a second account that is the same provider sign-in", async () => {
@@ -627,9 +718,24 @@ function threadOptions(providers: readonly string[]): ThreadOptions {
       models:
         id === "claude-code"
           ? [
-              { id: "default", displayName: "Account default", isDefault: true },
-              { id: "opus", displayName: "Opus", isDefault: false },
-              { id: "sonnet", displayName: "Sonnet", isDefault: false },
+              {
+                id: "default",
+                displayName: "Account default",
+                isDefault: true,
+                supportedEfforts: ["low", "medium", "high", "xhigh", "max"],
+              },
+              {
+                id: "opus",
+                displayName: "Opus",
+                isDefault: false,
+                supportedEfforts: ["low", "medium", "high", "xhigh", "max"],
+              },
+              {
+                id: "sonnet",
+                displayName: "Sonnet",
+                isDefault: false,
+                supportedEfforts: ["low", "medium", "high", "xhigh", "max"],
+              },
             ]
           : [],
     })),
@@ -663,7 +769,7 @@ function clientWith(
           provider?.models.map((model) => ({
             ...model,
             defaultEffort: null,
-            supportedEfforts: [],
+            supportedEfforts: (model as typeof model & { supportedEfforts?: string[] }).supportedEfforts ?? [],
           })) ?? [],
       };
     }),
@@ -803,7 +909,7 @@ describe("independent authentication and metadata in agent creation", () => {
       </ProviderAccountSessionsProvider>,
     );
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("radio", { name: "Model B" }));
+    await user.click(await screen.findByRole("radio", { name: /^Model B · model-b/ }));
     expect(screen.getByRole("radio", { name: "Medium" })).toBeChecked();
     expect(screen.getByRole("radio", { name: "Extra high" })).toBeVisible();
     expect(screen.queryByRole("radio", { name: "High" })).not.toBeInTheDocument();
@@ -815,6 +921,77 @@ describe("independent authentication and metadata in agent creation", () => {
       effort: "medium",
       count: 1,
     });
+  });
+
+  it("preserves an exact remembered model when documented aliases cannot verify its absence", async () => {
+    const account = makeAccount("claude-aliases", "Claude Aliases", true);
+    const exact = "custom/provider-model-v9";
+    rememberLaunch({
+      providerId: "claude-code",
+      accountId: account.id,
+      model: exact,
+      modelName: "Custom v9",
+      effort: "future",
+      count: 1,
+      workspaceId: "ws",
+      boundAccountId: null,
+      at: "2026-10-07T12:00:00Z",
+    });
+    runtime.client = {
+      ...clientWith([account], async () => threadOptions(["claude-code"])),
+      providerAccountModels: vi.fn(async () => ({
+        accountId: account.id,
+        providerId: "claude-code" as const,
+        source: "documented_aliases" as const,
+        supportedEfforts: ["low", "medium", "high"],
+        models: [{ id: "opus", displayName: "Opus", isDefault: true, defaultEffort: null, supportedEfforts: [] }],
+      })),
+    } as unknown as KalCodeClient;
+    const onLaunch = vi.fn(async () => true);
+    render(<ProviderAccountSessionsProvider>{dialog({ onLaunch })}</ProviderAccountSessionsProvider>);
+
+    expect(await screen.findByText(/Documented model aliases/)).toBeVisible();
+    expect(screen.getByRole("radio", { name: `Custom v9 · ${exact}` })).toHaveAttribute("title", exact);
+    expect(screen.getByRole("radio", { name: `Custom v9 · ${exact}` })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "Future" })).toBeChecked();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Launch Claude Code agent" }));
+    expect(onLaunch).toHaveBeenCalledWith(expect.objectContaining({ model: exact, effort: "future" }));
+  });
+
+  it("preserves an exact remembered effort when fresh runtime data has no effort metadata", async () => {
+    const account = makeAccount("codex-legacy-effort", "Codex Legacy", true, "codex");
+    rememberLaunch({
+      providerId: "codex",
+      accountId: account.id,
+      model: "model-a",
+      modelName: "Model A",
+      effort: "future",
+      count: 1,
+      workspaceId: "ws",
+      boundAccountId: null,
+      at: "2026-10-07T12:00:00Z",
+    });
+    runtime.client = {
+      ...clientWith([account], async () => threadOptions(["codex"])),
+      providerAccountModels: vi.fn(async () => ({
+        accountId: account.id,
+        providerId: "codex" as const,
+        source: "runtime" as const,
+        models: [{ id: "model-a", displayName: "Model A", isDefault: true, defaultEffort: null }],
+      })),
+    } as unknown as KalCodeClient;
+    const onLaunch = vi.fn(async () => true);
+    render(
+      <ProviderAccountSessionsProvider>
+        {dialog({ offered: ["codex"], initialProvider: "codex", onLaunch })}
+      </ProviderAccountSessionsProvider>,
+    );
+
+    expect(await screen.findByRole("radio", { name: "Future" })).toBeChecked();
+    const launch = screen.getByRole("button", { name: "Launch Codex agent" });
+    await waitFor(() => expect(launch).toBeEnabled());
+    await userEvent.setup().click(launch);
+    expect(onLaunch).toHaveBeenCalledWith(expect.objectContaining({ model: "model-a", effort: "future" }));
   });
 
   it("routes an incompatible recent provider-default effort into the picker instead of launching it", async () => {
@@ -839,6 +1016,7 @@ describe("independent authentication and metadata in agent creation", () => {
       providerAccountModels: vi.fn(async () => ({
         accountId: account.id,
         providerId: "codex" as const,
+        source: "runtime" as const,
         models: [
           {
             id: "model-b",
@@ -937,20 +1115,23 @@ describe("independent authentication and metadata in agent creation", () => {
     };
     const login = deferred<ProviderAccount>();
     runtime.client = {
-      ...clientWith(
-        [],
-        async () =>
-          ({
-            ...threadOptions(["codex"]),
-            providers: [
+      ...clientWith([], async () => {
+        const available = threadOptions(["codex"]);
+        return {
+          ...available,
+          providers: available.providers.map((provider) => ({
+            ...provider,
+            models: [
               {
-                id: "codex",
-                displayName: "Codex",
-                models: [{ id: "gpt-code", displayName: "GPT Code", isDefault: false }],
+                id: "gpt-code",
+                displayName: "GPT Code",
+                isDefault: true,
+                supportedEfforts: ["minimal", "low", "medium", "high", "xhigh"],
               },
             ],
-          }) as ThreadOptions,
-      ),
+          })),
+        } as ThreadOptions;
+      }),
       listProviderAccounts: vi.fn(async () => [account]),
       refreshCodexAccount: vi.fn(async () => account),
       startCodexLogin: vi.fn(async () => ({ loginHandle: "codex-b-login" })),
@@ -974,7 +1155,7 @@ describe("independent authentication and metadata in agent creation", () => {
       const user = userEvent.setup();
       await user.click(await screen.findByRole("radio", { name: "High" }));
       // A compatible explicit effort remains the user's choice when they then choose a model.
-      await user.click(screen.getByRole("radio", { name: "GPT Code" }));
+      await user.click(screen.getByRole("radio", { name: /^GPT Code · gpt-code/ }));
       await user.clear(screen.getByRole("spinbutton", { name: "Agents" }));
       await user.type(screen.getByRole("spinbutton", { name: "Agents" }), "3");
       expect(screen.getByText("Codex B needs to reconnect.")).toBeVisible();
@@ -982,7 +1163,7 @@ describe("independent authentication and metadata in agent creation", () => {
       expect(screen.getByRole("dialog")).not.toHaveTextContent(/thread/i);
       await user.click(screen.getByRole("button", { name: "Reconnect" }));
       expect(screen.getByRole("spinbutton", { name: "Agents" })).toBeDisabled();
-      expect(screen.getByRole("radio", { name: "GPT Code" })).toBeDisabled();
+      expect(screen.getByRole("radio", { name: /^GPT Code · gpt-code/ })).toBeDisabled();
       await act(async () => login.resolve(connected));
       await waitFor(() =>
         expect(onLaunch).toHaveBeenCalledExactlyOnceWith({

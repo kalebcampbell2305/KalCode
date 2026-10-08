@@ -149,6 +149,18 @@ describe("filtering and search", () => {
     expect(matchesQuery(a, "FIX/LOGIN")).toBe(true);
     expect(matchesQuery(a, "nothing")).toBe(false);
   });
+
+  it("searches provider-reported model and reasoning identifiers", () => {
+    const active = {
+      ...thread("active"),
+      model: "selected/model-v1",
+      effort: "high",
+      activeModel: "provider/model-v2[reasoning=max]",
+      activeEffort: "X-High",
+    } as ThreadSummary;
+    expect(matchesQuery(active, "provider/model-v2[reasoning=max]")).toBe(true);
+    expect(matchesQuery(active, "x-high")).toBe(true);
+  });
 });
 
 describe("grouping", () => {

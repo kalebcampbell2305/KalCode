@@ -142,7 +142,7 @@ pub fn interactive_args_with_overrides(
         OsString::from(crate::codex::argv::SUBAGENT_CONFIG),
     ]);
     if let Some(model) = args.model {
-        if !crate::claude::argv::valid_model_name(model) {
+        if !crate::codex::argv::valid_model_name(model) {
             return Err(CodexArgsError::InvalidModel);
         }
         out.push("-m".into());
@@ -614,12 +614,34 @@ mod tests {
         assert!(args.windows(2).any(|pair| pair == overrides));
         let mut future = base.clone();
         future.effort = Some("ultra");
-        assert!(interactive_args_with_overrides(&future, &[]).is_ok());
-        let mut invalid = base.clone();
-        invalid.effort = Some("high' -c web_search='live");
-        assert_eq!(
-            interactive_args_with_overrides(&invalid, &[]),
-            Err(CodexArgsError::InvalidEffort)
+        let future_args = interactive_args_with_overrides(&future, &[]).expect("future effort");
+        assert!(
+            future_args
+                .windows(2)
+                .any(|pair| pair == ["-c", "model_reasoning_effort='ultra'"])
+        );
+
+        for invalid_effort in ["high' -c web_search='live", "ultra' -c web_search='live"] {
+            let mut invalid = base.clone();
+            invalid.effort = Some(invalid_effort);
+            assert_eq!(
+                interactive_args_with_overrides(&invalid, &[]),
+                Err(CodexArgsError::InvalidEffort)
+            );
+        }
+
+        let model = "m".repeat(512);
+        let mut future_model = base.clone();
+        future_model.model = Some(&model);
+        assert!(interactive_args_with_overrides(&future_model, &[]).is_ok());
+
+        future_model.model = Some("future+tools");
+        let future_model_args =
+            interactive_args_with_overrides(&future_model, &[]).expect("future runtime model");
+        assert!(
+            future_model_args
+                .windows(2)
+                .any(|pair| pair == ["-m", "future+tools"])
         );
     }
 }

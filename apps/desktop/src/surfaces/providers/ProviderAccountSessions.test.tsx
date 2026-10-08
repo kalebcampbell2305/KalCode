@@ -52,6 +52,62 @@ const wrapper = ({ children }: { children: ReactNode }) => (
 );
 
 describe("provider account session restoration", () => {
+  it("retains the exact account catalog as stale on refresh failure and reconciles a removed model", async () => {
+    const saved = account("codex-a", "codex", "Work");
+    const model = {
+      id: "exact-v2",
+      displayName: "Exact V2",
+      isDefault: false,
+      defaultEffort: null,
+      supportedEfforts: [],
+    };
+    const catalog = {
+      accountId: saved.id,
+      providerId: saved.providerId,
+      source: "runtime",
+      supportedEfforts: [],
+      models: [model],
+    };
+    runtime.client = {
+      listProviderAccounts: vi.fn(async () => [saved]),
+      refreshCodexAccount: vi.fn(async () => saved),
+      providerAccountModels: vi
+        .fn()
+        .mockResolvedValueOnce(catalog)
+        .mockRejectedValueOnce(new Error("Offline"))
+        .mockResolvedValueOnce({ ...catalog, models: [] }),
+    } as unknown as KalCodeClient;
+    const view = renderHook(useOptionalProviderAccountSessions, { wrapper });
+    await waitFor(() => expect(view.result.current?.checking.size).toBe(0));
+    await waitFor(() => expect(view.result.current?.accounts).toEqual([saved]));
+    await act(async () => {
+      await view.result.current?.discoverModels(saved.id);
+    });
+    const observedAt = view.result.current?.states.get(saved.id)?.models?.observedAt;
+    expect(observedAt).toEqual(expect.any(Number));
+    expect(view.result.current?.states.get(saved.id)?.models).toMatchObject({
+      source: "runtime",
+      supportedEfforts: [],
+    });
+    await act(async () => {
+      await view.result.current?.discoverModels(saved.id);
+    });
+    expect(view.result.current?.states.get(saved.id)?.models).toMatchObject({
+      status: "stale",
+      items: [model],
+      observedAt,
+    });
+    expect(view.result.current?.states.get(saved.id)?.health.usable).toBe(true);
+    await act(async () => {
+      await view.result.current?.discoverModels(saved.id);
+    });
+    expect(view.result.current?.states.get(saved.id)?.models).toMatchObject({
+      status: "available",
+      items: [],
+      source: "runtime",
+    });
+  });
+
   it("does not let an earlier metadata reload undo provider-confirmed expiration", async () => {
     const saved = account("codex-b", "codex", "Codex B");
     const check = deferred<ProviderAccount>();

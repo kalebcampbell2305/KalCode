@@ -5,7 +5,12 @@ import { toKalCodeError } from "../../ipc/errors.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import type { AccountUsageState } from "./accountUsage.ts";
 import { useAccountUsageReader } from "./accountUsageReader.ts";
-import { type AccountModels, type ProviderAccountState, providerAccountState } from "./providerAccountState.ts";
+import {
+  type AccountModels,
+  type ProviderAccountState,
+  providerAccountState,
+  reconcileModelFreshness,
+} from "./providerAccountState.ts";
 
 function supportsPassiveValidation(providerId: string): providerId is "codex" | "gemini-cli" {
   // Claude's auth-status command can refresh provider-owned OAuth state before exiting. Running it
@@ -218,6 +223,7 @@ export function ProviderAccountSessionsProvider({ children }: { children: ReactN
         live.current && clientEpoch.current === expectedEpoch && version(account.id) === expectedVersion;
       setAccountModels((previous) =>
         new Map(previous).set(account.id, {
+          ...previous.get(account.id),
           status: "checking",
           items: previous.get(account.id)?.items ?? [],
           reason: null,
@@ -232,7 +238,14 @@ export function ProviderAccountSessionsProvider({ children }: { children: ReactN
           if (catalog.accountId !== account.id || catalog.providerId !== account.providerId) {
             throw new Error("Model response did not match the selected account");
           }
-          const result: AccountModels = { status: "available", items: catalog.models, reason: null };
+          const result: AccountModels = {
+            status: "available",
+            items: catalog.models,
+            reason: null,
+            source: catalog.source ?? "not_discoverable",
+            supportedEfforts: catalog.supportedEfforts,
+            observedAt: Date.now(),
+          };
           if (current()) setAccountModels((previous) => new Map(previous).set(account.id, result));
         } catch (error) {
           const failure = toKalCodeError(error);
@@ -253,8 +266,9 @@ export function ProviderAccountSessionsProvider({ children }: { children: ReactN
           if (current())
             setAccountModels((previous) =>
               new Map(previous).set(account.id, {
-                status: "unavailable",
-                items: [],
+                ...previous.get(account.id),
+                status: previous.get(account.id)?.observedAt !== undefined ? "stale" : "unavailable",
+                items: previous.get(account.id)?.items ?? [],
                 reason: failure.message,
               }),
             );
@@ -324,6 +338,29 @@ export function ProviderAccountSessionsProvider({ children }: { children: ReactN
     },
     [client, commit, version],
   );
+
+  useEffect(() => {
+    // Age local metadata without spawning observer CLIs. Opening a model chooser already
+    // refreshes asynchronously; some providers may mutate native credentials during discovery.
+    const reconcile = () =>
+      setAccountModels((current) => {
+        let next: Map<string, AccountModels> | null = null;
+        for (const [id, models] of current) {
+          const reconciled = reconcileModelFreshness(models, Date.now());
+          if (reconciled !== models) {
+            next ??= new Map(current);
+            next.set(id, reconciled);
+          }
+        }
+        return next ?? current;
+      });
+    const timer = setInterval(reconcile, 60_000);
+    window.addEventListener("focus", reconcile);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("focus", reconcile);
+    };
+  }, []);
 
   const validateRestored = useCallback(
     (restored: readonly ProviderAccount[], owner: KalCodeClient, expectedClientEpoch: number) => {

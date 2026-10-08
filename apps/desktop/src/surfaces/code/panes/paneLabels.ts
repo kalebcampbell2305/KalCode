@@ -146,20 +146,6 @@ export function isAnswerInProvider(activity: string | null): boolean {
   return activity?.startsWith("Answer in ") ?? false;
 }
 
-/** The exact model the agent was launched with; null when unknown (never a guess). */
-export function paneModel(thread: Pick<ThreadSummary, "model">): string | null {
-  return thread.model?.trim() || null;
-}
-
-const EFFORT_LABELS: Record<string, string> = { xhigh: "Extra high", max: "Max" };
-
-/** The provider-native reasoning effort, labelled; null for the provider default. */
-export function paneEffort(thread: Pick<ThreadSummary, "effort">): string | null {
-  const effort = thread.effort?.trim().toLowerCase();
-  if (!effort || effort === "default") return null;
-  return EFFORT_LABELS[effort] ?? `${effort[0]?.toUpperCase()}${effort.slice(1)}`;
-}
-
 /** An agent whose provider process ended (or never started) and can be started again. */
 export function canResumePane(status: ThreadStatus, running: boolean): boolean {
   return (

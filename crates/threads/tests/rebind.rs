@@ -88,7 +88,8 @@ fn idle_thread_on_a(h: &Harness, accounts: &Accounts) -> String {
     let session = accounts.provider.last_session();
     session.emit(AgentEvent::SessionStarted {
         provider_session_id: "gemini-chat-under-a".into(),
-        model: None,
+        model: Some("gemini-runtime-a".into()),
+        effort: None,
     });
     session.emit(AgentEvent::TurnCompleted { ok: true });
     wait_until("idle with a resume id", || {
@@ -174,6 +175,37 @@ fn rebind_ends_the_idle_session_and_the_next_turn_starts_fresh_under_the_new_acc
     assert_eq!(
         messages[0].content, "summarize the repo",
         "history is untouched"
+    );
+    let first_turn = h
+        .runtime
+        .agent_turn(&messages[0].id, None)
+        .expect("first turn evidence")
+        .expect("first turn");
+    assert_eq!(
+        first_turn.observed_model.as_deref(),
+        Some("gemini-runtime-a")
+    );
+    assert_eq!(
+        first_turn.observed_provider_account_id.as_deref(),
+        Some(accounts.a.as_str())
+    );
+    let continued = messages
+        .iter()
+        .find(|message| message.role == MessageRole::User && message.content == "continue")
+        .expect("continued turn");
+    let continued_turn = h
+        .runtime
+        .agent_turn(&continued.id, None)
+        .expect("continued turn evidence")
+        .expect("continued turn");
+    assert_eq!(
+        continued_turn.observed_model, None,
+        "account B has not reported a model, so account A's model must not leak forward"
+    );
+    assert_eq!(
+        continued_turn.observed_provider_account_id.as_deref(),
+        Some(accounts.b.as_str()),
+        "the null identity boundary still records the exact new account binding"
     );
 }
 

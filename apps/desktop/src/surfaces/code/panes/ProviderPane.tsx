@@ -7,6 +7,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   IconButton,
+  Tooltip,
 } from "@kalcode/ui/components";
 import {
   BrushCleaning,
@@ -32,6 +33,7 @@ import { ApprovalPrompt } from "../../permissions/ApprovalPrompt.tsx";
 import { MODE_LABELS } from "../../permissions/labels.ts";
 import { usePermissions } from "../../permissions/PermissionsProvider.tsx";
 import { AccountUsageBadge } from "../../providers/AccountUsageBadge.tsx";
+import { useSessionIdentity } from "../../providers/useSessionIdentity.ts";
 import { canStartAnyway, isWaitingForResources, waitingReason } from "../../threads/model.ts";
 import { useKalTidy } from "../kaltidy/kalTidyContext.ts";
 import { PaneAccountPicker, type PaneAccountPickerProps } from "./PaneAccountPicker.tsx";
@@ -54,10 +56,8 @@ import {
   channelNote,
   endedSummary,
   isAnswerInProvider,
-  paneEffort,
   paneInfoCopy,
   paneLabel,
-  paneModel,
   paneStatus,
   providerIdentity,
 } from "./paneLabels.ts";
@@ -246,7 +246,6 @@ export const ProviderPane = memo(function ProviderPane({
     >
       <PaneHeader
         thread={thread}
-        providerName={identity.name}
         account={account}
         note={note}
         moreRef={moreRef}
@@ -469,7 +468,6 @@ function sameProviderPaneProps(a: ProviderPaneProps, b: ProviderPaneProps): bool
 
 interface PaneHeaderProps {
   thread: ThreadSummary;
-  providerName: string;
   account: PaneAccountIdentity | null;
   note: ReturnType<typeof channelNote>;
   moreRef: RefObject<HTMLButtonElement | null>;
@@ -488,7 +486,6 @@ interface PaneHeaderProps {
 
 function PaneHeader({
   thread,
-  providerName,
   account,
   note,
   moreRef,
@@ -512,8 +509,30 @@ function PaneHeader({
   // A menu item that moves focus elsewhere (rename field, info panel, stop bar) keeps it there.
   const keepMenuFocus = useRef(false);
   const bypass = thread.permissionMode === "bypass";
-  const model = paneModel(thread);
-  const effort = paneEffort(thread);
+  const session = useSessionIdentity(thread);
+  const canonicalAccount: PaneAccountIdentity | null = account
+    ? {
+        ...account,
+        label: session.accountName,
+        usageAccount: session.account
+          ? {
+              id: session.account.id,
+              displayName: session.accountName,
+              providerId: session.account.providerId,
+            }
+          : undefined,
+      }
+    : session.account
+      ? {
+          label: session.accountName,
+          state: "active",
+          usageAccount: {
+            id: session.account.id,
+            displayName: session.accountName,
+            providerId: session.account.providerId,
+          },
+        }
+      : null;
 
   useEffect(() => {
     if (!editing) setDraft(thread.name);
@@ -521,7 +540,7 @@ function PaneHeader({
 
   const save = async () => {
     const name = draft.trim();
-    if (!name || name === thread.name) {
+    if (!name) {
       setError(null);
       setEditing(false);
       return;
@@ -540,14 +559,6 @@ function PaneHeader({
     keepMenuFocus.current = true;
     action();
   };
-
-  const identityTitle = [
-    `${providerName}${account ? ` · ${paneAccountLabel(account)}` : ""}`,
-    model ? `Model ${model}` : "Provider default model",
-    effort ? `${effort} effort` : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
 
   return (
     <>
@@ -595,27 +606,43 @@ function PaneHeader({
               <span className={styles.title}>{thread.name}</span>
             </button>
           )}
-          <span className={styles.identity} title={identityTitle} data-pane-identity>
-            <span className="visually-hidden">{providerName}</span>
+          <span className={styles.identity} title={session.detail} data-pane-identity>
+            <span className={`${styles.seg} ${styles.provider}`} data-pane-provider>
+              {session.providerName}
+            </span>
             {onContinue ? (
-              <PaneAccountPicker thread={thread} account={account} onContinue={onContinue} />
-            ) : account ? (
-              <PaneAccountChip account={account} />
-            ) : null}
-            {model && thread.providerId !== "cursor" ? (
-              <span className={`${styles.seg} ${styles.model}`} data-pane-model>
-                {model}
+              <PaneAccountPicker thread={thread} account={canonicalAccount} onContinue={onContinue} />
+            ) : canonicalAccount ? (
+              <PaneAccountChip account={canonicalAccount} />
+            ) : (
+              <span
+                className={`${styles.seg} ${styles.accountName}`}
+                data-account-state="archived_or_unavailable"
+                data-pane-account
+              >
+                {session.accountName}
               </span>
-            ) : null}
-            {effort ? (
-              <span className={`${styles.seg} ${styles.effort}`} data-pane-effort>
-                {effort}
-              </span>
-            ) : null}
+            )}
+            <span className={`${styles.seg} ${styles.model}`} data-source={session.model.source} data-pane-model>
+              {session.model.label}
+            </span>
+            <span className={`${styles.seg} ${styles.effort}`} data-source={session.effort.source} data-pane-effort>
+              {session.effort.label}
+            </span>
           </span>
-          {account?.usageAccount ? (
+          <Tooltip content={session.detail} side="bottom">
+            <IconButton
+              size="sm"
+              variant="ghost"
+              className={styles.identityInfo}
+              label={`Session identity: ${session.detail}`}
+              icon={<Info />}
+              data-pane-identity-detail
+            />
+          </Tooltip>
+          {canonicalAccount?.usageAccount ? (
             <span className={styles.usage} data-pane-usage>
-              <AccountUsageBadge account={account.usageAccount} size="xs" interactive />
+              <AccountUsageBadge account={canonicalAccount.usageAccount} size="xs" interactive />
             </span>
           ) : null}
         </div>
@@ -704,11 +731,6 @@ function PaneHeader({
             </Button>
           ) : null}
         </div>
-        {model && thread.providerId === "cursor" ? (
-          <span className={styles.exactModel} data-pane-model title={model}>
-            {model}
-          </span>
-        ) : null}
       </header>
       {editing && error ? (
         <div id={`${inputId}-error`} className={styles.titleError} role="alert">

@@ -92,7 +92,12 @@ test.describe("threads", () => {
       .and(page.locator(NOT_FAVORITE));
     await expect(row).toHaveAttribute("aria-current", "true");
     await expect(detail(page).getByRole("heading", { name: "Fix OAuth Callback Race" })).toBeVisible();
-    await expect(detail(page).getByText("Claude Code · opus · Personal")).toBeVisible();
+    // Canonical identity order: provider · account · model; a launch choice is marked as selected.
+    await expect(
+      detail(page)
+        .locator("dd")
+        .filter({ hasText: /^Claude Code · Personal · opus \(selected\)$/ }),
+    ).toBeVisible();
     await expect(detail(page).getByText("kalcoded.com", { exact: true })).toBeVisible();
 
     // Live deltas stream in, then the stored message, the tool call and the final reply.
@@ -123,24 +128,24 @@ test.describe("threads", () => {
       "Use a Cursor coding terminal in Code",
     );
 
-    // Codex lists no models up front: only the provider's default.
+    // Codex lists the selected account's runtime catalog, each model named exactly.
     await form.getByLabel("Provider").selectOption("codex");
     await expect(form.getByLabel("Account", { exact: true }).locator("option")).toHaveText([
       "Personal · Default",
       "Work · Signed out",
     ]);
     await expect(form.getByLabel("Account", { exact: true })).toHaveValue("0192f3c4-0000-7000-8000-000000000201");
-    await expect(form.getByLabel("Model").locator("option")).toHaveText(["Provider default"]);
+    await expect(form.getByLabel("Model").locator("option")).toHaveText([
+      "Provider default · Codex exact model · codex-ui-test-exact",
+      "Codex exact model · codex-ui-test-exact · reported default",
+    ]);
     await expect(form.getByText(/With Codex: Uses Codex's explicit danger-full-access sandbox/)).toBeVisible();
 
+    // Models are account-scoped: a signed-out Gemini account offers only the provider default and
+    // an inline sign-in; its catalog is read once the account is connected.
     await form.getByLabel("Provider").selectOption("gemini-cli");
-    await expect(form.getByLabel("Model").locator("option")).toHaveText([
-      "Provider default",
-      "Auto (default)",
-      "Pro",
-      "Flash",
-      "Flash-Lite",
-    ]);
+    await expect(form.getByRole("button", { name: "Sign in to Personal" })).toBeVisible();
+    await expect(form.getByLabel("Model").locator("option")).toHaveText(["Provider default"]);
     await expect(form.getByText(/With Gemini CLI: Everything runs without approval prompts/)).toBeVisible();
 
     // A Codex thread runs like any other.
@@ -194,7 +199,7 @@ test.describe("threads", () => {
     await expect(
       detail(page)
         .locator("dd")
-        .filter({ hasText: /^Claude Code · Personal$/ }),
+        .filter({ hasText: /^Claude Code · Personal · Model controlled by provider$/ }),
     ).toBeVisible();
   });
 

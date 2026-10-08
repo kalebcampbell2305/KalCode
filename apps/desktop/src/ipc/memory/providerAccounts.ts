@@ -176,6 +176,12 @@ function fixtureModels(account: ProviderAccount): ProviderAccountModel[] {
   }));
 }
 
+function fixtureSupportedEfforts(account: ProviderAccount): string[] {
+  if (account.providerId === "claude-code") return ["low", "medium", "high", "xhigh", "max"];
+  if (account.providerId === "codex") return ["minimal", "low", "medium", "high", "xhigh"];
+  return [];
+}
+
 export interface ProviderAccountsMemory {
   handlers: DashboardHandlers;
   /** Resolves active public metadata for the fixture thread runtime. */
@@ -367,6 +373,8 @@ export function createProviderAccountsMemory(requireCore: () => void, empty = fa
         return {
           accountId: current.id,
           providerId: current.providerId,
+          source: current.providerId === "codex" || current.providerId === "cursor" ? "runtime" : "documented_aliases",
+          supportedEfforts: fixtureSupportedEfforts(current),
           models: fixtureModels(current),
         };
       },

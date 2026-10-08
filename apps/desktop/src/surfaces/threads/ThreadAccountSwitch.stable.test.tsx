@@ -84,7 +84,7 @@ async function settledThread(
   return client.stopThread(created.id);
 }
 
-async function mountStable(): Promise<Mounted> {
+async function mountStable(identity?: { activeModel: string; activeEffort: string }): Promise<Mounted> {
   const transport = createMemoryTransport("threads", { detectDelayMs: 0 });
   const original = transport.invoke.bind(transport);
   const counts = new Map<string, number>();
@@ -102,6 +102,9 @@ async function mountStable(): Promise<Mounted> {
       return (result as ProviderAccount[]).map((account) =>
         account.displayName === "Gemini B" ? { ...account, providerReportedIdentity: "b@example.com" } : account,
       ) as never;
+    }
+    if (command === "thread_get" && identity && (result as ThreadSummary).name === "Gemini docs pass") {
+      return { ...(result as ThreadSummary), ...identity } as never;
     }
     return result as never;
   });
@@ -167,11 +170,14 @@ async function openMenu(user: Mounted["user"], label: string) {
 
 describe("thread account switch on Stable", () => {
   it("shows the thread's provider and account as text in the header and in the list", async () => {
-    const { user } = await mountStable();
+    const { user } = await mountStable({ activeModel: "gemini-2.5-pro", activeEffort: "high" });
     await openThreads(user);
     await openThread(user, "Gemini docs pass");
     const header = screen.getByRole("article");
     expect(within(header).getByText("Provider").nextElementSibling).toHaveTextContent("Gemini CLI · Personal");
+    expect(within(header).getByTestId("thread-provider-identity")).toHaveTextContent(
+      /^Gemini CLI · Personal · gemini-2.5-pro · high$/,
+    );
     expect(await accountButton("Personal")).toHaveTextContent("Personal");
     const list = screen.getByRole("list", { name: "Threads" });
     expect(within(list).getByRole("button", { name: threadRow("Gemini docs pass") })).toHaveTextContent(

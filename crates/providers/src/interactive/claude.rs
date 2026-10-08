@@ -467,7 +467,7 @@ mod tests {
             Some("high")
         );
         let mut invalid = base(new(), None);
-        invalid.effort = Some("ultra");
+        invalid.effort = Some("ultra' --dangerously-skip-permissions");
         assert_eq!(interactive_args(&invalid), Err(ArgsError::InvalidEffort));
     }
 

@@ -158,6 +158,9 @@ describe("account usage helpers", () => {
     // Slugs from multi-word display names ("Opus 4.1" → weekly_opus_4_1) match dotted/dashed ids.
     expect(windowAppliesToModel(win("weekly_opus_4_1", "Weekly Opus 4.1", 5), "claude-opus-4-1")).toBe(true);
     expect(windowAppliesToModel(win("weekly_opus_4_1", "Weekly Opus 4.1", 5), "claude-opus-4-6")).toBe(false);
+    expect(windowAppliesToModel(win("weekly_opus_4_1", "Weekly Opus 4.1", 5), "claude-opus-4-10")).toBe(false);
+    expect(windowAppliesToModel(win("weekly_opus", "Weekly Opus", 5), "octopus-v1")).toBe(false);
+    expect(windowAppliesToModel(win("weekly_opus", "Weekly Opus", 5), "claude-opus-4-1")).toBe(true);
     // Non-model-scoped windows always apply, whatever the model.
     for (const id of ["weekly", "five_hour", "primary", "secondary"])
       expect(windowAppliesToModel(win(id, id, 5), "claude-fable-1")).toBe(true);

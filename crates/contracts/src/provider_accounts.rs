@@ -51,6 +51,19 @@ pub struct ProviderAccountModel {
     pub supported_efforts: Vec<String>,
 }
 
+/// Where an account-bound provider model catalog came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum ProviderModelCatalogSource {
+    /// Discovered from the authenticated provider's supported runtime command.
+    Runtime,
+    /// Aliases published in the provider's documentation; the provider resolves them.
+    DocumentedAliases,
+    /// The provider does not expose a supported model-discovery path.
+    NotDiscoverable,
+}
+
 /// Account-bound model catalog returned by the canonical provider adapter path.
 ///
 /// Echoing both identities lets an asynchronous UI discard a response after an account switch
@@ -61,6 +74,14 @@ pub struct ProviderAccountModel {
 pub struct ProviderAccountModelCatalog {
     pub account_id: String,
     pub provider_id: ProviderId,
+    /// Provenance for this account catalog. Absent only when reading a legacy serialized value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub source: Option<ProviderModelCatalogSource>,
+    /// Adapter-owned picker fallback when no model-specific effort metadata is available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub supported_efforts: Option<Vec<String>>,
     pub models: Vec<ProviderAccountModel>,
 }
 

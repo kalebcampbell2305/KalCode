@@ -2,14 +2,14 @@
 //! caller. The WebView is untrusted: ids, names, prompts, models and modes are checked here
 //! before they touch storage or a provider.
 
-use kalcode_contracts::agent::ProviderId;
+use kalcode_contracts::agent::{ProviderId, safe_model_selector};
 use kalcode_contracts::ids::is_valid_id;
 use kalcode_contracts::permissions::PermissionMode;
 use kalcode_core::{KalError, Result};
 
 pub const MAX_NAME_CHARS: usize = 80;
 pub const MAX_PROMPT_CHARS: usize = 100_000;
-pub const MAX_MODEL_CHARS: usize = 128;
+pub const MAX_MODEL_BYTES: usize = 512;
 pub const MAX_PROVIDER_ID_CHARS: usize = 64;
 pub const MAX_PAGE: u32 = 500;
 /// Most threads a single bulk create may start.
@@ -58,18 +58,14 @@ pub fn provider_id(id: &str) -> Result<ProviderId> {
 
 /// An optional model id. Empty means "the provider's default".
 pub fn model(model: Option<&str>) -> Result<Option<String>> {
-    let Some(model) = model.map(str::trim).filter(|m| !m.is_empty()) else {
+    let Some(model) = model.filter(|value| !value.trim().is_empty()) else {
         return Ok(None);
     };
-    let valid = model.chars().count() <= MAX_MODEL_CHARS
-        && model.chars().all(|c| {
-            c.is_ascii_alphanumeric()
-                || matches!(
-                    c,
-                    '.' | '_' | '-' | ':' | '/' | '@' | '[' | ']' | '=' | '?' | '&' | ','
-                )
-        });
-    if valid {
+    // Model ids are opaque provider-native arguments. KalCode passes this value as one argv
+    // element, never through a shell, so punctuation is data and must not become a compatibility
+    // ceiling for future exact ids. Refuse only values that can be interpreted as an option,
+    // contain terminal/control data, or exceed the bounded native metadata contract.
+    if safe_model_selector(model) {
         Ok(Some(model.to_owned()))
     } else {
         Err(KalError::validation(
@@ -220,8 +216,26 @@ mod tests {
             model(Some("claude-sonnet-4-5")).expect("ok").as_deref(),
             Some("claude-sonnet-4-5")
         );
-        assert!(model(Some("x; rm -rf /")).is_err());
-        assert!(model(Some(&"m".repeat(129))).is_err());
+        assert_eq!(
+            model(Some("future+tools"))
+                .expect("future native id")
+                .as_deref(),
+            Some("future+tools")
+        );
+        assert_eq!(
+            model(Some("x;still-one-argv"))
+                .expect("opaque argv")
+                .as_deref(),
+            Some("x;still-one-argv")
+        );
+        assert_eq!(
+            model(Some("模型/éclair:β+tools model"))
+                .expect("ordinary Unicode exact id")
+                .as_deref(),
+            Some("模型/éclair:β+tools model")
+        );
+        assert!(model(Some(&"m".repeat(MAX_MODEL_BYTES))).is_ok());
+        assert!(model(Some(&"m".repeat(MAX_MODEL_BYTES + 1))).is_err());
         for exact in ["gpt-5.4[effort=high]", "custom/deepseek-v9?reasoning=high"] {
             assert_eq!(
                 model(Some(exact)).expect("runtime model").as_deref(),
@@ -231,8 +245,12 @@ mod tests {
         for invalid in [
             "model\n--force",
             "model\0id",
-            "model;command",
-            "model`command",
+            "-model-option",
+            "model\u{7f}id",
+            "zero\u{200b}width",
+            "bidi\u{202e}override",
+            "isolate\u{2066}text",
+            "bom\u{feff}text",
         ] {
             assert!(model(Some(invalid)).is_err());
         }

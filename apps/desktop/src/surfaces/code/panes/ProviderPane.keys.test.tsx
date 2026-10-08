@@ -1,12 +1,15 @@
 import type { PaneInfo, ThreadSummary } from "@kalcode/protocol";
+import { TooltipProvider } from "@kalcode/ui/components";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import { ProviderPane } from "./ProviderPane.tsx";
 import type { PaneChannel } from "./paneChannel.ts";
 
-const seams = vi.hoisted(() => ({ focusRequests: [] as number[] }));
+const seams = vi.hoisted(() => ({ focusRequests: [] as number[], renameThread: vi.fn() }));
 
-vi.mock("../../../runtime/RuntimeProvider.tsx", () => ({ useRuntime: () => ({ client: {} }) }));
+vi.mock("../../../runtime/RuntimeProvider.tsx", () => ({
+  useRuntime: () => ({ client: { renameThread: seams.renameThread } }),
+}));
 vi.mock("../../permissions/PermissionsProvider.tsx", () => ({
   usePermissions: () => ({ pending: [], decide: vi.fn() }),
 }));
@@ -59,6 +62,8 @@ const info: PaneInfo = {
 
 beforeEach(() => {
   seams.focusRequests.length = 0;
+  seams.renameThread.mockReset();
+  seams.renameThread.mockResolvedValue(thread);
 });
 
 const leaveTerminal = (target: Element) =>
@@ -66,14 +71,16 @@ const leaveTerminal = (target: Element) =>
 
 it("lets Ctrl+Shift+E leave an agent's terminal, as it does a shell's", () => {
   render(
-    <ProviderPane
-      thread={thread}
-      info={info}
-      channel={{} as PaneChannel}
-      account={null}
-      theme="dark"
-      focusRequest={0}
-    />,
+    <TooltipProvider>
+      <ProviderPane
+        thread={thread}
+        info={info}
+        channel={{} as PaneChannel}
+        account={null}
+        theme="dark"
+        focusRequest={0}
+      />
+    </TooltipProvider>,
   );
   const input = screen.getByRole("textbox", { name: "Agent terminal input" });
   input.focus();
@@ -85,4 +92,83 @@ it("lets Ctrl+Shift+E leave an agent's terminal, as it does a shell's", () => {
   const more = screen.getByRole("button", { name: "More actions for Fix login" });
   expect(leaveTerminal(more)).toBe(false);
   expect(seams.focusRequests.at(-1)).toBe(1);
+});
+
+it("keeps the task title first and presents exact runtime identity inline for every provider", () => {
+  const cursor = {
+    ...thread,
+    providerId: "cursor",
+    providerName: "Cursor",
+    providerAccountId: "cursor-work",
+    accountLabel: "Cursor Work",
+    model: "selected/model-v1",
+    effort: "high",
+    activeModel: "cursor/model-v2[reasoning=max]",
+    activeEffort: "X-High",
+  } as ThreadSummary;
+  const { container } = render(
+    <TooltipProvider>
+      <ProviderPane
+        thread={cursor}
+        info={{ ...info, providerId: "cursor" }}
+        channel={{} as PaneChannel}
+        account={{ label: "Cursor Work", state: "active" }}
+        theme="dark"
+        focusRequest={0}
+      />
+    </TooltipProvider>,
+  );
+
+  const title = screen.getByRole("button", { name: "Fix login. Rename agent" });
+  const identity = container.querySelector<HTMLElement>("[data-pane-identity]");
+  const model = container.querySelector<HTMLElement>("[data-pane-model]");
+  expect(identity).toHaveTextContent("Cursor");
+  expect(identity).toHaveTextContent("Cursor Work");
+  expect(identity).toHaveTextContent("cursor/model-v2[reasoning=max]");
+  expect(identity).toHaveTextContent("X-High");
+  expect(identity).toContainElement(model);
+  expect(container.querySelectorAll("[data-pane-model]")).toHaveLength(1);
+  expect(title.compareDocumentPosition(identity as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(identity).toHaveAttribute("title", expect.stringContaining("Selected model: selected/model-v1."));
+  expect(container.querySelector("[data-pane-identity-detail]")).toHaveAccessibleName(
+    expect.stringContaining("Selected model: selected/model-v1."),
+  );
+});
+
+it("says when model and reasoning remain controlled by the provider", () => {
+  const { container } = render(
+    <TooltipProvider>
+      <ProviderPane
+        thread={thread}
+        info={info}
+        channel={{} as PaneChannel}
+        account={null}
+        theme="dark"
+        focusRequest={0}
+      />
+    </TooltipProvider>,
+  );
+  const identity = container.querySelector<HTMLElement>("[data-pane-identity]");
+  expect(container.querySelector("[data-pane-account]")).toHaveTextContent("Account unavailable");
+  expect(identity).toHaveTextContent("Model controlled by provider");
+  expect(identity).toHaveTextContent("Reasoning controlled by provider");
+});
+
+it("pins a provider-generated title as manual when the user explicitly saves it unchanged", () => {
+  render(
+    <TooltipProvider>
+      <ProviderPane
+        thread={thread}
+        info={info}
+        channel={{} as PaneChannel}
+        account={null}
+        theme="dark"
+        focusRequest={0}
+      />
+    </TooltipProvider>,
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Fix login. Rename agent" }));
+  fireEvent.keyDown(screen.getByRole("textbox", { name: "Agent name" }), { key: "Enter" });
+  expect(seams.renameThread).toHaveBeenCalledWith(thread.id, thread.name);
 });

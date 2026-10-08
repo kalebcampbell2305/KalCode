@@ -1,5 +1,6 @@
 import type {
   OperationRecord,
+  ProviderAccount,
   SquadDefinition,
   SquadLaunch,
   SquadMemberDefinition,
@@ -146,6 +147,36 @@ describe("Squad canonical truth projection", () => {
       providerId: "codex",
       model: "gpt-6.1-sol",
       effort: "high",
+    });
+  });
+
+  it("projects a live provider selector ahead of the captured launch recipe", () => {
+    const relation = launch.members[0];
+    expect(relation).toBeDefined();
+    if (!relation) return;
+    const live = {
+      ...agent("active"),
+      accountLabel: "Old nickname",
+      activeModel: "provider/model-v2",
+      activeEffort: "ultra",
+    } as ThreadSummary & { activeModel: string; activeEffort: string };
+    const currentAccount = {
+      id: "codex-work",
+      providerId: "codex",
+      displayName: "Current nickname",
+      authenticationState: "authenticated",
+      archivedAt: null,
+    } as ProviderAccount;
+    const truth = memberTruth(relation, definition.members[0] ?? null, operation("running"), [live]);
+
+    expect(memberDisplay(truth, [currentAccount])).toMatchObject({
+      model: "provider/model-v2",
+      effort: "ultra",
+      identity: {
+        accountName: "Current nickname",
+        model: { value: "provider/model-v2", source: "provider", label: "provider/model-v2" },
+        effort: { value: "ultra", source: "provider", label: "ultra" },
+      },
     });
   });
 

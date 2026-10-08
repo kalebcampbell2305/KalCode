@@ -1,5 +1,6 @@
 use std::ffi::OsString;
 
+use kalcode_contracts::agent::safe_model_selector;
 use kalcode_contracts::permissions::PermissionMode;
 
 /// Flags and values KalCode never passes to Gemini CLI.
@@ -49,7 +50,7 @@ pub fn headless_args(
         approval_mode(mode).into(),
     ];
     if let Some(model) = model {
-        if !crate::claude::argv::valid_model_name(model) {
+        if !safe_model_selector(model) {
             return Err(GeminiArgsError::InvalidModel);
         }
         out.push("--model".into());

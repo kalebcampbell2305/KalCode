@@ -142,6 +142,7 @@ impl TurnSession {
             shared.sink.emit(AgentEvent::SessionStarted {
                 provider_session_id: id,
                 model: None,
+                effort: None,
             });
         }
         tracing::info!(

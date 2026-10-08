@@ -1,4 +1,4 @@
-import type { LocatorEntityKind, TerminalInfo, ThreadSummary, Workspace } from "@kalcode/protocol";
+import type { LocatorEntityKind, ProviderAccount, TerminalInfo, ThreadSummary, Workspace } from "@kalcode/protocol";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { useUiIntents } from "../runtime/uiIntents.tsx";
@@ -6,6 +6,8 @@ import { useWorkspaces } from "../runtime/WorkspaceProvider.tsx";
 import { useNavigation } from "../shell/navigation.tsx";
 import { useOpenLocated } from "../shell/rail/search/useOpenLocated.ts";
 import { isCodingAgent } from "../surfaces/dashboard/data/agents.ts";
+import { useOptionalProviderAccountSessions } from "../surfaces/providers/ProviderAccountSessions.tsx";
+import { sessionIdentity } from "../surfaces/providers/sessionIdentity.ts";
 import { getSelectedThread } from "../surfaces/threads/accountIntent.ts";
 import {
   resolveVoiceSceneTarget,
@@ -166,10 +168,16 @@ export interface VoiceSceneSources {
   workspaces: readonly Workspace[];
   terminals: readonly TerminalInfo[];
   threads: readonly ThreadSummary[];
+  accounts?: readonly ProviderAccount[] | null;
 }
 
 /** Builds privacy-bounded targets from canonical shell state; it never includes prompt or terminal text. */
-export function createBaseVoiceSceneTargets({ workspaces, terminals, threads }: VoiceSceneSources): VoiceSceneTarget[] {
+export function createBaseVoiceSceneTargets({
+  workspaces,
+  terminals,
+  threads,
+  accounts,
+}: VoiceSceneSources): VoiceSceneTarget[] {
   const workspaceNames = new Map(workspaces.map((workspace) => [workspace.id, workspace.name]));
   const targets: VoiceSceneTarget[] = workspaces.map((workspace) => ({
     kind: "workspace",
@@ -203,21 +211,22 @@ export function createBaseVoiceSceneTargets({ workspaces, terminals, threads }: 
   }
 
   for (const thread of threads) {
-    const effort = voiceThreadEffort(thread);
+    const identity = sessionIdentity(thread, accounts);
+    const accountLabel = identity.account?.displayName.trim() || thread.accountLabel?.trim() || null;
     const codingAgent = isCodingAgent(thread);
     targets.push({
       kind: codingAgent ? "agent" : "thread",
       entityId: thread.id,
       title: thread.name,
       aliases: compactAliases([
-        thread.providerName,
-        `${thread.providerName} ${codingAgent ? "agent" : "thread"}`,
-        thread.accountLabel,
-        thread.accountLabel ? `${thread.providerName} ${thread.accountLabel}` : null,
+        identity.providerName,
+        `${identity.providerName} ${codingAgent ? "agent" : "thread"}`,
+        accountLabel,
+        accountLabel ? `${identity.providerName} ${accountLabel}` : null,
         thread.workspaceName,
         `${thread.workspaceName} workspace`,
-        thread.model,
-        effort,
+        identity.model.value,
+        identity.effort.value,
         thread.branch,
       ]),
       // currentActivity is a short structured runtime fact, never model prose or a prompt.
@@ -226,11 +235,13 @@ export function createBaseVoiceSceneTargets({ workspaces, terminals, threads }: 
       workspaceId: thread.workspaceId,
       workspaceName: thread.workspaceName,
       providerId: thread.providerId,
-      providerName: thread.providerName,
+      providerName: identity.providerName,
       providerAccountId: thread.providerAccountId,
-      accountLabel: thread.accountLabel,
-      model: thread.model,
-      effort,
+      accountLabel,
+      model: identity.model.value,
+      modelSource: identity.model.source,
+      effort: identity.effort.value,
+      effortSource: identity.effort.source,
       branch: thread.branch,
       codingAgent,
       updatedAt: thread.lastActivityAt,
@@ -392,6 +403,7 @@ export function useVoiceScene(): VoiceScene {
   const intents = useUiIntents();
   const navigation = useNavigation();
   const openLocated = useOpenLocated();
+  const providerSessions = useOptionalProviderAccountSessions();
   const { threads, loaded, refresh } = useVoiceSceneThreads(client, runtime.feed);
 
   const terminalList = useMemo(() => {
@@ -407,8 +419,9 @@ export function useVoiceScene(): VoiceScene {
         workspaces: workspaces.workspaces ?? [],
         terminals: terminalList,
         threads,
+        accounts: providerSessions?.accounts,
       }),
-    [workspaces.workspaces, terminalList, threads],
+    [workspaces.workspaces, terminalList, threads, providerSessions?.accounts],
   );
 
   const snapshot = useCallback(() => {

@@ -96,6 +96,28 @@
   line-height: var(--leading-normal);
 }
 
+.sourceIdentity,
+.previewIdentity,
+.recipientIdentity {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: var(--leading-normal);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sourceIdentity {
+  margin-top: var(--space-1);
+}
+
+.previewIdentity {
+  margin-top: var(--space-1);
+}
+
 .sectionHead p,
 .taskHelp {
   margin: var(--space-1) 0 0;

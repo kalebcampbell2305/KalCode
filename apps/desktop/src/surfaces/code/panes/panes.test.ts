@@ -27,10 +27,8 @@ import {
   channelNote,
   endedSummary,
   isAnswerInProvider,
-  paneEffort,
   paneInfoCopy,
   paneLabel,
-  paneModel,
   paneStatus,
   providerIdentity,
 } from "./paneLabels.ts";
@@ -156,17 +154,9 @@ describe("pane labels", () => {
     expect(isAnswerInProvider(null)).toBe(false);
   });
 
-  it("labels the pane region, and shows the exact model and effort or nothing (never a guess)", () => {
+  it("labels the pane region with its task and provider", () => {
     const thread = { name: "Fix login", providerId: "claude-code", providerName: "Claude Code", model: null };
     expect(paneLabel(thread as ThreadSummary)).toBe("Fix login, Claude Code agent");
-    expect(paneModel({ model: null })).toBeNull();
-    expect(paneModel({ model: "  " })).toBeNull();
-    expect(paneModel({ model: "claude-opus-4-1" })).toBe("claude-opus-4-1");
-    expect(paneEffort({ effort: null })).toBeNull();
-    expect(paneEffort({ effort: "default" })).toBeNull();
-    expect(paneEffort({ effort: "high" })).toBe("High");
-    expect(paneEffort({ effort: "xhigh" })).toBe("Extra high");
-    expect(paneEffort({ effort: "minimal" })).toBe("Minimal");
   });
 
   it("offers Resume only for an agent whose provider ended, and says what happened", () => {

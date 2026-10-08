@@ -271,10 +271,21 @@ pub struct ThreadSummary {
     pub name: String,
     pub provider_id: ProviderId,
     pub provider_name: String,
+    /// Model requested when launching or resuming the provider session.
     pub model: Option<String>,
-    /// Provider-native reasoning effort. Missing means the provider default.
+    /// Provider-confirmed model for the current runtime, retained on terminal history. A new
+    /// session clears it until the provider reports again; missing means unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub active_model: Option<String>,
+    /// Provider-native reasoning effort requested at launch. Missing means the provider default.
     #[serde(default)]
     pub effort: Option<String>,
+    /// Provider-confirmed effort for the current runtime, retained on terminal history. A new
+    /// session clears it until the provider reports again; missing means unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub active_effort: Option<String>,
     /// Stable selected provider-account metadata id; never a credential.
     #[serde(default)]
     pub provider_account_id: Option<String>,

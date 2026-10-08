@@ -88,7 +88,7 @@ test("an agent row opens its coding terminal in Code, and a chat thread is never
   if (await newStrip.isVisible()) await newStrip.getByRole("button", { name: "Show dock", exact: true }).click();
   await agents(page).getByRole("button", { name: /^Idle/ }).click();
   await agents(page)
-    .getByRole("button", { name: /^Claude Code, .*Claude Code in deck-agent\. Open agent$/ })
+    .getByRole("button", { name: /^Claude Code, .*Claude Code · .* in deck-agent\. Open agent$/ })
     .click();
   await expect(page.getByRole("heading", { level: 1, name: "deck-agent" })).toBeVisible();
   await expect(page.getByRole("heading", { level: 1, name: "Threads" })).toHaveCount(0);

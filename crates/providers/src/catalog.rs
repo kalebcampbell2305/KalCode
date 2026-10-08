@@ -4,7 +4,9 @@
 
 use kalcode_contracts::agent::{
     ModelInfo, ProviderCapabilities, ProviderId, ToolAvailability, ToolCapability, ToolKind,
+    safe_model_selector,
 };
+use kalcode_contracts::provider_accounts::ProviderModelCatalogSource;
 
 use crate::claude::argv as claude_argv;
 use crate::detect::{AuthProbe, AuthSignal, DetectionSpec};
@@ -173,6 +175,25 @@ pub fn gemini_capabilities() -> ProviderCapabilities {
         interactive: Some(crate::interactive::gemini_interactive_support()),
         tools: gemini_tools(),
     }
+}
+
+/// Account-catalog provenance owned by the provider adapter layer. Native command surfaces call
+/// this instead of inferring discovery support from provider names.
+pub fn model_catalog_source(provider_id: &str) -> ProviderModelCatalogSource {
+    match provider_id {
+        ProviderId::CODEX | ProviderId::CURSOR => ProviderModelCatalogSource::Runtime,
+        ProviderId::CLAUDE_CODE | ProviderId::GEMINI_CLI => {
+            ProviderModelCatalogSource::DocumentedAliases
+        }
+        _ => ProviderModelCatalogSource::NotDiscoverable,
+    }
+}
+
+/// Provider-neutral launch validation for one exact model selector. The provider remains the
+/// authority for whether the selector exists for an account; KalCode only enforces safe direct
+/// argv bounds here. `provider_id` is retained in the API for future adapter-specific syntax.
+pub fn valid_model_selector(_provider_id: &str, value: &str) -> bool {
+    safe_model_selector(value)
 }
 
 /// Static capability metadata by canonical provider id. Account-aware adapters may replace the
@@ -353,7 +374,7 @@ pub fn statuses() -> Vec<ProviderStatus> {
             auth_check: codex.auth_check_command(),
             capabilities: codex_capabilities(),
             adapter: AdapterState::Implemented,
-            model_source: ModelSource::NotDiscoverable,
+            model_source: ModelSource::Runtime,
             integration: "Headless mode (codex exec --json) with JSON Lines events, one process \
                           per turn resumed by thread id"
                 .into(),
@@ -486,6 +507,62 @@ mod tests {
                 Some("cursor-agent status --format json".to_owned())
             ]
         );
+    }
+
+    #[test]
+    fn model_sources_match_the_real_adapter_discovery_paths() {
+        let sources: Vec<_> = statuses()
+            .into_iter()
+            .map(|status| (status.id, status.model_source))
+            .collect();
+        assert_eq!(
+            sources,
+            [
+                (
+                    ProviderId::new(ProviderId::CLAUDE_CODE),
+                    ModelSource::DocumentedAliases,
+                ),
+                (ProviderId::new(ProviderId::CODEX), ModelSource::Runtime),
+                (
+                    ProviderId::new(ProviderId::GEMINI_CLI),
+                    ModelSource::DocumentedAliases,
+                ),
+                (ProviderId::new(ProviderId::CURSOR), ModelSource::Runtime),
+            ]
+        );
+        assert_eq!(
+            [
+                ProviderId::CLAUDE_CODE,
+                ProviderId::CODEX,
+                ProviderId::GEMINI_CLI,
+                ProviderId::CURSOR,
+                "future-provider",
+            ]
+            .map(model_catalog_source),
+            [
+                ProviderModelCatalogSource::DocumentedAliases,
+                ProviderModelCatalogSource::Runtime,
+                ProviderModelCatalogSource::DocumentedAliases,
+                ProviderModelCatalogSource::Runtime,
+                ProviderModelCatalogSource::NotDiscoverable,
+            ]
+        );
+    }
+
+    #[test]
+    fn provider_model_selectors_preserve_exact_opaque_ids_safely() {
+        for provider_id in [
+            ProviderId::CLAUDE_CODE,
+            ProviderId::CODEX,
+            ProviderId::GEMINI_CLI,
+            ProviderId::CURSOR,
+        ] {
+            assert!(valid_model_selector(provider_id, "future+tools"));
+            assert!(valid_model_selector(provider_id, "模型/éclair:β+tools"));
+            for invalid in ["", "--option", "model\nname", "model\u{200b}name"] {
+                assert!(!valid_model_selector(provider_id, invalid));
+            }
+        }
     }
 
     #[test]

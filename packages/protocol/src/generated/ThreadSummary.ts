@@ -12,11 +12,25 @@ export type ThreadSummary = {
 /**
  * Whether this conversation can safely move to another workspace right now.
  */
-canMoveWorkspace?: boolean, id: string, name: string, providerId: ProviderId, providerName: string, model: string | null,
+canMoveWorkspace?: boolean, id: string, name: string, providerId: ProviderId, providerName: string,
 /**
- * Provider-native reasoning effort. Missing means the provider default.
+ * Model requested when launching or resuming the provider session.
+ */
+model: string | null,
+/**
+ * Provider-confirmed model for the current runtime, retained on terminal history. A new
+ * session clears it until the provider reports again; missing means unknown.
+ */
+activeModel?: string,
+/**
+ * Provider-native reasoning effort requested at launch. Missing means the provider default.
  */
 effort: string | null,
+/**
+ * Provider-confirmed effort for the current runtime, retained on terminal history. A new
+ * session clears it until the provider reports again; missing means unknown.
+ */
+activeEffort?: string,
 /**
  * Stable selected provider-account metadata id; never a credential.
  */

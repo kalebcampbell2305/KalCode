@@ -4,6 +4,7 @@ import {
   type AgentState,
   agentStateOf,
   type OperationRecord,
+  type ProviderAccount,
   type SquadDefinition,
   type SquadLaunch,
   type SquadLaunchMember,
@@ -12,6 +13,7 @@ import {
   type ThreadSummary,
 } from "@kalcode/protocol";
 import { type AgentClaim, areaBase, inArea } from "../../runtime/ownership/model.ts";
+import { sessionIdentity } from "../providers/sessionIdentity.ts";
 
 export interface SquadMemberTruth {
   member: SquadLaunchMember;
@@ -42,24 +44,45 @@ export interface SquadMemberDisplay {
   providerAccountId: string;
   model: string;
   effort: string;
+  identity: ReturnType<typeof sessionIdentity>;
 }
 
 /**
  * Historical launches keep the execution choices captured by their canonical Operation. Editing
  * a reusable template must never relabel an already-running or completed real terminal.
  */
-export function memberDisplay(truth: SquadMemberTruth): SquadMemberDisplay {
+export function memberDisplay(
+  truth: SquadMemberTruth,
+  accounts?: readonly ProviderAccount[] | null,
+): SquadMemberDisplay {
+  const providerId =
+    truth.agent?.providerId || truth.operation?.spec.providerId || truth.definition?.providerId || "unknown";
+  const providerAccountId =
+    truth.agent?.providerAccountId ||
+    truth.operation?.spec.providerAccountId ||
+    truth.definition?.providerAccountId ||
+    "";
+  const live = truth.agent as (ThreadSummary & { activeModel?: string | null; activeEffort?: string | null }) | null;
+  const identity = sessionIdentity(
+    {
+      providerId: providerId as ThreadSummary["providerId"],
+      providerName: truth.agent?.providerName || providerId,
+      providerAccountId,
+      accountLabel: truth.agent?.accountLabel ?? truth.operation?.accountLabel ?? null,
+      model: truth.operation?.spec.model || truth.agent?.model || truth.definition?.model || null,
+      effort: truth.operation?.spec.effort || truth.agent?.effort || truth.definition?.effort || null,
+      activeModel: live?.activeModel,
+      activeEffort: live?.activeEffort,
+    },
+    accounts,
+  );
   return {
     name: truth.operation?.spec.name || truth.agent?.name || truth.definition?.name || truth.member.key,
-    providerId:
-      truth.operation?.spec.providerId || truth.agent?.providerId || truth.definition?.providerId || "unknown",
-    providerAccountId:
-      truth.operation?.spec.providerAccountId ||
-      truth.agent?.providerAccountId ||
-      truth.definition?.providerAccountId ||
-      "",
-    model: truth.operation?.spec.model || truth.agent?.model || truth.definition?.model || "",
-    effort: truth.operation?.spec.effort || truth.agent?.effort || truth.definition?.effort || "",
+    providerId,
+    providerAccountId,
+    model: identity.model.value ?? "",
+    effort: identity.effort.value ?? "",
+    identity,
   };
 }
 

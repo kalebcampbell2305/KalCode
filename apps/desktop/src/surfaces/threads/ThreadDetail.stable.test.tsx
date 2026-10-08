@@ -28,10 +28,30 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-async function mountStable() {
+async function mountStable(identity?: {
+  configuredModel: string;
+  activeModel: string;
+  configuredEffort: string;
+  activeEffort: string;
+}) {
   // The "threads" fixture has a Codex thread waiting for a decision whose request isn't loaded.
   const transport = createMemoryTransport("threads", { detectDelayMs: 0 });
   const client = new KalCodeClient(transport);
+  if (identity) {
+    const invoke = transport.invoke.bind(transport);
+    transport.invoke = (<T,>(command: Parameters<typeof invoke>[0], args?: Record<string, unknown>): Promise<T> =>
+      invoke<T>(command, args).then((result) =>
+        command === "thread_get" && (result as { name?: string }).name === "Add Dark Mode Toggle"
+          ? ({
+              ...(result as object),
+              model: identity.configuredModel,
+              activeModel: identity.activeModel,
+              effort: identity.configuredEffort,
+              activeEffort: identity.activeEffort,
+            } as T)
+          : result,
+      )) as typeof transport.invoke;
+  }
   const boot = await client.boot();
   boot.info.channel = "stable";
   boot.info.flags.surfaces = (nativeStableSurfaces as SurfaceFlag[]).map((flag) => ({ ...flag }));
@@ -76,5 +96,26 @@ describe("Waiting thread (Stable)", () => {
 
     await user.click(screen.getByRole("button", { name: "Open Approvals" }));
     expect(await screen.findByRole("dialog", { name: "Approvals" })).toBeInTheDocument();
+  });
+
+  it("shows provider-confirmed model and effort while preserving selected identity details", async () => {
+    const user = await mountStable({
+      configuredModel: "requested/model-v1",
+      activeModel: "actual/model-v2",
+      configuredEffort: "high",
+      activeEffort: "xhigh",
+    });
+    await goTo(user, "Threads");
+    const threads = await screen.findByRole("list", { name: "Threads" });
+    await user.click(
+      await within(threads).findByRole("button", {
+        name: /^(?!(?:Pin|Unpin) globally: |(?:Add|Remove) Favorite: ).*Add Dark Mode Toggle/,
+      }),
+    );
+
+    const provider = await screen.findByTestId("thread-provider-identity");
+    expect(provider).toHaveTextContent(/^Codex · Account unavailable · actual\/model-v2 · xhigh$/);
+    expect(provider).toHaveAttribute("title", expect.stringContaining("Selected model: requested/model-v1."));
+    expect(provider).toHaveAttribute("title", expect.stringContaining("Selected reasoning: high."));
   });
 });

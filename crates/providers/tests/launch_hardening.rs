@@ -33,8 +33,8 @@ const NPM_NODE_SHIM: &str = "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~d
 /// What npm writes for a package whose bin is a native executable (current Claude Code).
 const NPM_NATIVE_SHIM: &str = "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe\"   %*\r\n";
 
-/// A shim KalCode deliberately can't resolve (two different targets), which starts a bare
-/// `node`: the fallback path, where only the hardened environment protects the workspace.
+/// A shim KalCode deliberately can't resolve (two different targets), which would start a bare
+/// `node` if it reached `cmd.exe`. Provider launch boundaries refuse it before spawn.
 const UNRESOLVABLE_SHIM: &str =
     "@ECHO off\r\nrem \"%~dp0\\other.js\"\r\nnode \"%~dp0\\cli.js\" %*\r\n";
 
@@ -268,7 +268,7 @@ fn an_npm_shim_for_the_native_binary_starts_it_directly() {
 }
 
 #[test]
-fn an_unresolvable_shim_still_never_runs_workspace_programs() {
+fn an_unresolvable_shim_is_refused_before_any_provider_process_starts() {
     let setup = Setup::new(UNRESOLVABLE_SHIM);
 
     // Control: the same shim, started the way KalCode did before the fix (workspace as working
@@ -307,23 +307,16 @@ fn an_unresolvable_shim_still_never_runs_workspace_programs() {
         std::fs::remove_file(setup.workspace.path().join(name)).unwrap();
     }
 
-    // KalCode: the shim can't be resolved, so it runs through cmd.exe, hardened.
+    // KalCode: the shim can't be resolved, so the version probe fails before cmd.exe starts.
     let result = detect::detect(&catalog::claude_spec(), &setup.env());
-    assert_eq!(
-        result.detection.state,
-        DetectionState::Installed,
-        "{result:?}"
-    );
-    let (session, rx) = start_turn(&setup);
-    stop(session, &rx);
+    assert_eq!(result.detection.state, DetectionState::Error, "{result:?}");
     assert!(
         setup.planted_runs().is_empty(),
         "{:?}",
         setup.planted_runs()
     );
-    let runs = setup.runs(&setup.nodejs);
     assert!(
-        runs.iter()
-            .any(|r| r["args"].as_array().unwrap().iter().any(|a| a == "-p"))
+        setup.runs(&setup.nodejs).is_empty(),
+        "unresolved shim must not reach Node.js"
     );
 }

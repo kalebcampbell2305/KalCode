@@ -212,7 +212,8 @@ test("launching four Claude Code agents creates four fresh live terminals with t
     await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     const launcher = page.getByRole("dialog", { name: "New agent" });
     await expect(launcher).toBeVisible();
-    await launcher.getByRole("radio", { name: "Sonnet", exact: true }).click();
+    // The picker names each model exactly: display name · runtime selector.
+    await launcher.getByRole("radio", { name: "Sonnet · sonnet", exact: true }).click();
     await launcher.getByRole("radio", { name: "High", exact: true }).click();
     await launcher.getByLabel("Agents", { exact: true }).fill("4");
 

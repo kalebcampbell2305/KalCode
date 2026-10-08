@@ -48,6 +48,8 @@ import { ChainComposer } from "../chains/ChainComposer.tsx";
 import { useCodingAgents, useOptionalOwnership } from "../dashboard/data/DashboardData.tsx";
 import { STATUS_META } from "../dashboard/data/status.ts";
 import { focusSection } from "../dashboard/useNow.ts";
+import { useOptionalProviderAccountSessions } from "../providers/ProviderAccountSessions.tsx";
+import { sessionIdentity } from "../providers/sessionIdentity.ts";
 import styles from "./HandOffDialog.module.css";
 
 const TASK_OPTIONS: readonly { value: HandoffTask; label: string }[] = [
@@ -130,6 +132,7 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
   const { navigate } = useNavigation();
   const uiIntents = useOptionalUiIntents();
   const codingAgents = useCodingAgents();
+  const accountSessions = useOptionalProviderAccountSessions();
   const ownership = useOptionalOwnership();
   const id = useId();
   const [targetId, setTargetId] = useState("");
@@ -154,6 +157,8 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
   const allAgents = codingAgents.state.status === "ready" ? codingAgents.state.data : [];
   const recipients = useMemo(() => allAgents.filter((agent) => agent.id !== source.id), [allAgents, source.id]);
   const selectedTarget = recipients.find((agent) => agent.id === targetId) ?? null;
+  const sourceIdentity = sessionIdentity(source, accountSessions?.accounts);
+  const selectedTargetIdentity = selectedTarget ? sessionIdentity(selectedTarget, accountSessions?.accounts) : null;
   const sourceClaim = ownership?.claims.get(source.id);
   const sourceFiles = sourceClaim?.files.length ?? 0;
   const staleTarget = targetId.length > 0 && selectedTarget === null;
@@ -374,6 +379,9 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
                   </>
                 )}
               </Dialog.Description>
+              <span className={styles.sourceIdentity} title={sourceIdentity.detail} data-handoff-source-identity>
+                {sourceIdentity.compact}
+              </span>
             </div>
             <Dialog.Close asChild>
               <Button size="sm" variant="ghost" disabled={busy !== null}>
@@ -424,6 +432,11 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
                         <strong>{selectedTarget?.name ?? "the receiving agent"}</strong>. Nothing is delivered until you
                         send it.
                       </p>
+                      {selectedTargetIdentity ? (
+                        <span className={styles.previewIdentity} title={selectedTargetIdentity.detail}>
+                          {selectedTargetIdentity.compact}
+                        </span>
+                      ) : null}
                     </div>
                     <Button
                       size="sm"
@@ -538,6 +551,7 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
                       {recipients.map((agent) => {
                         const selected = agent.id === targetId;
                         const status = STATUS_META[agent.status];
+                        const identity = sessionIdentity(agent, accountSessions?.accounts);
                         return (
                           <label key={agent.id} className={styles.recipient} data-selected={selected || undefined}>
                             <input
@@ -555,6 +569,13 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
                             <span className={styles.recipientCopy}>
                               <span className={styles.recipientName}>
                                 <span className={styles.recipientTitle}>{agent.name}</span>
+                              </span>
+                              <span
+                                className={styles.recipientIdentity}
+                                title={identity.detail}
+                                data-handoff-recipient-identity
+                              >
+                                {identity.compact}
                               </span>
                               <span className={styles.recipientMeta}>
                                 {agent.workspaceName} · {status.label}

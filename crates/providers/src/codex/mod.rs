@@ -503,9 +503,14 @@ mod tests {
                 if code == "provider_reasoning_effort_unsupported"
         ));
 
-        let future =
-            capabilities_with_efforts(&["minimal", "low", "medium", "high", "xhigh", "ultra"]);
+        let future = capabilities_with_efforts(&["low", "medium", "high", "ultra"]);
+        assert!(require_managed_reasoning_effort(&future, None).is_ok());
         assert!(require_managed_reasoning_effort(&future, Some("ultra")).is_ok());
+        assert!(matches!(
+            require_managed_reasoning_effort(&future, Some("xhigh")),
+            Err(ProviderError::Refused { code, .. })
+                if code == "provider_reasoning_effort_unsupported"
+        ));
         assert!(matches!(
             require_managed_reasoning_effort(&future, Some("high' -c model='unsafe")),
             Err(ProviderError::Start(message))
@@ -651,15 +656,18 @@ mod tests {
     fn fake_codex_reporting(dir: &Path, version: &str) -> PathBuf {
         #[cfg(windows)]
         {
+            let entrypoint = dir.join("codex-version.js");
+            std::fs::write(
+                &entrypoint,
+                format!(
+                    "const fs = require('node:fs');\nfs.writeFileSync(process.env.CWD_MARKER, process.cwd());\nconsole.log('codex-cli {version}');\n"
+                ),
+            )
+            .expect("version entrypoint");
             let script = dir.join("codex-version.cmd");
             std::fs::write(
                 &script,
-                format!(
-                    "@echo off
-cd > \"%CWD_MARKER%\"
-echo codex-cli {version}
-"
-                ),
+                "@echo off\r\nnode \"%dp0%\\codex-version.js\" %*\r\n",
             )
             .expect("version script");
             script
@@ -724,29 +732,7 @@ printf 'codex-cli {version}\n'
         let neutral = temp.path().join("neutral");
         std::fs::create_dir(&neutral).expect("neutral directory");
         let marker = temp.path().join("cwd-marker");
-        #[cfg(windows)]
-        let executable = {
-            let script = temp.path().join("codex-version.cmd");
-            std::fs::write(
-                &script,
-                "@echo off\r\ncd > \"%CWD_MARKER%\"\r\necho codex-cli 0.160.0\r\n",
-            )
-            .expect("version script");
-            script
-        };
-        #[cfg(unix)]
-        let executable = {
-            use std::os::unix::fs::PermissionsExt;
-            let script = temp.path().join("codex-version");
-            std::fs::write(
-                &script,
-                "#!/bin/sh\npwd > \"$CWD_MARKER\"\nprintf 'codex-cli 0.157.0\\n'\n",
-            )
-            .expect("version script");
-            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700))
-                .expect("executable version script");
-            script
-        };
+        let executable = fake_codex_reporting(temp.path(), "0.160.0");
         let source = DetectEnv::from_process();
         let mut env = source.provider_env(&crate::env::EnvPolicy::BASE);
         env.insert("CWD_MARKER".into(), marker.clone().into_os_string());

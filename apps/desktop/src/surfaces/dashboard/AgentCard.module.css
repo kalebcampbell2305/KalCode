@@ -247,6 +247,12 @@
   white-space: nowrap;
 }
 
+.usage {
+  display: inline-flex;
+  flex: none;
+  min-width: 0;
+}
+
 .state {
   display: inline-flex;
   flex: 0 1 auto;
@@ -430,6 +436,7 @@
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
+  overflow: hidden;
   margin: 0;
   color: var(--color-text-muted);
   font-family: var(--font-mono);
@@ -438,7 +445,8 @@
 }
 
 .model {
-  flex: none;
+  flex: 1 1 auto;
+  min-width: 3rem;
   max-width: 45%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -446,11 +454,21 @@
 }
 
 .effort {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 2.75rem;
+  max-width: 35%;
+  overflow: hidden;
   padding: 0 0.3125rem;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-xs);
   color: var(--color-text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model[data-source="unavailable"],
+.effort[data-source="unavailable"] {
+  color: var(--color-text-faint);
 }
 
 .branch {

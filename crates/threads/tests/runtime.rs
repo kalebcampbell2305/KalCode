@@ -105,6 +105,7 @@ fn create_starts_a_session_and_records_the_lifecycle() {
         types,
         [
             "thread.created",
+            "thread.runtime_identity_changed",
             "thread.started",
             "agent.message",
             "thread.status_changed"
@@ -169,6 +170,100 @@ fn claude_full_model_id_is_preserved_with_a_nonempty_alias_catalog() {
     assert_eq!(
         claude.last_session().config.model.as_deref(),
         Some("claude-sonnet-5")
+    );
+}
+
+#[test]
+fn exact_native_model_ids_are_forwarded_beyond_static_documented_aliases() {
+    let h = Harness::new();
+    let aliases = || {
+        vec![ModelInfo {
+            id: "default".into(),
+            display_name: "Account default".into(),
+            is_default: true,
+        }]
+    };
+    let gemini = FakeProvider::with_models("gemini-cli", "Gemini CLI", aliases());
+    let codex = FakeProvider::with_models(ProviderId::CODEX, "Codex", aliases());
+    h.registry.register(gemini.clone());
+    h.registry.register(codex.clone());
+
+    let gemini_thread = h
+        .runtime
+        .create(CreateThread {
+            provider_id: "gemini-cli".into(),
+            model: Some("gemini-2.5-pro-preview-06-05".into()),
+            ..h.request("use the provider's exact Gemini version")
+        })
+        .expect("Gemini exact native model");
+    assert_eq!(
+        gemini_thread.model.as_deref(),
+        Some("gemini-2.5-pro-preview-06-05")
+    );
+    assert_eq!(
+        gemini.last_session().config.model.as_deref(),
+        Some("gemini-2.5-pro-preview-06-05")
+    );
+
+    let codex_thread = h
+        .runtime
+        .create(CreateThread {
+            provider_id: ProviderId::CODEX.into(),
+            model: Some("future+tools".into()),
+            ..h.request("use the provider's future exact Codex model")
+        })
+        .expect("Codex future native model");
+    assert_eq!(codex_thread.model.as_deref(), Some("future+tools"));
+    assert_eq!(
+        codex.last_session().config.model.as_deref(),
+        Some("future+tools")
+    );
+}
+
+#[test]
+fn idle_reconfigure_forwards_a_future_native_model_beyond_the_static_catalog() {
+    let h = Harness::new();
+    let codex = FakeProvider::with_models(
+        ProviderId::CODEX,
+        "Codex",
+        vec![ModelInfo {
+            id: "default".into(),
+            display_name: "Account default".into(),
+            is_default: true,
+        }],
+    );
+    h.registry.register(codex.clone());
+    let created = h
+        .runtime
+        .create_idle(kalcode_threads::CreateIdleThread {
+            provider_id: ProviderId::CODEX.into(),
+            provider_account_id: None,
+            account_label: None,
+            workspace_id: h.workspace_id.clone(),
+            model: None,
+            effort: None,
+            permission_mode: PermissionMode::Approve,
+            name: None,
+        })
+        .expect("idle Codex session");
+    let targets = h
+        .runtime
+        .launch_instances(std::slice::from_ref(&created.id))
+        .expect("exact instance");
+
+    let updated = h
+        .runtime
+        .reconfigure_idle_launch(
+            &targets,
+            &ProviderId::new(ProviderId::CODEX),
+            "future+tools",
+            "high",
+        )
+        .expect("exact native model reconfigure");
+    assert_eq!(updated[0].model.as_deref(), Some("future+tools"));
+    assert_eq!(
+        codex.last_session().config.model.as_deref(),
+        Some("future+tools")
     );
 }
 
@@ -426,6 +521,7 @@ fn status_follows_structured_events_only() {
     session.emit(AgentEvent::SessionStarted {
         provider_session_id: "sess-1".into(),
         model: Some("fake-large".into()),
+        effort: None,
     });
     session.emit(AgentEvent::Status {
         status: ThreadStatus::Thinking,
@@ -437,7 +533,12 @@ fn status_follows_structured_events_only() {
         Some("Planning")
     );
     assert_eq!(
-        h.runtime.get(&id).unwrap().model.as_deref(),
+        h.runtime.get(&id).unwrap().model,
+        None,
+        "provider identity never rewrites the durable launch selector"
+    );
+    assert_eq!(
+        h.runtime.get(&id).unwrap().active_model.as_deref(),
         Some("fake-large")
     );
 
@@ -1254,6 +1355,7 @@ fn resume_reattaches_the_provider_session() {
     h.provider.last_session().emit(AgentEvent::SessionStarted {
         provider_session_id: "provider-sess-9".into(),
         model: None,
+        effort: None,
     });
     wait_until("session id", || {
         h.core
@@ -1277,6 +1379,251 @@ fn resume_reattaches_the_provider_session() {
     );
     assert_eq!(session.calls(), [Call::Send("continue please".into())]);
     assert_code(h.runtime.resume(&id, None), "thread_already_running");
+}
+
+fn reported_session(id: &str, model: Option<&str>, effort: Option<&str>) -> AgentEvent {
+    serde_json::from_value(serde_json::json!({
+        "kind": "session_started",
+        "providerSessionId": id,
+        "model": model,
+        "effort": effort,
+    }))
+    .expect("provider session event")
+}
+
+fn thread_wire(h: &Harness, id: &str) -> serde_json::Value {
+    serde_json::to_value(h.runtime.get(id).expect("thread summary")).expect("summary wire")
+}
+
+#[test]
+fn provider_reported_identity_is_separate_from_launch_intent_and_tracks_switches() {
+    let h = Harness::new();
+    let thread = h
+        .runtime
+        .create(CreateThread {
+            model: Some("fake-large".into()),
+            ..h.request("use the configured launch model")
+        })
+        .expect("create");
+    let session = h.provider.last_session();
+
+    session.emit(reported_session(
+        "runtime-session-a",
+        Some("runtime-model-a"),
+        Some("XHigh"),
+    ));
+    wait_until("provider session identity", || {
+        h.core
+            .read(|conn| kalcode_threads::store::get(conn, &thread.id))
+            .expect("row")
+            .provider_session_id
+            .as_deref()
+            == Some("runtime-session-a")
+    });
+
+    let first = thread_wire(&h, &thread.id);
+    assert_eq!(first["model"], "fake-large", "launch intent is unchanged");
+    assert_eq!(first["effort"], serde_json::Value::Null);
+    assert_eq!(first["activeModel"], "runtime-model-a");
+    assert_eq!(
+        first["activeEffort"], "XHigh",
+        "provider-reported effort keeps the native token exactly"
+    );
+
+    session.emit(reported_session(
+        "runtime-session-a",
+        Some("runtime-model-b"),
+        None,
+    ));
+    wait_until("runtime model switch", || {
+        thread_wire(&h, &thread.id)["activeModel"] == "runtime-model-b"
+    });
+    let switched = thread_wire(&h, &thread.id);
+    assert_eq!(switched["model"], "fake-large");
+    assert_eq!(switched["activeModel"], "runtime-model-b");
+    assert_eq!(
+        switched.get("activeEffort"),
+        None,
+        "an absent provider effort remains truthfully unknown"
+    );
+    session.emit(AgentEvent::ToolRequested {
+        tool_call_id: "runtime-tool-model-b".into(),
+        tool: "Read".into(),
+        summary: "Read the active file".into(),
+    });
+    wait_until("runtime-identity-bound tool", || {
+        !h.runtime
+            .tool_calls(&thread.id, 5)
+            .expect("tools")
+            .is_empty()
+    });
+    let (tools, _) = h
+        .runtime
+        .tool_call_history(Some(&h.workspace_id), Some(&thread.id), None, 5)
+        .expect("tool history");
+    assert_eq!(tools[0].observed_model.as_deref(), Some("runtime-model-b"));
+    assert_eq!(
+        tools[0].observed_effort, None,
+        "the exact identity preceding tool.requested is its durable snapshot"
+    );
+    assert_eq!(
+        h.events_for(&thread.id)
+            .iter()
+            .filter(|event| {
+                matches!(
+                    &event.event,
+                    EventPayload::ThreadRuntimeIdentityChanged {
+                        active_model: Some(_),
+                        ..
+                    }
+                )
+            })
+            .count(),
+        2,
+        "initial identity and an in-session model switch both invalidate live summaries"
+    );
+}
+
+#[test]
+fn restarting_clears_historical_runtime_identity_until_the_provider_reports_again() {
+    let h = Harness::new();
+    let id = started(&h, "restart the provider");
+    let first = h.provider.last_session();
+    first.emit(reported_session(
+        "runtime-session-before-restart",
+        Some("runtime-model-before-restart"),
+        None,
+    ));
+    wait_until("first runtime identity", || {
+        thread_wire(&h, &id)["activeModel"] == "runtime-model-before-restart"
+    });
+
+    h.runtime.stop(&id).expect("stop");
+    let restarted = h.runtime.resume(&id, None).expect("resume");
+    let wire = serde_json::to_value(restarted).expect("resumed summary wire");
+    assert_eq!(wire.get("activeModel"), None);
+    assert_eq!(wire.get("activeEffort"), None);
+
+    h.provider.last_session().emit(reported_session(
+        "runtime-session-after-restart",
+        Some("runtime-model-after-restart"),
+        None,
+    ));
+    wait_until("replacement runtime identity", || {
+        thread_wire(&h, &id)["activeModel"] == "runtime-model-after-restart"
+    });
+}
+
+#[test]
+fn reopening_the_runtime_clears_identity_from_the_previous_app_process() {
+    let h = Harness::new();
+    let id = started(&h, "preserve only current runtime truth");
+    h.provider.last_session().emit(reported_session(
+        "runtime-session-before-app-restart",
+        Some("runtime-model-before-app-restart"),
+        Some("High"),
+    ));
+    wait_until("persisted active identity", || {
+        thread_wire(&h, &id)["activeModel"] == "runtime-model-before-app-restart"
+    });
+
+    let historical_id = started(&h, "retain completed execution identity");
+    let historical_session = h.provider.last_session();
+    historical_session.emit(reported_session(
+        "completed-runtime-session",
+        Some("completed-runtime-model"),
+        Some("Medium"),
+    ));
+    wait_until("completed identity persisted", || {
+        thread_wire(&h, &historical_id)["activeModel"] == "completed-runtime-model"
+    });
+    historical_session.emit(AgentEvent::TurnCompleted { ok: true });
+    wait_status(&h, &historical_id, ThreadStatus::Idle);
+    historical_session.emit(AgentEvent::Exited { exit_code: Some(0) });
+    wait_status(&h, &historical_id, ThreadStatus::Completed);
+
+    let core = h.core.clone();
+    let providers = h.registry.clone();
+    let workspaces = h.workspaces.clone();
+    let gate = h.gate.clone();
+    drop(h.runtime);
+
+    let runtime = ThreadRuntime::new(core, providers, workspaces, gate).expect("restart runtime");
+    let reopened =
+        serde_json::to_value(runtime.get(&id).expect("reopened summary")).expect("summary wire");
+    assert_eq!(reopened.get("activeModel"), None);
+    assert_eq!(reopened.get("activeEffort"), None);
+    let historical = serde_json::to_value(runtime.get(&historical_id).expect("completed summary"))
+        .expect("completed wire");
+    assert_eq!(historical["activeModel"], "completed-runtime-model");
+    assert_eq!(historical["activeEffort"], "Medium");
+}
+
+#[test]
+fn provider_reported_identity_is_isolated_by_account_and_session() {
+    let h = Harness::new();
+    let provider = FakeProvider::new(ProviderId::CODEX, "Codex");
+    h.registry.register(provider.clone());
+    let account_a = new_id();
+    let account_b = new_id();
+    h.core
+        .transact(|conn| {
+            for (id, label) in [(&account_a, "Account A"), (&account_b, "Account B")] {
+                conn.execute(
+                    "INSERT INTO provider_accounts (
+                        id, provider_id, display_name, authentication_state, is_default, created_at
+                     ) VALUES (?1, 'codex', ?2, 'authenticated', 0, '2026-10-07T00:00:00Z')",
+                    rusqlite::params![id, label],
+                )?;
+            }
+            Ok(((), Vec::new()))
+        })
+        .expect("accounts");
+    let create = |account_id: &str, label: &str, prompt: &str| {
+        h.runtime
+            .create(CreateThread {
+                provider_id: ProviderId::CODEX.into(),
+                provider_account_id: Some(account_id.into()),
+                account_label: Some(label.into()),
+                ..h.request(prompt)
+            })
+            .expect("create account session")
+    };
+    let a = create(&account_a, "Account A", "task for account a");
+    let session_a = provider.last_session();
+    let b = create(&account_b, "Account B", "task for account b");
+    let session_b = provider.last_session();
+
+    session_a.emit(reported_session(
+        "account-a-session",
+        Some("account-a-model"),
+        None,
+    ));
+    session_b.emit(reported_session(
+        "account-b-session",
+        Some("account-b-model"),
+        None,
+    ));
+    wait_until("account-scoped runtime identities", || {
+        thread_wire(&h, &a.id)["activeModel"] == "account-a-model"
+            && thread_wire(&h, &b.id)["activeModel"] == "account-b-model"
+    });
+    assert_eq!(
+        h.runtime
+            .get(&a.id)
+            .expect("a")
+            .provider_account_id
+            .as_deref(),
+        Some(account_a.as_str())
+    );
+    assert_eq!(
+        h.runtime
+            .get(&b.id)
+            .expect("b")
+            .provider_account_id
+            .as_deref(),
+        Some(account_b.as_str())
+    );
 }
 
 #[test]
@@ -1894,14 +2241,14 @@ fn inputs_are_validated_natively() {
     );
     bad(
         CreateThread {
-            model: Some("gpt-unknown".into()),
+            model: Some("-gpt-option".into()),
             ..h.request("x")
         },
         "invalid_model",
     );
     bad(
         CreateThread {
-            model: Some("$(whoami)".into()),
+            model: Some("model\n--force".into()),
             ..h.request("x")
         },
         "invalid_model",

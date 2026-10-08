@@ -59,7 +59,8 @@ fn migrations_are_numbered_contiguously() {
             (25, "terminal_directory"),
             (26, "squads"),
             (27, "launch_recipes"),
-            (28, "chains")
+            (28, "chains"),
+            (29, "thread_runtime_identity")
         ]
     );
 }

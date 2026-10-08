@@ -1,6 +1,6 @@
 import type { SurfaceFlag, Workspace } from "@kalcode/protocol";
 import { ToastProvider, TooltipProvider } from "@kalcode/ui/components";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AccountProvider } from "../../account/AccountProvider.tsx";
@@ -111,6 +111,159 @@ const workspace = (form: ReturnType<typeof within>) => form.getByRole("combobox"
 const remember = (form: ReturnType<typeof within>) =>
   form.getByRole("checkbox", { name: "Remember these accounts for this workspace" });
 
+function simulateClaudeHealthChange() {
+  (
+    window as unknown as {
+      __kalcodeMemory: {
+        simulate: (event: {
+          type: "provider.health_changed";
+          payload: { providerId: "claude-code"; from: "healthy"; to: "unavailable"; reason: string };
+        }) => void;
+      };
+    }
+  ).__kalcodeMemory.simulate({
+    type: "provider.health_changed",
+    payload: { providerId: "claude-code", from: "healthy", to: "unavailable", reason: "cli_disappeared" },
+  });
+}
+
+describe("New thread account model identity (Stable)", () => {
+  it("discovers the selected account's exact models and passes the provider-native id to launch", async () => {
+    const h = await mountStable();
+    intercept = (command, args) =>
+      command === "provider_account_models"
+        ? Promise.resolve({
+            accountId: String(args?.accountId),
+            providerId: "claude-code",
+            source: "runtime",
+            supportedEfforts: [],
+            models:
+              args?.accountId === h.claudeWork
+                ? [
+                    {
+                      id: "claude-opus-4-1-20261001",
+                      displayName: "Claude Opus 4.1",
+                      isDefault: false,
+                      defaultEffort: null,
+                      supportedEfforts: [],
+                    },
+                  ]
+                : [],
+          })
+        : null;
+
+    const form = await openNewThread(h.user);
+    await h.user.selectOptions(account(form), h.claudeWork);
+    const model = form.getByRole("combobox", { name: "Model" });
+    expect(
+      await within(model).findByRole("option", { name: "Claude Opus 4.1 · claude-opus-4-1-20261001" }),
+    ).toBeVisible();
+    expect(
+      h.calls.some((call) => call.command === "provider_account_models" && call.args?.accountId === h.claudeWork),
+    ).toBe(true);
+
+    await h.user.selectOptions(model, "claude-opus-4-1-20261001");
+    await h.user.type(form.getByRole("textbox", { name: "Task" }), "summarize the README");
+    await h.user.click(form.getByRole("button", { name: "Start thread" }));
+    await waitFor(() => expect(h.calls.some((call) => call.command === "thread_review_create_prompt")).toBe(true));
+    expect(h.calls.find((call) => call.command === "thread_review_create_prompt")?.args?.model).toBe(
+      "claude-opus-4-1-20261001",
+    );
+  });
+
+  it("preserves an explicit model through a transient failure, then blocks a fresh runtime incompatibility", async () => {
+    const h = await mountStable();
+    let discovery = 0;
+    intercept = (command, args) => {
+      if (command !== "provider_account_models") return null;
+      discovery += 1;
+      if (discovery === 2) return Promise.reject(new Error("Model service is temporarily offline"));
+      return Promise.resolve({
+        accountId: String(args?.accountId),
+        providerId: "claude-code",
+        source: "runtime",
+        supportedEfforts: [],
+        models:
+          discovery === 1
+            ? [
+                {
+                  id: "exact-model-v9",
+                  displayName: "Exact Model Nine",
+                  isDefault: false,
+                  defaultEffort: null,
+                  supportedEfforts: [],
+                },
+              ]
+            : [
+                {
+                  id: "replacement-model-v10",
+                  displayName: "Replacement Model Ten",
+                  isDefault: true,
+                  defaultEffort: null,
+                  supportedEfforts: [],
+                },
+              ],
+      });
+    };
+
+    const form = await openNewThread(h.user);
+    const model = form.getByRole("combobox", { name: "Model" });
+    await within(model).findByRole("option", { name: "Exact Model Nine · exact-model-v9" });
+    await h.user.selectOptions(model, "exact-model-v9");
+    await h.user.type(form.getByRole("textbox", { name: "Task" }), "Keep my exact choice");
+
+    expect(await form.findByText(/Existing exact choices stay selected/i)).toBeVisible();
+    expect(model).toHaveValue("exact-model-v9");
+    expect(form.getByRole("button", { name: "Start thread" })).toBeEnabled();
+
+    await h.user.click(form.getByRole("textbox", { name: "Task" }));
+    await h.user.click(model);
+    expect(await form.findByRole("alert")).toHaveTextContent(
+      "This exact model is unavailable for Personal. Choose an available model or Provider default.",
+    );
+    expect(model).toHaveValue("exact-model-v9");
+    expect(form.getByRole("button", { name: "Start thread" })).toBeDisabled();
+  });
+
+  it("does not treat a documented-alias catalog as proof that an explicit model is unavailable", async () => {
+    const h = await mountStable();
+    let discovery = 0;
+    intercept = (command, args) => {
+      if (command !== "provider_account_models") return null;
+      discovery += 1;
+      return Promise.resolve({
+        accountId: String(args?.accountId),
+        providerId: "claude-code",
+        source: discovery === 1 ? "runtime" : "documented_aliases",
+        supportedEfforts: [],
+        models:
+          discovery === 1
+            ? [
+                {
+                  id: "account-only-model",
+                  displayName: "Account Only Model",
+                  isDefault: false,
+                  defaultEffort: null,
+                  supportedEfforts: [],
+                },
+              ]
+            : [{ id: "opus", displayName: "Opus", isDefault: false, defaultEffort: null, supportedEfforts: [] }],
+      });
+    };
+
+    const form = await openNewThread(h.user);
+    const model = form.getByRole("combobox", { name: "Model" });
+    await within(model).findByRole("option", { name: "Account Only Model · account-only-model" });
+    await h.user.selectOptions(model, "account-only-model");
+    await h.user.type(form.getByRole("textbox", { name: "Task" }), "Keep the account model");
+
+    expect(await form.findByText(/Documented model aliases/i)).toBeVisible();
+    expect(model).toHaveValue("account-only-model");
+    expect(form.queryByText(/This exact model is unavailable/)).not.toBeInTheDocument();
+    expect(form.getByRole("button", { name: "Start thread" })).toBeEnabled();
+  });
+});
+
 describe("New thread account defaults (Stable)", () => {
   it("shows provider choices while supplementary availability diagnostics are still loading", async () => {
     const h = await mountStable();
@@ -186,6 +339,34 @@ describe("New thread account defaults (Stable)", () => {
     expect(form.getByRole("textbox", { name: "Task" })).toHaveValue("Keep this draft");
     expect(account(form)).toHaveValue(h.claudeWork);
     expect(h.calls.some((call) => call.command === "provider_claude_login_start")).toBe(true);
+  });
+
+  it("keeps a selected account blocked when it is removed during refresh until another is chosen", async () => {
+    const h = await mountStable(async ({ client, claudeWork }) => {
+      await client.logoutClaudeAccount(claudeWork);
+    });
+    const form = await openNewThread(h.user);
+    await h.user.selectOptions(account(form), h.claudeWork);
+    await h.user.type(form.getByRole("textbox", { name: "Task" }), "Keep this exact account");
+    intercept = (command, args) =>
+      command === "provider_claude_login_wait"
+        ? h.raw(command, args).then(async (connected) => {
+            await h.raw("provider_account_archive", { accountId: h.claudeWork });
+            return connected;
+          })
+        : null;
+
+    await h.user.click(form.getByRole("button", { name: "Sign in to Work" }));
+
+    expect(await form.findByRole("alert")).toHaveTextContent(
+      "The selected account is no longer available. Add or choose another account to continue.",
+    );
+    expect(account(form)).toHaveValue("");
+    expect(form.getByRole("button", { name: "Start thread" })).toBeDisabled();
+    expect(h.calls.some((call) => call.command === "thread_review_create_prompt")).toBe(false);
+
+    await h.user.selectOptions(account(form), CLAUDE_PERSONAL);
+    expect(form.getByRole("button", { name: "Start thread" })).toBeEnabled();
   });
 
   it("adds and signs in an account without leaving a new thread", async () => {
@@ -514,6 +695,171 @@ describe("New thread permission mode (Stable)", () => {
     );
     expect(task).toHaveValue("keep this draft while Codex warms");
     expect(workspace(form)).toHaveValue(h.beta.id);
+  });
+
+  it("blocks a removed selected provider without changing its account, model or draft", async () => {
+    const h = await mountStable();
+    const readyOptions = await h.raw<Awaited<ReturnType<KalCodeClient["threadOptions"]>>>("thread_options");
+    let removeClaude = false;
+    let selectedAccountModelProbes = 0;
+    intercept = (command, args) => {
+      if (command === "thread_options") {
+        return Promise.resolve(
+          removeClaude
+            ? { ...readyOptions, providers: readyOptions.providers.filter((provider) => provider.id !== "claude-code") }
+            : readyOptions,
+        );
+      }
+      if (command === "provider_account_models" && args?.accountId === h.claudeWork) {
+        selectedAccountModelProbes += 1;
+        return Promise.resolve({
+          accountId: h.claudeWork,
+          providerId: "claude-code",
+          source: "runtime",
+          supportedEfforts: [],
+          models: [
+            {
+              id: "claude-account-model",
+              displayName: "Claude Account Model",
+              isDefault: false,
+              defaultEffort: null,
+              supportedEfforts: [],
+            },
+          ],
+        });
+      }
+      return null;
+    };
+
+    const form = await openNewThread(h.user);
+    await h.user.selectOptions(workspace(form), h.alpha.id);
+    await h.user.selectOptions(account(form), h.claudeWork);
+    const model = form.getByRole("combobox", { name: "Model" });
+    await within(model).findByRole("option", { name: "Claude Account Model · claude-account-model" });
+    await h.user.selectOptions(model, "claude-account-model");
+    await h.user.type(form.getByRole("textbox", { name: "Task" }), "Keep the whole provider draft");
+    await h.user.type(form.getByRole("textbox", { name: /^Name/ }), "Provider recovery");
+    await h.user.click(
+      within(form.getByRole("radiogroup", { name: "Permissions" })).getByRole("radio", { name: "Plan" }),
+    );
+
+    removeClaude = true;
+    act(simulateClaudeHealthChange);
+
+    expect(await form.findByRole("alert")).toHaveTextContent(
+      "The selected provider is no longer available. Choose another provider to continue.",
+    );
+    const provider = form.getByRole("combobox", { name: "Provider" });
+    expect(provider).toHaveValue("claude-code");
+    expect(account(form)).toHaveValue(h.claudeWork);
+    expect(model).toHaveValue("claude-account-model");
+    expect(workspace(form)).toHaveValue(h.alpha.id);
+    expect(form.getByRole("textbox", { name: "Task" })).toHaveValue("Keep the whole provider draft");
+    expect(form.getByRole("textbox", { name: /^Name/ })).toHaveValue("Provider recovery");
+    expect(
+      within(form.getByRole("radiogroup", { name: "Permissions" })).getByRole("radio", { name: "Plan" }),
+    ).toBeChecked();
+    expect(form.getByRole("button", { name: "Start thread" })).toBeDisabled();
+
+    const probesBeforeFocus = selectedAccountModelProbes;
+    await h.user.click(model);
+    expect(selectedAccountModelProbes).toBe(probesBeforeFocus);
+    fireEvent.submit(form.getByRole("button", { name: "Start thread" }).closest("form") as HTMLFormElement);
+    await Promise.resolve();
+    expect(
+      h.calls.some((call) => call.command === "thread_review_create_prompt" || call.command === "thread_create"),
+    ).toBe(false);
+
+    await h.user.selectOptions(provider, "codex");
+    expect(form.queryByText(/The selected provider is no longer available/)).not.toBeInTheDocument();
+    expect(model).toHaveValue("");
+    expect(workspace(form)).toHaveValue(h.alpha.id);
+    expect(form.getByRole("textbox", { name: "Task" })).toHaveValue("Keep the whole provider draft");
+    expect(form.getByRole("textbox", { name: /^Name/ })).toHaveValue("Provider recovery");
+    expect(
+      within(form.getByRole("radiogroup", { name: "Permissions" })).getByRole("radio", { name: "Plan" }),
+    ).toBeChecked();
+    await waitFor(() => expect(form.getByRole("button", { name: "Start thread" })).toBeEnabled());
+  });
+
+  it("keeps the form mounted when its selected provider was the last available provider", async () => {
+    const h = await mountStable();
+    const readyOptions = await h.raw<Awaited<ReturnType<KalCodeClient["threadOptions"]>>>("thread_options");
+    let offered: "all" | "none" | "codex" = "all";
+    intercept = (command, args) => {
+      if (command === "thread_options") {
+        return Promise.resolve({
+          ...readyOptions,
+          providers:
+            offered === "all"
+              ? readyOptions.providers
+              : offered === "codex"
+                ? readyOptions.providers.filter((provider) => provider.id === "codex")
+                : [],
+        });
+      }
+      if (command === "provider_account_models" && args?.accountId === h.claudeWork) {
+        return Promise.resolve({
+          accountId: h.claudeWork,
+          providerId: "claude-code",
+          source: "runtime",
+          supportedEfforts: [],
+          models: [
+            {
+              id: "claude-last-model",
+              displayName: "Claude Last Model",
+              isDefault: false,
+              defaultEffort: null,
+              supportedEfforts: [],
+            },
+          ],
+        });
+      }
+      return null;
+    };
+
+    const form = await openNewThread(h.user);
+    await h.user.selectOptions(workspace(form), h.alpha.id);
+    await h.user.selectOptions(account(form), h.claudeWork);
+    const model = form.getByRole("combobox", { name: "Model" });
+    await within(model).findByRole("option", { name: "Claude Last Model · claude-last-model" });
+    await h.user.selectOptions(model, "claude-last-model");
+    await h.user.type(form.getByRole("textbox", { name: "Task" }), "Keep the last-provider draft");
+    await h.user.type(form.getByRole("textbox", { name: /^Name/ }), "Last provider recovery");
+    await h.user.click(
+      within(form.getByRole("radiogroup", { name: "Permissions" })).getByRole("radio", { name: "Plan" }),
+    );
+
+    offered = "none";
+    act(simulateClaudeHealthChange);
+
+    expect(await form.findByRole("alert")).toHaveTextContent(
+      "The selected provider is no longer available. Choose another provider to continue.",
+    );
+    expect(form.getByRole("combobox", { name: "Provider" })).toHaveValue("claude-code");
+    expect(account(form)).toHaveValue(h.claudeWork);
+    expect(model).toHaveValue("claude-last-model");
+    expect(workspace(form)).toHaveValue(h.alpha.id);
+    expect(form.getByRole("textbox", { name: "Task" })).toHaveValue("Keep the last-provider draft");
+    expect(form.getByRole("textbox", { name: /^Name/ })).toHaveValue("Last provider recovery");
+    expect(
+      within(form.getByRole("radiogroup", { name: "Permissions" })).getByRole("radio", { name: "Plan" }),
+    ).toBeChecked();
+    expect(form.getByRole("button", { name: "Start thread" })).toBeDisabled();
+
+    offered = "codex";
+    act(simulateClaudeHealthChange);
+    const provider = form.getByRole("combobox", { name: "Provider" });
+    await waitFor(() => expect(within(provider).getByRole("option", { name: "Codex" })).toBeInTheDocument());
+    expect(provider).toHaveValue("claude-code");
+    await h.user.selectOptions(provider, "codex");
+    expect(form.getByRole("textbox", { name: "Task" })).toHaveValue("Keep the last-provider draft");
+    expect(form.getByRole("textbox", { name: /^Name/ })).toHaveValue("Last provider recovery");
+    expect(workspace(form)).toHaveValue(h.alpha.id);
+    expect(
+      within(form.getByRole("radiogroup", { name: "Permissions" })).getByRole("radio", { name: "Plan" }),
+    ).toBeChecked();
+    await waitFor(() => expect(form.getByRole("button", { name: "Start thread" })).toBeEnabled());
   });
 
   it("keeps a saved read-only Plan default", async () => {

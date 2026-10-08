@@ -2487,7 +2487,19 @@ impl OperationsState {
                 project_active_operation_thread(row, &thread)?;
             }
             let (turns, _) = runtime.agent_turn_history(None, None, 100)?;
-            for turn in turns.into_iter().filter(|turn| turn.operation_id.is_none()) {
+            for turn in turns {
+                if let Some(operation_id) = &turn.operation_id {
+                    if let Some(row) = rows.iter_mut().find(|row| &row.id == operation_id) {
+                        row.observed_provider_id =
+                            turn.observed_provider_id.as_ref().map(ToString::to_string);
+                        row.observed_provider_account_id =
+                            turn.observed_provider_account_id.clone();
+                        row.observed_account_label = turn.observed_account_label.clone();
+                        row.observed_model = turn.observed_model.clone();
+                        row.observed_effort = turn.observed_effort.clone();
+                    }
+                    continue;
+                }
                 let thread = if let Some(thread) = threads.get(&turn.thread_id) {
                     thread.clone()
                 } else {
@@ -2507,7 +2519,7 @@ impl OperationsState {
                     threads.insert(thread_id, thread.clone());
                     thread
                 };
-                rows.push(crate::operations_observed::tool_run(&thread, tool.call));
+                rows.push(crate::operations_observed::tool_run(&thread, tool));
             }
         }
         for workspace in self.core.workspaces()?.into_iter().take(100) {
@@ -2555,6 +2567,18 @@ impl OperationsState {
             .into_iter()
             .map(|thread| (thread.id.clone(), thread))
             .collect::<HashMap<_, _>>();
+        for turn in &turns {
+            if let Some(operation_id) = &turn.operation_id
+                && let Some(operation) = operations.iter_mut().find(|row| &row.id == operation_id)
+            {
+                operation.observed_provider_id =
+                    turn.observed_provider_id.as_ref().map(ToString::to_string);
+                operation.observed_provider_account_id = turn.observed_provider_account_id.clone();
+                operation.observed_account_label = turn.observed_account_label.clone();
+                operation.observed_model = turn.observed_model.clone();
+                operation.observed_effort = turn.observed_effort.clone();
+            }
+        }
         for operation in &mut operations {
             if let Some(id) = &operation.thread_id {
                 match runtime.get(id) {
@@ -2598,7 +2622,7 @@ impl OperationsState {
             };
             let created_at = tool.call.requested_at.clone();
             let cursor = tool.call.id.clone();
-            let record = crate::operations_observed::tool_run(&thread, tool.call);
+            let record = crate::operations_observed::tool_run(&thread, tool);
             tool_rows.push(HistoryRow {
                 authority: HistoryAuthority::Tools,
                 cursor,
@@ -2798,6 +2822,17 @@ impl OperationsState {
         let run = if kalcode_contracts::ids::is_valid_id(id) {
             let detail = self.store.detail(id)?;
             let mut run = detail.run.clone();
+            if run.spec.kind == OperationKind::Agent
+                && let Some(runtime) = self.threads.runtime_handle()
+                && let Some(turn) = runtime.agent_turn_for_operation(&run.id)?
+            {
+                run.observed_provider_id =
+                    turn.observed_provider_id.as_ref().map(ToString::to_string);
+                run.observed_provider_account_id = turn.observed_provider_account_id;
+                run.observed_account_label = turn.observed_account_label;
+                run.observed_model = turn.observed_model;
+                run.observed_effort = turn.observed_effort;
+            }
             if run.source == "operations"
                 && let Some(thread_id) = run.thread_id.as_deref()
                 && let Some(runtime) = self.threads.runtime_handle()
@@ -2891,7 +2926,7 @@ impl OperationsState {
                     "An observed tool call did not match its workspace.",
                 ));
             }
-            crate::operations_observed::tool_run(&thread, tool.call)
+            crate::operations_observed::tool_run(&thread, tool)
         } else if let Some(start_event_id) = id.strip_prefix("shell:") {
             let shell = self
                 .store
@@ -3568,6 +3603,11 @@ fn project_active_operation_thread(
     row.spec.provider_id = Some(thread.provider_id.to_string());
     row.spec.provider_account_id = thread.provider_account_id.clone();
     row.spec.model = thread.model.clone();
+    row.observed_provider_id = Some(thread.provider_id.to_string());
+    row.observed_provider_account_id = thread.provider_account_id.clone();
+    row.observed_account_label = thread.account_label.clone();
+    row.observed_model = thread.active_model.clone();
+    row.observed_effort = thread.active_effort.clone();
     row.account_label = thread.account_label.clone();
     if row.branch.is_none() {
         row.branch = thread.branch.clone();
@@ -3631,6 +3671,11 @@ fn observed_spec(name: String, workspace_id: String, kind: OperationKind) -> Ope
 }
 
 fn observed_thread(thread: ThreadSummary) -> OperationRecord {
+    let observed_provider_id = Some(thread.provider_id.to_string());
+    let observed_provider_account_id = thread.provider_account_id.clone();
+    let observed_account_label = thread.account_label.clone();
+    let observed_model = thread.active_model.clone();
+    let observed_effort = thread.active_effort.clone();
     let mut spec = observed_spec(
         safe(&thread.name),
         thread.workspace_id,
@@ -3655,6 +3700,11 @@ fn observed_thread(thread: ThreadSummary) -> OperationRecord {
         account_label: thread.account_label,
         terminal_id: thread.terminal_id,
         thread_id: Some(thread.id),
+        observed_provider_id,
+        observed_provider_account_id,
+        observed_account_label,
+        observed_model,
+        observed_effort,
         created_at: thread.created_at.clone(),
         started_at: Some(thread.created_at),
         ended_at: ended.then_some(thread.last_activity_at),
@@ -3687,6 +3737,11 @@ fn observed_terminal(terminal: TerminalInfo, workspace_name: &str) -> OperationR
         account_label: None,
         terminal_id: Some(terminal.id),
         thread_id: None,
+        observed_provider_id: None,
+        observed_provider_account_id: None,
+        observed_account_label: None,
+        observed_model: None,
+        observed_effort: None,
         created_at: terminal.started_at.clone().unwrap_or_default(),
         started_at: terminal.started_at,
         ended_at: terminal.ended_at,
@@ -6553,6 +6608,11 @@ mod tests {
             account_label: None,
             terminal_id: None,
             thread_id: None,
+            observed_provider_id: None,
+            observed_provider_account_id: None,
+            observed_account_label: None,
+            observed_model: None,
+            observed_effort: None,
             created_at: created_at.into(),
             started_at: Some(created_at.into()),
             ended_at: Some(created_at.into()),

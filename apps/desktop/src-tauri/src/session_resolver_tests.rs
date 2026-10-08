@@ -1,7 +1,8 @@
 use std::time::Instant;
 
-use kalcode_contracts::agent::ProviderId;
+use kalcode_contracts::agent::{AuthState, ProviderId};
 use kalcode_contracts::permissions::PermissionMode;
+use kalcode_contracts::provider_accounts::ProviderAccount;
 use kalcode_contracts::sessions::{SessionMatchTier, SessionResolution};
 use kalcode_contracts::threads::{ThreadStatus, ThreadSummary};
 use serde_json::Value;
@@ -62,7 +63,9 @@ fn summary(
         provider_id: ProviderId::new(provider),
         provider_name: provider_name.into(),
         model: None,
+        active_model: None,
         effort: None,
+        active_effort: None,
         provider_account_id: account.map(|_| format!("acct-{key}")),
         account_label: account.map(str::to_owned),
         workspace_id: workspace.0.into(),
@@ -262,16 +265,54 @@ fn account_disambiguation_labels_every_choice_name_provider_account() {
     assert_eq!(
         labels,
         [
-            "Research \u{b7} Gemini CLI \u{b7} Gemini A",
-            "Research \u{b7} Gemini CLI \u{b7} Gemini B"
+            "Research \u{b7} Gemini CLI \u{b7} Gemini A \u{b7} Model controlled by provider \u{b7} Reasoning controlled by provider",
+            "Research \u{b7} Gemini CLI \u{b7} Gemini B \u{b7} Model controlled by provider \u{b7} Reasoning controlled by provider"
         ]
     );
     assert_eq!(choices[1].account_label.as_deref(), Some("Gemini B"));
 }
 
 #[test]
+fn account_nickname_refresh_requires_the_exact_provider_binding_and_survives_expiry() {
+    let account = ProviderAccount {
+        id: "acct-01".into(),
+        provider_id: ProviderId::new(ProviderId::GEMINI_CLI),
+        display_name: "Renamed work account".into(),
+        provider_reported_identity: None,
+        authentication_state: AuthState::NotAuthenticated,
+        is_default: false,
+        created_at: "2026-09-28T12:00:00Z".into(),
+        last_used_at: None,
+        last_checked_at: None,
+        last_error_code: Some("authentication_expired".into()),
+        archived_at: None,
+    };
+    let mut exact = gemini("01", "Research", "Old snapshot");
+    apply_account_label(&mut exact, &account);
+    assert_eq!(exact.account_label.as_deref(), Some("Renamed work account"));
+
+    let mut wrong_provider = exact.clone();
+    wrong_provider.provider_id = ProviderId::new(ProviderId::CODEX);
+    wrong_provider.account_label = Some("Preserved provider snapshot".into());
+    apply_account_label(&mut wrong_provider, &account);
+    assert_eq!(
+        wrong_provider.account_label.as_deref(),
+        Some("Preserved provider snapshot")
+    );
+
+    let mut wrong_account = exact;
+    wrong_account.provider_account_id = Some("acct-other".into());
+    wrong_account.account_label = Some("Preserved account snapshot".into());
+    apply_account_label(&mut wrong_account, &account);
+    assert_eq!(
+        wrong_account.account_label.as_deref(),
+        Some("Preserved account snapshot")
+    );
+}
+
+#[test]
 fn a_thread_without_an_account_is_labelled_name_and_provider() {
-    let t = summary(
+    let mut t = summary(
         "01",
         "Release Mac",
         (ProviderId::CODEX, "Codex"),
@@ -280,12 +321,74 @@ fn a_thread_without_an_account_is_labelled_name_and_provider() {
         ThreadStatus::Idle,
         false,
     );
-    assert_eq!(session_label(&t), "Release Mac \u{b7} Codex");
+    assert_eq!(
+        session_label(&t),
+        "Release Mac \u{b7} Codex \u{b7} Model controlled by provider \u{b7} Reasoning controlled by provider"
+    );
+    t.provider_id = ProviderId::new(ProviderId::CLAUDE_CODE);
+    t.provider_name = "Claude".into();
+    assert_eq!(
+        session_label(&t),
+        "Release Mac \u{b7} Claude Code \u{b7} Model controlled by provider \u{b7} Reasoning controlled by provider",
+        "known provider ids use the adapter's canonical display name over stale snapshots"
+    );
+    assert_eq!(spoken_session_label(&t), "Release Mac \u{b7} Claude Code");
+    assert_eq!(candidate(&t).provider_name, "Claude Code");
+
+    t.provider_id = ProviderId::new("future-provider");
+    t.provider_name = "Future Provider Name".into();
+    assert_eq!(session_provider_name(&t), "Future Provider Name");
+
     let blank = ThreadSummary {
         account_label: Some("  ".into()),
         ..t
     };
-    assert_eq!(session_label(&blank), "Release Mac \u{b7} Codex");
+    assert_eq!(
+        session_label(&blank),
+        "Release Mac \u{b7} Future Provider Name \u{b7} Model controlled by provider \u{b7} Reasoning controlled by provider"
+    );
+}
+
+#[test]
+fn exact_runtime_identity_precedes_launch_selection_and_unknown_values_are_labelled_selected() {
+    let mut first = gemini("01", "Research", "Work");
+    first.model = Some("requested/model-v1".into());
+    first.active_model = Some("actual/model-v2".into());
+    first.effort = Some("high".into());
+    assert_eq!(
+        session_label(&first),
+        "Research \u{b7} Gemini CLI \u{b7} Work \u{b7} actual/model-v2 \u{b7} high (selected)"
+    );
+    assert_eq!(
+        spoken_session_label(&first),
+        "Research \u{b7} Gemini CLI \u{b7} Work \u{b7} actual/model-v2 \u{b7} high (selected)"
+    );
+    let first_candidate = candidate(&first);
+    assert_eq!(first_candidate.model.as_deref(), Some("requested/model-v1"));
+    assert_eq!(
+        first_candidate.active_model.as_deref(),
+        Some("actual/model-v2")
+    );
+    assert_eq!(first_candidate.effort.as_deref(), Some("high"));
+    assert_eq!(first_candidate.active_effort, None);
+    assert!(!first_candidate.label.contains("requested/model-v1"));
+
+    let mut second = gemini("02", "Research", "Work");
+    second.model = Some("requested/model-v1".into());
+    second.active_model = Some("actual/model-v3".into());
+    second.effort = Some("high".into());
+    let SessionResolution::Ambiguous {
+        question, choices, ..
+    } = resolve(&[first, second], "Research", &ResolveContext::default())
+    else {
+        panic!("expected model-qualified clarification");
+    };
+    assert_eq!(
+        question,
+        "Which one \u{2014} Research with model actual/model-v2 or Research with model actual/model-v3?"
+    );
+    assert_eq!(choices[0].active_model.as_deref(), Some("actual/model-v2"));
+    assert_eq!(choices[1].active_model.as_deref(), Some("actual/model-v3"));
 }
 
 #[test]

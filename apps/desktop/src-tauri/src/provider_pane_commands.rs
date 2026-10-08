@@ -1215,6 +1215,7 @@ mod tests {
                 &id,
                 "source-provider-session",
                 Some("source-model"),
+                None,
             )?;
             if archived {
                 tx.execute(
@@ -1237,7 +1238,9 @@ mod tests {
             provider_id: ProviderId::new(ProviderId::CODEX),
             provider_name: "Codex".into(),
             model: None,
+            active_model: None,
             effort: None,
+            active_effort: None,
             provider_account_id: None,
             account_label: None,
             workspace_id: kalcode_contracts::ids::new_id(),
