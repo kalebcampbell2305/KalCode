@@ -139,6 +139,7 @@ struct ProviderState {
     display_name: String,
     models: Vec<ModelInfo>,
     detection: Option<ProviderDetection>,
+    managed_runtime_ready: bool,
     active_sessions: u32,
     latency: VecDeque<(Instant, u32)>,
     failures: VecDeque<(Instant, SystemTime, String)>,
@@ -157,6 +158,7 @@ impl ProviderState {
             display_name,
             models,
             detection: None,
+            managed_runtime_ready: false,
             active_sessions: 0,
             latency: VecDeque::new(),
             failures: VecDeque::new(),
@@ -271,7 +273,8 @@ fn assess(p: &ProviderState) -> Assessment {
         reason_code: Some(code),
         reason: Some(reason),
     };
-    let Some(detection) = &p.detection else {
+    let detection = p.detection.as_ref();
+    if detection.is_none() && !p.managed_runtime_ready {
         return Assessment {
             state: HealthState::Unknown,
             capacity: CapacityState::Unknown,
@@ -279,35 +282,37 @@ fn assess(p: &ProviderState) -> Assessment {
             reason_code: Some("not_checked"),
             reason: Some(format!("{name} hasn't been checked yet.")),
         };
-    };
-    match detection.state {
-        DetectionState::NotInstalled => {
-            return unavailable(
-                Recoverability::Install,
-                "not_installed",
-                format!("{name} isn't installed."),
-            );
-        }
-        DetectionState::Outdated => {
-            return unavailable(
-                Recoverability::Update,
-                "outdated",
-                detection
+    }
+    if !p.managed_runtime_ready
+        && let Some(detection) = detection
+    {
+        match detection.state {
+            DetectionState::NotInstalled => {
+                return unavailable(
+                    Recoverability::Install,
+                    "not_installed",
+                    format!("{name} isn't installed."),
+                );
+            }
+            DetectionState::Outdated => {
+                let message = detection
                     .message
                     .clone()
-                    .unwrap_or_else(|| format!("{name} needs an update.")),
-            );
+                    .unwrap_or_else(|| format!("{name} needs an update."));
+                return unavailable(Recoverability::Update, "outdated", message);
+            }
+            DetectionState::Error => {
+                return unavailable(
+                    Recoverability::Restart,
+                    "detection_failed",
+                    format!("KalCode couldn't check {name}. Choose Check again."),
+                );
+            }
+            DetectionState::Installed => {}
         }
-        DetectionState::Error => {
-            return unavailable(
-                Recoverability::Restart,
-                "detection_failed",
-                format!("KalCode couldn't check {name}. Choose Check again."),
-            );
-        }
-        DetectionState::Installed => {}
     }
-    if detection.auth == AuthState::NotAuthenticated {
+    let auth = detection.map_or(AuthState::Unknown, |detection| detection.auth);
+    if auth == AuthState::NotAuthenticated {
         return unavailable(
             Recoverability::SignIn,
             "signed_out",
@@ -348,14 +353,16 @@ fn assess(p: &ProviderState) -> Assessment {
             )),
         };
     }
-    let auth_unknown = detection.auth == AuthState::Unknown;
+    let auth_unknown = auth == AuthState::Unknown;
     Assessment {
         state: HealthState::Healthy,
         capacity: CapacityState::Available,
         recoverability: Recoverability::None,
         reason_code: auth_unknown.then_some("auth_unknown"),
         reason: auth_unknown.then(|| {
-            if detection.provider_id.as_str() == ProviderId::CLAUDE_CODE {
+            if detection
+                .is_some_and(|detection| detection.provider_id.as_str() == ProviderId::CLAUDE_CODE)
+            {
                 "Claude Code sign-in is checked when a coding session starts.".to_owned()
             } else {
                 format!(
@@ -450,16 +457,17 @@ impl HealthMonitor {
     pub fn detected(&self, statuses: &[ProviderStatus]) {
         let mut inner = lock(&self.inner);
         for status in statuses {
-            let Some(detection) = &status.detection else {
-                continue;
-            };
             let p = inner.providers.entry(status.id.clone()).or_insert_with(|| {
                 ProviderState::new(
                     status.display_name.clone(),
                     status.capabilities.models.clone(),
                 )
             });
-            let usable = detection.state == DetectionState::Installed
+            p.managed_runtime_ready = status.managed_runtime.is_some();
+            let Some(detection) = &status.detection else {
+                continue;
+            };
+            let usable = (p.managed_runtime_ready || detection.state == DetectionState::Installed)
                 && detection.auth != AuthState::NotAuthenticated;
             if usable {
                 p.recheck_interval = RECHECK_MIN;
@@ -802,6 +810,14 @@ mod tests {
         status
     }
 
+    fn managed(mut status: ProviderStatus) -> ProviderStatus {
+        status.managed_runtime = Some(crate::model::ManagedRuntimeReadiness {
+            version: "0.161.0".into(),
+            source: "validated_snapshot".into(),
+        });
+        status
+    }
+
     fn codex() -> ProviderId {
         ProviderId::new(ProviderId::CODEX)
     }
@@ -844,6 +860,84 @@ mod tests {
             AuthState::Unknown,
         )]);
         assert_eq!(health(&m).recoverability, Recoverability::Install);
+    }
+
+    #[test]
+    fn managed_runtime_bypasses_only_machine_availability_failures() {
+        let m = HealthMonitor::new();
+        for state in [
+            DetectionState::NotInstalled,
+            DetectionState::Outdated,
+            DetectionState::Error,
+        ] {
+            m.detected(&[managed(detection("codex", state, AuthState::Unknown))]);
+            let h = health(&m);
+            assert_eq!(h.state, HealthState::Healthy, "{state:?}");
+            assert_eq!(h.capacity, CapacityState::Available, "{state:?}");
+            assert_eq!(h.detection, Some(state), "machine truth must be preserved");
+            assert_eq!(h.auth, AuthState::Unknown);
+            assert_eq!(h.reason_code.as_deref(), Some("auth_unknown"));
+        }
+
+        m.detected(&[managed(detection(
+            "codex",
+            DetectionState::NotInstalled,
+            AuthState::NotAuthenticated,
+        ))]);
+        let signed_out = health(&m);
+        assert_eq!(signed_out.state, HealthState::Unavailable);
+        assert_eq!(signed_out.recoverability, Recoverability::SignIn);
+        assert_eq!(signed_out.reason_code.as_deref(), Some("signed_out"));
+    }
+
+    #[test]
+    fn managed_runtime_without_machine_detection_keeps_auth_unknown() {
+        let m = HealthMonitor::new();
+        let mut status = crate::catalog::statuses()
+            .into_iter()
+            .find(|status| status.id.as_str() == ProviderId::CODEX)
+            .expect("Codex status");
+        status.managed_runtime = Some(crate::model::ManagedRuntimeReadiness {
+            version: "0.161.0".into(),
+            source: "last_known_good".into(),
+        });
+
+        m.detected(&[status]);
+
+        let h = health(&m);
+        assert_eq!(h.state, HealthState::Healthy);
+        assert_eq!(h.capacity, CapacityState::Available);
+        assert_eq!(h.detection, None);
+        assert_eq!(h.auth, AuthState::Unknown);
+        assert_eq!(h.reason_code.as_deref(), Some("auth_unknown"));
+    }
+
+    #[test]
+    fn managed_runtime_does_not_hide_observed_failures_or_backoff() {
+        let m = HealthMonitor::new();
+        m.detected(&[managed(detection(
+            "codex",
+            DetectionState::NotInstalled,
+            AuthState::Unknown,
+        ))]);
+        m.start_failed(&codex(), &ProviderError::Io("first".into()));
+        m.start_failed(&codex(), &ProviderError::Io("second".into()));
+        let failing = health(&m);
+        assert_eq!(failing.state, HealthState::Degraded);
+        assert_eq!(failing.reason_code.as_deref(), Some("recent_failures"));
+
+        m.event(
+            &codex(),
+            &AgentEvent::Error {
+                code: "rate_limited".into(),
+                message: "structured".into(),
+                recoverable: true,
+            },
+        );
+        let backing_off = health(&m);
+        assert_eq!(backing_off.state, HealthState::Degraded);
+        assert_eq!(backing_off.capacity, CapacityState::BackingOff);
+        assert_eq!(backing_off.reason_code.as_deref(), Some("rate_limited"));
     }
 
     #[test]

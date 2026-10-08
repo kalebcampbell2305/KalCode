@@ -219,6 +219,20 @@ test.describe("threads", () => {
     await expect(page.getByRole("heading", { level: 1, name: "Providers" })).toBeVisible();
   });
 
+  test("offers Codex when its validated managed runtime recovered a missing native CLI", async ({ page }) => {
+    await openThreads(page, "providers-managed-runtime");
+    await openFolders(page, "kalcode");
+    await goTo(page, "Threads");
+    await page.getByRole("button", { name: "New thread" }).first().click();
+    const form = page.getByRole("region", { name: "New thread" });
+    await expect(form.getByRole("combobox", { name: "Provider" }).locator('option[value="codex"]')).toHaveCount(1);
+    await form.getByRole("combobox", { name: "Provider" }).selectOption("codex");
+    await expect(form.getByRole("combobox", { name: "Provider" })).toHaveValue("codex");
+    await expect(
+      form.getByRole("list", { name: "Not available for threads" }).getByText("Codex", { exact: true }),
+    ).toHaveCount(0);
+  });
+
   test("without a workspace, New thread points to Code", async ({ page }) => {
     await page.goto("/");
     await goTo(page, "Threads");

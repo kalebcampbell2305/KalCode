@@ -150,8 +150,10 @@ pub enum CodexAccountAuthError {
     ProfileConfigChanged,
     #[error("the Codex app-server could not be started")]
     StartFailed,
-    #[error("the installed Codex version is not certified for managed profiles")]
-    UnsupportedVersion,
+    #[error(
+        "the installed Codex runtime is missing required capabilities and no compatible runtime is available"
+    )]
+    IncompatibleCapabilities,
     #[error("the Codex app-server connection ended unexpectedly")]
     ConnectionEnded,
     #[error("the Codex app-server did not respond in time")]
@@ -200,6 +202,7 @@ enum LaunchMode {
     Test {
         args: Vec<OsString>,
         extra_env: BTreeMap<OsString, OsString>,
+        runtime_lease: Option<crate::managed_runtime::RuntimeLease>,
     },
 }
 
@@ -257,7 +260,11 @@ impl CodexAccountAuthManager {
             executable,
             source_env,
             profiles,
-            launch_mode: LaunchMode::Test { args, extra_env },
+            launch_mode: LaunchMode::Test {
+                args,
+                extra_env,
+                runtime_lease: None,
+            },
             timeouts,
             client_version: tests::TEST_CLIENT_VERSION.into(),
         }
@@ -593,56 +600,62 @@ impl CodexAccountAuthManager {
         remove_env(&mut env, "CODEX_APP_SERVER_LOGIN_CLIENT_ID");
         remove_env(&mut env, "CODEX_APP_SERVER_DEV_OPEN_APP_URL");
 
-        let (args, allow_test_harness_output) = match &self.launch_mode {
+        let (executable, args, allow_test_harness_output, runtime_lease) = match &self.launch_mode {
             LaunchMode::Production => {
-                let version_job = launch
-                    .lease
-                    .prepare_guarded_job("codex-auth-version")
-                    .map_err(|_| CodexAccountAuthError::StartFailed)?;
                 let canceled = || {
                     cancellations
                         .iter()
                         .any(|cancellation| cancellation.load(Ordering::Acquire))
                 };
-                let checked = if cancellations.is_empty() {
-                    crate::codex::verify_managed_executable_version_guarded(
-                        &self.executable,
-                        &env,
-                        &launch.cwd,
-                        version_job,
-                    )
+                let cancellation: Option<&dyn Fn() -> bool> = if cancellations.is_empty() {
+                    None
                 } else {
-                    crate::codex::verify_managed_executable_version_guarded_cancelable(
-                        &self.executable,
-                        &env,
-                        &launch.cwd,
-                        version_job,
-                        &canceled,
-                    )
+                    Some(&canceled)
                 };
-                checked.map_err(|error| match error {
-                    // Only a version outside the certified window is a version refusal; a CLI
-                    // that can't report a version is a start failure.
-                    kalcode_contracts::agent::ProviderError::Refused { .. } => {
-                        CodexAccountAuthError::UnsupportedVersion
-                    }
+                let selected = crate::codex::runtime::select_managed_runtime(
+                    self.executable_for_connect().as_deref(),
+                    &env,
+                    &launch.cwd,
+                    &self.profiles.runtime_store(),
+                    |label| launch.lease.prepare_guarded_job(label),
+                    cancellation,
+                )
+                .map_err(|error| match error {
                     _ if canceled() => CodexAccountAuthError::Canceled,
+                    kalcode_contracts::agent::ProviderError::Refused { code, .. }
+                        if code == "provider_capability_incompatible" =>
+                    {
+                        CodexAccountAuthError::IncompatibleCapabilities
+                    }
                     _ => CodexAccountAuthError::StartFailed,
                 })?;
-                (launch.args, false)
+                let (executable, _version, _capabilities, runtime_lease) = selected.into_parts();
+                (executable, launch.args, false, runtime_lease)
             }
             #[cfg(test)]
-            LaunchMode::Test { args, extra_env } => {
+            LaunchMode::Test {
+                args,
+                extra_env,
+                runtime_lease,
+            } => {
                 env.extend(extra_env.clone());
-                (args.clone(), true)
+                (
+                    self.executable.clone(),
+                    args.clone(),
+                    true,
+                    runtime_lease.clone(),
+                )
             }
         };
+        if let Some(runtime_lease) = &runtime_lease {
+            runtime_lease.configure_environment(&mut env);
+        }
         #[cfg(test)]
         let force_cleanup_failure = env
             .get(&OsString::from("ACCOUNT_AUTH_FORCE_CLEANUP_FAILURE"))
             .is_some_and(|value| value == "1");
         let spec = ProcessSpec {
-            program: self.executable.clone(),
+            program: executable,
             args,
             cwd: Some(launch.cwd),
             env,
@@ -669,6 +682,7 @@ impl CodexAccountAuthManager {
             expected_home: launch.profile_home,
             allow_test_harness_output,
             lease: Some(launch.lease),
+            runtime_lease,
             client_version: self.client_version.clone(),
             cleanup_attempted: false,
             cancellations,
@@ -677,6 +691,27 @@ impl CodexAccountAuthManager {
         };
         session.initialize()?;
         Ok(session)
+    }
+
+    /// Production connections resolve from the current provider environment on every launch so
+    /// an atomic CLI replacement or normal PATH-preferred install is picked up without replacing
+    /// this manager. Tests retain their explicit fixture executable and never consult the host.
+    fn executable_for_connect(&self) -> Option<PathBuf> {
+        match &self.launch_mode {
+            LaunchMode::Production => self
+                .source_env
+                .resolve_executable_only(&crate::catalog::codex_spec()),
+            #[cfg(test)]
+            LaunchMode::Test { .. } => Some(self.executable.clone()),
+        }
+    }
+
+    #[cfg(test)]
+    fn attach_test_runtime_lease(&mut self, lease: crate::managed_runtime::RuntimeLease) {
+        let LaunchMode::Test { runtime_lease, .. } = &mut self.launch_mode else {
+            panic!("test runtime leases require the explicit test launch mode");
+        };
+        *runtime_lease = Some(lease);
     }
 }
 
@@ -887,6 +922,7 @@ struct RpcSession {
     expected_home: PathBuf,
     allow_test_harness_output: bool,
     lease: Option<ProfileLease>,
+    runtime_lease: Option<crate::managed_runtime::RuntimeLease>,
     client_version: String,
     cleanup_attempted: bool,
     cancellations: Vec<Arc<AtomicBool>>,
@@ -1121,6 +1157,9 @@ impl RpcSession {
     fn retain_profile_fail_closed(&mut self) {
         if let Some(lease) = self.lease.take() {
             std::mem::forget(lease);
+        }
+        if let Some(runtime_lease) = self.runtime_lease.take() {
+            std::mem::forget(runtime_lease);
         }
     }
 }
@@ -1437,6 +1476,127 @@ mod tests {
             exit_marker,
             _recursive_test_process_slot: recursive_test_process_slot,
         }
+    }
+
+    fn write_discoverable_codex(directory: &Path, marker: &[u8]) -> PathBuf {
+        std::fs::create_dir_all(directory).expect("provider directory");
+        let executable = directory.join(if cfg!(windows) { "codex.exe" } else { "codex" });
+        std::fs::write(&executable, marker).expect("provider executable");
+        executable
+    }
+
+    fn discovery_env(search_directories: &[&Path]) -> DetectEnv {
+        DetectEnv {
+            vars: vec![(
+                "PATH".into(),
+                std::env::join_paths(search_directories).expect("provider search path"),
+            )],
+            windows: cfg!(windows),
+            probe_timeout: Some(Duration::from_secs(2)),
+            system_root: None,
+        }
+    }
+
+    #[test]
+    fn production_manager_rediscovers_the_codex_binary_for_every_connection() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let temp_root = temp.path().canonicalize().expect("canonical tempdir");
+        let first_dir = temp_root.join("first");
+        let second_dir = temp_root.join("second");
+        let first = write_discoverable_codex(&first_dir, b"first");
+        let second = write_discoverable_codex(&second_dir, b"second");
+        let profiles =
+            Arc::new(ManagedProfiles::new(temp_root.join("managed")).expect("managed profiles"));
+        let manager = CodexAccountAuthManager::new(
+            first.clone(),
+            discovery_env(&[&first_dir, &second_dir]),
+            profiles,
+            TEST_CLIENT_VERSION,
+        );
+
+        assert_eq!(manager.executable_for_connect().unwrap(), first);
+        std::fs::remove_file(&first).expect("simulate provider replacing its launch path");
+        assert_eq!(manager.executable_for_connect().unwrap(), second);
+    }
+
+    #[test]
+    fn explicit_test_executable_is_not_replaced_by_production_discovery() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let temp_root = temp.path().canonicalize().expect("canonical tempdir");
+        let discovered_dir = temp_root.join("discovered");
+        let discovered = write_discoverable_codex(&discovered_dir, b"discovered");
+        let explicit = temp_root.join("explicit-test-provider");
+        std::fs::write(&explicit, b"explicit").expect("explicit test executable");
+        let profiles =
+            Arc::new(ManagedProfiles::new(temp_root.join("managed")).expect("managed profiles"));
+        let manager = CodexAccountAuthManager::new_for_test(
+            explicit.clone(),
+            discovery_env(&[&discovered_dir]),
+            profiles,
+            Vec::new(),
+            BTreeMap::new(),
+            AuthTimeouts::default(),
+        );
+
+        assert_ne!(explicit, discovered);
+        assert_eq!(manager.executable_for_connect().unwrap(), explicit);
+    }
+
+    #[test]
+    fn genuine_capability_incompatibility_never_claims_a_minor_version_window() {
+        let message = CodexAccountAuthError::IncompatibleCapabilities.to_string();
+
+        assert!(message.contains("required capabilities"), "{message}");
+        assert!(!message.contains("version"), "{message}");
+        assert!(!message.contains("0.160"), "{message}");
+    }
+
+    fn npm_snapshot_runtime(temp_root: &Path) -> crate::managed_runtime::RuntimeLease {
+        let shim = temp_root.join("bin/codex.cmd");
+        let script = temp_root.join("bin/node_modules/@openai/codex/bin/codex.js");
+        let platform_root = temp_root
+            .join("bin/node_modules/@openai/codex/node_modules/@openai/codex-win32-x64")
+            .join("vendor/x86_64-pc-windows-msvc");
+        std::fs::create_dir_all(script.parent().unwrap()).expect("script parent");
+        std::fs::create_dir_all(platform_root.join("bin")).expect("native bin");
+        std::fs::write(&script, b"#!/usr/bin/env node\n").expect("codex script");
+        std::fs::write(platform_root.join("bin/codex.exe"), b"native").expect("native codex");
+        std::fs::write(
+            &shim,
+            b"@ECHO off\r\n\"%dp0%\\node.exe\" \"%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js\" %*\r\n",
+        )
+        .expect("codex shim");
+        let layout = crate::managed_runtime::resolve_codex_runtime_layout(
+            &shim,
+            &BTreeMap::new(),
+            crate::managed_runtime::RuntimePlatform::WindowsX64,
+        )
+        .expect("managed npm runtime layout");
+        let store = crate::managed_runtime::RuntimeStore::new(temp_root.join("runtime-store"));
+        let staged = store
+            .stage(ProviderId::CODEX, &layout)
+            .expect("stage runtime");
+        store
+            .promote_validated(&staged, "0.161.0")
+            .expect("promote runtime")
+    }
+
+    #[test]
+    fn snapshotted_auth_server_receives_native_wrapper_environment() {
+        let mut fixture = fixture("read_connected_runtime_env");
+        let runtime_root = fixture
+            ._temp
+            .path()
+            .canonicalize()
+            .expect("canonical tempdir")
+            .join("npm-runtime");
+        let runtime = npm_snapshot_runtime(&runtime_root);
+        fixture.manager.attach_test_runtime_lease(runtime);
+
+        fixture
+            .manager
+            .read_account(ACCOUNT_ID)
+            .expect("account read through snapshotted runtime environment");
     }
 
     #[test]
@@ -2054,6 +2214,21 @@ mod tests {
         assert!(std::env::var_os("CODEX_APP_SERVER_DEV_OPEN_APP_URL").is_none());
         let ordinary_home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" });
         assert!(ordinary_home.is_some(), "ordinary home is preserved");
+        if scenario == "read_connected_runtime_env" {
+            let package_root = PathBuf::from(
+                std::env::var_os("CODEX_MANAGED_PACKAGE_ROOT")
+                    .expect("snapshot package root reaches auth app-server"),
+            );
+            assert!(package_root.is_dir(), "snapshot package root exists");
+            assert_eq!(std::env::var("CODEX_MANAGED_BY_NPM").as_deref(), Ok("1"));
+            for name in [
+                "CODEX_MANAGED_BY_PNPM",
+                "CODEX_MANAGED_BY_BUN",
+                "CODEX_MANAGED_BY_VITE_PLUS",
+            ] {
+                assert!(std::env::var_os(name).is_none(), "{name} is cleared");
+            }
+        }
 
         let mut reads = 0usize;
         for line in stdin.lock().lines() {
@@ -2093,7 +2268,9 @@ mod tests {
                     assert_eq!(request["params"], json!({"refreshToken":false}));
                     reads += 1;
                     let result = match scenario {
-                        "read_connected" => account("person@example.test", "pro"),
+                        "read_connected" | "read_connected_runtime_env" => {
+                            account("person@example.test", "pro")
+                        }
                         scenario
                             if scenario.starts_with("models_")
                                 && scenario != "models_not_authenticated" =>

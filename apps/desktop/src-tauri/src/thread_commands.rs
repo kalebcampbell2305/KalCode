@@ -10,8 +10,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use kalcode_contracts::agent::{
-    AgentEvent, AgentEventSink, AgentProvider, AgentSession, AuthState, LaunchOrigin,
-    ProviderCapabilities, ProviderDetection, ProviderError, ProviderId, SessionConfig,
+    AgentEvent, AgentEventSink, AgentProvider, AgentSession, AuthState, DetectionState,
+    LaunchOrigin, ProviderCapabilities, ProviderDetection, ProviderError, ProviderId,
+    SessionConfig,
 };
 use kalcode_contracts::context::PromptReview;
 use kalcode_contracts::operations::{OperationKind, OperationSpec};
@@ -36,7 +37,7 @@ use tauri::{State, Webview};
 
 use crate::AppState;
 use crate::provider_auth_commands::ProviderRuntimeAuthority;
-use crate::provider_commands::detect_once_and_record;
+use crate::provider_commands::{InitialManagedReadiness, detect_once_and_record};
 use crate::provider_pane_commands::ProviderPanesState;
 use crate::resource_commands::ResourceAdmissionProvider;
 
@@ -106,6 +107,7 @@ pub struct ThreadsState {
     /// Adapters offered to threads: exactly the providers detection reports usable.
     providers: Arc<ProviderRegistry>,
     detection: Arc<Detection>,
+    initial_managed_readiness: Option<Arc<InitialManagedReadiness>>,
     provider_runtime: Option<ProviderRuntimeAuthority>,
     /// One live stream per webview; a new `thread_stream` call replaces the previous one.
     streams: Mutex<HashMap<String, StreamId>>,
@@ -398,6 +400,29 @@ where
     sync();
 }
 
+fn launchability_depends_on_initial_managed_readiness(statuses: &[ProviderStatus]) -> bool {
+    statuses.iter().any(|status| {
+        status.id.as_str() == ProviderId::CODEX
+            && status.adapter == AdapterState::Implemented
+            && status.managed_runtime.is_none()
+            && !status
+                .detection
+                .as_ref()
+                .is_some_and(|detection| detection.state == DetectionState::Installed)
+    })
+}
+
+fn wait_for_selected_managed_readiness<W>(provider_id: &str, statuses: &[ProviderStatus], wait: W)
+where
+    W: FnOnce(),
+{
+    if provider_id == ProviderId::CODEX
+        && launchability_depends_on_initial_managed_readiness(statuses)
+    {
+        wait();
+    }
+}
+
 impl ThreadsState {
     /// Starts the thread runtime over `core`.
     ///
@@ -415,6 +440,31 @@ impl ThreadsState {
     pub fn start(
         core: Option<&Arc<Core>>,
         detection: Arc<Detection>,
+        permissions: Option<Arc<PermissionService>>,
+        modes: &ThreadModes,
+        provider_runtime: Option<ProviderRuntimeAuthority>,
+        routes: crate::provider_pane_commands::PaneRoutes,
+        health: Option<Arc<kalcode_providers::HealthMonitor>>,
+        resources: Arc<crate::resource_commands::ResourceGovernorState>,
+    ) -> Self {
+        Self::start_with_managed_readiness(
+            core,
+            detection,
+            None,
+            permissions,
+            modes,
+            provider_runtime,
+            routes,
+            health,
+            resources,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn start_with_managed_readiness(
+        core: Option<&Arc<Core>>,
+        detection: Arc<Detection>,
+        initial_managed_readiness: Option<Arc<InitialManagedReadiness>>,
         permissions: Option<Arc<PermissionService>>,
         modes: &ThreadModes,
         provider_runtime: Option<ProviderRuntimeAuthority>,
@@ -471,6 +521,7 @@ impl ThreadsState {
             permissions,
             providers,
             detection,
+            initial_managed_readiness,
             provider_runtime,
             streams: Mutex::new(HashMap::new()),
         };
@@ -478,8 +529,9 @@ impl ThreadsState {
         state
     }
 
-    /// Registers the adapter of every provider detection reports usable and unregisters the
-    /// rest. Threads already running keep their sessions. Uses the cached detection.
+    /// Registers every provider that can launch from either the native installation or a
+    /// validated managed runtime, and unregisters the rest. Threads already running keep their
+    /// sessions. Uses cached provider state.
     pub fn sync_providers(&self) {
         let usable = self.detection.usable();
         sync_cached_provider_statuses(&self.providers, self.detection.list(), &usable, |status| {
@@ -519,6 +571,19 @@ impl ThreadsState {
                 self.sync_providers();
             },
         );
+    }
+
+    /// Synchronizes cached provider truth immediately, then shares startup managed-runtime
+    /// readiness only when the requested provider is Codex and native launchability is absent.
+    /// Claude, Cursor, Gemini, list/get, and provider-choice reads never wait on Codex work.
+    pub(crate) fn ensure_provider(&self, core: Option<&Arc<Core>>, provider_id: &str) {
+        self.ensure_providers(core);
+        if let Some(readiness) = &self.initial_managed_readiness {
+            wait_for_selected_managed_readiness(provider_id, &self.detection.list(), || {
+                readiness.wait();
+            });
+        }
+        self.sync_providers();
     }
 
     /// Validates an Operations agent task and resolves the exact provider/account/model selection
@@ -682,7 +747,11 @@ impl ThreadsState {
         core: &Arc<Core>,
         spec: &OperationSpec,
     ) -> kalcode_core::Result<CreateThread> {
-        self.ensure_providers(Some(core));
+        if let Some(provider_id) = spec.provider_id.as_deref() {
+            self.ensure_provider(Some(core), provider_id);
+        } else {
+            self.ensure_providers(Some(core));
+        }
         let runtime = self.operation_runtime()?;
         let permission_mode = match self.permissions.as_ref() {
             Some(service) => service
@@ -1306,7 +1375,7 @@ pub fn thread_create(
         name,
     )
     .map_err(|error| error.log_and_convert("thread_create_account"))?;
-    state.ensure_providers(app.core.as_ref());
+    state.ensure_provider(app.core.as_ref(), &request.provider_id);
     if isolate == Some(true) {
         let root = crate::git_commands::workspace_root(&app, &request.workspace_id)
             .map_err(|e| e.log_and_convert("thread_create_worktree"))?;
@@ -1882,7 +1951,12 @@ pub fn thread_resume(
 ) -> Result<ThreadSummary, IpcError> {
     _runtime_access.revalidate()?;
     validate_optional_prompt_review(text.as_deref(), prompt_review_id.as_deref())?;
-    state.ensure_providers(app.core.as_ref());
+    let provider_id = state
+        .runtime()?
+        .get(&thread_id)
+        .map_err(|e| e.log_and_convert("thread_resume"))?
+        .provider_id;
+    state.ensure_provider(app.core.as_ref(), provider_id.as_str());
     let mut thread = state
         .runtime()?
         .resume_reviewed_with_options(
@@ -2287,7 +2361,7 @@ mod tests {
             );
         }
         assert_eq!(
-            operation_effort(ProviderId::CODEX, Some("turbo"))
+            operation_effort(ProviderId::CODEX, Some("high' -c web_search='live"))
                 .expect_err("unknown effort")
                 .code,
             "invalid_effort"
@@ -2636,6 +2710,223 @@ mod tests {
         );
         assert_eq!(detections.get(), 1, "empty status must run detection once");
         assert_eq!(syncs.get(), 2, "fresh detection must sync before summaries");
+    }
+
+    #[test]
+    fn provider_registry_sync_accepts_managed_runtime_without_faking_native_installation() {
+        let mut status = kalcode_providers::catalog::statuses()
+            .into_iter()
+            .find(|status| status.id.as_str() == ProviderId::CODEX)
+            .expect("Codex status");
+        status.detection = Some(ProviderDetection {
+            provider_id: status.id.clone(),
+            display_name: status.display_name.clone(),
+            state: DetectionState::NotInstalled,
+            display_path: None,
+            version: None,
+            minimum_version: None,
+            auth: AuthState::Unknown,
+            message: None,
+            checked_at: "cached".into(),
+        });
+        let id = status.id.clone();
+        let providers = ProviderRegistry::new();
+        status.managed_runtime = Some(kalcode_providers::model::ManagedRuntimeReadiness {
+            version: "0.161.0".into(),
+            source: "last_known_good".into(),
+        });
+
+        sync_cached_provider_statuses(
+            &providers,
+            vec![status.clone()],
+            std::slice::from_ref(&id),
+            |status| Some(Arc::new(CapabilitySpy::from_status(status))),
+        );
+
+        assert!(providers.get(&id).is_some());
+        assert_eq!(
+            status.detection.as_ref().expect("detection").state,
+            DetectionState::NotInstalled,
+            "managed readiness must not rewrite machine-installation truth"
+        );
+
+        status.managed_runtime = None;
+        sync_cached_provider_statuses(&providers, vec![status.clone()], &[], |status| {
+            Some(Arc::new(CapabilitySpy::from_status(status)))
+        });
+        assert!(
+            providers.get(&id).is_none(),
+            "a later unusable cycle must unregister the adapter for new sessions"
+        );
+        assert_eq!(
+            status.detection.as_ref().expect("detection").state,
+            DetectionState::NotInstalled,
+            "later registry refreshes must preserve native installation truth"
+        );
+    }
+
+    #[test]
+    fn first_provider_sync_waits_for_managed_runtime_before_projecting_choices() {
+        use std::sync::{Barrier, mpsc};
+        use std::time::Duration;
+
+        let mut status = kalcode_providers::catalog::statuses()
+            .into_iter()
+            .find(|status| status.id.as_str() == ProviderId::CODEX)
+            .expect("Codex status");
+        status.detection = Some(ProviderDetection {
+            provider_id: status.id.clone(),
+            display_name: status.display_name.clone(),
+            state: DetectionState::NotInstalled,
+            display_path: None,
+            version: None,
+            minimum_version: None,
+            auth: AuthState::Unknown,
+            message: None,
+            checked_at: "cached".into(),
+        });
+        let id = status.id.clone();
+        let status = Arc::new(Mutex::new(status));
+        let providers = Arc::new(ProviderRegistry::new());
+        let readiness = Arc::new(InitialManagedReadiness::test_pending());
+        let entered_wait = Arc::new(Barrier::new(2));
+        let (finished, result) = mpsc::channel();
+        let worker = std::thread::spawn({
+            let status = Arc::clone(&status);
+            let providers = Arc::clone(&providers);
+            let readiness = Arc::clone(&readiness);
+            let entered_wait = Arc::clone(&entered_wait);
+            let id = id.clone();
+            move || {
+                let unresolved = status
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone();
+                wait_for_selected_managed_readiness(
+                    id.as_str(),
+                    std::slice::from_ref(&unresolved),
+                    || {
+                        entered_wait.wait();
+                        readiness.wait();
+                    },
+                );
+                ensure_cached_provider_registry(
+                    false,
+                    || {},
+                    || {
+                        let snapshot = status
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .clone();
+                        let usable = if snapshot.managed_runtime.is_some() {
+                            vec![id.clone()]
+                        } else {
+                            Vec::new()
+                        };
+                        sync_cached_provider_statuses(
+                            &providers,
+                            vec![snapshot],
+                            &usable,
+                            |status| Some(Arc::new(CapabilitySpy::from_status(status))),
+                        );
+                        finished
+                            .send(providers.get(&id).is_some())
+                            .expect("result receiver");
+                    },
+                );
+            }
+        });
+
+        entered_wait.wait();
+        assert!(
+            result.recv_timeout(Duration::from_millis(50)).is_err(),
+            "the first projection must not publish false-unavailable while prewarm is pending"
+        );
+        status
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .managed_runtime = Some(kalcode_providers::model::ManagedRuntimeReadiness {
+            version: "0.161.0".into(),
+            source: "last_known_good".into(),
+        });
+        readiness.test_complete();
+
+        assert!(
+            result
+                .recv_timeout(Duration::from_secs(1))
+                .expect("first provider projection")
+        );
+        worker.join().expect("provider projection worker");
+        assert_eq!(
+            status
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .detection
+                .as_ref()
+                .expect("detection")
+                .state,
+            DetectionState::NotInstalled,
+            "last-known-good readiness must not rewrite global installation truth"
+        );
+    }
+
+    #[test]
+    fn only_unresolved_codex_launchability_waits_for_initial_managed_readiness() {
+        let mut status = kalcode_providers::catalog::statuses()
+            .into_iter()
+            .find(|status| status.id.as_str() == ProviderId::CODEX)
+            .expect("Codex status");
+        status.detection = Some(ProviderDetection {
+            provider_id: status.id.clone(),
+            display_name: status.display_name.clone(),
+            state: DetectionState::NotInstalled,
+            display_path: None,
+            version: None,
+            minimum_version: None,
+            auth: AuthState::Unknown,
+            message: None,
+            checked_at: "cached".into(),
+        });
+        assert!(launchability_depends_on_initial_managed_readiness(
+            std::slice::from_ref(&status)
+        ));
+
+        let waits = std::cell::Cell::new(0);
+        wait_for_selected_managed_readiness(
+            ProviderId::CLAUDE_CODE,
+            std::slice::from_ref(&status),
+            || waits.set(waits.get() + 1),
+        );
+        assert_eq!(
+            waits.get(),
+            0,
+            "a ready Claude request must never wait for pending Codex maintenance"
+        );
+        wait_for_selected_managed_readiness(
+            ProviderId::CODEX,
+            std::slice::from_ref(&status),
+            || waits.set(waits.get() + 1),
+        );
+        assert_eq!(waits.get(), 1);
+
+        status.managed_runtime = Some(kalcode_providers::model::ManagedRuntimeReadiness {
+            version: "0.161.0".into(),
+            source: "last_known_good".into(),
+        });
+        assert!(!launchability_depends_on_initial_managed_readiness(
+            std::slice::from_ref(&status)
+        ));
+        assert_eq!(
+            status.detection.as_ref().expect("detection").state,
+            DetectionState::NotInstalled,
+            "managed readiness stays separate from global installation truth"
+        );
+
+        status.managed_runtime = None;
+        status.detection.as_mut().expect("detection").state = DetectionState::Installed;
+        assert!(!launchability_depends_on_initial_managed_readiness(&[
+            status
+        ]));
     }
 
     #[test]

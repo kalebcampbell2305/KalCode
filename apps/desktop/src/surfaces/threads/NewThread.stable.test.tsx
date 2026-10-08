@@ -112,6 +112,16 @@ const remember = (form: ReturnType<typeof within>) =>
   form.getByRole("checkbox", { name: "Remember these accounts for this workspace" });
 
 describe("New thread account defaults (Stable)", () => {
+  it("shows provider choices while supplementary availability diagnostics are still loading", async () => {
+    const h = await mountStable();
+    intercept = (command) => (command === "providers_list" ? new Promise(() => {}) : null);
+
+    const form = await openNewThread(h.user);
+
+    expect(form.getByRole("combobox", { name: "Provider" })).toHaveDisplayValue("Claude Code");
+    await form.findByRole("combobox", { name: "Model" });
+  });
+
   it("keeps an in-progress inline sign-in alive when thread options finish loading", async () => {
     const h = await mountStable(async ({ client, claudeWork }) => {
       await client.logoutClaudeAccount(claudeWork);
@@ -441,6 +451,69 @@ describe("New thread permission mode (Stable)", () => {
     const create = h.calls.find((c) => c.command === "thread_create");
     expect(create?.args?.permissionMode).toBe("bypass");
     expect(create?.args?.confirmBypass).toBe(true);
+  });
+
+  it("adopts delayed provider readiness without remounting or clearing the draft", async () => {
+    const h = await mountStable();
+    const readyOptions = await h.raw<Awaited<ReturnType<KalCodeClient["threadOptions"]>>>("thread_options");
+    const statuses = await h.raw<Awaited<ReturnType<KalCodeClient["listProviders"]>>>("providers_list");
+    let ready = false;
+    intercept = (command) => {
+      if (command === "thread_options") {
+        return Promise.resolve(
+          ready
+            ? readyOptions
+            : { ...readyOptions, providers: readyOptions.providers.filter((provider) => provider.id !== "codex") },
+        );
+      }
+      if (command === "providers_list") {
+        return Promise.resolve(
+          ready
+            ? statuses
+            : statuses.map((status) =>
+                status.id === "codex"
+                  ? {
+                      ...status,
+                      detection: status.detection
+                        ? { ...status.detection, state: "not_installed" as const, auth: "unknown" as const }
+                        : null,
+                      managedRuntime: undefined,
+                    }
+                  : status,
+              ),
+        );
+      }
+      return null;
+    };
+
+    const form = await openNewThread(h.user);
+    const task = form.getByRole("textbox", { name: "Task" });
+    await h.user.type(task, "keep this draft while Codex warms");
+    await h.user.selectOptions(workspace(form), h.beta.id);
+    expect(form.getByRole("combobox", { name: "Provider" })).not.toHaveDisplayValue("Codex");
+
+    ready = true;
+    act(() => {
+      (
+        window as unknown as {
+          __kalcodeMemory: {
+            simulate: (event: {
+              type: "provider.health_changed";
+              payload: { providerId: "codex"; from: "unavailable"; to: "healthy"; reason: string };
+            }) => void;
+          };
+        }
+      ).__kalcodeMemory.simulate({
+        type: "provider.health_changed",
+        payload: { providerId: "codex", from: "unavailable", to: "healthy", reason: "managed_runtime_ready" },
+      });
+    });
+
+    await waitFor(() =>
+      expect(form.getByRole("combobox", { name: "Provider" }).querySelector('option[value="codex"]')).not.toBeNull(),
+    );
+    expect(task).toHaveValue("keep this draft while Codex warms");
+    expect(workspace(form)).toHaveValue(h.beta.id);
   });
 
   it("keeps a saved read-only Plan default", async () => {

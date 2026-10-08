@@ -333,6 +333,21 @@ impl ManagedProfiles {
         Self::new(data_dir.join(MANAGED_PROFILE_DIRECTORY))
     }
 
+    /// Runtime bytes are separate from account homes and never contain credentials.
+    pub fn runtime_store(&self) -> crate::managed_runtime::RuntimeStore {
+        crate::managed_runtime::RuntimeStore::new(
+            self.root
+                .parent()
+                .unwrap_or(&self.root)
+                .join("provider-runtimes"),
+        )
+    }
+
+    /// A neutral directory for installation probes, separate from every account and workspace.
+    pub fn compatibility_probe_dir(&self) -> Result<PathBuf, ProviderError> {
+        self.ensure_directory(&["compatibility-probe"])
+    }
+
     /// Opens or creates an absolute managed-profile root directly below an existing directory.
     /// Every existing ancestor must be an ordinary directory rather than a symlink, junction, or
     /// other Windows reparse point.

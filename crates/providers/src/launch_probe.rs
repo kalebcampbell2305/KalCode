@@ -26,7 +26,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, PoisonError};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 use kalcode_contracts::agent::{AuthState, DetectionState};
 
@@ -104,43 +104,15 @@ impl Key {
     }
 }
 
-/// Cheap identity of one file: no process, one metadata read.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct FileStamp {
-    path: PathBuf,
-    len: u64,
-    modified: Option<SystemTime>,
-    created: Option<SystemTime>,
-}
-
-impl FileStamp {
-    fn of(path: &Path) -> Option<Self> {
-        let metadata = std::fs::metadata(path).ok().filter(|m| m.is_file())?;
-        Some(Self {
-            path: path.to_path_buf(),
-            len: metadata.len(),
-            modified: metadata.modified().ok(),
-            created: metadata.created().ok(),
-        })
-    }
-}
-
 /// The executable plus what starting it actually runs (a shim's target, `node` and the script).
-/// `None` when any of them is missing.
-fn stamps(exe: &Path, spec: &DetectionSpec, env: &DetectEnv) -> Option<Vec<FileStamp>> {
-    let launch = crate::launch::resolve(exe, &env.provider_env(&spec.env_policy));
-    let mut files = vec![exe.to_path_buf()];
-    if launch.program != exe {
-        files.push(launch.program);
-    }
-    files.extend(
-        launch
-            .prefix_args
-            .iter()
-            .map(PathBuf::from)
-            .filter(|p| p.is_absolute() && p.is_file()),
-    );
-    files.iter().map(|path| FileStamp::of(path)).collect()
+/// For Codex this also includes the native executable and helpers behind its npm wrapper.
+/// `None` when any required file is missing.
+fn stamps(
+    exe: &Path,
+    spec: &DetectionSpec,
+    env: &DetectEnv,
+) -> Option<crate::managed_runtime::InstallationFingerprint> {
+    crate::managed_runtime::installation_fingerprint(exe, &env.provider_env(&spec.env_policy))
 }
 
 /// A session can start with this result (everything else is probed again on every launch).
@@ -154,7 +126,7 @@ struct Reusable {
     detected: Detected,
     /// When the probe that produced it started.
     probed_at: Instant,
-    stamps: Vec<FileStamp>,
+    stamps: crate::managed_runtime::InstallationFingerprint,
 }
 
 impl Reusable {

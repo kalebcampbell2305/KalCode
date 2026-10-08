@@ -204,18 +204,20 @@ describe("provider support status", () => {
   });
 });
 
-// B5 staging/b5: crates/providers/src/claude/mod.rs (2.1.282 up to 2.2.0), codex/mod.rs and
-// gemini/mod.rs (VersionWindow floors 0.155.1, 0.156.0, 0.157.0, 0.158.0 and 0.61.0).
-describe("supported provider CLI versions", () => {
-  it("names the certified release lines in the provider docs", async () => {
+// Provider adapters own their probes. Stable Codex updates are capability checked instead of
+// being rejected merely because their minor line is new; other provider policies stay explicit.
+describe("provider CLI compatibility", () => {
+  it("explains automatic Codex update handling without promising a fixed version window", async () => {
     const copy = text(await render(ProvidersDocs, "/docs/providers"));
-    // codex/mod.rs MANAGED_VERSIONS: 0.160 everywhere; 0.155.1-0.159 lines on macOS only.
     expect(copy).toContain(
-      "Claude Code 2.1.282 or a later 2.1 release, Codex CLI 0.160 (on macOS also the 0.155 to 0.159 lines, from 0.155.1), and Gemini CLI 0.61.",
+      "Managed Codex accounts use capability checks instead of requiring one pinned minor version.",
     );
-    expect(copy).toContain("Pre-release builds aren't supported.");
-    // Refusals name the supported versions but no install command.
-    expect(copy).toContain("agents stop with a message that names the supported versions.");
+    expect(copy).toContain("A newer stable release keeps working when its required capabilities pass");
+    expect(copy).toContain("Alpha, beta and release-candidate builds use an experimental compatibility path");
+    expect(copy).toContain("Agents already running keep the Codex process they started with");
+    expect(copy).toContain("New agents use the newly validated binary");
+    expect(copy).not.toContain("Codex CLI 0.160");
+    expect(copy).not.toContain("agents stop with a message that names the supported versions");
   });
 });
 

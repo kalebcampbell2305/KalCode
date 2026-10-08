@@ -25,9 +25,10 @@ import {
   closeGracefully,
   createAccountFixtureDataDir,
   EXE,
+  fakeProviderProcesses,
+  installFakeCodex,
   killForcibly,
   launch,
-  processesMatching,
   RESOURCE_PROVIDER_FIXTURE_OPT_IN,
   type Running,
   removeDir,
@@ -352,7 +353,7 @@ function writeProviderFixture(root: string): { bin: string; project: string } {
   execFileSync("git", ["-C", project, "add", "README.md"], { windowsHide: true, stdio: "pipe" });
   execFileSync("git", ["-C", project, "commit", "-m", "fixture"], { windowsHide: true, stdio: "pipe" });
   copyFileSync(FAKE, join(bin, "claude.exe"));
-  copyFileSync(FAKE, join(bin, "codex.exe"));
+  installFakeCodex(FAKE, bin);
   writeManagedFakeProviderConfig(bin);
   const configPath = join(bin, "fake-provider.json");
   const config = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
@@ -572,7 +573,7 @@ test("a saved mixed-provider Squad gives every available member a real pane whil
       })
       .toBe("idle");
     await expect(page.locator(`[data-provider-pane="${readyId}"] [data-pane-status]`)).toContainText(/READY|IDLE/);
-    await expect.poll(() => processesMatching(bin).length, { timeout: 30_000 }).toBe(liveIds.length);
+    await expect.poll(() => fakeProviderProcesses(bin, dataDir).length, { timeout: 30_000 }).toBe(liveIds.length);
     await expect.poll(() => fakeSessionLaunches(bin).length, { timeout: 30_000 }).toBe(sessionIds.length);
     const nativeLaunches = fakeSessionLaunches(bin);
     expect(nativeLaunches.every(({ args }) => !args.includes("--resume") && args[0] !== "resume")).toBe(true);
@@ -636,7 +637,7 @@ test("a saved mixed-provider Squad gives every available member a real pane whil
     await page.screenshot({ path: test.info().outputPath("squad-dependency-admitted-once.png") });
     await closeGracefully(app);
     app = null;
-    await expect.poll(() => processesMatching(bin), { timeout: 30_000 }).toEqual([]);
+    await expect.poll(() => fakeProviderProcesses(bin, dataDir), { timeout: 30_000 }).toEqual([]);
   } finally {
     if (app) await closeGracefully(app);
     removeDir(dataDir);
@@ -816,7 +817,7 @@ test("manager takeover, isolated worktrees, and explicit restart recovery retain
 
     await killForcibly(app);
     app = null;
-    await expect.poll(() => processesMatching(bin), { timeout: 30_000 }).toEqual([]);
+    await expect.poll(() => fakeProviderProcesses(bin, dataDir), { timeout: 30_000 }).toEqual([]);
 
     app = await launch(dataDir, env);
     page = app.page;
@@ -868,7 +869,7 @@ test("manager takeover, isolated worktrees, and explicit restart recovery retain
     // consume a stale authorization or duplicate a provider process for an uncertain prior run.
     await page.waitForTimeout(2_500);
     expect(fakeSessionLaunches(bin)).toHaveLength(launchesBeforeRestart);
-    expect(processesMatching(bin)).toEqual([]);
+    expect(fakeProviderProcesses(bin, dataDir)).toEqual([]);
 
     await invoke<void>(page, "operations_run_now", { id: rootId });
     await waitForSquadThreads(page, workspace.id, initialThreadIds, 30_000);

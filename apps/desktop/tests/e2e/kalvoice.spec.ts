@@ -6,8 +6,9 @@ import {
   ACCOUNT_KALVOICE_FIXTURE_OPT_IN,
   closeGracefully,
   EXE,
+  fakeProviderProcesses,
+  installFakeCodex,
   launch,
-  processesMatching,
   RESOURCE_PROVIDER_FIXTURE_OPT_IN,
   removeDir,
   test,
@@ -94,7 +95,7 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
   writeFileSync(join(project, "README.md"), "# KalVoice fixture\n");
   const bin = join(root, "bin");
   mkdirSync(bin);
-  copyFileSync(FAKE, join(bin, "codex.exe"));
+  installFakeCodex(FAKE, bin);
   writeManagedFakeProviderConfig(bin);
   const env = {
     KALCODE_E2E_ACCOUNT_FIXTURE: ACCOUNT_KALVOICE_FIXTURE_OPT_IN,
@@ -271,10 +272,12 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
     await page.getByRole("menuitemradio", { name: "Top left" }).click();
     await expect(widget(page)).toHaveAttribute("data-anchor", "top_left");
     await page.waitForTimeout(600);
-    const firstRunFakePids = processesMatching(bin);
+    const firstRunFakePids = fakeProviderProcesses(bin, dataDir);
     await closeGracefully(app);
     app = null;
-    await expect.poll(() => processesMatching(bin).filter((pid) => firstRunFakePids.includes(pid))).toEqual([]);
+    await expect
+      .poll(() => fakeProviderProcesses(bin, dataDir).filter((pid) => firstRunFakePids.includes(pid)))
+      .toEqual([]);
 
     app = await launch(dataDir, env);
     page = app.page;
@@ -287,12 +290,15 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
     await page.getByRole("button", { name: "Activity", exact: true }).click();
     const activity = page.getByRole("region", { name: "Activity" });
     await expect(activity.getByText("KalVoice ran a command").first()).toBeVisible();
+    // The restarted app's own startup provider checks can fill the first page of 25 entries, so
+    // the earlier route event may sit on the next page.
+    await activity.getByRole("button", { name: "Show older activity" }).click();
     await expect(activity.getByText("KalVoice heard a command").first()).toBeVisible();
     // Activity never shows what was said.
     await expect(activity.getByText(/unit test for the parser/i)).toHaveCount(0);
     await closeGracefully(app);
     app = null;
-    expect(processesMatching(bin), "no provider process outlives KalCode").toEqual([]);
+    expect(fakeProviderProcesses(bin, dataDir), "no provider process outlives KalCode").toEqual([]);
   } finally {
     if (app) await closeGracefully(app).catch(() => undefined);
     try {

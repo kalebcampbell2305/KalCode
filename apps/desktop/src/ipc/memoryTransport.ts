@@ -109,6 +109,7 @@ const PROVIDER_SCENARIOS: readonly string[] = [
   "providers-none",
   "providers-outdated",
   "providers-signed-out",
+  "providers-managed-runtime",
   "providers-backoff",
 ];
 
@@ -1042,7 +1043,9 @@ function usableProviders(statuses: readonly ProviderStatus[]): string[] {
   return statuses
     .filter(
       (s) =>
-        s.adapter === "implemented" && s.detection?.state === "installed" && s.detection.auth !== "not_authenticated",
+        s.adapter === "implemented" &&
+        (s.managedRuntime !== undefined ||
+          (s.detection?.state === "installed" && s.detection.auth !== "not_authenticated")),
     )
     .map((s) => s.id);
 }

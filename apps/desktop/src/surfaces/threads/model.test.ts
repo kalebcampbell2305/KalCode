@@ -373,6 +373,15 @@ describe("unavailableReason", () => {
     expect(unavailableReason(codex)).toBe("Not checked yet");
   });
 
+  it("does not call a validated managed runtime uninstalled", () => {
+    const recovered = {
+      ...detected(codex, { state: "not_installed", version: null }),
+      managedRuntime: { version: "0.160.0", source: "last_known_good" },
+    } as ProviderStatus;
+    expect(unavailableReason(recovered)).toBe("Managed runtime ready; checking availability");
+    expect(unavailableReason(recovered)).not.toMatch(/not installed|unsupported/i);
+  });
+
   it("keeps the no-adapter copy for planned adapters only", () => {
     const planned = { ...detected(codex, {}), adapter: "planned" as const };
     expect(unavailableReason(planned)).toBe("Installed, but KalCode can't run threads with it yet");
