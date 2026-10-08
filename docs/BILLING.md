@@ -518,7 +518,19 @@ off-by-default production deploy):
   billing grant does), and whether a *partial* refund marked `fraudulent` removes the payment (today
   only a full one does).
 - **License subject.** An unkeyed SHA-256 of the account id; use an HMAC if unlinkability matters.
-- **Restricted key.** Confirm its permissions cover `invoices/{id}?expand[]=payments`.
+- **Restricted key permissions.** `GAME_STRIPE_SECRET_KEY` needs read access to Invoices (with
+  `expand[]=payments`), Checkout Sessions, Charges (with refunds) and **Disputes**, and write access
+  to Checkout Sessions and Refunds. A key without Disputes read makes every payment webhook fail
+  with 500 (Stripe retries), as the unclaimed sandbox key showed.
+
+**Sandbox test-mode run (2026-10-08, local API + `stripe listen` against the `kal-university-test`
+sandbox, real Stripe payloads):** a $9.99 one-time sandbox Price; `POST /v1/games/checkout` created
+a real Checkout Session, paid with the 4242 test card and a US address, and
+`checkout.session.completed` recorded standalone ownership (`standalonePriceCents` 999); a second
+checkout answered `already_owned`. A sandbox Pro subscription's `invoice.paid` recorded `pro`
+ownership; a full refund 30 seconds later revoked it (`refund`); a new paid subscription invoice
+restored it. The unclaimed sandbox key cannot read `/v1/disputes`, so that run used a local-only,
+uncommitted stub for the dispute list; everything else ran unmodified.
 
 Comped (operator) grants and the OWNER account add their tier's perks to the license only while the
 grant is active and never store a claim; only a paid billing grant claims perks permanently (E7).
