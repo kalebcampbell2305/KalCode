@@ -14,6 +14,7 @@ const { themeToggle = true } = Astro.props;
 
 const columns = [
   { heading: "Product", links: [...FOOTER_NAV.product, { href: ACCOUNT_PAGE.path, label: "Account" }] },
+  { heading: "Games", links: FOOTER_NAV.games },
   { heading: "Docs", links: FOOTER_NAV.docs },
   { heading: "Legal", links: FOOTER_NAV.legal },
 ] as const;
