@@ -97,7 +97,8 @@ stay KalCode-only. Rules:
 - **Separate from KalCode.** No KalCode plan, account, billing, checkout or early-access form appears
   on the page; release news points to the existing X account in `SOCIAL`.
 - **Truthful state.** While no game build is published, the Windows and macOS download controls are
-  disabled "Coming soon" buttons, no price is shown, and the story arc tags each chapter as "In the
+  disabled "Coming soon" buttons, the planned standalone price is shown as a $9.99 USD one-time
+  purchase with no subscription, and the story arc tags each chapter as "In the
   development build" or "Planned". Features beyond the current build (a laptop to work anywhere on
   campus, fictional AI tools and an AI company, a fictional stock market and IPO, regions inspired by
   California, Florida and New York) sit together under "Where it's headed", each tagged Planned.
