@@ -105,6 +105,24 @@ export const ACCOUNT_PAGE = {
 } as const satisfies PageInfo;
 
 /**
+ * Private KalCode-account pages for games (KAL University ownership, docs/BILLING.md §13). Like
+ * Account: noindex, no-referrer, and kept out of PAGES, navigation and the sitemap. Until the game
+ * is on sale, only the game's own sign-in screen (and the activation sign-in return) leads here.
+ */
+export const GAME_ACCOUNT_PAGES = {
+  library: {
+    path: "/games/library",
+    title: "Game Library — KalCode",
+    description: "The games your KalCode account owns, their perks and their downloads.",
+  },
+  activate: {
+    path: "/games/activate",
+    title: "Activate KAL University — KalCode",
+    description: "Approve KAL University on your computer by entering the code the game shows.",
+  },
+} as const satisfies Record<string, PageInfo>;
+
+/**
  * The private owner dashboard (docs/OWNER_ANALYTICS.md). Deliberately not in PAGES, navigation,
  * the footer or the sitemap, and noindex. Its data is served only to an OWNER account.
  */
@@ -185,6 +203,12 @@ export const PAGES = [
       "KalCode product updates: Windows releases, KalVoice progress, provider workspace improvements and meaningful product news without the engineering noise.",
   },
   {
+    path: "/games/kal-university",
+    title: "KAL University — A KalCode Game",
+    description:
+      "KAL University is a single-player campus adventure and business game from KalCode, in development for Windows and macOS. Start in your dorm with $200 and build your future: $9.99, or included with KalCode Pro, MAX and MAX 2X.",
+  },
+  {
     path: "/security",
     title: "Security — KalCode",
     description:
@@ -259,6 +283,8 @@ export const FOOTER_NAV = {
     { href: "/download", label: "Download" },
     { href: "/updates", label: "Updates" },
   ],
+  /** Games from KalCode: separate products, kept out of the KalCode header and pricing. */
+  games: [{ href: "/games/kal-university", label: "KAL University" }],
   docs: [
     { href: "/docs", label: "Overview" },
     { href: "/docs/permissions", label: "Permissions" },

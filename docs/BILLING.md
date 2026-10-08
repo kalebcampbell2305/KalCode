@@ -419,3 +419,120 @@ Regenerate the vectors after an intentional format or plan change:
 `UPDATE_VECTORS=1 pnpm --filter @kalcode/api exec vitest run tests/unit/vectors.test.ts`, then
 `pnpm exec biome format --write crates/entitlements/testdata` and the Rust tests. Each regeneration
 uses fresh throwaway keys, so the whole file changes.
+
+## 13. KalCode games (KAL University)
+
+Owner direction "KAL University, Update 3" (2026-10-08): the game is **$9.99 USD on its own** (this
+supersedes the earlier $5 proposal) or **included with Pro, MAX and MAX 2X**, and ownership lives in
+the KalCode account. The owner approved the entitlement policy (KalGame `docs/ENTITLEMENTS.md`
+E1-E13) on 2026-10-08. Status: **game billing is OFF in production** (`GAME_STRIPE_MODE` unset,
+`GAME_CHECKOUT_ENABLED` `"false"`): no live Stripe objects exist and nothing is sold until the owner
+publishes the game's terms and refund wording and gives the launch go-ahead. Test mode runs only
+against a Stripe sandbox. KalCode prices are unchanged.
+
+**One catalog.** `packages/protocol/src/games.ts` defines the game (`kal_university`, `standalonePriceCents: 999`,
+`includedWithPlans`), the perk tiers (standalone < Pro < MAX < MAX 2X), the perk items, and the
+signed license format. The website renders it, the API signs claimed perks into the license, and the
+game applies exactly what the license lists.
+
+**Ownership policy** (`worker/lib/game-routes.ts`, `game-store.ts`, migration `0012_game_entitlements.sql`):
+
+| Event | Effect |
+| --- | --- |
+| Paid standalone Checkout (`mode=payment`, the game Price, quantity 1, USD, server-set account metadata) | Records the payment; grants lifetime ownership (`source standalone`). Non-US billing address with `GAME_US_ONLY` → full refund, nothing granted. |
+| First `invoice.paid` with `amount_paid > 0`, a subscription invoice, a line on one of the six plan Prices, paid by a PaymentIntent, customer mapped to a live account | Records the payment; grants lifetime ownership (`source pro/max/max2x`). Trials and 100%-off invoices never qualify. |
+| Cancel, downgrade, unpaid renewal | Nothing. Ownership is for life. |
+| Full refund within `GAME_REFUND_REVOKE_DAYS` (default 30) | Payment → `refunded`; ownership revoked if no counting payment remains. |
+| Full refund after the window | Payment → `refunded_late` (still counts). Partial refunds change nothing. |
+| Refund marked `fraudulent`, or dispute closed `lost` | Payment → `fraud` / `dispute_lost` at any time; revoked if nothing else counts. |
+| A later counting payment | Restores ownership. |
+| OWNER operator account | Owns the game with MAX 2X perks while the grant is active (never stored as a payment). |
+
+Payment status only moves to a stronger state and is always read fresh from Stripe (charges with
+refunds, disputes), so events in any order converge. D1 triggers refuse ownership without a counting
+payment, refuse revocation while one remains, refuse deletes, keep perk claims insert-only, and write
+`audit_log` for every grant, revocation and restoration.
+
+**Perks.** Claimed per account and item, once, whenever a license is issued or the Game Library is
+viewed, for every tier at or below the account's current plan. Claims persist after cancellation; an
+upgrade claims only the higher tiers' items; resubscribing claims nothing new. The license's perk
+tier is the higher of the current plan and the highest claimed tier.
+
+**Device sign-in and license.**
+
+| Route | Who | Purpose |
+| --- | --- | --- |
+| `POST /v1/games/device/start` | the game (no `Origin`) | `{gameId, device?}` → device code (secret, hashed in D1), 8-letter user code, `https://kalcoded.com/games/activate`, 10-minute expiry, 5 s interval |
+| `POST /v1/games/device/approve` | website session (`kalcoded.com` only) | binds the code to the owning account; 403 `not_owned` otherwise |
+| `POST /v1/games/device/token` | the game | `authorization_pending` / `slow_down` / `expired_token` / `invalid_grant`, or once: the signed license + a refresh token (`kgr_…`, hashed, 180-day sliding) |
+| `POST /v1/games/license/refresh` | the game (`Bearer kgr_…`) | a fresh license; 403 `not_owned` after a revocation; 401 after sign-out or account deletion |
+| `POST /v1/games/license/sign-out` | the game | ends that install's session |
+| `GET /v1/games/license/keys` | anyone | published game-license public keys |
+| `GET /v1/games/library` | website session | ownership, perks (claimed), checkout state, download availability |
+| `POST /v1/games/checkout` | website session | Stripe-hosted Checkout for the $9.99 purchase (409 if already owned; 503 while `GAME_CHECKOUT_ENABLED` is not `true`) |
+| `POST /v1/games/downloads` | website session | a 10-minute signed link for an owner (20 per day) |
+| `GET /v1/games/download?t=…` | the link holder | streams the build from R2 `GAME_BUILDS` with Range support |
+| `POST /v1/games/webhook` | Stripe | its own endpoint and signing secret; events `invoice.paid`, `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `charge.refunded`, `charge.dispute.closed` |
+
+The license is a compact JWS (`EdDSA`, `typ kalcode-game-license.v1`) signed with its **own** key
+`GAME_LICENSE_SIGNING_KEY`, valid 30 days; the game refreshes it silently once it is a day old.
+Payload: `version, gameId, subject` (SHA-256 of a domain-separated account id, never the id or
+email), `source, perkTier, perks[{id,kind,ref,amountCents}], device` (optional install binding),
+`issuedAt, expiresAt, keyId`. The game embeds the public key and verifies offline (KalGame
+`Scripts/Runtime/Licensing`); `apps/api/tests/fixtures/game-license-vectors.json` pins both verifiers.
+
+**Configuration** (`wrangler.jsonc` vars, Worker secrets):
+
+| Name | Kind | Value |
+| --- | --- | --- |
+| `GAME_STRIPE_MODE` | var | unset (off) → `live` at launch (`test` only for a sandbox deployment) |
+| `GAME_STRIPE_PRICE_KAL_UNIVERSITY` | var | the one-time $9.99 USD Price (999 cents; a completed session whose subtotal differs from the catalog grants nothing) |
+| `GAME_CHECKOUT_ENABLED` | var | `"false"` until launch |
+| `GAME_REFUND_REVOKE_DAYS`, `GAME_US_ONLY` | var | `"30"`, `"true"` (owner decisions E3, E6) |
+| `GAME_TEST_PLAN_PRICES` | var | test mode only: sandbox Price → tier JSON |
+| `GAME_LICENSE_SIGNING_KEY` | secret | `node tooling/admin/gen-game-license-key.mjs --kid g2026-10 \| pnpm --filter @kalcode/api exec wrangler secret put GAME_LICENSE_SIGNING_KEY` (prints only the public key and the Unity pin line) |
+| `GAME_STRIPE_SECRET_KEY` | secret | restricted live key: Checkout Sessions write, Refunds write, Invoices read, Charges read, Disputes read |
+| `GAME_STRIPE_WEBHOOK_SECRET` | secret | signing secret of the `/v1/games/webhook` endpoint |
+| `GAME_DOWNLOAD_SIGNING_SECRET` | secret | 32+ random bytes |
+| `GAME_BUILDS` | R2 binding | `campus-founder-builds`, with `kal_university/manifest.json` naming the current build per platform (`key, version, fileName, size, sha256`) |
+
+Tests: `packages/protocol/src/games.test.ts`, `apps/api/tests/unit/game-license.test.ts`,
+`apps/api/tests/integration/d1-games.test.ts` (real local D1: grants, trials, annual, refunds in and
+out of the window, fraud, disputes, out-of-order events, idempotency, triggers, standalone + US-only,
+perk claims, OWNER, device flow, license refresh/sign-out, signed downloads with ranges).
+
+**Before game billing is switched on** (independent review, 2026-10-08; none affects the
+off-by-default production deploy):
+
+- **Backfill.** Subscription invoices paid before the game webhook exists are not recorded. Add an
+  admin task that lists paid invoices (not events, which Stripe keeps only 30 days) and runs each
+  through `recordInvoice` (decision E1).
+- **Failed refunds.** `charge.refunded` fires when a refund is created; a refund that later fails
+  leaves the payment `refunded`. Let a payment return to `paid` when Stripe shows the charge is no
+  longer refunded, and subscribe to `charge.refund.updated`.
+- **Transient webhook outcomes.** `unknown_customer` / `account_unavailable` are recorded as handled,
+  so Stripe's retries are ignored. Do not record transient outcomes.
+- **Duplicate purchase.** "Already owned" is checked when the Checkout Session is created, not when
+  it completes; decide whether a second payment is refunded automatically.
+- **Owner policy questions.** Whether a $0 trialing subscription earns perk claims (today any active
+  billing grant does), and whether a *partial* refund marked `fraudulent` removes the payment (today
+  only a full one does).
+- **License subject.** An unkeyed SHA-256 of the account id; use an HMAC if unlinkability matters.
+- **Restricted key permissions.** `GAME_STRIPE_SECRET_KEY` needs read access to Invoices (with
+  `expand[]=payments`), Checkout Sessions, Charges (with refunds) and **Disputes**, and write access
+  to Checkout Sessions and Refunds. A key without Disputes read makes every payment webhook fail
+  with 500 (Stripe retries), as the unclaimed sandbox key showed.
+
+**Sandbox test-mode run (2026-10-08, local API + `stripe listen` against the `kal-university-test`
+sandbox, real Stripe payloads):** a $9.99 one-time sandbox Price; `POST /v1/games/checkout` created
+a real Checkout Session, paid with the 4242 test card and a US address, and
+`checkout.session.completed` recorded standalone ownership (`standalonePriceCents` 999); a second
+checkout answered `already_owned`. A sandbox Pro subscription's `invoice.paid` recorded `pro`
+ownership; a full refund 30 seconds later revoked it (`refund`); a new paid subscription invoice
+restored it. The unclaimed sandbox key cannot read `/v1/disputes`, so that run used a local-only,
+uncommitted stub for the dispute list; everything else ran unmodified.
+
+Comped (operator) grants and the OWNER account add their tier's perks to the license only while the
+grant is active and never store a claim; only a paid billing grant claims perks permanently (E7).
+`/v1/games/license/refresh` is rate-limited per network before any per-token row is written, and a
+`GAME_LICENSE_SIGNING_KEY` identical to `ENTITLEMENT_SIGNING_KEY` is refused.

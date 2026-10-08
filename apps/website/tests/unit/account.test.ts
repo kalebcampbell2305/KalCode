@@ -26,11 +26,13 @@ describe("Account page", () => {
     expect(source).toContain("sessionStorage.removeItem");
     expect(source).not.toMatch(/document\.cookie/);
     // localStorage holds only the plan chosen on /pricing (lib/checkout-intent.ts), never a session.
+    // The page may also read (never write) the KAL University "continue" hint (lib/games-client.ts).
     const storageCalls = [...source.matchAll(/localStorage\.(\w+)\(([^,)]*)/g)].map((match) => [match[1], match[2]]);
     expect(storageCalls.length).toBeGreaterThan(0);
     for (const [method, key] of storageCalls) {
       expect(["getItem", "setItem", "removeItem"]).toContain(method);
-      expect(key).toBe("CHECKOUT_INTENT_KEY");
+      if (key === "GAMES_RETURN_KEY") expect(method).toBe("getItem");
+      else expect(key).toBe("CHECKOUT_INTENT_KEY");
     }
     expect(source).not.toMatch(/sessionStorage\.setItem\([^\n]*(?:token|session|kcs_)/i);
     expect(source.indexOf("sessionStorage.removeItem")).toBeLessThan(source.indexOf(socialCompletePath));

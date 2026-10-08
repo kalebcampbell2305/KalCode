@@ -282,3 +282,161 @@ export function stripeClient({ secretKey, fetcher = fetch }: StripeClientOptions
 }
 
 export type StripeClient = ReturnType<typeof stripeClient>;
+
+// ---------------------------------------------------------------------------------------------
+// KalCode games (docs/BILLING.md §13). A separate client with its own restricted key and an
+// explicit mode, so a test deployment can never act on live money and the reverse.
+
+export type GameStripeMode = "live" | "test";
+
+const GAME_STRIPE_ID = /^(?:in|cs|pi|ch|re|dp|du|cus|price)_[A-Za-z0-9_]+$/;
+
+export function gameStripeKeyMatchesMode(secretKey: string, mode: GameStripeMode): boolean {
+  return mode === "live"
+    ? /^(?:sk|rk)_live_[A-Za-z0-9_]+$/.test(secretKey)
+    : /^(?:sk|rk|rkcs)_test_[A-Za-z0-9_]+$/.test(secretKey);
+}
+
+/** The charge facts that decide whether a game payment still counts. */
+export interface GameChargeState {
+  /** Fully refunded (partial refunds never change ownership). */
+  refunded: boolean;
+  /** When the last refund was created (ISO), if refunded. */
+  refundedAt: string | null;
+  /** Any refund on the charge was marked fraudulent. */
+  fraudulent: boolean;
+  /** A dispute on the payment closed as lost. */
+  disputeLost: boolean;
+}
+
+function gameId(value: string, prefix: string): string {
+  if (!value.startsWith(`${prefix}_`) || !GAME_STRIPE_ID.test(value)) throw new Error("invalid stripe id");
+  return value;
+}
+
+export function gameStripeClient({
+  secretKey,
+  mode,
+  fetcher = fetch,
+}: {
+  secretKey: string;
+  mode: GameStripeMode;
+  fetcher?: typeof fetch;
+}) {
+  const livemode = mode === "live";
+  const get = async (path: string): Promise<Record<string, unknown>> => {
+    const value = (await stripeJson(fetcher, secretKey, path)) as Record<string, unknown>;
+    if (typeof value !== "object" || value === null) throw new Error("billing provider unavailable");
+    return value;
+  };
+  const list = async (path: string): Promise<Record<string, unknown>[]> => {
+    const value = (await stripeJson(fetcher, secretKey, path)) as { object?: unknown; data?: unknown };
+    if (value.object !== "list" || !Array.isArray(value.data)) throw new Error("billing provider unavailable");
+    return value.data as Record<string, unknown>[];
+  };
+  const sameMode = (value: Record<string, unknown>) => {
+    if (value.livemode !== livemode) throw new Error("stripe mode mismatch");
+    return value;
+  };
+  return {
+    mode,
+    /** The invoice with its payments (API 2025-03-31.basil: payments replace invoice.charge). */
+    async retrieveInvoice(invoiceId: string): Promise<Record<string, unknown>> {
+      const id = gameId(invoiceId, "in");
+      return sameMode(await get(`/invoices/${encodeURIComponent(id)}?expand[]=payments`));
+    },
+    async retrieveCheckoutSession(sessionId: string): Promise<Record<string, unknown>> {
+      const id = gameId(sessionId, "cs");
+      return sameMode(await get(`/checkout/sessions/${encodeURIComponent(id)}?expand[]=line_items`));
+    },
+    /** Current refund/dispute facts for a payment intent, read fresh because events arrive unordered. */
+    async chargeState(paymentIntent: string): Promise<GameChargeState> {
+      const pi = encodeURIComponent(gameId(paymentIntent, "pi"));
+      const charges = await list(`/charges?payment_intent=${pi}&limit=10&expand[]=data.refunds`);
+      const disputes = await list(`/disputes?payment_intent=${pi}&limit=10`);
+      let refunded = false;
+      let refundedAt: string | null = null;
+      let fraudulent = false;
+      for (const charge of charges) {
+        sameMode(charge);
+        if (charge.status !== "succeeded") continue;
+        const refunds = (charge.refunds as { data?: unknown } | undefined)?.data;
+        const items = Array.isArray(refunds) ? (refunds as Record<string, unknown>[]) : [];
+        if (items.some((refund) => refund.reason === "fraudulent" && refund.status !== "failed")) fraudulent = true;
+        if (charge.refunded === true) {
+          refunded = true;
+          for (const refund of items) {
+            if (refund.status === "failed" || refund.status === "canceled") continue;
+            if (Number.isSafeInteger(refund.created) && (refund.created as number) > 0) {
+              const at = new Date((refund.created as number) * 1000).toISOString();
+              if (refundedAt === null || at > refundedAt) refundedAt = at;
+            }
+          }
+        }
+      }
+      const disputeLost = disputes.some((dispute) => sameMode(dispute).status === "lost");
+      return { refunded, refundedAt, fraudulent: refunded && fraudulent, disputeLost };
+    },
+    async createCheckout(input: {
+      accountId: string;
+      gameId: string;
+      priceId: string;
+      customerId: string | null;
+      email: string | null;
+      successUrl: string;
+      cancelUrl: string;
+      expiresAt: number;
+      idempotencyKey: string;
+    }): Promise<{ id: string; url: string }> {
+      const parameters: Record<string, string> = {
+        mode: "payment",
+        "line_items[0][price]": gameId(input.priceId, "price"),
+        "line_items[0][quantity]": "1",
+        "payment_method_types[0]": "card",
+        billing_address_collection: "required",
+        client_reference_id: input.accountId,
+        "metadata[kalcode_game]": input.gameId,
+        "metadata[kalcode_account_id]": input.accountId,
+        "payment_intent_data[metadata][kalcode_game]": input.gameId,
+        "payment_intent_data[metadata][kalcode_account_id]": input.accountId,
+        success_url: input.successUrl,
+        cancel_url: input.cancelUrl,
+        expires_at: String(input.expiresAt),
+      };
+      if (input.customerId) parameters.customer = gameId(input.customerId, "cus");
+      else if (input.email) parameters.customer_email = input.email;
+      const value = (await stripeJson(fetcher, secretKey, "/checkout/sessions", {
+        method: "POST",
+        headers: { "Idempotency-Key": input.idempotencyKey },
+        body: new URLSearchParams(parameters).toString(),
+      })) as { id?: unknown; url?: unknown; livemode?: unknown };
+      if (
+        typeof value.id !== "string" ||
+        !value.id.startsWith("cs_") ||
+        !GAME_STRIPE_ID.test(value.id) ||
+        value.livemode !== livemode ||
+        typeof value.url !== "string" ||
+        !isExactHttpsOrigin(value.url, "checkout.stripe.com")
+      ) {
+        throw new Error("billing provider unavailable");
+      }
+      return { id: value.id, url: value.url };
+    },
+    /** A full refund (used only for the US-only rule). Idempotent per key. */
+    async refundPayment(paymentIntent: string, idempotencyKey: string): Promise<void> {
+      const value = (await stripeJson(fetcher, secretKey, "/refunds", {
+        method: "POST",
+        headers: { "Idempotency-Key": idempotencyKey },
+        body: new URLSearchParams({
+          payment_intent: gameId(paymentIntent, "pi"),
+          reason: "requested_by_customer",
+        }).toString(),
+      })) as { id?: unknown; livemode?: unknown };
+      if (typeof value.id !== "string" || !value.id.startsWith("re_") || value.livemode !== livemode) {
+        throw new Error("billing provider unavailable");
+      }
+    },
+  };
+}
+
+export type GameStripeClient = ReturnType<typeof gameStripeClient>;

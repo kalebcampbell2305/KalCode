@@ -52,6 +52,9 @@ const localAgents = formatLimit(freePlan.limits.parallelAgents);
           </form>
         </div>
         <div class="account-summary" data-account-summary hidden>
+          <p class="account-intent" data-games-return hidden>
+            <a class="text-link" href="/games/activate" data-games-return-link>Continue to KAL University <Icon name="arrow-right" /></a>
+          </p>
           <p class="account-summary__email" data-account-email></p>
           <div class="account-summary__metrics">
             <div><span>Plan</span><strong data-account-plan>Choose a plan</strong></div>
@@ -442,6 +445,7 @@ const localAgents = formatLimit(freePlan.limits.parallelAgents);
     serializeCheckoutIntent,
   } from "../lib/checkout-intent";
   import { applyInterval, onIntervalChange } from "../scripts/interval";
+  import { GAMES_RETURN_KEY, parseReturn, returnUrl } from "../lib/games-client";
 
   const API = "https://api.kalcoded.com";
   /** The catalog's name for a tier ("Pro", "MAX 2X"); the private OWNER tier keeps its own name. */
@@ -729,6 +733,27 @@ const localAgents = formatLimit(freePlan.limits.parallelAgents);
     if (provider) button.addEventListener("click", () => void startSocial(provider, button));
   }
 
+  /** A KAL University page sent the visitor here to sign in: offer the way back (never automatic). */
+  function showGamesReturn(): void {
+    const notice = document.querySelector<HTMLElement>("[data-games-return]");
+    const link = document.querySelector<HTMLAnchorElement>("[data-games-return-link]");
+    if (!notice || !link) return;
+    let target = null;
+    try {
+      target = parseReturn(localStorage.getItem(GAMES_RETURN_KEY), Date.now());
+    } catch {
+      target = null;
+    }
+    notice.hidden = !target;
+    if (!target) return;
+    link.href = returnUrl(target);
+    const label = link.firstChild;
+    if (label?.nodeType === Node.TEXT_NODE) {
+      label.textContent =
+        target.path === "/games/activate" ? "Continue signing in KAL University " : "Continue to your Game Library ";
+    }
+  }
+
   async function loadAccount(): Promise<string | null> {
     if (emailOutput) emailOutput.textContent = "";
     if (planOutput) planOutput.textContent = "Plan unavailable";
@@ -755,6 +780,7 @@ const localAgents = formatLimit(freePlan.limits.parallelAgents);
     if (form) form.hidden = true;
     if (accessControls) accessControls.hidden = true;
     if (summary) summary.hidden = false;
+    showGamesReturn();
     if (emailOutput) emailOutput.textContent = body.account.email;
     if (!body.account.activatedAt) {
       if (activateFree) activateFree.hidden = false;

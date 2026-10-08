@@ -155,7 +155,7 @@ async function post(d: Deps, accountId: string, body: unknown, headers: Record<s
 }
 
 describe("route table", () => {
-  it("is exactly the account, auth, billing, entitlement and KalVoice routes", () => {
+  it("is exactly the account, auth, billing, entitlement, KalVoice, insights and games routes", () => {
     expect(ROUTES.map(({ method, path, access }) => ({ method, path, access }))).toEqual([
       { method: "GET", path: "/v1/account", access: "account" },
       { method: "GET", path: "/v1/account/profile", access: "account" },
@@ -186,6 +186,17 @@ describe("route table", () => {
       { method: "POST", path: "/v1/kalvoice/requests", access: "account" },
       { method: "GET", path: "/v1/insights/distribution", access: "owner" },
       { method: "GET", path: "/v1/insights/revenue", access: "owner" },
+      { method: "GET", path: "/v1/games/library", access: "account" },
+      { method: "POST", path: "/v1/games/device/approve", access: "account" },
+      { method: "POST", path: "/v1/games/checkout", access: "account" },
+      { method: "POST", path: "/v1/games/downloads", access: "account" },
+      { method: "POST", path: "/v1/games/device/start", access: "public" },
+      { method: "POST", path: "/v1/games/device/token", access: "public" },
+      { method: "POST", path: "/v1/games/license/refresh", access: "public" },
+      { method: "POST", path: "/v1/games/license/sign-out", access: "public" },
+      { method: "GET", path: "/v1/games/license/keys", access: "public" },
+      { method: "GET", path: "/v1/games/download", access: "public" },
+      { method: "POST", path: "/v1/games/webhook", access: "public" },
     ]);
   });
 
