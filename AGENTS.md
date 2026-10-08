@@ -680,6 +680,19 @@ Claude Code and Codex are PEER engineering workers. NEITHER provider owns main, 
 - **Cooperation.** Treat work produced by the other provider as legitimate engineering work: INSPECT CURRENT STATE → identify ownership of active tasks → reuse completed valid work → coordinate through branches/worktrees + main → work on the remaining task → merge and ship independently when ready. If another agent lands something your task depends on, consume it from main; do not duplicate it.
 - **Goal.** Maximum parallelism, zero unnecessary agent interruption, fast safe merges, fast safe shipping, and no single merge/release bottleneck. Behave like engineers on one high-performance team, not competing processes.
 
+## Permanent ship-speed rule (owner directive 2026-10-08)
+
+"FIND THE ABSOLUTE BEST WAY, THE HIGHEST-LEVERAGE, FASTEST PATH TO SHIP TO ALL USERS, AND IMPLEMENT IT." Time from ready work to every user is the metric; every agent optimizes it on every change. Today's evidence (2026-10-08): steady state was a ~77 min gate + ~15 min landing-to-users, but most lost time came from failures that waited on a human (a PC2 overload round, a 1 h 40 min hung ssh, a crashed pipeline nobody restarted, a hand-edited notes commit, PRs missing rounds on conflicts).
+
+- **Nothing waits for a land.** Work that is ready while a train candidate gates rebases onto that candidate's tip (not main) and is submitted; the train stacks it above the gating candidate, so one gate covers the whole stack and one land ships it. Gate the deepest level; cancel shallower levels' gates when PC2 capacity is the bottleneck.
+- **The release is built during the gate.** The armed watcher (`auto-release.ps1`) runs the speculative front half for the deepest gating candidate, so after a land only Windows QA, the Mac update check and publish remain. Target: landing to users within 20 minutes.
+- **No human in the loop between green and users.** The landed pipeline is resumable (finished front half, QA and Mac package are reused) and the watcher resumes a dead pipeline by itself. Never hand-edit release artifacts after the front half starts.
+- **Release notes come from the PR.** Every user-facing PR body opens with one plain-ASCII `Release note: <what users can now do>` line; internal PRs write `Release note: none`. The pipeline uses those lines verbatim and leaves ci/tooling/test/release/gate PRs out automatically. A notes change after a build starts goes in `notes-override-<c12>.md`, never as a commit on the publication worktree.
+- **A flake is a bug on first sight.** A gate that fails or reruns because of a test that passes elsewhere gets its root cause found and a fix PR the same hour (for example #389, ConPTY title redraws); never rerun past it twice. A failure message must say what failed and why (state, member, output), so one run is enough to diagnose it.
+- **Nothing hangs silently.** Any release or gate step with no progress for 10 minutes is a defect: find the stuck process, stop it, fix the cause (for example ssh keepalives on every Mac call) and record it.
+- **Capacity.** PC2 always gates (at most three runners; its timed unit/UI halves at normal priority, Rust/native below normal); the build PC joins the pool through `gate-pool-governor.ps1` whenever it is idle; release builds stay on the build PC.
+- **Measure every release.** Record submit-to-users and landing-to-users for each build; a regression in either is a bug to fix, not a new normal.
+
 ## Permanent high-concurrency merge + release architecture: lanes on the shared merge train (owner directive 2026-10-05; replaces the 2026-10-04 single-queue wording)
 
 > "KALCODE USES A HIGH-CONCURRENCY INTEGRATION AND RELEASE PIPELINE.
