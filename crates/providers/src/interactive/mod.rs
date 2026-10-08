@@ -101,7 +101,8 @@ mod effort_tests {
                 Some("future-fast".into())
             );
             assert!(normalize_effort(provider, Some("high' -c web_search='live")).is_err());
-            assert!(normalize_effort(provider, Some(&"e".repeat(33))).is_err());
+            let too_long = if provider == ProviderId::CODEX { 65 } else { 33 };
+            assert!(normalize_effort(provider, Some(&"e".repeat(too_long))).is_err());
         }
     }
 }
