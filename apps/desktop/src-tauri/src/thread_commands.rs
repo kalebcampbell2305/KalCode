@@ -2404,11 +2404,13 @@ mod tests {
     }
 
     struct AccountFixture {
-        _temp: tempfile::TempDir,
         core: Arc<Core>,
         store: AccountStore,
         profiles: ManagedProfiles,
         workspace_id: String,
+        // Last: fields drop in declaration order, so Core closes kalcode.lock and the db first.
+        // Dropped earlier, the TempDir silently survives on Windows.
+        _temp: tempfile::TempDir,
     }
 
     impl AccountFixture {
