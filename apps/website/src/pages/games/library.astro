@@ -1,0 +1,677 @@
+---
+/**
+ * /games/library: the games a KalCode account owns (docs/BILLING.md §13). Shows how the account
+ * owns KAL University, its claimed perks and the downloads (signed, short-lived links minted by the
+ * API for owners only). Private: noindex, no-referrer, not in the sitemap. Every fact on the page
+ * comes from api.kalcoded.com for the session cookie; the page decides nothing.
+ */
+import Backdrop from "../../components/Backdrop.astro";
+import BrandMark from "../../components/BrandMark.astro";
+import Icon from "../../components/Icon.astro";
+import PageHead from "../../components/PageHead.astro";
+import Capture from "../../components/games/Capture.astro";
+import Base from "../../layouts/Base.astro";
+import { formatGamePrice, GAME_PERKS, KAL_UNIVERSITY } from "@kalcode/protocol/games";
+import { GAME_ACCOUNT_PAGES } from "../../lib/site";
+
+const page = GAME_ACCOUNT_PAGES.library;
+const tiers = [
+  { id: "pro", name: "Pro" },
+  { id: "max", name: "MAX" },
+  { id: "max2x", name: "MAX 2X" },
+] as const;
+const perksByTier = tiers.map((tier) => ({
+  ...tier,
+  perks: GAME_PERKS.filter((perk) => perk.gameId === KAL_UNIVERSITY.id && perk.tier === tier.id),
+}));
+---
+<Base title={page.title} description={page.description} path={page.path} world noindex>
+  <meta slot="head" name="referrer" content="no-referrer" />
+  <PageHead
+    backdrop="orbital"
+    eyebrow="Your KalCode account"
+    title="Game Library"
+    lead="The games your KalCode account owns, with their perks and downloads. Ownership is for life: cancelling or changing your plan never takes a game away."
+  />
+
+  <section class="world-section gl-section" aria-labelledby="gl-title">
+    <Backdrop variant="deep" />
+    <div class="container gl-shell" data-library>
+      <p class="gl-status" data-status role="status" aria-live="polite">Loading your library…</p>
+
+      <div class="gl-signed-out" data-view="signed-out" hidden>
+        <p>Sign in to your KalCode account to see the games it owns.</p>
+        <a class="button button--primary" href="/account" data-signin>Sign in to KalCode <Icon name="arrow-right" /></a>
+      </div>
+
+      <article class="gl-game" data-view="game" aria-labelledby="gl-title" hidden>
+        <figure class="gl-game__art frame">
+          <Capture
+            name="quad"
+            sizes="(min-width: 64rem) 30rem, 92vw"
+            alt="KAL University: the central quad during Welcome Week."
+          />
+        </figure>
+
+        <div class="gl-game__body">
+          <p class="gl-lockup"><BrandMark size={24} /><span>A KalCode Game</span></p>
+          <div class="gl-game__head">
+            <h2 id="gl-title" class="h2 h2--sm">{KAL_UNIVERSITY.name}</h2>
+            <span class="chip" data-owned-chip>Checking</span>
+          </div>
+          <p class="gl-game__detail" data-owned-detail></p>
+
+          <div class="gl-buy" data-buy hidden>
+            <p>
+              Own it for {formatGamePrice(KAL_UNIVERSITY)} on its own, or get it with KalCode Pro, MAX or MAX 2X: your first
+              payment makes it yours for life.
+            </p>
+            <div class="button-row">
+              <button class="button button--primary" type="button" data-checkout disabled>
+                <span data-checkout-label>Buy for {formatGamePrice(KAL_UNIVERSITY)} · Coming soon</span>
+              </button>
+              <a class="button button--secondary" href="/pricing">Get it with a KalCode plan <Icon name="arrow-right" /></a>
+            </div>
+          </div>
+
+          <section class="gl-block" aria-labelledby="gl-downloads">
+            <h3 id="gl-downloads" class="gl-block__title">Downloads</h3>
+            <ul class="gl-downloads" role="list">
+              {
+                KAL_UNIVERSITY.platforms.map((platform) => (
+                  <li class="gl-download" data-platform={platform.id}>
+                    <button class="gl-download__button" type="button" disabled data-download={platform.id}>
+                      <Icon name="download" class="gl-download__icon" />
+                      <span class="gl-download__text">
+                        <span class="gl-download__os">{platform.name}</span>
+                        <span class="gl-download__state" data-download-state>Coming soon</span>
+                      </span>
+                    </button>
+                    <code class="gl-download__sha" data-download-sha hidden />
+                  </li>
+                ))
+              }
+            </ul>
+            <p class="gl-note">
+              Downloads appear once a build has passed testing on real PCs and Macs. Links are personal and expire after ten minutes.
+            </p>
+          </section>
+
+          <section class="gl-block" aria-labelledby="gl-perks">
+            <div class="gl-block__head">
+              <h3 id="gl-perks" class="gl-block__title">Your perks</h3>
+              <span class="chip chip--plain" data-perk-tier>None yet</span>
+            </div>
+            <div class="gl-tiers">
+              {
+                perksByTier.map((tier) => (
+                  <div class="gl-tier" data-tier={tier.id}>
+                    <p class="gl-tier__name">{tier.name}</p>
+                    <ul class="gl-perks" role="list">
+                      {tier.perks.map((perk) => (
+                        <li class="gl-perk" data-perk={perk.id}>
+                          <span class="gl-perk__mark" aria-hidden="true"><Icon name="check" /></span>
+                          <span class="gl-perk__name">{perk.name}</span>
+                          <span class="visually-hidden" data-perk-state>Not claimed</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))
+              }
+            </div>
+            <p class="gl-note">
+              Perks are cosmetic with a little starting cash for new games, and every item can also be earned in the game. They're
+              claimed once per account and stay yours after you cancel; upgrading adds only what you didn't have.
+            </p>
+          </section>
+
+          <section class="gl-block gl-play" aria-labelledby="gl-play">
+            <h3 id="gl-play" class="gl-block__title">Play on your computer</h3>
+            <p>
+              Open KAL University and choose <strong>Sign in with KalCode</strong>, then enter the code on the
+              <a class="text-link" href={GAME_ACCOUNT_PAGES.activate.path}>activation page</a>. The game works offline and renews its
+              license whenever you're online.
+            </p>
+          </section>
+        </div>
+      </article>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .gl-section {
+    min-height: 36rem;
+  }
+
+  .gl-shell {
+    display: grid;
+    gap: var(--space-6);
+  }
+
+  .gl-status {
+    min-height: 1.5rem;
+    margin: 0;
+    color: var(--color-accent-text);
+  }
+
+  .gl-status:empty {
+    display: none;
+  }
+
+  .gl-status[data-tone="error"] {
+    color: var(--color-danger-text);
+  }
+
+  .gl-signed-out {
+    display: grid;
+    gap: var(--space-4);
+    justify-items: start;
+    max-width: 36rem;
+    padding: clamp(1.5rem, 4vw, 2.5rem);
+    border-radius: var(--radius-xl);
+    background: var(--world-panel);
+    box-shadow: var(--world-panel-lit);
+    color: var(--color-text-secondary);
+  }
+
+  .gl-signed-out p {
+    margin: 0;
+  }
+
+  [data-view][hidden],
+  .gl-buy[hidden],
+  .gl-download__sha[hidden] {
+    display: none;
+  }
+
+  .gl-game {
+    position: relative;
+    display: grid;
+    gap: clamp(1.5rem, 4vw, 3rem);
+    padding: clamp(1.25rem, 3.5vw, 2.5rem);
+    border-radius: var(--radius-xl);
+    background:
+      radial-gradient(70% 50% at 100% 0%, rgb(var(--world-gold) / 0.08), transparent 70%),
+      var(--world-panel);
+    box-shadow: var(--world-panel-lit);
+  }
+
+  .gl-game::before {
+    position: absolute;
+    top: 0;
+    left: 10%;
+    width: 40%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--color-accent-icy), transparent);
+    content: "";
+  }
+
+  .gl-game__art {
+    align-self: start;
+    margin: 0;
+    padding: clamp(0.4rem, 0.3rem + 0.5vw, 0.7rem);
+    box-shadow:
+      var(--world-panel-edge),
+      0 0 70px -30px rgb(var(--world-gold) / 0.35);
+  }
+
+  .gl-game__body {
+    display: grid;
+    gap: var(--space-5);
+    align-content: start;
+  }
+
+  .gl-lockup {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin: 0;
+    color: rgb(var(--world-gold));
+    font-family: var(--font-wider);
+    font-size: var(--type-label);
+    font-weight: var(--weight-medium);
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+  }
+
+  .gl-lockup :global(.brand-mark) {
+    border-radius: var(--radius-sm);
+  }
+
+  .gl-game__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  .gl-game__head .h2 {
+    margin: 0;
+  }
+
+  .gl-game__detail,
+  .gl-buy p,
+  .gl-play p {
+    margin: 0;
+    color: var(--color-text-secondary);
+    line-height: 1.65;
+  }
+
+  .gl-game__detail:empty {
+    display: none;
+  }
+
+  .gl-buy {
+    display: grid;
+    gap: var(--space-4);
+    padding: var(--space-5);
+    border-radius: var(--radius-lg);
+    background: color-mix(in srgb, var(--color-bg-sunken) 72%, transparent);
+    box-shadow: inset 0 0 0 1px var(--color-border);
+  }
+
+  .gl-block {
+    display: grid;
+    gap: var(--space-3);
+    padding-top: var(--space-5);
+    border-top: 1px solid var(--color-border);
+  }
+
+  .gl-block__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+
+  .gl-block__title {
+    margin: 0;
+    color: var(--color-text);
+    font-size: 1rem;
+    font-weight: var(--weight-semibold);
+  }
+
+  .gl-note {
+    margin: 0;
+    color: var(--color-text-muted);
+    font-size: 0.88rem;
+    line-height: 1.6;
+  }
+
+  .gl-play strong {
+    color: var(--color-text);
+  }
+
+  .gl-downloads {
+    display: grid;
+    gap: var(--space-3);
+    grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .gl-download {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .gl-download__button {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-height: 3.5rem;
+    padding: var(--space-2) var(--space-5) var(--space-2) var(--space-4);
+    border: 0;
+    border-radius: var(--btn-radius);
+    background: var(--world-glass);
+    box-shadow:
+      inset 0 0 0 1px var(--color-border-strong),
+      inset 0 1px 0 color-mix(in srgb, var(--color-text) 6%, transparent);
+    color: var(--color-text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition:
+      box-shadow var(--dur-fast, 160ms) ease,
+      transform var(--dur-fast, 160ms) ease;
+  }
+
+  .gl-download__button:not(:disabled):hover {
+    box-shadow:
+      inset 0 0 0 1px var(--color-border-lit-soft),
+      var(--glow-subtle);
+  }
+
+  .gl-download__button:focus-visible {
+    outline: 2px solid var(--color-border-focus);
+    outline-offset: 2px;
+  }
+
+  .gl-download__button:disabled {
+    cursor: not-allowed;
+  }
+
+  .gl-download__button :global(.gl-download__icon) {
+    width: 1.25rem;
+    height: 1.25rem;
+    flex: none;
+    color: var(--color-text-muted);
+  }
+
+  .gl-download__button:not(:disabled) :global(.gl-download__icon) {
+    color: var(--color-accent-text);
+  }
+
+  .gl-download__text {
+    display: grid;
+    gap: 0.1rem;
+  }
+
+  .gl-download__os {
+    font-weight: var(--weight-semibold);
+  }
+
+  .gl-download__state {
+    color: var(--color-text-muted);
+    font-size: var(--site-text-xs);
+    letter-spacing: 0.04em;
+  }
+
+  .gl-download__sha {
+    overflow-wrap: anywhere;
+    color: var(--color-text-faint);
+    font-size: 0.72rem;
+  }
+
+  .gl-tiers {
+    display: grid;
+    gap: var(--space-3);
+    grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  }
+
+  .gl-tier {
+    display: grid;
+    gap: var(--space-2);
+    align-content: start;
+    padding: var(--space-4);
+    border-radius: var(--radius-lg);
+    background: color-mix(in srgb, var(--color-bg-sunken) 72%, transparent);
+    box-shadow: inset 0 0 0 1px var(--color-border);
+  }
+
+  .gl-tier__name {
+    margin: 0;
+    color: var(--color-text-muted);
+    font-size: var(--site-text-xs);
+    font-weight: var(--weight-medium);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .gl-tier[data-current] .gl-tier__name {
+    color: var(--color-accent-text);
+  }
+
+  .gl-perks {
+    display: grid;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .gl-perk {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--color-text-muted);
+    font-size: 0.92rem;
+  }
+
+  .gl-perk__mark {
+    display: grid;
+    width: 1.2rem;
+    height: 1.2rem;
+    flex: none;
+    place-items: center;
+    border-radius: var(--radius-full);
+    box-shadow: inset 0 0 0 1px var(--color-border-strong);
+    color: transparent;
+  }
+
+  .gl-perk__mark :global(svg) {
+    width: 0.8rem;
+    height: 0.8rem;
+  }
+
+  .gl-perk[data-claimed] {
+    color: var(--color-text);
+  }
+
+  .gl-perk[data-claimed] .gl-perk__mark {
+    background: var(--color-accent-soft);
+    box-shadow: inset 0 0 0 1px var(--color-border-lit-soft);
+    color: var(--color-accent-text);
+  }
+
+  @media (min-width: 64rem) {
+    .gl-game {
+      grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .gl-download__button {
+      transition: none;
+    }
+  }
+</style>
+
+<script>
+  import {
+    formatBytes,
+    formatDate,
+    GAMES_API,
+    GAMES_RETURN_KEY,
+    ownershipLabel,
+    perkTierLabel,
+    serializeReturn,
+  } from "../../lib/games-client";
+  import type { GameOwnershipSource } from "@kalcode/protocol/games";
+
+  interface LibraryGame {
+    id: string;
+    owned: boolean;
+    source: GameOwnershipSource | null;
+    grantedAt: string | null;
+    revoked: { at: string | null; reason: string | null } | null;
+    perkTier: string | null;
+    standalonePriceUsd: number;
+    perks: { id: string; claimed: boolean }[];
+    checkout: { open: boolean };
+    downloads: { platform: string; available: boolean; version?: string; size?: number; sha256?: string }[];
+  }
+
+  const root = document.querySelector<HTMLElement>("[data-library]");
+  const status = root?.querySelector<HTMLElement>("[data-status]");
+  const signedOut = root?.querySelector<HTMLElement>('[data-view="signed-out"]');
+  const card = root?.querySelector<HTMLElement>('[data-view="game"]');
+  const ownedChip = root?.querySelector<HTMLElement>("[data-owned-chip]");
+  const ownedDetail = root?.querySelector<HTMLElement>("[data-owned-detail]");
+  const buy = root?.querySelector<HTMLElement>("[data-buy]");
+  const checkout = root?.querySelector<HTMLButtonElement>("[data-checkout]");
+  const checkoutLabel = root?.querySelector<HTMLElement>("[data-checkout-label]");
+  const perkTier = root?.querySelector<HTMLElement>("[data-perk-tier]");
+
+  function say(text: string, tone: "info" | "error" = "info") {
+    if (!status) return;
+    status.textContent = text;
+    status.dataset.tone = tone;
+  }
+
+  async function api(path: string, init: RequestInit = {}) {
+    try {
+      return await fetch(`${GAMES_API}${path}`, { ...init, credentials: "include" });
+    } catch {
+      return null;
+    }
+  }
+
+  const REVOKED: Record<string, string> = {
+    refund: "Ownership ended because the payment that granted it was refunded.",
+    fraud: "Ownership ended because the payment that granted it was refunded as fraudulent.",
+    dispute_lost: "Ownership ended because the payment that granted it was charged back.",
+  };
+
+  function render(game: LibraryGame) {
+    if (!card) return;
+    card.hidden = false;
+    if (ownedChip) {
+      ownedChip.textContent = game.owned ? "Owned" : "Not owned yet";
+      ownedChip.className = `chip ${game.owned ? "chip--built" : "chip--plain"}`;
+    }
+    if (ownedDetail) {
+      if (game.owned && game.source) {
+        const since = formatDate(game.grantedAt);
+        ownedDetail.textContent = since ? `${ownershipLabel(game.source)} · yours since ${since}` : ownershipLabel(game.source);
+      } else if (game.revoked?.reason) {
+        ownedDetail.textContent = REVOKED[game.revoked.reason] ?? "";
+      } else {
+        ownedDetail.textContent = "";
+      }
+    }
+    if (buy) buy.hidden = game.owned;
+    if (checkout && checkoutLabel) {
+      checkout.disabled = !game.checkout.open;
+      checkoutLabel.textContent = game.checkout.open
+        ? `Buy for $${game.standalonePriceUsd}`
+        : `Buy for $${game.standalonePriceUsd} · Coming soon`;
+    }
+    if (perkTier) perkTier.textContent = game.owned ? `${perkTierLabel(game.perkTier)} perks` : "None yet";
+    for (const tier of root?.querySelectorAll<HTMLElement>("[data-tier]") ?? []) {
+      tier.toggleAttribute("data-current", game.owned && tier.dataset.tier === game.perkTier);
+    }
+    for (const perk of game.perks) {
+      const row = root?.querySelector<HTMLElement>(`[data-perk="${CSS.escape(perk.id)}"]`);
+      if (!row) continue;
+      row.toggleAttribute("data-claimed", game.owned && perk.claimed);
+      const state = row.querySelector<HTMLElement>("[data-perk-state]");
+      if (state) state.textContent = game.owned && perk.claimed ? "Claimed" : "Not claimed";
+    }
+    for (const download of game.downloads) {
+      const row = root?.querySelector<HTMLElement>(`[data-platform="${CSS.escape(download.platform)}"]`);
+      const button = row?.querySelector<HTMLButtonElement>("[data-download]");
+      const state = row?.querySelector<HTMLElement>("[data-download-state]");
+      const sha = row?.querySelector<HTMLElement>("[data-download-sha]");
+      if (!button || !state || !sha) continue;
+      const ready = game.owned && download.available;
+      button.disabled = !ready;
+      state.textContent = ready
+        ? [download.version, formatBytes(download.size ?? 0)].filter(Boolean).join(" · ")
+        : game.owned
+          ? "Coming soon"
+          : "Own the game to download";
+      sha.hidden = !ready || !download.sha256;
+      sha.textContent = ready && download.sha256 ? `SHA-256 ${download.sha256}` : "";
+    }
+  }
+
+  async function load(): Promise<LibraryGame | null> {
+    const response = await api("/v1/games/library");
+    if (response?.status === 401) {
+      say("");
+      if (card) card.hidden = true;
+      if (signedOut) signedOut.hidden = false;
+      return null;
+    }
+    if (!response?.ok) {
+      say("Your library couldn't be loaded. Check your connection and refresh the page.", "error");
+      return null;
+    }
+    const body = (await response.json()) as { games: LibraryGame[] };
+    const game = body.games.find((entry) => entry.id === "kal_university");
+    if (!game) return null;
+    say("");
+    render(game);
+    return game;
+  }
+
+  root?.querySelector<HTMLAnchorElement>("[data-signin]")?.addEventListener("click", () => {
+    try {
+      localStorage.setItem(GAMES_RETURN_KEY, serializeReturn("/games/library", null, Date.now()));
+    } catch {
+      // Storage blocked.
+    }
+  });
+
+  for (const button of root?.querySelectorAll<HTMLButtonElement>("[data-download]") ?? []) {
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      say("Preparing your download…");
+      const response = await api("/v1/games/downloads", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ gameId: "kal_university", platform: button.dataset.download }),
+      });
+      button.disabled = false;
+      const body = response ? ((await response.json().catch(() => ({}))) as { url?: string; error?: string }) : {};
+      if (response?.ok && typeof body.url === "string" && body.url.startsWith(`${GAMES_API}/v1/games/download?`)) {
+        say("Your download is starting.");
+        location.assign(body.url);
+      } else if (body.error === "rate_limited") {
+        say("You've started a lot of downloads today. Try again later.", "error");
+      } else {
+        say("The download couldn't be started. Refresh the page and try again.", "error");
+      }
+    });
+  }
+
+  checkout?.addEventListener("click", async () => {
+    checkout.disabled = true;
+    say("Opening secure checkout…");
+    const requestId = crypto.randomUUID().replaceAll("-", "");
+    const response = await api("/v1/games/checkout", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ gameId: "kal_university", requestId }),
+    });
+    const body = response ? ((await response.json().catch(() => ({}))) as { url?: string; error?: string }) : {};
+    if (response?.ok && typeof body.url === "string" && body.url.startsWith("https://checkout.stripe.com/")) {
+      location.assign(body.url);
+      return;
+    }
+    checkout.disabled = false;
+    say(
+      body.error === "already_owned"
+        ? "You already own KAL University."
+        : body.error === "checkout_unavailable"
+          ? "KAL University isn't on sale yet."
+          : "Checkout couldn't be opened. Try again in a moment.",
+      "error",
+    );
+  });
+
+  (async () => {
+    const url = new URL(location.href);
+    const purchased = url.searchParams.get("purchase") === "success";
+    if (url.search) history.replaceState({}, "", location.pathname);
+    try {
+      localStorage.removeItem(GAMES_RETURN_KEY);
+    } catch {
+      // Nothing stored.
+    }
+    let game = await load();
+    if (!purchased || !game) return;
+    // Stripe confirms the payment to KalCode separately; wait for it briefly, then say so.
+    for (let attempt = 0; attempt < 6 && game && !game.owned; attempt++) {
+      say("Payment received. Confirming it with KalCode…");
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      game = await load();
+    }
+    say(game?.owned ? "Thanks! KAL University is yours." : "Payment received. It can take a minute to appear here; refresh shortly.");
+  })();
+</script>

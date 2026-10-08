@@ -8,6 +8,7 @@ import {
   ACCOUNT_PAGE,
   EMAIL_ACTION_PAGES,
   FOOTER_NAV,
+  GAME_ACCOUNT_PAGES,
   isKnownPagePath,
   OWNER_PAGE,
   PAGES,
@@ -47,7 +48,13 @@ describe("site map", () => {
 
   it("lists every page source (no unlisted public pages)", () => {
     const listed = new Set(
-      [...PAGES, ...Object.values(EMAIL_ACTION_PAGES), ACCOUNT_PAGE, OWNER_PAGE].map((page) => pageFile(page.path)),
+      [
+        ...PAGES,
+        ...Object.values(EMAIL_ACTION_PAGES),
+        ...Object.values(GAME_ACCOUNT_PAGES),
+        ACCOUNT_PAGE,
+        OWNER_PAGE,
+      ].map((page) => pageFile(page.path)),
     );
     const walk = (dir: string): string[] =>
       readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
@@ -111,6 +118,19 @@ describe("site map", () => {
     const source = readFileSync(pageFile(ACCOUNT_PAGE.path), "utf8");
     expect(source).toMatch(/<Base[^>]*\bnoindex\b/);
     expect(source).toContain('name="referrer" content="no-referrer"');
+  });
+
+  it("keeps the private game account pages out of search, the sitemap and the public allow-list", () => {
+    for (const page of Object.values(GAME_ACCOUNT_PAGES)) {
+      expect(PAGES.some((listed) => listed.path === page.path), page.path).toBe(false);
+      expect(isKnownPagePath(page.path)).toBe(false);
+      const source = readFileSync(pageFile(page.path), "utf8");
+      expect(source).toMatch(/<Base[^>]*\bnoindex\b/);
+      expect(source).toContain('name="referrer" content="no-referrer"');
+    }
+    const config = readFileSync(resolve(root, "astro.config.mjs"), "utf8");
+    expect(config).toContain('!page.includes("/games/library")');
+    expect(config).toContain('!page.includes("/games/activate")');
   });
 
   it("has the header navigation in the agreed order", () => {

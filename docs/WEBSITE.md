@@ -89,15 +89,19 @@ Rules the pages follow:
 
 ## Games
 
-`/games/kal-university` presents KAL University, a separate single-player game (tagline "Build your
-future."), as "A KalCode Game".
+`/games/kal-university` presents KAL University, a single-player game (tagline "Build your
+future."), as "A KalCode Game". Two private account pages belong to it: `/games/library` (Game
+Library) and `/games/activate` (approve the game's device sign-in). Both are `noindex`,
+`no-referrer`, outside `PAGES` and the sitemap (`GAME_ACCOUNT_PAGES` in `src/lib/site.ts`).
 It is a world page reached from the footer's Games column; the header navigation and `/pricing`
 stay KalCode-only. Rules:
 
-- **Separate from KalCode.** No KalCode plan, account, billing, checkout or early-access form appears
-  on the page; release news points to the existing X account in `SOCIAL`.
-- **Truthful state.** While no game build is published, the Windows and macOS download controls are
-  disabled "Coming soon" buttons, no price is shown, and the story arc tags each chapter as "In the
+- **Owned through the KalCode account (owner direction Update 3).** $5 on its own, or included with
+  Pro, MAX and MAX 2X, for life from the first successful payment (docs/BILLING.md §13). Prices come
+  from `plans.ts` and the game and perk catalog from `@kalcode/protocol/games`; never type a price or
+  a perk into a page. The game page has no form; release news points to the X account in `SOCIAL`.
+- **Truthful state.** While no game build is published, the Windows and macOS download controls and
+  the "Buy for $5" button are disabled "Coming soon" states, and the story arc tags each chapter as "In the
   development build" or "Planned". Features beyond the current build (a laptop to work anywhere on
   campus, fictional AI tools and an AI company, a fictional stock market and IPO, regions inspired by
   California, Florida and New York) sit together under "Where it's headed", each tagged Planned.
@@ -107,6 +111,9 @@ stay KalCode-only. Rules:
   and never a frame that shows retired KalCode branding.
 - **Structured data.** The page's JSON-LD adds a `VideoGame` node and names it as the page's `about`
   (no offers until the game is for sale).
+- **Account pages decide nothing.** The Game Library and activation pages only show what
+  `api.kalcoded.com/v1/games/*` answers for the session cookie (ownership, perks, signed download
+  links, device approval). A signed-out visitor is sent to `/account`, which offers a link back.
 
 ## Behaviour
 

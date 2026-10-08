@@ -105,6 +105,24 @@ export const ACCOUNT_PAGE = {
 } as const satisfies PageInfo;
 
 /**
+ * Private KalCode-account pages for games (KAL University ownership, docs/BILLING.md §13). Like
+ * Account: noindex, no-referrer, and kept out of PAGES, navigation and the sitemap. Reached from
+ * the game page, the account page and the game's own sign-in screen.
+ */
+export const GAME_ACCOUNT_PAGES = {
+  library: {
+    path: "/games/library",
+    title: "Game Library — KalCode",
+    description: "The games your KalCode account owns, their perks and their downloads.",
+  },
+  activate: {
+    path: "/games/activate",
+    title: "Activate KAL University — KalCode",
+    description: "Approve KAL University on your computer by entering the code the game shows.",
+  },
+} as const satisfies Record<string, PageInfo>;
+
+/**
  * The private owner dashboard (docs/OWNER_ANALYTICS.md). Deliberately not in PAGES, navigation,
  * the footer or the sitemap, and noindex. Its data is served only to an OWNER account.
  */

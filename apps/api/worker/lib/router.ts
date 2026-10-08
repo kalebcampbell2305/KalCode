@@ -13,6 +13,7 @@ import type { BillingService } from "./billing-routes";
 import { readJsonBody } from "./body";
 import type { EmailAuthService } from "./email-auth";
 import { buildEntitlement, resolveEntitlement } from "./entitlement";
+import type { GameService } from "./game-routes";
 import { apiError, json } from "./http";
 import type { InsightsService } from "./insights";
 import { type PublicKeyEntry, publishedKeySet } from "./keys";
@@ -32,6 +33,8 @@ export interface Deps {
   billing?: BillingService | null;
   /** Private owner dashboard data; served only to an account holding an active OWNER grant. */
   insights?: InsightsService | null;
+  /** KalCode games: ownership, perks, the game's device sign-in and signed license (game-routes.ts). */
+  games?: GameService | null;
   /** The current signing key, or null when none is configured (signed documents unavailable). */
   signingKey: () => Promise<EntitlementSigningKey | null>;
   previousPublicKeys: () => readonly PublicKeyEntry[];
@@ -80,6 +83,17 @@ export const BILLING_STATUS_PATH = "/v1/billing/status";
 export const BILLING_WEBHOOK_PATH = "/v1/billing/webhook";
 export const INSIGHTS_DISTRIBUTION_PATH = "/v1/insights/distribution";
 export const INSIGHTS_REVENUE_PATH = "/v1/insights/revenue";
+export const GAMES_LIBRARY_PATH = "/v1/games/library";
+export const GAMES_DEVICE_APPROVE_PATH = "/v1/games/device/approve";
+export const GAMES_CHECKOUT_PATH = "/v1/games/checkout";
+export const GAMES_DOWNLOADS_PATH = "/v1/games/downloads";
+export const GAMES_DEVICE_START_PATH = "/v1/games/device/start";
+export const GAMES_DEVICE_TOKEN_PATH = "/v1/games/device/token";
+export const GAMES_LICENSE_REFRESH_PATH = "/v1/games/license/refresh";
+export const GAMES_LICENSE_SIGN_OUT_PATH = "/v1/games/license/sign-out";
+export const GAMES_LICENSE_KEYS_PATH = "/v1/games/license/keys";
+export const GAMES_DOWNLOAD_PATH = "/v1/games/download";
+export const GAMES_WEBHOOK_PATH = "/v1/games/webhook";
 
 const SERVER_ERROR_MESSAGE = "Something went wrong on our side. Please try again later.";
 
@@ -269,6 +283,32 @@ const insightsDistribution: Handler = async (request, deps) =>
 const insightsRevenue: Handler = async (request, deps) =>
   (await requireOwner(request, deps)) ?? deps.insights?.revenue(request) ?? unavailable();
 
+/** Game routes for a signed-in website account: identity only from `deps.auth`. */
+function accountGame(run: (games: GameService, request: Request, accountId: string) => Promise<Response>): Handler {
+  return async (request, deps) => {
+    const account = await authenticatedAccount(request, deps);
+    if (!account) return unauthenticated();
+    return deps.games ? run(deps.games, request, account.id) : unavailable();
+  };
+}
+
+/** Game routes the game itself (or Stripe, or a download manager) calls; each authenticates its own way. */
+function publicGame(run: (games: GameService, request: Request) => Promise<Response>): Handler {
+  return async (request, deps) => (deps.games ? run(deps.games, request) : unavailable());
+}
+
+const gamesLibrary = accountGame((games, _request, accountId) => games.library(accountId));
+const gamesApprove = accountGame((games, request, accountId) => games.approveDevice(request, accountId));
+const gamesCheckout = accountGame((games, request, accountId) => games.checkout(request, accountId));
+const gamesDownloads = accountGame((games, request, accountId) => games.downloadLink(request, accountId));
+const gamesDeviceStart = publicGame((games, request) => games.startDevice(request));
+const gamesDeviceToken = publicGame((games, request) => games.deviceToken(request));
+const gamesRefresh = publicGame((games, request) => games.refreshLicense(request));
+const gamesSignOut = publicGame((games, request) => games.signOut(request));
+const gamesKeys = publicGame((games) => games.keys());
+const gamesDownload = publicGame((games, request) => games.download(request));
+const gamesWebhook = publicGame((games, request) => games.webhook(request));
+
 const billingWebhook: Handler = (request, deps) => deps.billing?.webhook(request) ?? Promise.resolve(unavailable());
 
 /** The caller's own signed entitlement. */
@@ -414,6 +454,17 @@ export const ROUTES: readonly Route[] = [
   { method: "POST", path: KALVOICE_REQUESTS_PATH, access: "account", handler: postRequest },
   { method: "GET", path: INSIGHTS_DISTRIBUTION_PATH, access: "owner", handler: insightsDistribution },
   { method: "GET", path: INSIGHTS_REVENUE_PATH, access: "owner", handler: insightsRevenue },
+  { method: "GET", path: GAMES_LIBRARY_PATH, access: "account", handler: gamesLibrary },
+  { method: "POST", path: GAMES_DEVICE_APPROVE_PATH, access: "account", handler: gamesApprove },
+  { method: "POST", path: GAMES_CHECKOUT_PATH, access: "account", handler: gamesCheckout },
+  { method: "POST", path: GAMES_DOWNLOADS_PATH, access: "account", handler: gamesDownloads },
+  { method: "POST", path: GAMES_DEVICE_START_PATH, access: "public", handler: gamesDeviceStart },
+  { method: "POST", path: GAMES_DEVICE_TOKEN_PATH, access: "public", handler: gamesDeviceToken },
+  { method: "POST", path: GAMES_LICENSE_REFRESH_PATH, access: "public", handler: gamesRefresh },
+  { method: "POST", path: GAMES_LICENSE_SIGN_OUT_PATH, access: "public", handler: gamesSignOut },
+  { method: "GET", path: GAMES_LICENSE_KEYS_PATH, access: "public", handler: gamesKeys },
+  { method: "GET", path: GAMES_DOWNLOAD_PATH, access: "public", handler: gamesDownload },
+  { method: "POST", path: GAMES_WEBHOOK_PATH, access: "public", handler: gamesWebhook },
 ];
 
 async function dispatch(request: Request, deps: Deps): Promise<Response> {

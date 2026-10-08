@@ -19,6 +19,9 @@
       "migrations_dir": "migrations"
     }
   ],
+  // KalCode games: the private build bucket of KAL University (reused from the closed test store,
+  // ENTITLEMENTS decision E11). Downloads are streamed only through signed, short-lived links.
+  "r2_buckets": [{ "binding": "GAME_BUILDS", "bucket_name": "campus-founder-builds" }],
   "services": [
     {
       "binding": "ACCOUNT_MAILER",
@@ -41,6 +44,8 @@
   //   MICROSOFT_OIDC_CLIENT_SECRET, AUTH_RATE_LIMIT_KEY
   //   STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
   //   ENTITLEMENT_SIGNING_KEY — Ed25519 private JWK; see docs/BILLING.md §6.
+  //   GAME_LICENSE_SIGNING_KEY — a separate Ed25519 private JWK for game licenses (§13).
+  //   GAME_STRIPE_SECRET_KEY, GAME_STRIPE_WEBHOOK_SECRET, GAME_DOWNLOAD_SIGNING_SECRET (§13).
   // Local development reads them from .dev.vars (git-ignored; `pnpm keys:dev` creates one).
   "vars": {
     "CHECKOUT_ENABLED": "true",
@@ -53,7 +58,13 @@
     // Verified live yearly USD catalog (interval year), provisioned 2026-10-01.
     "STRIPE_PRICE_PRO_YEARLY": "price_1ULw9QK2Cbd8I5MGfN23Kq2e",
     "STRIPE_PRICE_MAX_YEARLY": "price_1ULw9RK2Cbd8I5MGrvdu8NJF",
-    "STRIPE_PRICE_MAX_2X_YEARLY": "price_1ULw9RK2Cbd8I5MGuCNbLac9"
+    "STRIPE_PRICE_MAX_2X_YEARLY": "price_1ULw9RK2Cbd8I5MGuCNbLac9",
+    // KalCode games (docs/BILLING.md §13). Game billing stays OFF until the owner approves the
+    // entitlement policy and sets GAME_STRIPE_MODE to "live" with the live Price and secrets.
+    "GAME_CHECKOUT_ENABLED": "false",
+    "GAME_REFUND_REVOKE_DAYS": "30",
+    "GAME_US_ONLY": "true",
+    "GAME_LICENSE_PREVIOUS_PUBLIC_KEYS": "[]"
     // GitHub OAuth and Google/Microsoft OIDC remain disabled until their registered clients are configured.
   },
   "observability": {
