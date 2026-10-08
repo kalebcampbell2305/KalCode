@@ -1231,9 +1231,14 @@ describe("merge train pieces", () => {
       workflow,
       /if: github\.event_name != 'pull_request' \|\| github\.event\.pull_request\.head\.repo\.full_name == github\.repository/,
     );
-    // Owner, 2026-10-08: every Windows gate job requests the elastic gate pool, never one machine's label.
+    // Owner, 2026-10-08: the desktop gate jobs request the elastic gate pool (build PC first, the second PC
+    // for overflow) and never the build PC's label alone; only the light JS/web job targets the second PC.
     assert.doesNotMatch(workflow, /kalcode-main-pc\]/);
-    assert.doesNotMatch(workflow, /runs-on: \[self-hosted, Windows, kalcode-gate-pc2\]/);
+    assert.equal(workflow.match(/runs-on: \[self-hosted, Windows, kalcode-gate-pc2\]/g)?.length, 1);
+    assert.match(
+      workflow,
+      /name: Gate \(Windows, PC2\)\n(?:.*\n)*?\s+runs-on: \[self-hosted, Windows, kalcode-gate-pc2\]/,
+    );
     assert.match(workflow, /name: Plan change-based gate/);
     assert.match(workflow, /gate-host\.ps1/);
     assert.match(
@@ -1242,7 +1247,8 @@ describe("merge train pieces", () => {
     );
     // The split: the JS/web job (its name is historical) gates the same exact candidate and recorded base.
     assert.match(workflow, /name: Gate \(Windows, PC2\)/);
-    assert.equal(workflow.match(/runs-on: \[self-hosted, Windows, kalcode-gate-pool\]\n/g)?.length, 2);
+    // The Windows matrix job (main, native, e2e) is the only one on the pool; the JS/web job targets the second PC.
+    assert.equal(workflow.match(/runs-on: \[self-hosted, Windows, kalcode-gate-pool\]\n/g)?.length, 1);
     // The Windows gate runs as three matrix jobs (main, native, e2e), each gating its share of the split.
     assert.match(workflow, /half: \[main, native, e2e\]/);
     assert.match(workflow, /gate-split\.mjs \$env:GATE_HALF/);

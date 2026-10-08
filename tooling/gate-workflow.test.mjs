@@ -369,7 +369,11 @@ test("both halves reuse with the identical evidence rule", () => {
 test("the JS/web job is self-contained, runs on the pool and gates the same exact candidate", () => {
   const names = pc2Steps.map((step) => step.match(/^name: (.+)$/m)?.[1] ?? step.split("\n")[0]);
   assert.match(pc2Job, /^ {4}name: Gate \(Windows, PC2\)$/m);
-  assert.match(pc2Job, /^ {4}runs-on: \[self-hosted, Windows, kalcode-gate-pool\]$/m);
+  assert.match(
+    pc2Job,
+    /^ {4}runs-on: \[self-hosted, Windows, kalcode-gate-pc2\]$/m,
+    "the light JS/web job stays on the second PC",
+  );
   assert.match(pc2Job, /head\.repo\.full_name == github\.repository/, "fork guard");
   assert.match(pc2Job, /persist-credentials: false/);
   assert.match(pc2Job, /clean: false/);
@@ -648,12 +652,17 @@ test("every gate job keeps bounded Playwright failure evidence, on failure only"
   }
 });
 
-test("every Windows gate job requests the elastic pool; build-PC hooks run only when the runner is the build PC", () => {
-  // Owner, 2026-10-08: an elastic gate pool. The second PC is always in it, the build PC joins while idle.
+test("the desktop gate jobs request the elastic pool, the JS/web job the second PC; build-PC hooks run only on the build PC", () => {
+  // Owner, 2026-10-08: build PC first (gate-pool-governor.ps1), the second PC for overflow and the JS/web job.
   const header = windows.split(/\n {4}steps:/)[0];
   assert.match(header, /^ {4}runs-on: \[self-hosted, Windows, kalcode-gate-pool\]$/m);
-  assert.match(pc2Job, /^ {4}runs-on: \[self-hosted, Windows, kalcode-gate-pool\]$/m);
-  assert.doesNotMatch(workflow, /runs-on: \[self-hosted, Windows, kalcode-(?:main-pc|gate-pc2)\]/);
+  assert.match(
+    pc2Job,
+    /^ {4}runs-on: \[self-hosted, Windows, kalcode-gate-pc2\]$/m,
+    "the light JS/web job stays on the second PC",
+  );
+  assert.doesNotMatch(header, /kalcode-(?:main-pc|gate-pc2)\]/, "the desktop halves stay on the pool");
+  assert.doesNotMatch(workflow, /runs-on: \[self-hosted, Windows, kalcode-main-pc\]/);
   assert.doesNotMatch(workflow, /kalcode-main-pc\]/, "no job targets the build PC's pool label alone");
   const names = steps.map((step) => step.match(/^name: (.+)$/m)?.[1] ?? "");
   const plan = script(steps[names.indexOf("Plan change-based gate")]);

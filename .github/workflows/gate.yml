@@ -430,11 +430,12 @@ jobs:
     # A PR in the merge queue is gated inside its exact merge-train candidate; its own branch gate would only
     # hold the runners the candidates need (the train also cancels such runs when it builds).
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository && !contains(github.event.pull_request.labels.*.name, 'merge-queue')
-    # The JS/web share of the same exact candidate (its job name is historical). Like the jobs above it
-    # runs on whichever gate runner the elastic pool offers (owner, 2026-10-08): the second PC's always,
-    # the build PC's only while gate-pool-governor.ps1 finds it idle. .github/scripts/gate-host.ps1 gives
-    # each runner its own port block.
-    runs-on: [self-hosted, Windows, kalcode-gate-pool]
+    # The JS/web share of the same exact candidate. It runs on the second PC's gate runners directly (owner,
+    # 2026-10-08: "optimize for the build PC and for PC2"): it is light and fits there in 5-18 min, which
+    # leaves the build PC's pooled workers (gate-pool-governor.ps1: build PC first, the second PC for
+    # overflow) to the three heavy desktop jobs above. .github/scripts/gate-host.ps1 gives each runner its own
+    # port block.
+    runs-on: [self-hosted, Windows, kalcode-gate-pc2]
     timeout-minutes: 120
     steps:
       # A merge-train landing fast-forwards main to a candidate this job already gated. Re-gating the
