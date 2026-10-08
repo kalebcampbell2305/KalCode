@@ -79,9 +79,9 @@ gate job only from a named runner of either PC that took it from the pool (`tool
 ## All gates on the second PC (owner, 2026-10-07, extended by the pool)
 
 Owner, 2026-10-07: "to all gates on PC 2 ... We use this computer to build ... the other one to pass the gates
-and ship to users." Every `gate.yml` Windows job (`Gate (Windows)`, `Gate (Windows, native)` and
-`Gate (Windows, PC2)`) now runs on the second PC's gate runners `kalcode-win-gate-2` and
-`kalcode-win-gate-2b` (label `kalcode-gate-pc2`); the build PC's pool workers no longer take gate jobs. On
+and ship to users." Every `gate.yml` Windows job (`Gate (Windows)`, `Gate (Windows, native)`,
+`Gate (Windows, native E2E)` and `Gate (Windows, PC2)`) now runs on the second PC's gate runners
+`kalcode-win-gate-2` and `kalcode-win-gate-2b` (label `kalcode-gate-pc2`); the build PC's pool workers no longer take gate jobs. On
 that PC one Rust gate runs at a time (`C:\ProgramData\KalCodePC2\locks\rust.lock`), the desktop UI and
 native E2E suites never overlap (`machine-lock.mjs` in the same folder), and every gate job holds the machine
 lock below shared, so the Windows update proof still runs alone. The history below explains the split.
@@ -170,8 +170,8 @@ owner directives:
    Resource Governor throttles optional background work first and only delays a user agent for genuine
    hard resource pressure, showing the real reason.
 2. **Gates on PC2, builds on the build PC (owner, 2026-10-07).** PC2's two gate runners run every gate
-   job (`Gate (Windows)`, `Gate (Windows, native)`, `Gate (Windows, PC2)`) as `gate-split.mjs` assigns, at
-   BelowNormal, one Rust gate at a time. All jobs gate the exact SHA and all must be green to land. The
+   job (`Gate (Windows)`, `Gate (Windows, native)`, `Gate (Windows, native E2E)`, `Gate (Windows, PC2)`) as
+   `gate-split.mjs` assigns, at BelowNormal, one Rust gate at a time. All jobs gate the exact SHA and all must be green to land. The
    build PC runs release builds, signing and packaging.
 3. **Release QA.** PC2's desktop-QA runs the Windows update proofs (never alongside a gate job: the PC2 machine lock); the
    Mac runs Mac release builds and notarization over SSH. Any validated agent lands and releases.
