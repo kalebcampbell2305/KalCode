@@ -68,4 +68,16 @@ describe("canonical squad commands", () => {
     const invoke = vi.fn().mockRejectedValue(error);
     await expect(new SquadsClient(invoke).launch("squad", "workspace", "request")).rejects.toBe(error);
   });
+
+  it("reports when Squads first come into use, once, from a read or a launch", async () => {
+    const invoke = vi.fn().mockResolvedValue({});
+    const client = new SquadsClient(invoke);
+    const used = vi.fn();
+    client.onUse(used);
+    expect(client.inUse).toBe(false);
+    await client.launch("squad", "workspace", "request");
+    await client.snapshot();
+    expect(client.inUse).toBe(true);
+    expect(used).toHaveBeenCalledTimes(1);
+  });
 });

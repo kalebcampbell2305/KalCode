@@ -177,9 +177,18 @@ export function useOwnershipSources(
   );
 
   const hasAgents = list.length > 1;
+  // Squad members' owned paths matter once Squads are in use this session (read or launched by
+  // the Squads panel, Operations or a launch); until then nothing polls them.
+  // (Partial clients in isolated renders may lack the use signal: then Squads are simply not followed.)
+  const squadsClient: Partial<Pick<typeof client.squads, "inUse" | "onUse">> = client.squads;
+  const [squadsInUse, setSquadsInUse] = useState(() => squadsClient.inUse === true);
+  useEffect(() => {
+    setSquadsInUse(squadsClient.inUse === true);
+    return squadsClient.onUse?.(() => setSquadsInUse(true));
+  }, [squadsClient]);
   const declared = usePolledRead(
     "squads",
-    hasAgents,
+    hasAgents && squadsInUse,
     async () => {
       const snapshot = await client.squads.snapshot();
       const threadOf = new Map(snapshot.operations.map((operation) => [operation.id, operation.threadId] as const));
