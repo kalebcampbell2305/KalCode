@@ -50,7 +50,7 @@ jobs:
           $want = ((Get-Content -Raw -LiteralPath "$tmp\deny.sha256").Trim() -split '\s+')[0].ToLower()
           $got = (Get-FileHash -Algorithm SHA256 "$tmp\deny.tar.gz").Hash.ToLower()
           if ($want -ne $got) { throw "cargo-deny sha256 mismatch $got vs $want" }
-          & (Join-Path $env:SystemRoot 'System32	ar.exe') -xzf "$tmp\deny.tar.gz" -C $tmp; if ($LASTEXITCODE) { throw 'untar cargo-deny failed' }
+          & (Join-Path $env:SystemRoot 'System32\tar.exe') -xzf "$tmp\deny.tar.gz" -C $tmp; if ($LASTEXITCODE) { throw 'untar cargo-deny failed' }
           Copy-Item -Force (Get-ChildItem -Recurse -LiteralPath $tmp -Filter 'cargo-deny.exe' | Select-Object -First 1).FullName (Join-Path $bin 'cargo-deny.exe')
           Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/rustsec/rustsec/releases/download/cargo-audit/v0.22.2/cargo-audit-x86_64-pc-windows-msvc-v0.22.2.zip' -OutFile "$tmp\audit.zip"
           Expand-Archive -Force -LiteralPath "$tmp\audit.zip" -DestinationPath "$tmp\audit"
