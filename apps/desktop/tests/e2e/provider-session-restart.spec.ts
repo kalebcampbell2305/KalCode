@@ -9,6 +9,7 @@ import {
   closeGracefully,
   createAccountFixtureDataDir,
   EXE,
+  installFakeCodex,
   launch,
   RESOURCE_PROVIDER_FIXTURE_OPT_IN,
   type Running,
@@ -45,7 +46,7 @@ test("connected accounts survive restart, launch without Refresh and isolate gen
   mkdirSync(bin);
   writeFileSync(join(project, "README.md"), "# Isolated restart proof\n");
   copyFileSync(FAKE, join(bin, "claude.exe"));
-  copyFileSync(FAKE, join(bin, "codex.exe"));
+  installFakeCodex(FAKE, bin);
   const configure = (codexFirstAccountReadDelayMs: number) =>
     writeFileSync(
       join(bin, "fake-provider.json"),
