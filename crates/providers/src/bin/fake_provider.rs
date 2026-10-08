@@ -56,18 +56,49 @@ fn exe_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-fn config() -> Value {
-    let bin = exe_dir();
-    std::fs::read_to_string(bin.join("fake-provider.json"))
-        .or_else(|_| {
-            bin.parent()
-                .map(|root| root.join("codex-resources").join("fake-provider.json"))
-                .ok_or_else(|| std::io::Error::other("fake provider has no distribution root"))
-                .and_then(std::fs::read_to_string)
-        })
+/// Where this run records its artifacts (`runs.log`, `last-args.json`, ...): the folder of the
+/// live fixture configuration, else the executable's own folder.
+static ARTIFACT_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+fn artifact_dir() -> PathBuf {
+    ARTIFACT_DIR.get().cloned().unwrap_or_else(exe_dir)
+}
+
+fn read_json(path: &Path) -> Option<Value> {
+    std::fs::read_to_string(path)
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or(Value::Null)
+}
+
+/// Loads the fixture configuration: `fake-provider.json` beside the executable, else the one in
+/// a distribution-shaped install's `codex-resources/` (what a real Codex distribution carries
+/// beside `bin/`, and what KalCode copies into its immutable managed runtime snapshot).
+///
+/// A distribution resource may instead name the live fixture folder (`{"fixtureDir": ...}`).
+/// Then a copy KalCode snapshotted elsewhere reads the same live configuration and records its
+/// artifacts there, exactly like the installed copy, and never writes into the snapshot: a real
+/// provider never modifies its own installation, and KalCode verifies snapshots are unchanged.
+fn config() -> Value {
+    let bin = exe_dir();
+    if let Some(config) = read_json(&bin.join("fake-provider.json")) {
+        let _ = ARTIFACT_DIR.set(bin);
+        return config;
+    }
+    let Some(resource) = bin
+        .parent()
+        .and_then(|root| read_json(&root.join("codex-resources").join("fake-provider.json")))
+    else {
+        return Value::Null;
+    };
+    match resource.get("fixtureDir").and_then(Value::as_str) {
+        Some(fixture) => {
+            let fixture = PathBuf::from(fixture);
+            let config = read_json(&fixture.join("fake-provider.json")).unwrap_or(Value::Null);
+            let _ = ARTIFACT_DIR.set(fixture);
+            config
+        }
+        None => resource,
+    }
 }
 
 fn get_str<'a>(config: &'a Value, key: &str, default: &'a str) -> &'a str {
@@ -327,7 +358,7 @@ fn record_run(args: &[String], config: &Value) {
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(exe_dir().join("runs.log"))
+        .open(artifact_dir().join("runs.log"))
     {
         let _ = file.write_all(line.as_bytes());
     }
@@ -347,6 +378,14 @@ fn codex_app_server(config: &Value) -> ! {
         .map(PathBuf::from)
         .unwrap_or_else(|| codex_home.clone());
     let user_agent = format!("codex_cli_rs/{}", codex_semver(config));
+    // KalCode's compatibility smoke runs the app-server against a disposable, credential-free
+    // home (`.kalcode-codex-compat-*/home`). A real Codex answers that read locally and at once,
+    // with no account; the fixture's delayed, signed-in reads model a person's account home.
+    let disposable_probe_home = codex_home
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with(".kalcode-codex-compat-"));
     let marker = codex_home.join(".kalcode-fake-first-account-read");
     let delay_ms = get_i64(config, "codexFirstAccountReadDelayMs", 0);
     let plan = get_str(config, "codexPlan", "pro").to_owned();
@@ -382,6 +421,16 @@ fn codex_app_server(config: &Value) -> ! {
                     != Some(false)
                 {
                     exit(8);
+                }
+                if disposable_probe_home {
+                    let response = serde_json::json!({
+                        "id": id,
+                        "result": {"account": null, "requiresOpenaiAuth": true},
+                    });
+                    if writeln!(stdout, "{response}").is_err() || stdout.flush().is_err() {
+                        exit(8);
+                    }
+                    continue;
                 }
                 match std::fs::OpenOptions::new()
                     .create_new(true)
@@ -461,7 +510,20 @@ fn codex_app_server(config: &Value) -> ! {
                     Some(_) => exit(8),
                 }
             }
-            _ => continue,
+            // Like the native JSON-RPC server, a request this fixture does not implement (for
+            // example `hooks/list`, which hook-capable Codex releases answer) gets an immediate
+            // "method not found" error rather than silence, so a caller never waits out its
+            // timeout on a live fixture process.
+            _ => {
+                let response = serde_json::json!({
+                    "id": id,
+                    "error": {"code": -32601, "message": format!("method not found: {method}")},
+                });
+                if writeln!(stdout, "{response}").is_err() || stdout.flush().is_err() {
+                    exit(8);
+                }
+                continue;
+            }
         };
         let response = serde_json::json!({ "id": id, "result": result });
         if writeln!(stdout, "{response}").is_err() || stdout.flush().is_err() {
@@ -545,7 +607,7 @@ fn main() {
         exit(0);
     }
     if kind == "cursor" && args.first().is_some_and(|arg| arg == "models") {
-        if !exe_dir().join("cursor-login-completed").exists()
+        if !artifact_dir().join("cursor-login-completed").exists()
             && let Some(failure) = config.get("cursorModelFailure").and_then(Value::as_str)
         {
             eprintln!("{failure}");
@@ -557,7 +619,7 @@ fn main() {
         exit(0);
     }
     if kind == "cursor" && args.first().is_some_and(|arg| arg == "login") {
-        let _ = std::fs::write(exe_dir().join("cursor-login-completed"), "signed in");
+        let _ = std::fs::write(artifact_dir().join("cursor-login-completed"), "signed in");
         exit(0);
     }
     if kind == "codex" && args.iter().any(|arg| arg == "app-server") {
@@ -612,7 +674,7 @@ fn record_invocation(args: &[String], config: &Value) {
     {
         return;
     }
-    let dir = exe_dir();
+    let dir = artifact_dir();
     let _ = std::fs::write(
         dir.join("last-args.json"),
         serde_json::to_string(args).unwrap_or_default(),
@@ -688,7 +750,10 @@ fn session(config: &Value, args: &[String]) {
                 .stderr(std::process::Stdio::null())
                 .spawn()
         {
-            let _ = std::fs::write(exe_dir().join("grandchild.pid"), child.id().to_string());
+            let _ = std::fs::write(
+                artifact_dir().join("grandchild.pid"),
+                child.id().to_string(),
+            );
         }
         loop {
             std::thread::sleep(Duration::from_secs(1));
@@ -774,7 +839,7 @@ mod turns {
 
     use serde_json::Value;
 
-    use super::{Out, exe_dir, exit, get_i64, hidden_command, sleep_ms};
+    use super::{Out, artifact_dir, exit, get_i64, hidden_command, sleep_ms};
 
     const CODEX_FIRST: &str = r#"{"type":"thread.started","thread_id":"{SESSION_ID}"}"#;
 
@@ -786,7 +851,7 @@ mod turns {
             .and_then(Value::as_bool)
             != Some(false)
         {
-            let _ = std::fs::write(exe_dir().join("last-stdin.txt"), &text);
+            let _ = std::fs::write(artifact_dir().join("last-stdin.txt"), &text);
         }
         text
     }
@@ -818,7 +883,10 @@ mod turns {
                 .stderr(std::process::Stdio::null())
                 .spawn()
         {
-            let _ = std::fs::write(exe_dir().join("grandchild.pid"), child.id().to_string());
+            let _ = std::fs::write(
+                artifact_dir().join("grandchild.pid"),
+                child.id().to_string(),
+            );
         }
         loop {
             std::thread::sleep(std::time::Duration::from_secs(1));

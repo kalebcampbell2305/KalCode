@@ -1,7 +1,7 @@
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve, sep } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { type Browser, chromium, type Page, test as playwrightTest, type TestInfo } from "@playwright/test";
 import { type LaunchReadinessTimer, waitForLaunchConnection, waitForLaunchReadiness } from "./launchReadiness.ts";
 
@@ -200,6 +200,28 @@ export function prepareAccountFixtureDataDir(dataDir: string): void {
     }
     writeFileSync(marker, content, { encoding: "utf8", flag: "wx" });
   }
+}
+
+/**
+ * Installs the fake provider as `bin/codex.exe` (tests put `bin` first on PATH). Managed Codex
+ * sessions run from an immutable KalCode-owned snapshot of the installed distribution, as they do
+ * for a real Codex, and the snapshot carries the distribution's `codex-resources/`. The fake's
+ * resource names `bin` as its live fixture folder, so a snapshotted copy reads the same
+ * `fake-provider.json` and records its runs in `bin`, and never writes into the snapshot.
+ */
+export function installFakeCodex(fake: string, bin: string): void {
+  copyFileSync(fake, join(bin, "codex.exe"));
+  const resources = join(dirname(bin), "codex-resources");
+  mkdirSync(resources, { recursive: true });
+  writeFileSync(
+    join(resources, "fake-provider.json"),
+    `${JSON.stringify({ fixtureDir: bin })}
+`,
+    {
+      encoding: "utf8",
+      flag: "wx",
+    },
+  );
 }
 
 /** Writes exact reviewed CLI versions for managed-account E2E providers sharing one fake bin. */
@@ -601,6 +623,14 @@ export function processesMatching(needle: string): number[] {
     .split(/\r?\n/)
     .map((l) => Number.parseInt(l.trim(), 10))
     .filter((n) => Number.isFinite(n));
+}
+
+/**
+ * Live fake provider processes of one test: started from `bin`, or from the immutable managed
+ * runtime snapshot KalCode made of the fake Codex distribution (see `installFakeCodex`).
+ */
+export function fakeProviderProcesses(bin: string, dataDir: string): number[] {
+  return [...new Set([...processesMatching(bin), ...processesMatching(join(dataDir, "provider-runtimes"))])];
 }
 
 /**

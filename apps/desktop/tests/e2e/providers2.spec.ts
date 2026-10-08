@@ -7,8 +7,9 @@ import {
   ACCOUNT_KALVOICE_FIXTURE_OPT_IN,
   closeGracefully,
   EXE,
+  fakeProviderProcesses,
+  installFakeCodex,
   launch,
-  processesMatching,
   RESOURCE_PROVIDER_FIXTURE_OPT_IN,
   removeDir,
   test,
@@ -96,7 +97,7 @@ test("Codex and Gemini CLI threads stream to done and Provider Health reports th
   writeFileSync(join(project, "README.md"), "# providers2 site\n");
   const bin = join(root, "bin");
   mkdirSync(bin);
-  copyFileSync(FAKE, join(bin, "codex.exe"));
+  installFakeCodex(FAKE, bin);
   copyFileSync(FAKE, join(bin, "gemini.exe"));
   writeManagedFakeProviderConfig(bin);
 
@@ -184,7 +185,7 @@ test("Codex and Gemini CLI threads stream to done and Provider Health reports th
     expect(events.events.some((e) => e.type === "provider.health_changed")).toBe(true);
 
     await closeGracefully(app);
-    expect(processesMatching(bin), "no provider process outlives KalCode").toEqual([]);
+    expect(fakeProviderProcesses(bin, dataDir), "no provider process outlives KalCode").toEqual([]);
   } finally {
     removeDir(dataDir);
     removeDir(root);
@@ -200,7 +201,7 @@ test("a Codex pane reports authenticated notify status and ignores forged termin
   writeFileSync(join(project, "README.md"), "# codex pane site\n");
   const bin = join(root, "bin");
   mkdirSync(bin);
-  copyFileSync(FAKE, join(bin, "codex.exe"));
+  installFakeCodex(FAKE, bin);
   writeManagedFakeProviderConfig(bin);
   const HELPER = join(dirname(EXE), "kalcode-hook.exe");
   test.skip(!existsSync(HELPER), "Run build:e2e: it builds kalcode-hook.");
@@ -271,7 +272,7 @@ test("a Codex pane reports authenticated notify status and ignores forged termin
     await typeLine("exit");
     await expect(pane.locator("[data-pane-status]")).toContainText("DONE", { timeout: 30_000 });
     await closeGracefully(app);
-    expect(processesMatching(bin), "no provider process outlives KalCode").toEqual([]);
+    expect(fakeProviderProcesses(bin, dataDir), "no provider process outlives KalCode").toEqual([]);
   } finally {
     removeDir(dataDir);
     removeDir(root);

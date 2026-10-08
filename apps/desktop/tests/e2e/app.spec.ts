@@ -16,6 +16,7 @@ import {
   closeGracefully,
   EXE,
   inServiceSession,
+  installFakeCodex,
   killForcibly,
   launch,
   removeDir,
@@ -154,7 +155,8 @@ test("the Providers page detects the installed Claude Code CLI", async () => {
   const bin = join(root, "bin");
   mkdirSync(bin);
   expect(existsSync(FAKE), "build:e2e must build the fake provider").toBe(true);
-  for (const name of ["claude.exe", "codex.exe", "gemini.exe"]) copyFileSync(FAKE, join(bin, name));
+  for (const name of ["claude.exe", "gemini.exe"]) copyFileSync(FAKE, join(bin, name));
+  installFakeCodex(FAKE, bin);
   writeManagedFakeProviderConfig(bin);
   try {
     const app = await launch(dataDir, { PATH: `${bin};${process.env.PATH ?? ""}` });
@@ -208,7 +210,8 @@ test("the Threads surface runs on the native thread runtime", async () => {
     const bin = join(root, "bin");
     mkdirSync(bin);
     expect(existsSync(FAKE), "build:e2e must build the fake provider").toBe(true);
-    for (const name of ["claude.exe", "codex.exe", "gemini.exe"]) copyFileSync(FAKE, join(bin, name));
+    for (const name of ["claude.exe", "gemini.exe"]) copyFileSync(FAKE, join(bin, name));
+    installFakeCodex(FAKE, bin);
     writeManagedFakeProviderConfig(bin);
 
     const app = await launch(dataDir, { PATH: `${bin};${process.env.PATH ?? ""}` });
