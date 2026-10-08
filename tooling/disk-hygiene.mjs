@@ -187,6 +187,25 @@ export function profileDirs(target, depth = 3) {
   return found;
 }
 
+/**
+ * Cargo target dirs of one worktree: `target`, plus any other dir up to two levels down that cargo
+ * marked with CACHEDIR.TAG (custom CARGO_TARGET_DIRs such as stress-target or .validation/cargo).
+ * Never descends into node_modules, .git or a target it already found.
+ */
+export function targetDirs(worktree) {
+  const found = [];
+  const visit = (dir, depth) => {
+    for (const entry of directories(dir)) {
+      if (entry.name === "node_modules" || entry.name === ".git") continue;
+      const path = join(dir, entry.name);
+      if (existsSync(join(path, "CACHEDIR.TAG")) || (depth === 1 && entry.name === "target")) found.push(path);
+      else if (depth < 2) visit(path, depth + 1);
+    }
+  };
+  visit(worktree, 1);
+  return found;
+}
+
 /** Newest change cargo leaves when it builds in a profile dir (directory mtimes move on every new artifact). */
 export function profileActivity(profile) {
   return Math.max(
@@ -252,23 +271,22 @@ export function planSweep({
 } = {}) {
   const profiles = [];
   for (const worktree of worktrees) {
-    const target = join(worktree.path, "target");
-    if (!existsSync(target)) continue;
     const main = worktree.main === true;
-    for (const profile of profileDirs(target)) {
-      profiles.push({
-        path: profile,
-        key: pathKey(profile, platform),
-        target,
-        worktree: worktree.path,
-        main,
-        // The main checkout's own target/debug and target/release are the owner's live cache.
-        topLevelMain:
-          main &&
-          pathKey(dirname(profile), platform) === pathKey(target, platform) &&
-          ["debug", "release"].includes(basename(profile)),
-      });
-    }
+    for (const target of targetDirs(worktree.path))
+      for (const profile of profileDirs(target)) {
+        profiles.push({
+          path: profile,
+          key: pathKey(profile, platform),
+          target,
+          worktree: worktree.path,
+          main,
+          // The main checkout's own target/debug and target/release are the owner's live cache.
+          topLevelMain:
+            main &&
+            pathKey(dirname(profile), platform) === pathKey(target, platform) &&
+            ["debug", "release"].includes(basename(profile)),
+        });
+      }
   }
 
   // Seeds copied from another target keep pointing at it; that origin must survive.
@@ -396,6 +414,50 @@ export function applySweep(plan, { now = Date.now, rename = renameSync, remove =
     remove(trash, { recursive: true, force: true, maxRetries: 2 });
   }
   return { removed, trimmed, skipped };
+}
+
+/** Newest write to a directory or any of its direct children. */
+function newestShallow(dir) {
+  let newest = mtime(dir);
+  try {
+    for (const name of readdirSync(dir)) newest = Math.max(newest, mtime(join(dir, name)));
+  } catch {}
+  return newest;
+}
+
+/**
+ * Leftovers in the OS temp dir that nothing will read again:
+ *   - `.tmpXXXXXX` dirs holding a `kalcode.db`: Core fixtures of Rust tests (tempfile) whose
+ *     cleanup failed, idle for a day. On Windows a TempDir silently survives when a file in it
+ *     was still open at drop, and gates leaked ~17,000 of them (14 GB) in one day;
+ *   - `claude/bash-edit-diff/*`: Claude Code's per-session file snapshot stores (~0.65 GB each)
+ *     untouched for 3 days, long after their session ended.
+ */
+export function staleTempLeftovers({ tmp = tmpdir(), now = Date.now() } = {}) {
+  const stale = [];
+  for (const entry of directories(tmp)) {
+    if (!/^\.tmp[A-Za-z0-9]{6}$/.test(entry.name)) continue;
+    const dir = join(tmp, entry.name);
+    if (existsSync(join(dir, "kalcode.db")) && now - newestShallow(dir) > DAY) stale.push(dir);
+  }
+  const snapshots = join(tmp, "claude", "bash-edit-diff");
+  for (const entry of directories(snapshots)) {
+    const dir = join(snapshots, entry.name);
+    if (now - newestShallow(dir) > 3 * DAY) stale.push(dir);
+  }
+  return stale;
+}
+
+/** Removes each dir, skipping any a process still holds open; returns how many went. */
+function removeAll(dirs, remove = rmSync) {
+  let removed = 0;
+  for (const dir of dirs) {
+    try {
+      remove(dir, { recursive: true, force: true, maxRetries: 1 });
+      removed += 1;
+    } catch {}
+  }
+  return removed;
 }
 
 function readLines(path) {
@@ -550,21 +612,24 @@ function main(argv) {
       const trim = entry.trim?.length ? `; ${entry.trim.length} stale incremental dirs` : "";
       process.stdout.write(`${entry.verdict.padEnd(4)} ${entry.path}  (${entry.reason}${trim})\n`);
     }
+    const leftovers = staleTempLeftovers();
+    process.stdout.write(`SAFE ${leftovers.length} leaked temp dirs in ${tmpdir()}\n`);
     if (!apply) {
       const safe = plan.filter((entry) => entry.verdict === "SAFE").length;
       const trims = plan.reduce((sum, entry) => sum + (entry.trim?.length ?? 0), 0);
       process.stdout.write(`${safe} SAFE profiles, ${trims} stale incremental dirs; dry run, nothing deleted\n`);
       return 0;
     }
+    const cleared = removeAll(leftovers);
     // A build may have started in the minutes the plan took: look at the processes again per profile.
     const result = applySweep(plan, {
       recheck: (profile) => !inUse(profile, processCommandLines()),
     });
     const recovered = freeBytes() - before;
-    appendBounded(join(stateDir(process.env), "sweep.jsonl"), { at: Date.now(), recovered, ...result });
+    appendBounded(join(stateDir(process.env), "sweep.jsonl"), { at: Date.now(), recovered, cleared, ...result });
     process.stdout.write(
-      `removed ${result.removed.length} profiles and ${result.trimmed.length} incremental dirs, ` +
-        `recovered ${formatGb(recovered)}; skipped ${result.skipped.length}\n`,
+      `removed ${result.removed.length} profiles, ${result.trimmed.length} incremental dirs and ` +
+        `${cleared} leaked temp dirs, recovered ${formatGb(recovered)}; skipped ${result.skipped.length}\n`,
     );
     return 0;
   } finally {

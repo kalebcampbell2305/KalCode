@@ -1062,7 +1062,10 @@ SAFE when all of these hold:
 Only regenerable output goes: `deps`, `build`, `incremental`, `.fingerprint` and loose build products. `bundle/`,
 evidence and every other file stay. Each entry is renamed aside first, so anything a build holds open is
 skipped. Kept profiles that no process uses, the main checkout's `target/debug` included, also shed per-crate
-incremental dirs untouched for 7 days. Dev and test builds use `debug = "line-tables-only"` (root
+incremental dirs untouched for 7 days. The sweep also clears leaked temp dirs: `.tmpXXXXXX` Core test
+fixtures holding a `kalcode.db` and idle for a day (Windows leaves a TempDir behind when a file in it is still
+open at drop; one day of gates leaked 17,000 of them, 14 GB), and Claude Code `bash-edit-diff` snapshot stores
+untouched for 3 days. Dev and test builds use `debug = "line-tables-only"` (root
 `Cargo.toml`): full debuginfo `.pdb` files were 46 GB of a 128 GB debug target, and the change cut a
 `kalcode-native-core` test build from 1,986 MB to 1,299 MB (`.pdb` 618 MB to 261 MB).
 

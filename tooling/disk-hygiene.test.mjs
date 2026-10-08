@@ -14,7 +14,9 @@ import {
   profileDirs,
   regenerableEntries,
   staleIncremental,
+  staleTempLeftovers,
   startBackgroundSweep,
+  targetDirs,
 } from "./disk-hygiene.mjs";
 
 const HOUR = 3600_000;
@@ -257,4 +259,35 @@ test("kept profiles shed only incremental caches untouched for a week", (t) => {
   assert.equal(existsSync(fresh), true);
   assert.equal(existsSync(join(main.dir, "deps", "libring.rlib")), true);
   assert.equal(existsSync(busyStale), true);
+});
+
+test("custom cargo target dirs marked with CACHEDIR.TAG are found, node_modules is not searched", (t) => {
+  const root = fixture(t);
+  const wt = worktree(root, "kc-custom");
+  const custom = join(wt.path, ".validation", "cargo");
+  mkdirSync(join(custom, "debug", ".fingerprint"), { recursive: true });
+  writeFileSync(join(custom, "CACHEDIR.TAG"), "Signature: 8a477f597d28d172789f06886806bc55");
+  const hidden = join(wt.path, "node_modules", "x");
+  mkdirSync(join(hidden, "debug", "deps"), { recursive: true });
+  writeFileSync(join(hidden, "CACHEDIR.TAG"), "");
+  assert.deepEqual(targetDirs(wt.path).sort(), [custom, join(wt.path, "target")].sort());
+});
+
+test("leaked test fixtures and old Claude snapshot stores in temp are found; anything else is not", (t) => {
+  const tmp = fixture(t);
+  const dir = (name, files, ageHours) => {
+    const path = join(tmp, name);
+    mkdirSync(path, { recursive: true });
+    for (const file of files) writeFileSync(join(path, file), "");
+    for (const file of ["", ...files]) touch(join(path, file), NOW - ageHours * HOUR);
+    return path;
+  };
+  const leaked = dir(".tmpAbC123", ["kalcode.db", "kalcode.lock"], 30);
+  dir(".tmpFresh1", ["kalcode.db"], 2);
+  dir(".tmpOther1", ["notes.txt"], 300);
+  dir(".tmpTooLongName", ["kalcode.db"], 300);
+  const oldSnapshot = dir(join("claude", "bash-edit-diff", "1-2-old"), ["index"], 100);
+  dir(join("claude", "bash-edit-diff", "1-2-live"), ["index"], 5);
+  dir(join("claude", "C--project", "session"), ["x.output"], 500);
+  assert.deepEqual(staleTempLeftovers({ tmp, now: NOW }).sort(), [leaked, oldSnapshot].sort());
 });
