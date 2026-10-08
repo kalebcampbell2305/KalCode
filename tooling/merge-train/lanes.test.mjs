@@ -483,6 +483,37 @@ describe("merge lanes", { concurrency: true }, () => {
     assert.equal(originMain(env), levels[1].sha, "fast-forward to the exact gated tree");
   });
 
+  test("a landed prefix leaving the queue does not cancel its pending suffix when a new PR joins", async () => {
+    const env = setup();
+    openPr(env, 1, { "feature-1/a.txt": "one\n" });
+    openPr(env, 2, { "crates/threads/src/runtime.rs": "// two\n" });
+    const train = makeTrain(env, cloneOf(env, "retain-active-suffix"));
+    const first = await train.buildAll();
+    assert.equal(first.levels.length, 2);
+    const pendingSuffix = first.levels[1];
+    env.provider.gates.set(first.levels[0].sha, "success");
+    env.provider.gates.set(pendingSuffix.sha, "pending");
+    assert.equal((await train.land(first.levels[0].branch)).landed, true);
+    assert.equal(env.provider.prs.get(1).queued, false, "the landed prefix left the queue");
+
+    // #3 joins #2's risky zone, so a fresh plan would batch them into one replacement level.
+    openPr(env, 3, { "crates/contracts/src/agent_state.rs": "// three\n" });
+    const extended = await train.buildAll();
+    assert.deepEqual(
+      extended.levels.map((level) => nums(level.included)),
+      [
+        [1, 2],
+        [1, 2, 3],
+      ],
+    );
+    assert.deepEqual(
+      [extended.levels[0].sha, extended.levels[0].action],
+      [pendingSuffix.sha, "reused"],
+      "the exact pending suffix remains pinned above the landed prefix",
+    );
+    assert.deepEqual(env.provider.cancelled, [], "the pending suffix gate is not cancelled");
+  });
+
   test("the main lock covers only the push: no gate query or fetch happens while it is held", async () => {
     const env = setup();
     openPr(env, 1, { "feature-1/a.txt": "one\n" });

@@ -998,7 +998,7 @@ export function createTrain({
   const headsKey = (items) => items.map((i) => `${i.number}:${i.head}`).join(",");
 
   /**
-   * The deepest candidate on main's chain that is still exact (every PR still queued at the same head) and
+   * The deepest candidate on main's chain whose unlanded suffix is still queued at the same heads and
    * whose gate is running or green, with the existing levels that are its prefixes, shallowest first. A failed,
    * cancelled or never-started stack is not pinned: it re-plans as before (attribution, bisect, re-trigger).
    */
@@ -1007,7 +1007,7 @@ export function createTrain({
       .filter((c) => c.included.length > landedLength)
       .sort((a, b) => b.included.length - a.included.length);
     for (const stack of deepestFirst) {
-      if (!stack.included.every((i) => byNumber.get(i.number)?.head === i.head)) continue;
+      if (!stack.included.slice(landedLength).every((i) => byNumber.get(i.number)?.head === i.head)) continue;
       const gate = (await provider.gateStatus(stack.sha, stack.branch)).state;
       // A push's gate run takes a few seconds to register: a stack this train just built counts as gating.
       const builtAt = loadState().candidates?.[stack.branch]?.builtAt;
