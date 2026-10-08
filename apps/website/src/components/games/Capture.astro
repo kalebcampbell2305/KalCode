@@ -1,12 +1,11 @@
 ---
 /**
- * One real in-game capture of Campus Founder (public/assets/games/campus-founder/): 1920×1080 frames
+ * One real in-game capture of KAL University (public/assets/games/kal-university/): 1920×1080 frames
  * from the development build's automated capture tour, served as AVIF with a WebP fallback at
  * 960 and 1920 widths, with explicit dimensions. Never a mock-up: only captures of the real build
  * go in that folder (docs/WEBSITE.md "Games").
  */
 type CaptureName =
-  | "title"
   | "quad"
   | "night-quad"
   | "creator"
@@ -14,6 +13,7 @@ type CaptureName =
   | "cafe"
   | "dialogue"
   | "map"
+  | "journal"
   | "dashboard"
   | "campaign"
   | "pricing"
@@ -30,7 +30,7 @@ interface Props {
 }
 
 const { name, alt, sizes, eager = false, class: className } = Astro.props;
-const base = `/assets/games/campus-founder/${name}`;
+const base = `/assets/games/kal-university/${name}`;
 const widths = [960, 1920] as const;
 const srcset = (format: "avif" | "webp") => widths.map((width) => `${base}-${width}.${format} ${width}w`).join(", ");
 ---

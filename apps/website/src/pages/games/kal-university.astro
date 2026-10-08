@@ -1,11 +1,14 @@
 ---
 /**
- * /games/campus-founder: Campus Founder, a single-player game presented as "A KalCode Game".
+ * /games/kal-university: KAL University, a single-player game presented as "A KalCode Game"
+ * (tagline "Build your future."). The game shares its name with its fictional campus.
  *
  * Truth rules for this page (docs/WEBSITE.md "Games"):
  * - The game is in development. No build is downloadable or for sale, so the Windows and macOS
  *   download controls are disabled "Coming soon" states, and no price is shown (the price is not set).
  * - Every image is a real capture of the development build (components/games/Capture.astro).
+ * - Features that are not in the development build are listed under "Where it's headed", each
+ *   tagged Planned, never described as shipped.
  * - The game is separate from KalCode: no KalCode plan, account, billing or early-access list is
  *   involved, so this page has no form and links only to KalCode's existing X account for news.
  */
@@ -18,7 +21,7 @@ import Capture from "../../components/games/Capture.astro";
 import Base from "../../layouts/Base.astro";
 import { SITE_ORIGIN, SOCIAL, getPage } from "../../lib/site";
 
-const page = getPage("/games/campus-founder");
+const page = getPage("/games/kal-university");
 const pageUrl = new URL(page.path, SITE_ORIGIN).href;
 const gameId = `${pageUrl}#game`;
 
@@ -76,9 +79,9 @@ const gallery = [
     alt: "The character creator: a new student's name, skin tone, build, height and hair, with the quad behind.",
   },
   {
-    name: "cafe",
-    title: "Lantern Café",
-    alt: "Inside Lantern Café: a checkered floor, a long wooden counter and a menu board.",
+    name: "journal",
+    title: "Your journal",
+    alt: "The journal's Quests tab: the main quest Welcome to KAL, its objective and a tip.",
   },
   {
     name: "map",
@@ -99,6 +102,30 @@ const gallery = [
     name: "first-sale",
     title: "Your first sale",
     alt: "A milestone card reading Someone paid for your idea, after StudySync Labs makes its first sale.",
+  },
+] as const;
+
+/** The planned pitch beyond the current build (owner direction 2026-10-08). None of it ships today. */
+const roadmap = [
+  {
+    label: "laptop",
+    title: "Run your business from anywhere on campus.",
+    text: "A laptop that goes where you go: work from the café, the quad or the library instead of only your dorm desk.",
+  },
+  {
+    label: "fictional AI",
+    title: "Fictional AI tools, then your own AI company.",
+    text: "Use made-up AI tools to grow your business, and later found an AI company of your own, all inside the game.",
+  },
+  {
+    label: "fictional market",
+    title: "A stock market and an IPO.",
+    text: "Take your company public on a fictional in-game exchange. No real money, no real stocks, nothing to invest.",
+  },
+  {
+    label: "move out",
+    title: "Leave the dorm. Expand.",
+    text: "Move out and grow into new regions inspired by California, Florida and New York.",
   },
 ] as const;
 
@@ -152,7 +179,7 @@ const promises = [
 const faq = [
   {
     q: "When can I play?",
-    a: "Not yet. Campus Founder is in development and has no release date. Windows and macOS downloads will appear on this page when a build has passed testing on real Windows PCs and Macs.",
+    a: "Not yet. KAL University is in development and has no release date. Windows and macOS downloads will appear on this page when a build has passed testing on real Windows PCs and Macs.",
   },
   {
     q: "Does it need an internet connection or an account?",
@@ -164,7 +191,7 @@ const faq = [
   },
   {
     q: "Do I need a KalCode subscription?",
-    a: "No. Campus Founder is a separate game, sold on its own. It isn't included in any KalCode plan, no plan is needed to play it, and buying it has nothing to do with your KalCode account or billing.",
+    a: "No. KAL University is a separate game, sold on its own. It isn't included in any KalCode plan, no plan is needed to play it, and buying it has nothing to do with your KalCode account or billing.",
   },
   {
     q: "What is KalCode Sim?",
@@ -173,6 +200,10 @@ const faq = [
   {
     q: "Do I need to know how to code?",
     a: "No. Success never depends on coding. You can build a campus service instead of a tech product, and KalCode Sim only asks you to make decisions.",
+  },
+  {
+    q: "Is the stock market real?",
+    a: "No. The planned stock market and IPO are fictional parts of the game. No real money, real shares or real trading is involved, and nothing in the game can be cashed out.",
   },
   {
     q: "How much will it cost?",
@@ -194,13 +225,13 @@ const jsonLd = {
     {
       "@type": "VideoGame",
       "@id": gameId,
-      name: "Campus Founder",
-      alternateName: "Campus Founder: The KAL University World",
+      name: "KAL University",
+      slogan: "Build your future.",
       url: pageUrl,
       description: page.description,
       genre: ["Simulation", "Adventure"],
       playMode: "SinglePlayer",
-      image: `${SITE_ORIGIN}/assets/games/campus-founder/title-1920.webp`,
+      image: `${SITE_ORIGIN}/assets/games/kal-university/quad-1920.webp`,
       publisher: { "@type": "Organization", "@id": `${SITE_ORIGIN}/#organization`, name: "KalCode" },
     },
   ],
@@ -215,11 +246,12 @@ const jsonLd = {
           <p class="cf-lockup"><BrandMark size={32} /><span>A KalCode Game</span></p>
           <p class="chip chip--dev" data-page-status>In development · Coming soon</p>
         </div>
-        <h1 id="cf-title" class="cf-hero__title">Campus <span class="cf-hero__accent">Founder</span></h1>
+        <h1 id="cf-title" class="cf-hero__title">KAL <span class="cf-hero__accent">University</span></h1>
+        <p class="cf-hero__tagline">Build your future.</p>
         <p class="cf-hero__hook">You have $200, a college dorm, and four years to build something extraordinary.</p>
         <p class="cf-hero__line">
-          A single-player campus adventure and business game at KAL University, a fictional campus. Walk it,
-          meet its people, and build a company from your dorm desk.
+          A single-player campus adventure and business game. Start in your dorm, walk a fictional campus,
+          meet its people, and build a company one decision at a time.
         </p>
         <div class="cf-get" role="group" aria-labelledby="cf-get-label">
           <p id="cf-get-label" class="visually-hidden">Downloads</p>
@@ -248,10 +280,10 @@ const jsonLd = {
       </div>
       <figure class="cf-hero__shot frame">
         <Capture
-          name="title"
+          name="quad"
           eager
           sizes="(min-width: 64rem) 46rem, 92vw"
-          alt="The Campus Founder title screen: the KAL University quad and clock tower at sunset, with the New Game menu."
+          alt="The player on the central quad during Welcome Week, beside the fountain, with the domed hall behind and the clock, wallet and objective on screen."
         />
         <figcaption class="cf-caption"><span class="chip chip--plain">{CAPTION}</span></figcaption>
       </figure>
@@ -310,16 +342,16 @@ const jsonLd = {
           <figure class="feature-split__visual cf-shot cf-shot--pair">
             <div class="frame cf-shot__main">
               <Capture
-                name="quad"
+                name="night-quad"
                 sizes="(min-width: 64rem) 44rem, 92vw"
-                alt="The player on the central quad during Welcome Week, beside the fountain, with the domed hall behind and the clock, wallet and objective on screen."
+                alt="The central quad at night under lamplight, the domed hall lit in the distance."
               />
             </div>
             <div class="frame cf-shot__inset">
               <Capture
-                name="night-quad"
+                name="cafe"
                 sizes="(min-width: 64rem) 18rem, 46vw"
-                alt="The same quad at night under lamplight, the domed hall lit in the distance."
+                alt="Inside Lantern Café: a checkered floor, a long wooden counter and a menu board."
               />
             </div>
             <figcaption class="cf-caption"><span class="chip chip--plain">{CAPTION}</span></figcaption>
@@ -423,6 +455,32 @@ const jsonLd = {
     </div>
   </section>
 
+  <section class="world-section" id="ahead" aria-labelledby="ahead-title">
+    <Backdrop variant="nebula" />
+    <div class="container">
+      <SectionHead
+        id="ahead-title"
+        title="Where it's headed."
+        text="Planned for the full game and not in the development build yet. All of it is fictional: no real money, AI services or stocks."
+        chips={[{ label: "Planned · in development", kind: "dev" }]}
+      />
+      <ul class="cf-ahead" role="list">
+        {
+          roadmap.map((item) => (
+            <li class="cf-ahead__item">
+              <div class="cf-ahead__top">
+                <span class="cf-ahead__label">{item.label}</span>
+                <span class="chip">Planned</span>
+              </div>
+              <p class="cf-ahead__title">{item.title}</p>
+              <p class="cf-ahead__text">{item.text}</p>
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+  </section>
+
   <section class="world-section" id="platforms" aria-labelledby="platforms-title">
     <Backdrop variant="deep" />
     <div class="container">
@@ -466,7 +524,7 @@ const jsonLd = {
       <SectionHead
         id="promises-title"
         title="A game you buy once and keep."
-        text="Campus Founder is its own product, separate from KalCode's apps and plans."
+        text="KAL University is its own product, separate from KalCode's apps and plans."
       />
       <ul class="facts cf-facts" role="list">
         {
@@ -487,7 +545,7 @@ const jsonLd = {
     <div class="container cf-faq">
       <div class="cf-faq__head">
         <h2 id="faq-title" class="h2 h2--sm">Questions</h2>
-        <p class="body-lg">Straight answers about what Campus Founder is, and what it isn't.</p>
+        <p class="body-lg">Straight answers about what KAL University is, and what it isn't.</p>
       </div>
       <div class="faq">
         {
@@ -507,9 +565,9 @@ const jsonLd = {
     <div class="container cf-closing__inner">
       <BrandMark size={72} lazy />
       <p class="eyebrow">A KalCode Game</p>
-      <h2 id="closing-title" class="h2">Four years. $200. Your move.</h2>
+      <h2 id="closing-title" class="h2">Build your future.</h2>
       <p class="body-lg">
-        Campus Founder is coming to Windows and macOS. Follow {SOCIAL.official.handle} for release news.
+        $200, a dorm room and four years. KAL University is coming to Windows and macOS. Follow {SOCIAL.official.handle} for release news.
       </p>
       <div class="button-row cf-closing__actions">
         <XLink account="official" withHandle class="cf-follow" />
@@ -586,6 +644,16 @@ const jsonLd = {
   /* The game's own title art sets FOUNDER in warm gold; the site echoes it with its gold token. */
   .cf-hero__accent {
     color: rgb(var(--world-gold));
+  }
+
+  .cf-hero__tagline {
+    margin-top: calc(-1 * var(--space-2));
+    color: rgb(var(--world-gold));
+    font-family: var(--font-wider);
+    font-size: var(--site-text-small);
+    font-weight: var(--weight-medium);
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
   }
 
   .cf-hero__hook {
@@ -966,6 +1034,68 @@ const jsonLd = {
     .cf-gallery__item:hover .cf-gallery__frame {
       transform: none;
       transition: none;
+    }
+  }
+
+  /* ---------- Where it's headed (planned) ---------- */
+
+  .cf-ahead {
+    display: grid;
+    gap: var(--space-4);
+    margin: 0;
+    padding: 0;
+  }
+
+  .cf-ahead__item {
+    display: grid;
+    align-content: start;
+    gap: var(--space-3);
+    padding: clamp(1.25rem, 1rem + 1vw, 1.75rem);
+    border-radius: var(--radius-xl);
+    background: var(--world-panel);
+    box-shadow:
+      var(--world-panel-edge),
+      inset 0 2px 0 rgb(var(--world-gold) / 0.55);
+  }
+
+  .cf-ahead__top {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  .cf-ahead__label {
+    color: var(--color-accent-text);
+    font-family: var(--font-mono);
+    font-size: var(--site-text-xs);
+  }
+
+  .cf-ahead__title {
+    color: var(--color-text);
+    font-family: var(--font-display);
+    font-size: 1.25rem;
+    font-weight: var(--weight-semibold);
+    letter-spacing: -0.02em;
+    line-height: 1.25;
+  }
+
+  .cf-ahead__text {
+    color: var(--color-text-secondary);
+    font-size: var(--site-text-small);
+    line-height: var(--leading-normal);
+  }
+
+  @media (min-width: 40rem) {
+    .cf-ahead {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (min-width: 72rem) {
+    .cf-ahead {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
     }
   }
 
