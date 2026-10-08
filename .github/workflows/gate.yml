@@ -305,7 +305,11 @@ jobs:
           Remove-Item Env:CARGO_TARGET_DIR -ErrorAction SilentlyContinue
           $head = (git rev-parse HEAD | Out-String).Trim()
           if ($LASTEXITCODE -or $head -ne $env:GITHUB_SHA) { throw "Checkout does not match the immutable event SHA" }
-          (Get-Process -Id $PID).PriorityClass = 'BelowNormal'
+          # Below normal where it competes with something else: the build PC (the owner's agents) and, on the
+          # second PC, the Rust/native half's long compiles. The second PC's other halves keep normal priority:
+          # at equal priority a cold Rust build starved their timed unit and UI tests (gate 37758139488: 22
+          # desktop-unit tests over 15 s, twice, while every check passed alone).
+          if ($env:KALCODE_GATE_MACHINE -eq 'main-pc' -or $env:KALCODE_GATE_HEAVY -eq 'True') { (Get-Process -Id $PID).PriorityClass = 'BelowNormal' }
           if (-not $env:KALCODE_GATE_ONLY) { Write-Host 'gate: nothing selected for this job (the other jobs run the rest)'; exit 0 }
           $token = $null
           $lock = $null
@@ -607,7 +611,8 @@ jobs:
         run: |
           $head = (git rev-parse HEAD | Out-String).Trim()
           if ($LASTEXITCODE -or $head -ne $env:GITHUB_SHA) { throw "Checkout does not match the immutable event SHA" }
-          (Get-Process -Id $PID).PriorityClass = 'BelowNormal'
+          # Normal on the second PC, below normal on the build PC (see the Windows job's Gate step).
+          if ($env:KALCODE_GATE_MACHINE -eq 'main-pc') { (Get-Process -Id $PID).PriorityClass = 'BelowNormal' }
           if (-not $env:KALCODE_GATE_ONLY) { Write-Host 'gate: nothing selected for the JS/web job (the other jobs run the rest)'; exit 0 }
           # Shared with the second PC's other gate runners; never alongside its Windows update proof, which has
           # priority. A no-op on the build PC, which has no lock folder.

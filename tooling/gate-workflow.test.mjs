@@ -365,7 +365,11 @@ test("the JS/web job is self-contained, runs on the pool and gates the same exac
   assert.match(plan, /Checkout does not match the immutable event SHA/);
   assert.match(plan, /gate-split\.mjs pc2/);
   const gate = script(pc2Steps[names.indexOf("Gate")]);
-  assert.match(gate, /BelowNormal/);
+  // Below normal only on the build PC; the second PC runs its JS/web checks at normal priority.
+  assert.match(
+    gate,
+    /if \(\$env:KALCODE_GATE_MACHINE -eq 'main-pc'\) \{ \(Get-Process -Id \$PID\)\.PriorityClass = 'BelowNormal' \}/,
+  );
   // The second PC's machine lock, taken on every run (a no-op on the build PC, which has no lock folder).
   assert.match(gate, /^\s*\. \.github\/scripts\/pc2-machine-lock\.ps1$/m);
   assert.match(gate, /--only \$env:KALCODE_GATE_ONLY/);
@@ -598,7 +602,11 @@ test("every Windows gate job requests the elastic pool; build-PC hooks run only 
   // The Gate step: three heavy tokens on the build PC, the second PC's rust.lock there, and the machine lock
   // on every run (a no-op where its folder is absent).
   const gate = script(steps[names.indexOf("Gate")]);
-  assert.match(gate, /BelowNormal/);
+  // Below normal on the build PC and for the Rust/native half; the second PC's timed halves stay normal.
+  assert.match(
+    gate,
+    /if \(\$env:KALCODE_GATE_MACHINE -eq 'main-pc' -or \$env:KALCODE_GATE_HEAVY -eq 'True'\) \{ \(Get-Process -Id \$PID\)\.PriorityClass = 'BelowNormal' \}/,
+  );
   assert.match(gate, /\$env:KALCODE_GATE_HEAVY -eq 'True' -and \$env:KALCODE_GATE_MACHINE -eq 'main-pc'/);
   assert.match(gate, /KalCodeGatePool\\heavy/);
   assert.match(gate, /heavy-\$index\.lock/);
