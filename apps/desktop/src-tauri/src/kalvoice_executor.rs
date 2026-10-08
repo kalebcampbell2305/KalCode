@@ -288,13 +288,14 @@ fn validate_launch_model(
             "That model name isn't valid.",
         ));
     }
-    if authoritative_catalog && available.models.is_empty() {
-        if provider.as_str() == ProviderId::CURSOR {
-            return Err(ExecError::new(
-                "cursor_models_unavailable",
-                "Cursor's available models could not be verified. Reconnect Cursor or choose the native default model.",
-            ));
-        }
+    if authoritative_catalog
+        && available.models.is_empty()
+        && provider.as_str() == ProviderId::CURSOR
+    {
+        return Err(ExecError::new(
+            "cursor_models_unavailable",
+            "Cursor's available models could not be verified. Reconnect Cursor or choose the native default model.",
+        ));
     }
     if let Some(exact) = available
         .models
@@ -1876,7 +1877,7 @@ impl DesktopExecutor {
                     return Err(ExecError::new("target_unconfirmed", question.clone())
                         .with_directive(UiDirective::ChooseSession {
                             question,
-                            choices: vec![target],
+                            choices: vec![*target],
                             follow_up,
                         }));
                 }

@@ -1614,29 +1614,28 @@ impl Shared {
         } else if let Some(turn_id) = turn
             && lifecycle.codex_turn.as_deref() != Some(turn_id)
             && !matches!(event, HookEvent::Stop | HookEvent::Interrupt)
+            && !ordering_failed_before
         {
-            if !ordering_failed_before {
-                if event == HookEvent::UserPromptSubmit
-                    && let Some(superseded) = lifecycle.codex_turn.as_deref()
-                    && !lifecycle.codex_seen_turn_ids.contains(superseded)
-                    && !lifecycle.codex_superseded_turn_ids.contains(superseded)
-                {
-                    // A root prompt is the forward turn boundary. Retire the previous turn before
-                    // advancing so one of its delayed async tool hooks cannot move identity backward.
-                    if lifecycle.codex_superseded_turn_ids.len() < MAX_CODEX_SEEN_TURNS {
-                        lifecycle
-                            .codex_superseded_turn_ids
-                            .insert(superseded.to_owned());
-                    } else {
-                        lifecycle.codex_tracking_failed = true;
-                    }
+            if event == HookEvent::UserPromptSubmit
+                && let Some(superseded) = lifecycle.codex_turn.as_deref()
+                && !lifecycle.codex_seen_turn_ids.contains(superseded)
+                && !lifecycle.codex_superseded_turn_ids.contains(superseded)
+            {
+                // A root prompt is the forward turn boundary. Retire the previous turn before
+                // advancing so one of its delayed async tool hooks cannot move identity backward.
+                if lifecycle.codex_superseded_turn_ids.len() < MAX_CODEX_SEEN_TURNS {
+                    lifecycle
+                        .codex_superseded_turn_ids
+                        .insert(superseded.to_owned());
+                } else {
+                    lifecycle.codex_tracking_failed = true;
                 }
-                // A turn starts (its prompt hook, or the first hook that names it). Once bounded
-                // ordering tracking has failed, a different turn is activity only: it cannot
-                // replace the last identity whose order was proven.
-                lifecycle.codex_turn = Some(turn_id.to_owned());
-                lifecycle.codex_permission = None;
             }
+            // A turn starts (its prompt hook, or the first hook that names it). Once bounded
+            // ordering tracking has failed, a different turn is activity only: it cannot
+            // replace the last identity whose order was proven.
+            lifecycle.codex_turn = Some(turn_id.to_owned());
+            lifecycle.codex_permission = None;
         }
 
         // Every accepted root turn hook reports the exact active model. Apply it only after the
@@ -1827,9 +1826,7 @@ impl Shared {
                     })
                 });
                 let readiness_before = lifecycle.handoff_readiness;
-                lifecycle.handoff_readiness = if lifecycle.codex_tracking_failed {
-                    HandoffReadiness::Unverified
-                } else if current {
+                lifecycle.handoff_readiness = if lifecycle.codex_tracking_failed || current {
                     HandoffReadiness::Unverified
                 } else if matches!(
                     readiness_before,

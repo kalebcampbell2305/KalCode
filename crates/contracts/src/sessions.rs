@@ -88,7 +88,7 @@ pub enum SessionMatchTier {
 #[ts(export)]
 pub enum SessionResolution {
     Resolved {
-        target: SessionCandidate,
+        target: Box<SessionCandidate>,
         tier: SessionMatchTier,
     },
     /// More than one session fits. `question` names the choices by the first thing that tells
@@ -239,7 +239,7 @@ mod tests {
             label: "Research · Gemini CLI · Gemini B".into(),
         };
         let resolved = serde_json::to_value(SessionResolution::Resolved {
-            target: candidate.clone(),
+            target: Box::new(candidate.clone()),
             tier: SessionMatchTier::ProviderAccountName,
         })
         .expect("json");

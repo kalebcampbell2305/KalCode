@@ -477,7 +477,7 @@ fn decide(
 
 fn resolved(e: &Entry<'_>, tier: SessionMatchTier) -> SessionResolution {
     SessionResolution::Resolved {
-        target: candidate(e.t),
+        target: Box::new(candidate(e.t)),
         tier,
     }
 }
@@ -776,6 +776,8 @@ fn within_distance(a: &str, b: &str, max: usize) -> bool {
 
 /// Resolves a spoken or typed session name the way KalVoice does, for the command palette and
 /// the Dashboard. Reads only the open-thread listing (no Session Locator); changes nothing.
+// Tauri injects native runtime/state arguments alongside the existing flat IPC context fields.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command(async)]
 pub fn session_resolve(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,
