@@ -1,7 +1,9 @@
 name: PC2 extra gate runners bootstrap (throwaway)
 
-# Throwaway branch only (never merged). Diagnose and, where this account may, fix kalcode-qa's access to the
-# second PC's gate lock folder (2c/2d run as kalcode-qa; browser.lock access was denied in gate 37710308604).
+# Throwaway branch only (never merged). Bring the second PC's gate accounts (runners 2 = kalcode-ci and
+# 2b = kalcode-ci-2b) to the build PC's gate toolchain: rustc 1.97.1 (+clippy, rustfmt), cargo-deny 0.20.2,
+# cargo-audit 0.22.2. A directory override on the gate checkout beats rust-toolchain.toml without a listener
+# restart; RUSTUP_TOOLCHAIN in the runner's .env keeps it after one.
 
 on:
   push:
@@ -11,36 +13,50 @@ permissions:
   contents: read
 
 jobs:
-  locks:
-    runs-on: [self-hosted, Windows, kalcode-desktop-qa]
-    timeout-minutes: 10
+  toolchain:
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [kalcode-fix-2, kalcode-fix-2b]
+    runs-on: [self-hosted, Windows, "${{ matrix.target }}"]
+    timeout-minutes: 20
     steps:
-      - name: Lock folder access for kalcode-qa
+      - name: Pin rustc 1.97.1 and install cargo-deny 0.20.2 + cargo-audit 0.22.2
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
-          $ErrorActionPreference = 'Continue'
-          "whoami: $(whoami)"
-          $dir = 'C:\ProgramData\KalCodePC2\locks'
-          foreach ($p in @('C:\ProgramData\KalCodePC2', $dir)) { "== $p"; & icacls.exe $p }
-          $files = @(Get-ChildItem -Force -LiteralPath $dir -File -ErrorAction SilentlyContinue)
-          foreach ($f in $files) {
-            $owner = (Get-Acl -LiteralPath $f.FullName).Owner
-            $ok = $false
-            try { $h = [IO.File]::Open($f.FullName, 'OpenOrCreate', 'ReadWrite', 'ReadWrite'); $h.Dispose(); $ok = $true } catch { $err = $_.Exception.Message }
-            "file $($f.Name) owner=$owner openReadWrite=$ok $(if (-not $ok) { $err })"
-          }
-          "== try granting kalcode-qa Modify (dir, inherit) and on each file"
-          & icacls.exe $dir /grant 'kalcode-qa:(OI)(CI)M' 2>&1 | ForEach-Object { "  dir: $_" }
-          foreach ($f in $files) { & icacls.exe $f.FullName /grant 'kalcode-qa:M' 2>&1 | ForEach-Object { "  $($f.Name): $_" } }
-          "== after"
-          foreach ($f in $files) {
-            $ok = $false
-            try { $h = [IO.File]::Open($f.FullName, 'OpenOrCreate', 'ReadWrite', 'ReadWrite'); $h.Dispose(); $ok = $true } catch { }
-            "file $($f.Name) openReadWrite=$ok"
-          }
-          # Machine lock (gate.lock) is opened shared for read by gate jobs; check that mode too.
-          foreach ($n in 'gate.lock', 'qa-intent.lock', 'browser.lock', 'rust.lock') {
-            $p = Join-Path $dir $n
-            try { $h = [IO.File]::Open($p, 'OpenOrCreate', 'Read', 'Read'); $h.Dispose(); "$n read-open OK" } catch { "$n read-open FAILED: $($_.Exception.Message)" }
-          }
-          exit 0
+          $ErrorActionPreference = 'Stop'
+          "runner $env:RUNNER_NAME as $env:USERNAME; workspace $env:GITHUB_WORKSPACE"
+          $cargo = (Get-Command cargo -ErrorAction SilentlyContinue).Source
+          if (-not $cargo) { $cargo = Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe' }
+          $bin = Split-Path -Parent $cargo
+          if (-not (Test-Path -LiteralPath (Join-Path $bin 'rustup.exe'))) { throw "no rustup next to $cargo" }
+          $env:PATH = "$bin;$env:PATH"
+          & rustup toolchain install 1.97.1 --profile minimal --component clippy --component rustfmt
+          if ($LASTEXITCODE) { throw "rustup install failed ($LASTEXITCODE)" }
+          New-Item -ItemType Directory -Force -Path $env:GITHUB_WORKSPACE | Out-Null
+          & rustup override set 1.97.1 --path $env:GITHUB_WORKSPACE
+          if ($LASTEXITCODE) { throw "rustup override failed ($LASTEXITCODE)" }
+          $runnerRoot = Split-Path -Parent (Split-Path -Parent $env:RUNNER_WORKSPACE)
+          $envFile = Join-Path $runnerRoot '.env'
+          try {
+            $lines = @(if (Test-Path -LiteralPath $envFile) { Get-Content -LiteralPath $envFile | Where-Object { $_ -notmatch '^RUSTUP_TOOLCHAIN=' } })
+            Set-Content -LiteralPath $envFile -Value (@($lines) + 'RUSTUP_TOOLCHAIN=1.97.1') -Encoding ascii
+            ".env ($envFile): " + ((Get-Content -LiteralPath $envFile) -join ' | ')
+          } catch { "::warning::could not write $envFile ($($_.Exception.Message)); the directory override still applies" }
+          $tmp = Join-Path $env:RUNNER_TEMP 'tools'; New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+          $deny = 'https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-pc-windows-msvc.tar.gz'
+          Invoke-WebRequest -UseBasicParsing -Uri $deny -OutFile "$tmp\deny.tar.gz"
+          $want = ((Invoke-WebRequest -UseBasicParsing -Uri "$deny.sha256").Content | Out-String).Trim().Split(' ')[0].ToLower()
+          $got = (Get-FileHash -Algorithm SHA256 "$tmp\deny.tar.gz").Hash.ToLower()
+          if ($want -ne $got) { throw "cargo-deny sha256 mismatch $got vs $want" }
+          & tar.exe -xzf "$tmp\deny.tar.gz" -C $tmp; if ($LASTEXITCODE) { throw 'untar cargo-deny failed' }
+          Copy-Item -Force (Get-ChildItem -Recurse -LiteralPath $tmp -Filter 'cargo-deny.exe' | Select-Object -First 1).FullName (Join-Path $bin 'cargo-deny.exe')
+          Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/rustsec/rustsec/releases/download/cargo-audit/v0.22.2/cargo-audit-x86_64-pc-windows-msvc-v0.22.2.zip' -OutFile "$tmp\audit.zip"
+          Expand-Archive -Force -LiteralPath "$tmp\audit.zip" -DestinationPath "$tmp\audit"
+          Copy-Item -Force (Get-ChildItem -Recurse -LiteralPath "$tmp\audit" -Filter 'cargo-audit.exe' | Select-Object -First 1).FullName (Join-Path $bin 'cargo-audit.exe')
+          Push-Location $env:GITHUB_WORKSPACE
+          try {
+            $v = @((& rustc --version), (& cargo clippy --version), (& cargo deny --version), (& cargo audit --version)) | ForEach-Object { "$_".Trim() }
+          } finally { Pop-Location }
+          "VERIFY $env:RUNNER_NAME: $($v -join ' / ')"
+          if ($v[0] -notmatch '^rustc 1\.97\.1 ' -or $v[1] -notmatch '^clippy 0\.1\.97' -or $v[2] -notmatch '^cargo-deny 0\.20\.2' -or $v[3] -notmatch '^cargo-audit(-audit)? 0\.22\.2') { throw "version check failed: $($v -join ' / ')" }
