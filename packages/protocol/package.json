@@ -9,7 +9,8 @@
     "./plans": "./src/plans.ts",
     "./display-status": "./src/display-status.ts",
     "./entitlements": "./src/entitlements.ts",
-    "./usage-receipts": "./src/usage-receipts.ts"
+    "./usage-receipts": "./src/usage-receipts.ts",
+    "./games": "./src/games.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

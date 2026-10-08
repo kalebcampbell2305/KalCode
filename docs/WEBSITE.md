@@ -90,16 +90,19 @@ Rules the pages follow:
 ## Games
 
 `/games/kal-university` presents KAL University, a single-player game (tagline "Build your
-future."), as "A KalCode Game".
+future."), as "A KalCode Game". Two private account pages belong to it: `/games/library` (Game
+Library) and `/games/activate` (approve the game's device sign-in). Both are `noindex`,
+`no-referrer`, outside `PAGES` and the sitemap (`GAME_ACCOUNT_PAGES` in `src/lib/site.ts`), and
+nothing public links to them until the game is on sale.
 It is a world page reached from the footer's Games column; the header navigation and `/pricing`
 stay KalCode-only. Rules:
 
 - **Ownership (owner direction, KAL University blueprint Update 3; policy E1-E13 approved
   2026-10-08).** $9.99 USD once, or included with KalCode Pro, MAX and MAX 2X: the first
   successful paid subscription payment (monthly or yearly) makes it the account's for life, and
-  cancelling or changing plans never removes it. Plan prices on the page come from
-  `@kalcode/protocol/plans`; never type them. Plan perks are described as planned until the game
-  ships them.
+  cancelling or changing plans never removes it (docs/BILLING.md §13). Plan prices come from
+  `@kalcode/protocol/plans`, and the game price and perk catalog from `@kalcode/protocol/games`;
+  never type a price or a perk into a page.
 - **Not on sale.** No buy button, checkout, Stripe call or form appears on the page. The standalone
   card shows a "Coming soon · Not on sale yet" state; purchase opens only after the owner publishes
   the game's terms and refund wording and gives the launch go-ahead. Release news points to the
@@ -119,6 +122,9 @@ stay KalCode-only. Rules:
   `release-default`.
 - **Structured data.** The page's JSON-LD adds a `VideoGame` node and names it as the page's `about`
   (no offers until the game is for sale).
+- **Account pages decide nothing.** The Game Library and activation pages only show what
+  `api.kalcoded.com/v1/games/*` answers for the session cookie (ownership, perks, signed download
+  links, device approval). A signed-out visitor is sent to `/account`, which offers a link back.
 
 ## Behaviour
 

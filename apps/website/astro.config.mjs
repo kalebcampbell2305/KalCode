@@ -31,6 +31,8 @@ export default defineConfig({
         !page.endsWith("/account") &&
         !page.endsWith("/account.html") &&
         !page.includes("/early-access/") &&
+        !page.includes("/games/library") &&
+        !page.includes("/games/activate") &&
         !page.includes("/owner/"),
     }),
   ],

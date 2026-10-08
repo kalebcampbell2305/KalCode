@@ -15,7 +15,8 @@
  *   successful paid subscription payment. Plan prices come from @kalcode/protocol/plans, never typed
  *   here. Sales open only after the owner publishes the game's terms and refund wording.
  */
-import { formatInterval, formatPrice, getPlan, type PlanId } from "@kalcode/protocol/plans";
+import { formatGamePrice, KAL_UNIVERSITY, perksAddedAt } from "@kalcode/protocol/games";
+import { formatInterval, formatPrice, getPlan } from "@kalcode/protocol/plans";
 import Backdrop from "../../components/Backdrop.astro";
 import BrandMark from "../../components/BrandMark.astro";
 import Icon from "../../components/Icon.astro";
@@ -31,8 +32,8 @@ const gameId = `${pageUrl}#game`;
 
 const CAPTION = "In-game capture · development build";
 
-/** The standalone price (owner direction, Update 3: $9.99 USD, one time, lifetime ownership). */
-const GAME_PRICE = "$9.99";
+/** The standalone price from the game catalog (@kalcode/protocol/games): "$9.99". */
+const GAME_PRICE = formatGamePrice(KAL_UNIVERSITY);
 
 const arc = [
   {
@@ -170,15 +171,16 @@ const platforms = [
   },
 ] as const;
 
-/** The KalCode plans that include the game, with their live prices from plans.ts. */
-const INCLUDED_WITH: readonly PlanId[] = ["pro", "max", "max2x"];
-const ownPlans = INCLUDED_WITH.map((id) => {
+/** The KalCode plans that include the game, with their prices from plans.ts and perks from games.ts. */
+const ownPlans = KAL_UNIVERSITY.includedWithPlans.map((id) => {
   const plan = getPlan(id);
   return {
     id,
     name: `KalCode ${plan.name}`,
     monthly: `${formatPrice(plan, "month")}${formatInterval("month")}`,
     yearly: `${formatPrice(plan, "year")}${formatInterval("year")}`,
+    perks: perksAddedAt(KAL_UNIVERSITY.id, id).map((perk) => perk.name),
+    previous: id === "pro" ? null : id === "max" ? "Pro" : "MAX",
     featured: id === "max",
   };
 });
@@ -589,9 +591,18 @@ const jsonLd = {
                 <span class="cf-own__amount">{plan.monthly}</span> <span class="cf-own__per">or {plan.yearly}</span>
               </p>
               <p class="cf-own__text">
-                KAL University is yours for life from your first successful payment, monthly or yearly, plus this plan's
-                in-game perks.
+                {`KAL University is yours for life from your first successful payment, monthly or yearly. ${
+                  plan.previous ? `Everything in ${plan.previous}, plus:` : "Plan perks:"
+                }`}
               </p>
+              <ul class="cf-own__perks" role="list">
+                {plan.perks.map((perk) => (
+                  <li>
+                    <Icon name="check" class="cf-own__check" />
+                    {perk}
+                  </li>
+                ))}
+              </ul>
               <a class="text-link cf-own__action" href="/pricing">
                 See {plan.name} <Icon name="arrow-right" />
               </a>
@@ -824,7 +835,7 @@ const jsonLd = {
     position: relative;
     display: grid;
     gap: var(--space-3);
-    grid-template-rows: auto auto auto 1fr auto;
+    grid-template-rows: auto auto auto auto 1fr auto;
     padding: clamp(1.25rem, 1rem + 1vw, 1.75rem);
     border-radius: var(--radius-xl);
     background: var(--world-panel);
@@ -899,6 +910,30 @@ const jsonLd = {
     color: var(--color-text-secondary);
     font-size: 0.95rem;
     line-height: 1.6;
+  }
+
+  .cf-own__perks {
+    display: grid;
+    gap: var(--space-2);
+    align-content: start;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    color: var(--color-text);
+    font-size: 0.93rem;
+  }
+
+  .cf-own__perks li {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .cf-own__perks :global(.cf-own__check) {
+    width: 1rem;
+    height: 1rem;
+    flex: none;
+    color: var(--color-accent-text);
   }
 
   .cf-own__status {

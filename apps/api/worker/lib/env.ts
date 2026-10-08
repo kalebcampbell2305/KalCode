@@ -8,10 +8,12 @@ import {
 import { d1AccountStore } from "./account-store";
 import { SIGN_IN_UNAVAILABLE, sessionAuthenticator } from "./auth";
 import { accountAuthService } from "./auth-routes";
-import { billingPriceCatalog } from "./billing-plans";
+import { type BillableTier, billingPriceCatalog } from "./billing-plans";
 import { billingService } from "./billing-routes";
 import { d1BillingStore } from "./billing-store";
 import { emailAuthService } from "./email-auth";
+import { type GameBilling, type GameBuildsBucket, gameService } from "./game-routes";
+import { d1GameStore } from "./game-store";
 import {
   type DistributionStatsBinding,
   type InsightsCache,
@@ -24,7 +26,7 @@ import type { OpenIdClientConfig } from "./openid-connect";
 import { d1OwnerMetricsStore } from "./owner-metrics-store";
 import type { Deps } from "./router";
 import { d1Store } from "./store";
-import { stripeClient } from "./stripe";
+import { type GameStripeMode, gameStripeClient, gameStripeKeyMatchesMode, stripeClient } from "./stripe";
 import type { EntitlementSigningKey } from "./token";
 
 export interface Env {
@@ -56,6 +58,28 @@ export interface Env {
   STRIPE_PRICE_PRO_YEARLY?: string;
   STRIPE_PRICE_MAX_YEARLY?: string;
   STRIPE_PRICE_MAX_2X_YEARLY?: string;
+  // KalCode games (docs/BILLING.md §13). Unset GAME_STRIPE_MODE keeps game billing off.
+  /** Worker secret: Ed25519 private JWK with `kid` for game licenses. Never the entitlement key. */
+  GAME_LICENSE_SIGNING_KEY?: string;
+  GAME_LICENSE_PREVIOUS_PUBLIC_KEYS?: string;
+  /** "live" or "test"; the key prefix and every event's livemode must match it. */
+  GAME_STRIPE_MODE?: string;
+  GAME_STRIPE_SECRET_KEY?: string;
+  GAME_STRIPE_WEBHOOK_SECRET?: string;
+  /** One-time Price of the standalone KAL University purchase. */
+  GAME_STRIPE_PRICE_KAL_UNIVERSITY?: string;
+  /** Test mode only: JSON object of sandbox subscription Price id → "pro" | "max" | "max2x". */
+  GAME_TEST_PLAN_PRICES?: string;
+  /** Exact "true" opens the standalone checkout. */
+  GAME_CHECKOUT_ENABLED?: string;
+  /** Days after payment within which a full refund revokes ownership (default 30). */
+  GAME_REFUND_REVOKE_DAYS?: string;
+  /** "false" lifts the US-only rule for the standalone purchase (default on). */
+  GAME_US_ONLY?: string;
+  /** Worker secret: HMAC key for short-lived game download links. */
+  GAME_DOWNLOAD_SIGNING_SECRET?: string;
+  /** Private R2 bucket with game builds and `<game>/manifest.json`. */
+  GAME_BUILDS?: GameBuildsBucket;
 }
 
 // Imported once per isolate for each distinct secret value.
@@ -78,6 +102,73 @@ function loadSigningKey(secret: string | undefined): Promise<EntitlementSigningK
     });
   }
   return cachedKey;
+}
+
+// The game license key is cached separately: it is a different secret with a different purpose.
+let cachedGameSecret: string | undefined;
+let cachedGameKey: Promise<EntitlementSigningKey> | undefined;
+
+function loadGameSigningKey(secret: string | undefined): Promise<EntitlementSigningKey | null> {
+  if (!secret) return Promise.resolve(null);
+  if (secret !== cachedGameSecret || !cachedGameKey) {
+    cachedGameSecret = secret;
+    cachedGameKey = importSigningKey(secret);
+    cachedGameKey.catch(() => {
+      if (cachedGameSecret === secret) {
+        cachedGameSecret = undefined;
+        cachedGameKey = undefined;
+      }
+    });
+  }
+  return cachedGameKey;
+}
+
+const PRICE_ID = /^price_[A-Za-z0-9_]+$/;
+
+/** Sandbox subscription Prices for test mode; anything malformed disables game billing. */
+export function parseTestPlanPrices(value: string | undefined): Record<string, BillableTier> | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+    const out: Record<string, BillableTier> = {};
+    for (const [price, tier] of Object.entries(parsed)) {
+      if (!PRICE_ID.test(price) || (tier !== "pro" && tier !== "max" && tier !== "max2x")) return null;
+      out[price] = tier;
+    }
+    return Object.keys(out).length > 0 ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Game billing, or null unless every piece is configured consistently for one mode. */
+export function gameBillingFromEnv(
+  env: Env,
+  catalog: ReturnType<typeof billingPriceCatalog>,
+  fetcher?: typeof fetch,
+): GameBilling | null {
+  const mode: GameStripeMode | null =
+    env.GAME_STRIPE_MODE === "live" || env.GAME_STRIPE_MODE === "test" ? env.GAME_STRIPE_MODE : null;
+  if (!mode) return null;
+  const key = env.GAME_STRIPE_SECRET_KEY ?? "";
+  if (!gameStripeKeyMatchesMode(key, mode)) return null;
+  if (!/^whsec_[A-Za-z0-9_]+$/.test(env.GAME_STRIPE_WEBHOOK_SECRET ?? "")) return null;
+  const planPrices =
+    mode === "live" ? (catalog.ok ? catalog.tierForPrice : null) : parseTestPlanPrices(env.GAME_TEST_PLAN_PRICES);
+  if (!planPrices) return null;
+  const standalone = env.GAME_STRIPE_PRICE_KAL_UNIVERSITY ?? "";
+  if (!PRICE_ID.test(standalone) || standalone in planPrices) return null;
+  const days = Number(env.GAME_REFUND_REVOKE_DAYS ?? "30");
+  return {
+    stripe: gameStripeClient({ secretKey: key, mode, ...(fetcher ? { fetcher } : {}) }),
+    webhookSecret: env.GAME_STRIPE_WEBHOOK_SECRET as string,
+    standalonePrices: { kal_university: standalone },
+    planPrices,
+    checkoutEnabled: env.GAME_CHECKOUT_ENABLED === "true",
+    refundRevokeDays: Number.isInteger(days) && days >= 0 && days <= 365 ? days : 30,
+    usOnly: env.GAME_US_ONLY !== "false",
+  };
 }
 
 // Owner revenue reads page through Stripe; keep the last lists for the isolate (the service itself
@@ -173,8 +264,26 @@ export function depsFromEnv(env: Env): Deps {
     log,
     cache: insightsCacheFor(env.STRIPE_SECRET_KEY ?? ""),
   });
+  const entitlementStore = d1Store(env.DB);
+  const games = gameService({
+    store: d1GameStore(env.DB),
+    entitlements: entitlementStore,
+    // The game license key must never be the KalCode entitlement key (refused when identical).
+    signingKey: () =>
+      env.GAME_LICENSE_SIGNING_KEY && env.GAME_LICENSE_SIGNING_KEY === env.ENTITLEMENT_SIGNING_KEY
+        ? Promise.resolve(null)
+        : loadGameSigningKey(env.GAME_LICENSE_SIGNING_KEY),
+    previousPublicKeys: () => parsePreviousPublicKeys(env.GAME_LICENSE_PREVIOUS_PUBLIC_KEYS),
+    billing: gameBillingFromEnv(env, prices),
+    builds: env.GAME_BUILDS ?? null,
+    downloadSecret:
+      (env.GAME_DOWNLOAD_SIGNING_SECRET?.length ?? 0) >= 32 ? (env.GAME_DOWNLOAD_SIGNING_SECRET as string) : null,
+    rateLimitKey: (env.AUTH_RATE_LIMIT_KEY?.length ?? 0) >= 32 ? (env.AUTH_RATE_LIMIT_KEY as string) : null,
+    now,
+    log,
+  });
   return {
-    store: d1Store(env.DB),
+    store: entitlementStore,
     accountStore,
     accountAuth,
     openIdAuth,
@@ -191,6 +300,7 @@ export function depsFromEnv(env: Env): Deps {
         })
       : null,
     insights,
+    games,
     signingKey: () => loadSigningKey(env.ENTITLEMENT_SIGNING_KEY),
     previousPublicKeys: () => parsePreviousPublicKeys(env.ENTITLEMENT_PREVIOUS_PUBLIC_KEYS),
     now,

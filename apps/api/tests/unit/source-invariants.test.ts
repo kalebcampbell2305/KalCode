@@ -39,6 +39,7 @@ describe("Worker source", () => {
       expect([
         "worker/lib/account-store.ts",
         "worker/lib/billing-store.ts",
+        "worker/lib/game-store.ts",
         "worker/lib/owner-metrics-store.ts",
         "worker/lib/store.ts",
       ]).toContain(file);
@@ -50,6 +51,13 @@ describe("Worker source", () => {
         expect(write.sql).toMatch(
           /\b(?:oauth_attempts|email_signin_attempts|account_identities|account_sessions|auth_rate_limits|accounts|audit_log)\b/,
         );
+      }
+      // Games write only their own tables (migration 0012), never accounts, grants or billing.
+      if (file === "worker/lib/game-store.ts") {
+        expect(write.sql).toMatch(
+          /\b(?:game_payments|game_entitlements|game_perk_claims|game_device_authorizations|game_license_sessions|game_webhook_events|game_rate_limits)\b/,
+        );
+        expect(write.sql).not.toMatch(/\b(?:entitlement_grants|billing_[a-z_]+|account_sessions)\b\s*(?:\(|SET|WHERE)/);
       }
       if (file === "worker/lib/billing-store.ts") {
         expect(write.sql).toMatch(
