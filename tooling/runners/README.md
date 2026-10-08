@@ -50,21 +50,26 @@ The guard is copied next to the runner and wired as `ACTIONS_RUNNER_HOOK_JOB_STA
 Owner, 2026-10-08: "optimize which computer to pick for shipping to all users." Every `gate.yml` Windows job
 requests the label `kalcode-gate-pool` and runs on whichever trusted gate runner carries it:
 
-- **Second PC (always in the pool):** `kalcode-win-gate-2`, `-2b`, `-2c` carry `kalcode-gate-pool`; at most
+- **Second PC (gate runners; the pool for overflow, see below):** `kalcode-win-gate-2`, `-2b`, `-2c` carry `kalcode-gate-pool`; at most
   three gate jobs there at once, so `-2d` stays parked on `kalcode-gate-pc2-pending` (four concurrent jobs
   with a cold Rust build timed out website-e2e/api, run 37704899342). `-2c`/`-2d` run as the QA account
   (`C:\kalcode-ci-2c\runner`, `C:\kalcode-ci-2d\runner`, pinned to rustc 1.97.1 by `RUSTUP_TOOLCHAIN` in
   their `.env`); the release kit's `auto-windows-qa.ps1` parks them while that PC's update proof runs and
   restores exactly the labels they had.
-- **Build PC (only while idle):** `windows/gate-pool-governor.ps1` runs as one hidden background process
-  (lock and heartbeat in `C:\ProgramData\KalCode\gate-pool-governor`, decisions in
-  `target/lanes/gate-pool-governor.log`). Every 30 s it lends up to N idle pool workers (`kalcode-win-gate`,
-  `-w1`..`-w5`; N=2, 3 once a whole gate period stays under 50% CPU, back to 2 above 80%) by adding
-  `kalcode-gate-pool`, while the two-minute CPU average is under 55%, more than 16 GB RAM and 60 GB on C: are
-  free and no release build runs; otherwise it removes the label from idle workers. A busy worker is never
-  touched. Start it hidden:
+- **Build PC first, second PC for overflow (owner, 2026-10-08: "optimize for the build PC and for PC2"):**
+  the build PC runs the desktop half in ~16 min against ~50-77 min on the laptop. `windows/gate-pool-governor.ps1`
+  runs as one hidden background process (lock and heartbeat in `C:\ProgramData\KalCode\gate-pool-governor`,
+  decisions in `target/lanes/gate-pool-governor.log`). Every 30 s it lends up to N idle build-PC workers
+  (`kalcode-win-gate`, `-w1`..`-w5`; N=2, 3 once a whole gate period stays under 50% CPU, back to 2 above 80%)
+  while the two-minute CPU average is under 70% and more than 12 GB RAM and 60 GB on C: are free. A release
+  build no longer blocks lending (one runs during every gate by design); it caps N at 2, and gates run below
+  normal priority there so release builds and the owner's agents still win. The second PC's runners carry
+  `kalcode-gate-pool` only for the queued pooled jobs no idle build-PC worker can start now, so no job waits for
+  a busy build PC; a runner the release kit parked (`kalcode-gate-pc2-pending`) is never touched. When the
+  governor stops, the second PC is re-pooled, and the release watcher (`auto-release.ps1`) re-pools it if the
+  heartbeat is more than 5 minutes old. A busy runner is never touched. Start it hidden:
   `Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','<path>\gate-pool-governor.ps1'`
-  (`-Once -WhatIf` prints one decision; `-Stop` stops it).
+  (`-Once -WhatIf` prints one decision; `-Stop` stops it and re-pools the second PC).
 
 `.github/scripts/gate-host.ps1` maps each runner name to its machine's resources (ports, locks, the build
 PC's admission hook and heavy tokens, the second PC's `rust.lock` and machine lock). The merge train trusts a
