@@ -290,6 +290,9 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
     await page.getByRole("button", { name: "Activity", exact: true }).click();
     const activity = page.getByRole("region", { name: "Activity" });
     await expect(activity.getByText("KalVoice ran a command").first()).toBeVisible();
+    // The restarted app's own startup provider checks can fill the first page of 25 entries, so
+    // the earlier route event may sit on the next page.
+    await activity.getByRole("button", { name: "Show older activity" }).click();
     await expect(activity.getByText("KalVoice heard a command").first()).toBeVisible();
     // Activity never shows what was said.
     await expect(activity.getByText(/unit test for the parser/i)).toHaveCount(0);
