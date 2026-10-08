@@ -321,7 +321,9 @@ export function staleIncremental(profile, before) {
   const root = join(profile, "incremental");
   return directories(root)
     .map((entry) => join(root, entry.name))
-    .filter((dir) => Math.max(mtime(dir), ...directories(dir).map((session) => mtime(join(dir, session.name)))) < before);
+    .filter(
+      (dir) => Math.max(mtime(dir), ...directories(dir).map((session) => mtime(join(dir, session.name)))) < before,
+    );
 }
 
 /** What applySweep removes from one profile dir: regenerable dirs and loose build products only. */
