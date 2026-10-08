@@ -188,7 +188,7 @@ export const PAGES = [
     path: "/games/kal-university",
     title: "KAL University — A KalCode Game",
     description:
-      "KAL University is a single-player campus adventure and business game from KalCode, in development for Windows and macOS. Start in your dorm with $200 and build your future.",
+      "KAL University is a single-player campus adventure and business game from KalCode, in development for Windows and macOS. Start in your dorm with $200 and build your future: $9.99, or included with KalCode Pro, MAX and MAX 2X.",
   },
   {
     path: "/security",

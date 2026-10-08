@@ -5,13 +5,17 @@
  *
  * Truth rules for this page (docs/WEBSITE.md "Games"):
  * - The game is in development. No build is downloadable or for sale, so the Windows and macOS
- *   download controls are disabled "Coming soon" states, and no price is shown (the price is not set).
+ *   download controls and the standalone purchase are disabled "Coming soon" states. There is no
+ *   buy button, checkout or form on this page.
  * - Every image is a real capture of the development build (components/games/Capture.astro).
  * - Features that are not in the development build are listed under "Where it's headed", each
- *   tagged Planned, never described as shipped.
- * - The game is separate from KalCode: no KalCode plan, account, billing or early-access list is
- *   involved, so this page has no form and links only to KalCode's existing X account for news.
+ *   tagged Planned, never described as shipped (friends multiplayer and cofounders included).
+ * - Ownership (owner direction, Update 3; entitlement policy E1-E13 approved 2026-10-08):
+ *   $9.99 USD once, or included with KalCode Pro, MAX and MAX 2X, yours for life from the first
+ *   successful paid subscription payment. Plan prices come from @kalcode/protocol/plans, never typed
+ *   here. Sales open only after the owner publishes the game's terms and refund wording.
  */
+import { formatInterval, formatPrice, getPlan, type PlanId } from "@kalcode/protocol/plans";
 import Backdrop from "../../components/Backdrop.astro";
 import BrandMark from "../../components/BrandMark.astro";
 import Icon from "../../components/Icon.astro";
@@ -26,6 +30,9 @@ const pageUrl = new URL(page.path, SITE_ORIGIN).href;
 const gameId = `${pageUrl}#game`;
 
 const CAPTION = "In-game capture · development build";
+
+/** The standalone price (owner direction, Update 3: $9.99 USD, one time, lifetime ownership). */
+const GAME_PRICE = "$9.99";
 
 const arc = [
   {
@@ -79,9 +86,9 @@ const gallery = [
     alt: "The character creator: a new student's name, skin tone, build, height and hair, with the quad behind.",
   },
   {
-    name: "journal",
-    title: "Your journal",
-    alt: "The journal's Quests tab: the main quest Welcome to KAL, its objective and a tip.",
+    name: "cafe",
+    title: "Lantern Café",
+    alt: "Inside Lantern Café: a checkered floor, a long wooden counter, a menu board and a classmate to talk to.",
   },
   {
     name: "map",
@@ -91,7 +98,7 @@ const gallery = [
   {
     name: "dashboard",
     title: "Your company at a glance",
-    alt: "The StudySync Labs business dashboard: revenue, profit, customers, milestones and active tasks.",
+    alt: "The StudySync Labs business dashboard after a first campaign: revenue, profit, customers, satisfaction and the next milestone.",
   },
   {
     name: "campaign",
@@ -127,6 +134,16 @@ const roadmap = [
     title: "Leave the dorm. Expand.",
     text: "Move out and grow into new regions inspired by California, Florida and New York.",
   },
+  {
+    label: "friends",
+    title: "Private worlds with up to three friends.",
+    text: "An optional, invite-only world for four players in all: explore campus together and show off your companies. Solo play stays complete and offline.",
+  },
+  {
+    label: "cofounders",
+    title: "Cofounders and real rivals.",
+    text: "Start a company with friends as cofounders, and compete with classmate founders whose results come from the same simulation as yours.",
+  },
 ] as const;
 
 const platforms = [
@@ -153,16 +170,29 @@ const platforms = [
   },
 ] as const;
 
-const promises = [
+/** The KalCode plans that include the game, with their live prices from plans.ts. */
+const INCLUDED_WITH: readonly PlanId[] = ["pro", "max", "max2x"];
+const ownPlans = INCLUDED_WITH.map((id) => {
+  const plan = getPlan(id);
+  return {
+    id,
+    name: `KalCode ${plan.name}`,
+    monthly: `${formatPrice(plan, "month")}${formatInterval("month")}`,
+    yearly: `${formatPrice(plan, "year")}${formatInterval("year")}`,
+    featured: id === "max",
+  };
+});
+
+const ownership = [
   {
-    label: "one-time purchase",
-    title: "Buy it once.",
-    text: "Planned as a single purchase with no subscription. The price will be announced before release.",
+    label: "for life",
+    title: "Yours to keep.",
+    text: "Buying it, or your first successful payment on Pro, MAX or MAX 2X, makes KAL University yours for life. Cancelling or changing plans never takes it away.",
   },
   {
-    label: "separate from KalCode",
-    title: "Not part of a KalCode plan.",
-    text: "You don't need KalCode to play, and the game never touches your KalCode account or billing.",
+    label: "plan perks",
+    title: "Perks, never pay-to-win.",
+    text: "Plans will add a few cosmetic items and a little starting cash, claimed once and kept after you cancel. Every item can also be earned in the game.",
   },
   {
     label: "fair play",
@@ -171,8 +201,8 @@ const promises = [
   },
   {
     label: "offline",
-    title: "Yours, on your computer.",
-    text: "Single-player and designed to play fully offline, with your saves kept on your own computer.",
+    title: "Sign in once, then play offline.",
+    text: "The game links to your KalCode account with a short code, then plays offline with your saves on your own computer.",
   },
 ] as const;
 
@@ -183,7 +213,7 @@ const faq = [
   },
   {
     q: "Does it need an internet connection or an account?",
-    a: "No. It's a single-player game designed to play fully offline. It has no online features, and your saves stay on your computer.",
+    a: "Only to confirm you own it. You link the game to your KalCode account once, by entering a short code on kalcoded.com. After that the single-player game plays offline and your saves stay on your computer. It renews its license quietly when you're online and needs to reconnect at least once every 30 days; your saves are never touched.",
   },
   {
     q: "Are there microtransactions or loot boxes?",
@@ -191,7 +221,15 @@ const faq = [
   },
   {
     q: "Do I need a KalCode subscription?",
-    a: "No. KAL University is a separate game, sold on its own. It isn't included in any KalCode plan, no plan is needed to play it, and buying it has nothing to do with your KalCode account or billing.",
+    a: `No. You can buy KAL University on its own for ${GAME_PRICE}, once. It's also included with KalCode Pro, MAX and MAX 2X, monthly or yearly: your first successful payment makes it yours for life, even if you later cancel or change plans.`,
+  },
+  {
+    q: "What do the plan perks include?",
+    a: "Pro, MAX and MAX 2X will each add a few cosmetic items and +$50 of starting cash for new games, so MAX 2X starts with $150 extra. Perks are claimed once per account and stay after you cancel. Every item can also be earned in the game, and every achievement is reachable with the standalone version.",
+  },
+  {
+    q: "Can I play with friends?",
+    a: "Not yet. Optional private worlds for you and up to three friends are planned, along with starting companies as cofounders. Neither is in the development build. Solo play will always be the complete game and won't need an online session.",
   },
   {
     q: "What is KalCode Sim?",
@@ -207,7 +245,7 @@ const faq = [
   },
   {
     q: "How much will it cost?",
-    a: "The price isn't set yet. The plan is a one-time purchase with no subscription, announced here before release.",
+    a: `${GAME_PRICE} (USD), once, with no subscription needed. It's also included with KalCode Pro, MAX and MAX 2X. It isn't on sale yet: purchase opens on this page, with its terms and refund policy, when a tested build is ready.`,
   },
   {
     q: "Which computers will it run on?",
@@ -273,17 +311,22 @@ const jsonLd = {
         <p id="cf-get-note" class="cf-hero__note">
           No build is available yet. Downloads appear here once a build passes testing on real PCs and Macs.
         </p>
+        <p class="cf-hero__price">
+          <span class="cf-hero__amount">{GAME_PRICE}</span>
+          <span>once, or included with KalCode Pro, MAX and MAX 2X. Yours for life.</span>
+        </p>
         <div class="cf-hero__links">
+          <a class="text-link" href="#own">Ways to own it <Icon name="arrow-down" /></a>
           <a class="text-link" href="#play">See what you do <Icon name="arrow-down" /></a>
           <XLink account="official" withHandle class="cf-follow" />
         </div>
       </div>
       <figure class="cf-hero__shot frame">
         <Capture
-          name="quad"
+          name="title"
           eager
           sizes="(min-width: 64rem) 46rem, 92vw"
-          alt="The player on the central quad during Welcome Week, beside the fountain, with the domed hall behind and the clock, wallet and objective on screen."
+          alt="The KAL University title screen at sunset: the KalCode mascot with A KalCode Game, the tagline Build your future., and the campus clock tower and quad behind the menu."
         />
         <figcaption class="cf-caption"><span class="chip chip--plain">{CAPTION}</span></figcaption>
       </figure>
@@ -342,16 +385,16 @@ const jsonLd = {
           <figure class="feature-split__visual cf-shot cf-shot--pair">
             <div class="frame cf-shot__main">
               <Capture
-                name="night-quad"
+                name="quad"
                 sizes="(min-width: 64rem) 44rem, 92vw"
-                alt="The central quad at night under lamplight, the domed hall lit in the distance."
+                alt="The player on Founders' Quad during Welcome Week, beside the fountain, with the domed hall behind and the clock, wallet and objective on screen."
               />
             </div>
             <div class="frame cf-shot__inset">
               <Capture
-                name="cafe"
+                name="night-quad"
                 sizes="(min-width: 64rem) 18rem, 46vw"
-                alt="Inside Lantern Café: a checkered floor, a long wooden counter and a menu board."
+                alt="The same quad at night under lamplight, the domed hall lit in the distance."
               />
             </div>
             <figcaption class="cf-caption"><span class="chip chip--plain">{CAPTION}</span></figcaption>
@@ -371,7 +414,7 @@ const jsonLd = {
               <Capture
                 name="dialogue"
                 sizes="(min-width: 64rem) 44rem, 92vw"
-                alt="A conversation with Sam in Lantern Café, with three reply choices on screen."
+                alt="A conversation with Sam, a classmate, with three reply choices on screen."
               />
             </div>
             <figcaption class="cf-caption"><span class="chip chip--plain">{CAPTION}</span></figcaption>
@@ -391,7 +434,7 @@ const jsonLd = {
               <Capture
                 name="campaign-report"
                 sizes="(min-width: 64rem) 44rem, 92vw"
-                alt="A campaign report: 604 impressions led to 27 visits and no customers, with targeting named as the biggest drag."
+                alt="A campaign report: 714 impressions led to 43 visits and 2 customers, with targeting fit named as the biggest drag and the money spent laid out."
               />
             </div>
             <div class="frame cf-shot__inset">
@@ -518,17 +561,47 @@ const jsonLd = {
     </div>
   </section>
 
-  <section class="world-section" id="promises" aria-labelledby="promises-title">
+  <section class="world-section cf-own" id="own" aria-labelledby="own-title">
     <Backdrop variant="gravity" />
     <div class="container">
       <SectionHead
-        id="promises-title"
-        title="A game you buy once and keep."
-        text="KAL University is its own product, separate from KalCode's apps and plans."
+        id="own-title"
+        title="Own it once. Keep it for life."
+        text={`${GAME_PRICE} on its own, or included with a KalCode plan. Not on sale yet: purchase opens here, with its terms and refund policy, when a tested build is ready.`}
+        chips={[{ label: "Coming soon", kind: "dev" }]}
       />
-      <ul class="facts cf-facts" role="list">
+      <ul class="cf-own__grid" role="list">
+        <li class="cf-own__card cf-own__card--game">
+          <p class="cf-own__kicker">On its own</p>
+          <h3 class="cf-own__name">KAL University</h3>
+          <p class="cf-own__price">
+            <span class="cf-own__amount">{GAME_PRICE}</span> <span class="cf-own__per">USD, one time</span>
+          </p>
+          <p class="cf-own__text">The complete game, every chapter and every ending. No subscription, nothing to buy inside.</p>
+          <p class="cf-own__status"><span class="chip chip--dev">Coming soon</span> Not on sale yet</p>
+        </li>
         {
-          promises.map((fact) => (
+          ownPlans.map((plan) => (
+            <li class:list={["cf-own__card", { "cf-own__card--featured": plan.featured }]}>
+              <p class="cf-own__kicker">{plan.featured ? "Included · Most popular" : "Included"}</p>
+              <h3 class="cf-own__name">{plan.name}</h3>
+              <p class="cf-own__price">
+                <span class="cf-own__amount">{plan.monthly}</span> <span class="cf-own__per">or {plan.yearly}</span>
+              </p>
+              <p class="cf-own__text">
+                KAL University is yours for life from your first successful payment, monthly or yearly, plus this plan's
+                in-game perks.
+              </p>
+              <a class="text-link cf-own__action" href="/pricing">
+                See {plan.name} <Icon name="arrow-right" />
+              </a>
+            </li>
+          ))
+        }
+      </ul>
+      <ul class="facts cf-facts cf-own__facts" role="list">
+        {
+          ownership.map((fact) => (
             <li class="fact">
               <span class="fact__label">{fact.label}</span>
               <p class="fact__title">{fact.title}</p>
@@ -567,7 +640,8 @@ const jsonLd = {
       <p class="eyebrow">A KalCode Game</p>
       <h2 id="closing-title" class="h2">Build your future.</h2>
       <p class="body-lg">
-        $200, a dorm room and four years. KAL University is coming to Windows and macOS. Follow {SOCIAL.official.handle} for release news.
+        $200, a dorm room and four years. KAL University is coming to Windows and macOS, {GAME_PRICE} once or included with
+        KalCode Pro, MAX and MAX 2X. Follow {SOCIAL.official.handle} for release news.
       </p>
       <div class="button-row cf-closing__actions">
         <XLink account="official" withHandle class="cf-follow" />
@@ -641,7 +715,7 @@ const jsonLd = {
     text-wrap: balance;
   }
 
-  /* The game's own title art sets FOUNDER in warm gold; the site echoes it with its gold token. */
+  /* The game's own title art sets UNIVERSITY in warm gold; the site echoes it with its gold token. */
   .cf-hero__accent {
     color: rgb(var(--world-gold));
   }
@@ -709,6 +783,142 @@ const jsonLd = {
       grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
       gap: var(--space-12);
     }
+  }
+
+  .cf-hero__price {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: var(--space-3);
+    max-width: 46ch;
+    margin: 0;
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-lg);
+    background: rgb(var(--world-gold) / 0.06);
+    box-shadow: inset 0 0 0 1px rgb(var(--world-gold) / 0.22);
+    color: var(--color-text-secondary);
+    font-size: var(--site-text-small);
+    line-height: 1.45;
+  }
+
+  .cf-hero__amount {
+    color: rgb(var(--world-gold));
+    font-family: var(--font-display);
+    font-size: 1.5rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+
+  /* ---------- Own it: the standalone purchase and the plans that include the game ---------- */
+
+  .cf-own__grid {
+    display: grid;
+    gap: var(--space-4);
+    grid-template-columns: repeat(auto-fit, minmax(14.5rem, 1fr));
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .cf-own__card {
+    position: relative;
+    display: grid;
+    gap: var(--space-3);
+    grid-template-rows: auto auto auto 1fr auto;
+    padding: clamp(1.25rem, 1rem + 1vw, 1.75rem);
+    border-radius: var(--radius-xl);
+    background: var(--world-panel);
+    box-shadow: var(--world-panel-edge);
+  }
+
+  .cf-own__card--game {
+    background:
+      radial-gradient(90% 70% at 0% 0%, rgb(var(--world-gold) / 0.12), transparent 70%),
+      var(--world-panel);
+    box-shadow:
+      var(--world-panel-edge),
+      0 0 70px -40px rgb(var(--world-gold) / 0.5);
+  }
+
+  .cf-own__card--featured {
+    box-shadow: var(--world-panel-lit);
+  }
+
+  .cf-own__card--featured::before {
+    position: absolute;
+    top: 0;
+    left: 14%;
+    width: 50%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--color-accent-icy), transparent);
+    content: "";
+  }
+
+  .cf-own__kicker {
+    margin: 0;
+    color: var(--color-accent-text);
+    font-family: var(--font-wider);
+    font-size: var(--type-label);
+    font-weight: var(--weight-medium);
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+  }
+
+  .cf-own__card--game .cf-own__kicker {
+    color: rgb(var(--world-gold));
+  }
+
+  .cf-own__name {
+    margin: 0;
+    color: var(--color-text);
+    font-family: var(--font-display);
+    font-size: 1.3rem;
+    font-weight: var(--weight-semibold);
+    letter-spacing: -0.01em;
+  }
+
+  .cf-own__price {
+    margin: 0;
+    color: var(--color-text-muted);
+  }
+
+  .cf-own__amount {
+    color: var(--color-text);
+    font-family: var(--font-display);
+    font-size: 1.6rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+
+  .cf-own__per {
+    font-size: var(--site-text-small);
+  }
+
+  .cf-own__text {
+    margin: 0;
+    color: var(--color-text-secondary);
+    font-size: 0.95rem;
+    line-height: 1.6;
+  }
+
+  .cf-own__status {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+    align-self: end;
+    margin: 0;
+    color: var(--color-text-muted);
+    font-size: var(--site-text-small);
+  }
+
+  .cf-own__action {
+    align-self: end;
+    justify-self: start;
+  }
+
+  .cf-own__facts {
+    margin-top: clamp(2rem, 1.5rem + 2vw, 3rem);
   }
 
   /* ---------- "Coming soon" download controls: disabled, honest, still clearly a download ---------- */
@@ -1093,9 +1303,9 @@ const jsonLd = {
     }
   }
 
-  @media (min-width: 72rem) {
+  @media (min-width: 64rem) {
     .cf-ahead {
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(3, minmax(0, 1fr));
     }
   }
 

@@ -89,22 +89,34 @@ Rules the pages follow:
 
 ## Games
 
-`/games/kal-university` presents KAL University, a separate single-player game (tagline "Build your
+`/games/kal-university` presents KAL University, a single-player game (tagline "Build your
 future."), as "A KalCode Game".
 It is a world page reached from the footer's Games column; the header navigation and `/pricing`
 stay KalCode-only. Rules:
 
-- **Separate from KalCode.** No KalCode plan, account, billing, checkout or early-access form appears
-  on the page; release news points to the existing X account in `SOCIAL`.
+- **Ownership (owner direction, KAL University blueprint Update 3; policy E1-E13 approved
+  2026-10-08).** $9.99 USD once, or included with KalCode Pro, MAX and MAX 2X: the first
+  successful paid subscription payment (monthly or yearly) makes it the account's for life, and
+  cancelling or changing plans never removes it. Plan prices on the page come from
+  `@kalcode/protocol/plans`; never type them. Plan perks are described as planned until the game
+  ships them.
+- **Not on sale.** No buy button, checkout, Stripe call or form appears on the page. The standalone
+  card shows a "Coming soon · Not on sale yet" state; purchase opens only after the owner publishes
+  the game's terms and refund wording and gives the launch go-ahead. Release news points to the
+  existing X account in `SOCIAL`.
 - **Truthful state.** While no game build is published, the Windows and macOS download controls are
-  disabled "Coming soon" buttons, no price is shown, and the story arc tags each chapter as "In the
-  development build" or "Planned". Features beyond the current build (a laptop to work anywhere on
-  campus, fictional AI tools and an AI company, a fictional stock market and IPO, regions inspired by
-  California, Florida and New York) sit together under "Where it's headed", each tagged Planned.
+  disabled "Coming soon" buttons, and the story arc tags each chapter as "In the development build"
+  or "Planned". Features beyond the current build (a laptop to work anywhere on campus, fictional AI
+  tools and an AI company, a fictional stock market and IPO, regions inspired by California, Florida
+  and New York, optional private worlds with up to three friends, cofounders and classmate rivals)
+  sit together under "Where it's headed", each tagged Planned.
 - **Real captures only.** `public/assets/games/kal-university/*` are frames from the game's real
-  development build (1920×1080 PNG converted with sharp to AVIF and WebP at 960 and 1920 widths),
-  each captioned "In-game capture · development build" and given a descriptive alt. Never a mock-up,
-  and never a frame that shows retired KalCode branding.
+  development build (1920x1080 PNG converted with sharp to AVIF q55 and WebP q80 at 960 and 1920
+  widths), each captioned "In-game capture · development build" and given a descriptive alt. Never a
+  mock-up, never a frame from a capture set whose visual review was rejected, and never a frame that
+  shows retired KalCode branding or the old game name. Current set (2026-10-08): the title screen
+  from the `ui-polish4` capture (current mascot, KAL University title art) and the rest from
+  `release-default`.
 - **Structured data.** The page's JSON-LD adds a `VideoGame` node and names it as the page's `about`
   (no offers until the game is for sale).
 
