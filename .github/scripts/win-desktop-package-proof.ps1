@@ -9,8 +9,14 @@ function Invoke-CandidateRelease([string[]]$Arguments) {
       # Read-only Actions tokens cannot see drafts. Try the runner's existing
       # native gh login without reading, printing, copying or changing credentials.
       $env:GH_TOKEN = $null
-      $output = (& gh @Arguments | Out-String)
-      $code = $LASTEXITCODE
+      # That login is the one call that can see the draft, and one slow TLS handshake on the second PC
+      # failed whole QA runs (2026-10-08, 0.1.10+2310: three in a row). Retry it with backoff.
+      foreach ($wait in @(0, 5, 15, 30, 60)) {
+        if ($wait) { Start-Sleep -Seconds $wait }
+        $output = (& gh @Arguments | Out-String)
+        $code = $LASTEXITCODE
+        if ($code -eq 0) { break }
+      }
     }
     if ($code -ne 0) { Refuse 'candidate draft access failed with workflow and existing runner-native authentication' }
     $output
