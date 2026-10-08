@@ -61,7 +61,7 @@ requests the label `kalcode-gate-pool` and runs on whichever trusted gate runner
   runs as one hidden background process (lock and heartbeat in `C:\ProgramData\KalCode\gate-pool-governor`,
   decisions in `target/lanes/gate-pool-governor.log`). Every 30 s it lends up to N idle build-PC workers
   (`kalcode-win-gate`, `-w1`..`-w5`; N=2, 3 once a whole gate period stays under 50% CPU, back to 2 above 80%)
-  while the two-minute CPU average is under 70% and more than 12 GB RAM and 60 GB on C: are free. A release
+  while the two-minute CPU average is under 70%, more than 20 GB RAM (the build PC admits a gate job only with 16 GB + 2 GB per running gate job free) and 60 GB on C: are free. A release
   build no longer blocks lending (one runs during every gate by design); it caps N at 2, and gates run below
   normal priority there so release builds and the owner's agents still win. The second PC's runners carry
   `kalcode-gate-pool` only for the queued pooled jobs no idle build-PC worker can start now, so no job waits for
