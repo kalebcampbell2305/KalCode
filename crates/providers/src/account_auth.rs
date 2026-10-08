@@ -1725,10 +1725,25 @@ mod tests {
             .is_some()
         );
 
+        // An over-long effort (over Codex's 64-byte bound) is a malformed row, which fails closed
+        // for the whole model rather than being skipped like an unlaunchable token.
+        let oversized = "e".repeat(65);
+        assert!(
+            decode_model_item(&model_value(
+                "catalog-oversized",
+                "codex-oversized-selector",
+                "Oversized",
+                true,
+                "high",
+                &["high", &oversized],
+            ))
+            .is_none(),
+            "an over-long effort must not be advertised"
+        );
+
         let invalid = [
             "UPPER".to_owned(),
             "future.effort".to_owned(),
-            "e".repeat(33),
             "high' -c web_search='live".to_owned(),
         ];
         for effort in &invalid {
