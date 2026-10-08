@@ -114,7 +114,7 @@ describe("Waiting thread (Stable)", () => {
     );
 
     const provider = await screen.findByTestId("thread-provider-identity");
-    expect(provider).toHaveTextContent("Codex · actual/model-v2 · xhigh");
+    expect(provider).toHaveTextContent(/^Codex · Account unavailable · actual\/model-v2 · xhigh$/);
     expect(provider).toHaveAttribute("title", expect.stringContaining("Selected model: requested/model-v1."));
     expect(provider).toHaveAttribute("title", expect.stringContaining("Selected reasoning: high."));
   });

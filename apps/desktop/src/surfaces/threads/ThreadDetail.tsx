@@ -406,14 +406,15 @@ function ThreadProviderIdentity({
   return (
     <dd data-testid="thread-provider-identity" title={identity.detail}>
       <ProviderGlyph provider={thread.providerId} size="xs" />
-      {identity.providerName} · {identity.model.label}
-      {identity.effort.source !== "unavailable" ? ` · ${identity.effort.label}` : ""}
+      {identity.providerName}
       {" · "}
       <AccountSwitcher
         thread={{ ...thread, accountLabel: identity.accountName }}
         archived={archived}
         onRebound={onRebound}
       />
+      {` · ${identity.model.label}`}
+      {identity.effort.source !== "unavailable" ? ` · ${identity.effort.label}` : ""}
     </dd>
   );
 }
