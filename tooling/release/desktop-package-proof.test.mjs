@@ -136,3 +136,29 @@ test("portable Python cleanup removes only the validated current run directory",
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("candidate draft access retries the runner's own gh login before refusing", { skip: process.platform !== "win32" }, () => {
+  // Only the function under test: gh is a stub that fails a set number of times (a slow TLS handshake).
+  const fn = source.match(/function Invoke-CandidateRelease[\s\S]*?\r?\n\}\r?\n/u)?.[0];
+  assert.ok(fn, "Invoke-CandidateRelease");
+  const run = (failures) =>
+    spawnSync(
+      "powershell",
+      [
+        "-NoProfile",
+        "-Command",
+        `$ErrorActionPreference='Stop'; $script:calls = 0
+function Start-Sleep { param([int]$Seconds) }
+function Refuse([string]$m) { throw "REFUSED: $m" }
+function gh { $script:calls++; if ($script:calls -le ${failures}) { $global:LASTEXITCODE = 1; 'TLS handshake timeout' } else { $global:LASTEXITCODE = 0; 'ok' } }
+${fn}
+$env:GH_TOKEN = 'workflow'
+try { $out = Invoke-CandidateRelease @('release', 'view', 'qa-x'); "calls=$($script:calls) out=$($out.Trim()) token=$env:GH_TOKEN" } catch { "calls=$($script:calls) $($_.Exception.Message) token=$env:GH_TOKEN" }`,
+      ],
+      { encoding: "utf8", windowsHide: true, timeout: 60_000 },
+    ).stdout.trim();
+  // The workflow token's call fails by design; the native login then gets through on its third try.
+  assert.equal(run(3), "calls=4 out=ok token=workflow");
+  // Five native attempts, then the refusal, and the workflow token is always restored.
+  assert.match(run(99), /^calls=6 REFUSED: candidate draft access failed .* token=workflow$/u);
+});
