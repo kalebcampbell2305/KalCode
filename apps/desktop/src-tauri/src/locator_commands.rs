@@ -599,7 +599,7 @@ mod tests {
     }
 
     #[test]
-    fn a_full_plan_refuses_a_new_workspace_without_creating_its_folder() {
+    fn new_workspaces_are_never_refused_for_the_plan() {
         let dir = tempfile::tempdir().expect("tempdir");
         let core = Core::open(CoreConfig {
             paths: kalcode_core::Paths::new(dir.path().join("data")),
@@ -609,13 +609,18 @@ mod tests {
         .expect("core");
         let projects = dir.path().join("projects");
         std::fs::create_dir_all(&projects).expect("projects");
-        let limit = kalcode_core::plans::PlanTier::Free.limit(Limited::Workspaces);
-        create_in(&core, &projects, "one", limit).expect("first");
-        create_in(&core, &projects, "two", limit).expect("second");
-        let err = create_in(&core, &projects, "three", limit).expect_err("full");
-        assert_eq!(err.code, "too_many_workspaces");
-        assert!(!projects.join("three").exists(), "no folder is created");
-        create_in(&core, &projects, "three", None).expect("uncapped");
+        let free = kalcode_core::plans::PlanTier::Free.limit(Limited::Workspaces);
+        assert_eq!(free, None);
+        // A cap cached from an older build no longer refuses a new workspace.
+        let legacy = Some(kalcode_core::plans::PlanLimit {
+            tier: kalcode_core::plans::PlanTier::Free,
+            kind: Limited::Workspaces,
+            max: 2,
+        });
+        for name in ["one", "two", "three"] {
+            create_in(&core, &projects, name, legacy).expect("unlimited");
+            assert!(projects.join(name).is_dir());
+        }
         core.shutdown();
     }
 }

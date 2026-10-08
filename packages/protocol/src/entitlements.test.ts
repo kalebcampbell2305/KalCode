@@ -91,7 +91,7 @@ describe("restricted tiers", () => {
     expect(tierGrants("max2x").features).toEqual([...FEATURES]);
   });
 
-  it("ignores obsolete cached local terminal and coding-agent caps", () => {
+  it("ignores obsolete cached local terminal, coding-agent and workspace caps", () => {
     const legacy = {
       unrestricted: false,
       features: [],
@@ -99,7 +99,7 @@ describe("restricted tiers", () => {
     };
     expect(limitFor(legacy, "openTerminals")).toBeNull();
     expect(limitFor(legacy, "parallelAgents")).toBeNull();
-    expect(limitFor(legacy, "workspaces")).toBe(2);
+    expect(limitFor(legacy, "workspaces")).toBeNull();
   });
 
   it("fail closed for unknown features and missing limits", () => {

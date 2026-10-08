@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use kalcode_core::events::{EventEnvelope, EventPayload};
 use kalcode_core::flags::BuildChannel;
-use kalcode_core::plans::{Limited, PlanTier};
+use kalcode_core::plans::{Limited, PlanLimit, PlanTier};
 use kalcode_core::workspaces::{MAX_WRITE_BYTES, TerminalStatus};
 use kalcode_core::{Core, CoreConfig, Paths};
 use kalcode_pty::TerminalSize;
@@ -1016,42 +1016,34 @@ fn every_plan_can_open_terminals_beyond_the_obsolete_caps_across_workspaces() {
 }
 
 #[test]
-fn a_limited_plan_bounds_new_workspaces_but_never_reopening_one() {
+fn workspaces_are_unlimited_on_every_plan() {
     let data = tempfile::tempdir().expect("data");
     let projects: Vec<_> = (0..4)
         .map(|_| tempfile::tempdir().expect("project"))
         .collect();
     let core = open(data.path());
-    let limit = PlanTier::Free.limit(Limited::Workspaces);
+    for tier in [PlanTier::Free, PlanTier::Pro, PlanTier::Max] {
+        assert_eq!(tier.limit(Limited::Workspaces), None, "{tier:?}");
+    }
+    // A workspace cap cached from an older build no longer refuses a new workspace.
+    let legacy = Some(PlanLimit {
+        tier: PlanTier::Free,
+        kind: Limited::Workspaces,
+        max: 2,
+    });
     let first = core
-        .open_workspace_limited(projects[0].path(), limit)
+        .open_workspace_limited(projects[0].path(), legacy)
         .expect("first");
-    core.open_workspace_limited(projects[1].path(), limit)
-        .expect("second");
-    core.check_workspace_capacity(None).expect("uncapped");
-    let refused = core.check_workspace_capacity(limit).expect_err("full");
-    assert_eq!(refused.code, "too_many_workspaces");
-    let refused = core
-        .open_workspace_limited(projects[2].path(), limit)
-        .expect_err("a third workspace");
-    assert_eq!(refused.code, "too_many_workspaces");
-    assert_eq!(
-        refused.message,
-        "The Free plan allows 2 workspaces. Remove one to add another, or upgrade to Pro for 10."
-    );
-    assert_eq!(core.workspaces().expect("list").len(), 2);
-    // Reopening an existing workspace at the cap is never refused.
+    for project in &projects[1..] {
+        core.open_workspace_limited(project.path(), legacy)
+            .expect("unlimited");
+    }
+    core.check_workspace_capacity(legacy).expect("unlimited");
+    assert_eq!(core.workspaces().expect("list").len(), 4);
     let again = core
-        .open_workspace_limited(projects[0].path(), limit)
+        .open_workspace_limited(projects[0].path(), legacy)
         .expect("reopen");
     assert_eq!(again.id, first.id);
-    // Removing one frees a slot; an uncapped plan adds past the cap.
-    core.remove_workspace(&first.id).expect("remove");
-    core.open_workspace_limited(projects[2].path(), limit)
-        .expect("a removed workspace frees a slot");
-    core.open_workspace_limited(projects[3].path(), None)
-        .expect("uncapped");
-    assert_eq!(core.workspaces().expect("list").len(), 3);
 }
 
 #[test]

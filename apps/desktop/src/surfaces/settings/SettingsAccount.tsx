@@ -103,7 +103,7 @@ export function SettingsAccountView({
       id="kalcode-account"
       title="KalCode account"
       icon={<UserRound />}
-      description="Your verified plan, workspace capacity and KalVoice cloud allowance."
+      description="Your verified plan and KalVoice cloud allowance."
       padding="none"
       footer={
         <div className={styles.actions}>
@@ -208,8 +208,8 @@ export function SettingsAccountView({
           <div>
             <dt>Billing</dt>
             <dd>
-              No subscription. {PAID_PLAN_NAMES} add workspace capacity, cloud requests and premium workflows; compare
-              plans at <span data-selectable>kalcoded.com/pricing</span>.
+              No subscription. {PAID_PLAN_NAMES} add more accounts, cloud requests and premium workflows; compare plans
+              at <span data-selectable>kalcoded.com/pricing</span>.
             </dd>
           </div>
         ) : null}

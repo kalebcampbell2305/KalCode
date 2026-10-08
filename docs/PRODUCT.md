@@ -106,7 +106,7 @@ Defined once in `packages/protocol/src/plans.ts`.
 | KalVoice Requests / month | 25 | 150 | 500 | 1,000 | Unlimited |
 | Open terminals | 4 | 12 | 18 | Unlimited | Unlimited |
 | Parallel coding agents | 1 | 4 | 10 | Unlimited | Unlimited |
-| Workspaces | 2 | 10 | Unlimited | Unlimited | Unlimited |
+| Workspaces | Unlimited | Unlimited | Unlimited | Unlimited | Unlimited |
 | Connected provider accounts | 2 | 6 | 8 | Unlimited | Unlimited |
 | Local KalVoice dictation | Unlimited | Unlimited | Unlimited | Unlimited | Unlimited |
 | Permission modes (Plan, Approve, Auto, Bypass, Custom) | All | All | All | All | All |
