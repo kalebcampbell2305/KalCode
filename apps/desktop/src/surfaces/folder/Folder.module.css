@@ -618,3 +618,32 @@
     grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
   }
 }
+
+/* ---------------------------------------------------------------- agent ownership */
+
+.owner {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: var(--radius-full);
+  background: var(--status-working);
+}
+
+.owner[data-tone="received"] {
+  background: var(--status-recovering);
+}
+
+.owner[data-tone="area"] {
+  background: var(--status-muted);
+}
+
+.owner[data-tone="shared"] {
+  background: var(--status-waiting);
+}
+
+.ownerTip {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-width: 22rem;
+}

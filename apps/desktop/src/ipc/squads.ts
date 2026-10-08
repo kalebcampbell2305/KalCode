@@ -28,9 +28,33 @@ export interface SquadsApi {
 
 /** All entry points use the same native authority; no local execution or member state. */
 export class SquadsClient implements SquadsApi {
+  private used = false;
+  private readonly listeners = new Set<() => void>();
+
   constructor(private readonly invoke: <T>(command: SquadsCommandName, args: Record<string, unknown>) => Promise<T>) {}
 
+  /**
+   * Squads have been read or launched in this session. Agent File Ownership follows Squad members'
+   * owned paths only from then on, so a session that never uses Squads never polls them.
+   */
+  get inUse(): boolean {
+    return this.used;
+  }
+
+  /** Called once when Squads first come into use. */
+  onUse(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  private markUsed() {
+    if (this.used) return;
+    this.used = true;
+    for (const listener of this.listeners) listener();
+  }
+
   snapshot(): Promise<SquadsSnapshot> {
+    this.markUsed();
     return this.invoke("squads_snapshot", {});
   }
   save(definition: SquadDefinition): Promise<SquadDefinition> {
@@ -51,6 +75,7 @@ export class SquadsClient implements SquadsApi {
     requestId: string,
     goalOverride: string | null = null,
   ): Promise<SquadLaunch> {
+    this.markUsed();
     return this.invoke("squads_launch", { squadId, workspaceId, requestId, goalOverride });
   }
   launchRecipe(
@@ -59,6 +84,7 @@ export class SquadsClient implements SquadsApi {
     requestId: string,
     goalOverride: string | null = null,
   ): Promise<SquadLaunch> {
+    this.markUsed();
     return this.invoke("recipe_launch", { recipeId, workspaceId, requestId, goalOverride });
   }
   reassignManager(launchId: string, memberKey: string, managerKey: string | null): Promise<SquadLaunch> {

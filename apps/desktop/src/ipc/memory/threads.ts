@@ -36,7 +36,9 @@ export type ThreadsScenario = "default" | "threads" | "no-providers";
 export type EmitFn = (event: EventPayload, correlation?: Partial<Correlation>, source?: EventSource) => void;
 
 // `thread_set_permission_mode` belongs to the permission engine (Z4; see ./permissions.ts).
-type ThreadCommand = Exclude<Extract<CommandName, `thread_${string}`>, "thread_set_permission_mode">;
+type ThreadCommand =
+  | Exclude<Extract<CommandName, `thread_${string}`>, "thread_set_permission_mode">
+  | "agent_pair_conflicts";
 type Handler = (args: Record<string, unknown>) => unknown;
 
 /** The permission gate as the memory runtime uses it (Z4, see ./permissions.ts). */
@@ -72,6 +74,14 @@ export interface ThreadsMemory {
   setPaneStatus(threadId: string, status: ThreadStatus, activity: string | null, pendingApprovals?: number): void;
   /** Records how many files a pane agent changed (ui-test fixtures for outcomes). */
   setPaneFiles(threadId: string, filesChanged: number): void;
+  /** Test hook: the files a thread's provider reported editing (`thread_touched_paths`). */
+  setTouchedPaths(threadId: string, paths: string[]): void;
+  /** Test hook: the answer `agent_pair_conflicts` gives for a pair (either order). */
+  setPairConflict(
+    leftThreadId: string,
+    rightThreadId: string,
+    conflict: { conflicts: boolean | null; files?: string[] },
+  ): void;
   /**
    * Fixture history for other surfaces' ui-test scenarios (Z7-W2 rail and home): adds a thread
    * with no live session, as if it had run earlier. Returns its summary.
@@ -850,6 +860,9 @@ export function createThreadsMemory(
   // Agent Fleet worktree facts: a fresh worktree is level with main and merges cleanly; the agent's
   // edits are uncommitted until the person commits them (the memory runtime's agents don't commit).
   const committed = new Map<string, { ahead: number; files: number }>();
+  const touchedPaths = new Map<string, string[]>();
+  const pairConflicts = new Map<string, { conflicts: boolean | null; files: string[] }>();
+  const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
   const worktreeFacts = (t: MemThread) => {
     const done = committed.get(t.summary.id);
     return {
@@ -954,6 +967,41 @@ export function createThreadsMemory(
       return ids.flatMap((id) => {
         const t = threads.get(id as string);
         return t ? (worktreeState(t) ?? []) : [];
+      });
+    },
+    // Like native: provider-reported edited files per known thread (sorted, at most 200).
+    thread_touched_paths: (wrapped) => {
+      requireCore();
+      const args = (wrapped.args ?? {}) as Record<string, unknown>;
+      const ids = Array.isArray(args.threadIds) ? (args.threadIds as unknown[]) : [];
+      if (ids.length > 64 || ids.some((id) => typeof id !== "string" || !UUID.test(id)))
+        invalid("invalid_thread_ids", "Those thread references aren't valid.");
+      return ids.flatMap((id) => {
+        if (!threads.has(id as string)) return [];
+        const paths = [...(touchedPaths.get(id as string) ?? [])].sort();
+        return [{ threadId: id, paths: paths.slice(0, 200), truncated: paths.length > 200 }];
+      });
+    },
+    // Like native: one answer per pair, unknown (`null`) unless a test set it.
+    agent_pair_conflicts: (wrapped) => {
+      requireCore();
+      const args = (wrapped.args ?? {}) as Record<string, unknown>;
+      const pairs = Array.isArray(args.pairs) ? (args.pairs as Record<string, unknown>[]) : [];
+      const bad = (id: unknown) => typeof id !== "string" || !UUID.test(id);
+      if (
+        pairs.length > 16 ||
+        pairs.some((p) => bad(p.leftThreadId) || bad(p.rightThreadId) || p.leftThreadId === p.rightThreadId)
+      )
+        invalid("invalid_thread_pairs", "Those thread references aren't valid.");
+      return pairs.map((p) => {
+        const known = pairConflicts.get(pairKey(p.leftThreadId as string, p.rightThreadId as string));
+        return {
+          leftThreadId: p.leftThreadId,
+          rightThreadId: p.rightThreadId,
+          conflicts: known?.conflicts ?? null,
+          files: known?.files ?? [],
+          observedAt: new Date().toISOString(),
+        };
       });
     },
     // Like native: KalCode commits the isolated agent's changes on its branch, never while it works.
@@ -1292,6 +1340,12 @@ export function createThreadsMemory(
     setPaneFiles(threadId, filesChanged) {
       const t = threads.get(threadId);
       if (t) t.summary = { ...t.summary, filesChanged };
+    },
+    setTouchedPaths(threadId, paths) {
+      touchedPaths.set(threadId, paths);
+    },
+    setPairConflict(leftThreadId, rightThreadId, { conflicts, files = [] }) {
+      pairConflicts.set(pairKey(leftThreadId, rightThreadId), { conflicts, files });
     },
     resolveApproval(requestId, approved) {
       for (const t of threads.values()) {

@@ -196,6 +196,21 @@ describe("agentOutcome", () => {
     });
   });
 
+  it("keeps clean work ready to merge but names agents Git says it conflicts with", () => {
+    const agent = thread({ status: "completed", filesChanged: 4, worktreeId: "w", branch: "kal/x" });
+    expect(stage(agentOutcome(agent, facts()), "merge")).toMatchObject({ value: "Ready to merge", tone: "accent" });
+    expect(stage(agentOutcome(agent, facts(), { conflictsWith: ["Pricing Update"] }), "merge")).toMatchObject({
+      value: "Ready to merge",
+      tone: "waiting",
+      detail: "Conflicts with Pricing Update: the second to merge needs a fix",
+      known: true,
+    });
+    expect(
+      stage(agentOutcome(agent, facts(), { conflictsWith: ["Pricing Update", "Billing Fix", "Docs"] }), "merge")
+        ?.detail,
+    ).toBe("Conflicts with Pricing Update and 2 other agents: the second to merge needs a fix");
+  });
+
   it("states merged work as the Git fact, never as shipped", () => {
     const agent = thread({ status: "completed", filesChanged: 6, worktreeId: "w", branch: "kal/pricing-update" });
     const rows = agentOutcome(agent, facts({ ahead: 0 }));

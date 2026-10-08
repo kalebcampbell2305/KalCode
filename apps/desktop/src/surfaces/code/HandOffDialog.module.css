@@ -624,3 +624,9 @@
     min-height: 10rem;
   }
 }
+
+.takeover {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+}

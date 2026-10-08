@@ -378,6 +378,38 @@ pub struct ThreadWorktreeState {
     pub observed_at: String,
 }
 
+/// Files a coding agent's provider reported editing (`thread_files`), relative to the agent's
+/// working folder. The earliest ownership signal for agents that share the project folder
+/// (no worktree of their own). Read-only; sorted; at most 200 per thread.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ThreadTouchedPaths {
+    pub thread_id: String,
+    pub paths: Vec<String>,
+    /// More files were reported than `paths` lists.
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+/// Whether the committed work of two agents' own worktree branches would conflict if both
+/// merged (`git merge-tree` between the two branch tips; no work tree, index or ref changes).
+/// `conflicts` is `null` when unknown (either agent has no active worktree, different
+/// repositories, Git too old, merge driver). Uncommitted changes are not part of this answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AgentPairConflict {
+    pub left_thread_id: String,
+    pub right_thread_id: String,
+    pub conflicts: Option<bool>,
+    /// Conflicting files (repo-relative, sorted, at most 50) when known.
+    #[serde(default)]
+    pub files: Vec<String>,
+    /// When this was read (RFC 3339).
+    pub observed_at: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]

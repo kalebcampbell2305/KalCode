@@ -906,6 +906,8 @@ pub fn run(removed_overrides: Vec<String>) {
                 git_commands::git_status,
                 // Agent Fleet: Git facts for threads in their own worktrees (read-only).
                 git_commands::thread_worktree_states,
+                git_commands::thread_touched_paths,
+                git_commands::agent_pair_conflicts,
                 git_commands::thread_worktree_commit,
                 resource_commands::resource_report,
                 resource_commands::resource_set_mode,

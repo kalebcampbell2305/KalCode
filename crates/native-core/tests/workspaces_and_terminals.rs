@@ -93,6 +93,46 @@ impl Output {
             self.text()
         );
     }
+
+    /// The output without terminal control sequences. ConPTY may redraw the window title (OSC 0)
+    /// between a command's line break and its result, so a result check reads the plain text.
+    fn plain(&self) -> String {
+        let text = self.text();
+        let mut plain = String::with_capacity(text.len());
+        let mut chars = text.chars();
+        while let Some(c) = chars.next() {
+            if c != '\x1b' {
+                plain.push(c);
+                continue;
+            }
+            match chars.next() {
+                // CSI: parameter bytes, then one final byte in '@'..='~'.
+                Some('[') => {
+                    let _ = chars.by_ref().find(|c| ('@'..='~').contains(c));
+                }
+                // OSC: ends at BEL or at ST (ESC \).
+                Some(']') => {
+                    let mut escaped = false;
+                    for c in chars.by_ref() {
+                        if c == '\x07' || (escaped && c == '\\') {
+                            break;
+                        }
+                        escaped = c == '\x1b';
+                    }
+                }
+                _ => {}
+            }
+        }
+        plain
+    }
+
+    fn wait_for_plain(&self, needle: &str) {
+        assert!(
+            wait_until(Duration::from_secs(20), || self.plain().contains(needle)),
+            "expected {needle:?} in plain terminal output: {:?}",
+            self.text()
+        );
+    }
 }
 
 fn collect_events(core: &Core) -> Arc<Mutex<Vec<EventEnvelope>>> {
@@ -1230,7 +1270,7 @@ fn duplicate_terminal_is_independent_preserves_directory_and_omits_transient_env
     core.write_terminal(&copy.id, inspect.as_bytes())
         .expect("inspect copy");
     copied_output.wait_for(nested.to_str().expect("path"));
-    copied_output.wait_for("\r\nSECRET_ABSENT");
+    copied_output.wait_for_plain("\r\nSECRET_ABSENT");
     assert_eq!(
         core.terminal_session_identity(&original.id)
             .expect("still live"),
@@ -1311,4 +1351,21 @@ fn powershell_duplicate_uses_provider_location_and_keeps_custom_names() {
         core.close_terminal(&copy.id).unwrap();
         core.close_terminal(&original.id).unwrap();
     }
+}
+
+/// Gate 37770970206: ConPTY redrew the window title between the line break and the command's
+/// result, and a raw-output check missed a correct result.
+#[test]
+fn plain_output_ignores_title_redraws_between_a_line_break_and_a_result() {
+    let raw = concat!(
+        "nested folder>if defined KALCODE_DUPLICATE_SECRET (echo SECRET_PRESENT) else (echo SECRET_ABSENT)\r\n",
+        "\x1b]0;Administrator: C:\\windows\\system32\\cmd.exe\x07\x1b[?25h\x1b[?25l",
+        "SECRET_ABSENT\x1b[10;1Hnested folder>\x1b]0;title\x1b\\\x1b[?25h",
+    );
+    let output = Output(Arc::new(Mutex::new(raw.as_bytes().to_vec())));
+    assert!(!output.text().contains("\r\nSECRET_ABSENT"));
+    assert_eq!(
+        output.plain(),
+        "nested folder>if defined KALCODE_DUPLICATE_SECRET (echo SECRET_PRESENT) else (echo SECRET_ABSENT)\r\nSECRET_ABSENTnested folder>"
+    );
 }

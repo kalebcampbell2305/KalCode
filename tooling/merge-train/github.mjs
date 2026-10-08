@@ -96,8 +96,11 @@ export function isPc2Job(job, sha) {
   );
 }
 
-/** The second job of the two-job Windows gate: rust, native E2E and the Cargo tools. */
+/** The Rust job of the Windows gate: rust and the Cargo tools. */
 export const NATIVE_GATE_JOB = "Gate (Windows, native)";
+
+/** The native E2E job of the Windows gate: build:e2e and the native suite, beside the Rust job. */
+export const E2E_GATE_JOB = "Gate (Windows, native E2E)";
 
 /** The elastic gate pool's label (owner, 2026-10-08): every Windows gate job requests it. */
 export const GATE_POOL_LABEL = "kalcode-gate-pool";
@@ -145,8 +148,8 @@ function jobState(matching, run, sha, trusted) {
 
 /**
  * The candidate is green only when every part of its gate is: the "Gate (Windows)" job always, and the
- * native job and the PC2 job whenever the run has them (a workflow without a split keeps its single-job
- * evidence).
+ * native, native E2E and PC2 jobs whenever the run has them (a workflow without a split keeps its
+ * single-job evidence; one from before the native E2E job keeps its two-job evidence).
  */
 export function gateStateFrom(runs, jobs, sha, branch) {
   const run = runs[0];
@@ -161,6 +164,8 @@ export function gateStateFrom(runs, jobs, sha, branch) {
   ];
   const nativeJobs = jobs.filter((j) => j.name === NATIVE_GATE_JOB);
   if (nativeJobs.length) parts.push(jobState(nativeJobs, run, sha, isGateHostJob));
+  const e2eJobs = jobs.filter((j) => j.name === E2E_GATE_JOB);
+  if (e2eJobs.length) parts.push(jobState(e2eJobs, run, sha, isGateHostJob));
   const pc2Jobs = jobs.filter((j) => j.name === PC2_GATE_JOB);
   if (pc2Jobs.length) parts.push(jobState(pc2Jobs, run, sha, isGateHostJob));
   for (const state of ["failure", "pending", "stale"]) {

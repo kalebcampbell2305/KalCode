@@ -536,12 +536,13 @@ test.describe("sidebar", () => {
     const needsYou = page.getByRole("dialog", { name: "Needs you" });
     const live = needsYou.getByRole("region", { name: "Needs you now" });
     const overlap = live.getByRole("listitem", {
-      name: /Blocked:\s*Fix flaky checkout test and Write invoices migration overlap/,
+      name: /Blocked:\s*Fix flaky checkout test and Write invoices migration changed the same files/,
     });
     await expect(overlap).toContainText("apps/web/checkout/cart.ts");
     await expect(overlap.getByRole("button")).toHaveText([
       "Open Fix flaky checkout test",
       "Open Write invoices migration",
+      "Allow both",
     ]);
     const failedOperation = live.getByRole("listitem", { name: /Failed:\s*Package desktop failed/ });
     await expect(failedOperation).toContainText("Operations");

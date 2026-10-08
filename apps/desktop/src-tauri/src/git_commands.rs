@@ -21,7 +21,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use kalcode_contracts::threads::ThreadWorktreeState;
+use kalcode_contracts::threads::{AgentPairConflict, ThreadTouchedPaths, ThreadWorktreeState};
 use kalcode_core::events::NewEvent;
 use kalcode_core::{ErrorCategory, IpcError, KalError};
 use kalcode_git::checkpoint::CreateOutcome;
@@ -528,30 +528,182 @@ pub async fn thread_worktree_states(
     if ids.is_empty() {
         return Ok(Vec::new());
     }
-    let core = state.core()?;
-    let rows = core
+    let bound = bound_thread_worktrees(&state, &ids, "thread_worktree_states")?;
+    let gitcore = Arc::clone(&git.0);
+    blocking(_runtime_access, "thread_worktree_states", move || {
+        Ok(thread_worktree_states_for(&gitcore, bound))
+    })
+    .await
+}
+
+type BoundThread = (String, Worktree, std::path::PathBuf, WorkspaceRoot);
+
+/// Each id's active thread worktree with its workspace root; ids without one, or whose
+/// workspace is unknown, are left out.
+fn bound_thread_worktrees(
+    state: &AppState,
+    ids: &[String],
+    command: &'static str,
+) -> Result<Vec<BoundThread>, IpcError> {
+    let rows = state
+        .core()?
         .read(|conn| {
             let mut rows = Vec::new();
-            for id in &ids {
+            for id in ids {
                 if let Some((row, path)) = store::active_thread_worktree(conn, id)? {
                     rows.push((id.clone(), row, path));
                 }
             }
             Ok(rows)
         })
-        .map_err(|e| e.log_and_convert("thread_worktree_states"))?;
+        .map_err(|e| e.log_and_convert(command))?;
     let mut bound = Vec::with_capacity(rows.len());
     for (thread_id, row, path) in rows {
-        match workspace_root(&state, &row.workspace_id) {
+        match workspace_root(state, &row.workspace_id) {
             Ok(root) => bound.push((thread_id, row, path, root)),
             Err(error) => {
                 tracing::warn!(event = "git.thread_worktree_workspace_unknown", error = %error.diagnostic());
             }
         }
     }
+    Ok(bound)
+}
+
+/// Read-only: the files each thread's provider reported editing (`thread_files`), the earliest
+/// ownership signal for agents sharing the project folder. Unknown threads are left out.
+#[tauri::command(async)]
+pub async fn thread_touched_paths(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    state: State<'_, AppState>,
+    args: ThreadWorktreeStatesArgs,
+) -> Result<Vec<ThreadTouchedPaths>, IpcError> {
+    _runtime_access.revalidate()?;
+    let ids = thread_ids_arg(args.thread_ids).map_err(|e| e.to_ipc())?;
+    state
+        .core()?
+        .read(|conn| {
+            let mut touched = Vec::with_capacity(ids.len());
+            for thread_id in ids {
+                if let Some((paths, truncated)) =
+                    kalcode_threads::store::touched_paths(conn, &thread_id)?
+                {
+                    touched.push(ThreadTouchedPaths {
+                        thread_id,
+                        paths: paths.into_iter().map(|p| p.replace('\\', "/")).collect(),
+                        truncated,
+                    });
+                }
+            }
+            Ok(touched)
+        })
+        .map_err(|e| e.log_and_convert("thread_touched_paths"))
+}
+
+/// Most pairs one `agent_pair_conflicts` call accepts.
+pub(crate) const MAX_AGENT_PAIR_CONFLICTS: usize = 16;
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPairArg {
+    pub left_thread_id: String,
+    pub right_thread_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPairConflictsArgs {
+    pub pairs: Vec<AgentPairArg>,
+}
+
+/// At most [`MAX_AGENT_PAIR_CONFLICTS`] pairs of two different valid thread ids.
+pub(crate) fn agent_pairs_arg(pairs: Vec<AgentPairArg>) -> Result<Vec<AgentPairArg>, KalError> {
+    if pairs.len() > MAX_AGENT_PAIR_CONFLICTS
+        || pairs.iter().any(|pair| {
+            pair.left_thread_id == pair.right_thread_id
+                || !kalcode_contracts::ids::is_valid_id(&pair.left_thread_id)
+                || !kalcode_contracts::ids::is_valid_id(&pair.right_thread_id)
+        })
+    {
+        return Err(KalError::validation(
+            "invalid_thread_pairs",
+            "Those thread references aren't valid.",
+        ));
+    }
+    Ok(pairs)
+}
+
+/// One answer per pair: whether the two agents' worktree branches would conflict if both
+/// merged, via `git merge-tree` between the branch tips (nothing is written to any work tree,
+/// index or ref). Unknown (`None`) when either thread has no bound worktree, the two live in
+/// different workspaces, or Git can't tell.
+pub(crate) fn agent_pair_conflicts_for(
+    git: &GitCore,
+    bound: &[BoundThread],
+    pairs: Vec<AgentPairArg>,
+) -> Vec<AgentPairConflict> {
+    use std::collections::HashMap;
+
+    let exe = git.git().ok();
+    let mut repos: HashMap<String, Option<kalcode_git::repo::Repo>> = HashMap::new();
+    let find = |id: &str| bound.iter().find(|(thread_id, ..)| thread_id == id);
+    pairs
+        .into_iter()
+        .map(|pair| {
+            let mut files = None;
+            if let (Some(exe), Some((_, left, _, root)), Some((_, right, _, _))) =
+                (exe, find(&pair.left_thread_id), find(&pair.right_thread_id))
+                && left.workspace_id == right.workspace_id
+                && let Some(repo) = repos
+                    .entry(left.workspace_id.clone())
+                    .or_insert_with(|| git.repo(root).ok().flatten())
+            {
+                files = worktree::merge_conflict_files(
+                    exe,
+                    repo,
+                    &format!("refs/heads/{}", left.branch),
+                    &format!("refs/heads/{}", right.branch),
+                )
+                .unwrap_or_else(|error| {
+                    tracing::warn!(event = "git.agent_pair_unreadable", error = %error.diagnostic());
+                    None
+                });
+            }
+            AgentPairConflict {
+                left_thread_id: pair.left_thread_id,
+                right_thread_id: pair.right_thread_id,
+                conflicts: files.as_ref().map(|files| !files.is_empty()),
+                files: files.unwrap_or_default(),
+                observed_at: kalcode_core::time::now_rfc3339(),
+            }
+        })
+        .collect()
+}
+
+/// Read-only: whether pairs of agents' committed worktree work would conflict if both merged.
+#[tauri::command(async)]
+pub async fn agent_pair_conflicts(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    state: State<'_, AppState>,
+    git: crate::runtime_coordinator::RuntimeState<GitState>,
+    args: AgentPairConflictsArgs,
+) -> Result<Vec<AgentPairConflict>, IpcError> {
+    _runtime_access.revalidate()?;
+    let pairs = agent_pairs_arg(args.pairs)?;
+    if pairs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut ids: Vec<String> = Vec::new();
+    for pair in &pairs {
+        for id in [&pair.left_thread_id, &pair.right_thread_id] {
+            if !ids.contains(id) {
+                ids.push(id.clone());
+            }
+        }
+    }
+    let bound = bound_thread_worktrees(&state, &ids, "agent_pair_conflicts")?;
     let gitcore = Arc::clone(&git.0);
-    blocking(_runtime_access, "thread_worktree_states", move || {
-        Ok(thread_worktree_states_for(&gitcore, bound))
+    blocking(_runtime_access, "agent_pair_conflicts", move || {
+        Ok(agent_pair_conflicts_for(&gitcore, &bound, pairs))
     })
     .await
 }

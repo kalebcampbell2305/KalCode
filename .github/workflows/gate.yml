@@ -50,18 +50,19 @@ jobs:
     # Owner, 2026-10-08: an elastic gate pool. Every gate job runs on whichever trusted gate runner has
     # headroom: the second Windows PC's (KALEBSLAPTOP, idle, always in the pool, at most three runners) and
     # the build PC's pool workers only while gate-pool-governor.ps1 finds that PC idle (its owner-requested
-    # agents and release builds come first). Release builds stay on the build PC. These are two jobs so their
-    # chains overlap: "Gate (Windows)" (the desktop frontend/UI readers and any new check) and "Gate
-    # (Windows, native)" (rust, native E2E and the Cargo tools, which write the checkout). The "Gate
-    # (Windows, PC2)" job below runs the JS/web share. All three jobs test the same event SHA;
-    # tooling/release/lifecycle/gate-split.mjs assigns the checks and .github/scripts/gate-host.ps1 each
-    # runner's machine-specific resources.
-    name: ${{ matrix.half == 'native' && 'Gate (Windows, native)' || 'Gate (Windows)' }}
+    # agents and release builds come first). Release builds stay on the build PC. These are three jobs so
+    # their chains overlap: "Gate (Windows)" (the desktop frontend/UI readers and any new check), "Gate
+    # (Windows, native)" (rust and the Cargo tools) and "Gate (Windows, native E2E)" (the native E2E's
+    # build:e2e and suite). Rust then native E2E in one job was the gate's critical path (25-49 min on the
+    # build PC, ~76 min on the second PC). The "Gate (Windows, PC2)" job below runs the JS/web share. All
+    # four jobs test the same event SHA; tooling/release/lifecycle/gate-split.mjs assigns the checks and
+    # .github/scripts/gate-host.ps1 each runner's machine-specific resources.
+    name: ${{ matrix.half == 'native' && 'Gate (Windows, native)' || matrix.half == 'e2e' && 'Gate (Windows, native E2E)' || 'Gate (Windows)' }}
     strategy:
-      # One half failing never cancels the other: each half's own result is evidence.
+      # One half failing never cancels another: each half's own result is evidence.
       fail-fast: false
       matrix:
-        half: [main, native]
+        half: [main, native, e2e]
     # Never run code from a fork on our machines.
     # A PR in the merge queue is gated inside its exact merge-train candidate; its own branch gate would only
     # hold the runners the candidates need (the train also cancels such runs when it builds).
@@ -143,7 +144,14 @@ jobs:
                 (& $gateHost $_) -and
                 ($_.steps | Where-Object { $_.name -eq 'Gate' -and $_.conclusion -eq 'success' })
               }).Count -eq 1
-              if ($green -and $pc2Green -and $nativeGreen) {
+              # A three-job Windows gate also needs its native E2E job green the same way; an older run has none.
+              $e2e = @($jobs | Where-Object { $_.name -eq 'Gate (Windows, native E2E)' })
+              $e2eGreen = $e2e.Count -eq 0 -or @($e2e | Where-Object {
+                $_.conclusion -eq 'success' -and $_.head_sha -eq $env:GITHUB_SHA -and
+                (& $gateHost $_) -and
+                ($_.steps | Where-Object { $_.name -eq 'Gate' -and $_.conclusion -eq 'success' })
+              }).Count -eq 1
+              if ($green -and $pc2Green -and $nativeGreen -and $e2eGreen) {
                 Write-Output "Gate (Windows) already passed for $env:GITHUB_SHA on $($run.head_branch): $($run.html_url)"
                 # ASCII: Windows PowerShell's utf8 writes a BOM into an empty file, which corrupts the key.
                 Add-Content -Path $env:GITHUB_OUTPUT -Encoding ascii -Value 'reused=true'
@@ -226,7 +234,7 @@ jobs:
           GATE_HALF: ${{ matrix.half }}
         run: |
           $ErrorActionPreference = 'Stop'
-          if ($env:GATE_HALF -notin @('main', 'native')) { throw "Unknown Windows gate half: $env:GATE_HALF" }
+          if ($env:GATE_HALF -notin @('main', 'native', 'e2e')) { throw "Unknown Windows gate half: $env:GATE_HALF" }
           # This runner's machine and fixed port block (shared with the JS/web job: a runner runs one job at a time).
           . .github/scripts/gate-host.ps1
           $gateHost = Get-GateHost
@@ -250,8 +258,8 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $plan = ($json | Out-String | ConvertFrom-Json).plan
           $selected = @($plan | Where-Object { $_.state -eq 'selected' } | ForEach-Object { $_.id })
-          # This job's share of the plan (tooling/release/lifecycle/gate-split.mjs): the "main" or "native"
-          # half; the other half and the PC2 job run the rest.
+          # This job's share of the plan (tooling/release/lifecycle/gate-split.mjs): the "main", "native" or
+          # "e2e" half; the other halves and the PC2 job run the rest.
           $only = (node tooling/release/lifecycle/gate-split.mjs $env:GATE_HALF ($selected -join ',') | Out-String).Trim()
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $ids = @($only -split ',' | Where-Object { $_ })
@@ -306,9 +314,9 @@ jobs:
           $head = (git rev-parse HEAD | Out-String).Trim()
           if ($LASTEXITCODE -or $head -ne $env:GITHUB_SHA) { throw "Checkout does not match the immutable event SHA" }
           # Below normal where it competes with something else: the build PC (the owner's agents) and, on the
-          # second PC, the Rust/native half's long compiles. The second PC's other halves keep normal priority:
-          # at equal priority a cold Rust build starved their timed unit and UI tests (gate 37758139488: 22
-          # desktop-unit tests over 15 s, twice, while every check passed alone).
+          # second PC, the Rust and native E2E halves' long compiles. The second PC's other halves keep normal
+          # priority: at equal priority a cold Rust build starved their timed unit and UI tests (gate
+          # 37758139488: 22 desktop-unit tests over 15 s, twice, while every check passed alone).
           if ($env:KALCODE_GATE_MACHINE -eq 'main-pc' -or $env:KALCODE_GATE_HEAVY -eq 'True') { (Get-Process -Id $PID).PriorityClass = 'BelowNormal' }
           if (-not $env:KALCODE_GATE_ONLY) { Write-Host 'gate: nothing selected for this job (the other jobs run the rest)'; exit 0 }
           $token = $null
@@ -382,7 +390,7 @@ jobs:
         if: steps.reuse.outputs.reused != 'true' && failure() && steps.playwright_evidence.outputs.keep == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: gate-playwright-${{ matrix.half == 'native' && 'native-' || '' }}${{ github.sha }}-${{ github.run_attempt }}
+          name: gate-playwright-${{ matrix.half == 'native' && 'native-' || matrix.half == 'e2e' && 'e2e-' || '' }}${{ github.sha }}-${{ github.run_attempt }}
           path: |
             apps/desktop/test-results/
             packages/ui/test-results/
@@ -405,7 +413,7 @@ jobs:
         if: steps.reuse.outputs.reused != 'true' && (always())
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: gate-evidence-${{ matrix.half == 'native' && 'native-' || '' }}${{ github.sha }}-${{ github.run_attempt }}
+          name: gate-evidence-${{ matrix.half == 'native' && 'native-' || matrix.half == 'e2e' && 'e2e-' || '' }}${{ github.sha }}-${{ github.run_attempt }}
           path: target/gate-evidence.json
           if-no-files-found: ignore
       # Nothing this job started may outlive it and hold the warm target open for the next job.
@@ -422,11 +430,12 @@ jobs:
     # A PR in the merge queue is gated inside its exact merge-train candidate; its own branch gate would only
     # hold the runners the candidates need (the train also cancels such runs when it builds).
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository && !contains(github.event.pull_request.labels.*.name, 'merge-queue')
-    # The JS/web share of the same exact candidate (its job name is historical). Like the jobs above it
-    # runs on whichever gate runner the elastic pool offers (owner, 2026-10-08): the second PC's always,
-    # the build PC's only while gate-pool-governor.ps1 finds it idle. .github/scripts/gate-host.ps1 gives
-    # each runner its own port block.
-    runs-on: [self-hosted, Windows, kalcode-gate-pool]
+    # The JS/web share of the same exact candidate. It runs on the second PC's gate runners directly (owner,
+    # 2026-10-08: "optimize for the build PC and for PC2"): it is light and fits there in 5-18 min, which
+    # leaves the build PC's pooled workers (gate-pool-governor.ps1: build PC first, the second PC for
+    # overflow) to the three heavy desktop jobs above. .github/scripts/gate-host.ps1 gives each runner its own
+    # port block.
+    runs-on: [self-hosted, Windows, kalcode-gate-pc2]
     timeout-minutes: 120
     steps:
       # A merge-train landing fast-forwards main to a candidate this job already gated. Re-gating the
@@ -502,7 +511,14 @@ jobs:
                 (& $gateHost $_) -and
                 ($_.steps | Where-Object { $_.name -eq 'Gate' -and $_.conclusion -eq 'success' })
               }).Count -eq 1
-              if ($green -and $pc2Green -and $nativeGreen) {
+              # A three-job Windows gate also needs its native E2E job green the same way; an older run has none.
+              $e2e = @($jobs | Where-Object { $_.name -eq 'Gate (Windows, native E2E)' })
+              $e2eGreen = $e2e.Count -eq 0 -or @($e2e | Where-Object {
+                $_.conclusion -eq 'success' -and $_.head_sha -eq $env:GITHUB_SHA -and
+                (& $gateHost $_) -and
+                ($_.steps | Where-Object { $_.name -eq 'Gate' -and $_.conclusion -eq 'success' })
+              }).Count -eq 1
+              if ($green -and $pc2Green -and $nativeGreen -and $e2eGreen) {
                 Write-Output "Gate (Windows) already passed for $env:GITHUB_SHA on $($run.head_branch): $($run.html_url)"
                 # ASCII: Windows PowerShell's utf8 writes a BOM into an empty file, which corrupts the key.
                 Add-Content -Path $env:GITHUB_OUTPUT -Encoding ascii -Value 'reused=true'

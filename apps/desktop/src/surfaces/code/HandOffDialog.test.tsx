@@ -33,7 +33,11 @@ vi.mock("../../account/AccountProvider.tsx", () => ({ useOptionalAccount: () => 
 vi.mock("../../runtime/uiIntents.tsx", () => ({ useOptionalUiIntents: () => null }));
 vi.mock("../../shell/navigation.tsx", () => ({ useNavigation: () => ({ navigate: () => {} }) }));
 vi.mock("../../shell/AccountHub.tsx", () => ({ HUB_SECTIONS: { account: "account" } }));
-vi.mock("../dashboard/data/DashboardData.tsx", () => ({ useCodingAgents: () => agents }));
+const ownership = vi.hoisted(() => ({ value: null as unknown }));
+vi.mock("../dashboard/data/DashboardData.tsx", () => ({
+  useCodingAgents: () => agents,
+  useOptionalOwnership: () => ownership.value,
+}));
 vi.mock("../providers/ProviderAccountSessions.tsx", () => ({
   useOptionalProviderAccountSessions: () => providerSessions,
 }));
@@ -123,6 +127,7 @@ const dialog = () => render(<HandOffDialog open source={SOURCE} onNewAgent={() =
 
 beforeEach(() => {
   agents.state = { status: "ready", data: [SOURCE, TARGET] };
+  ownership.value = null;
 });
 
 afterEach(() => {
@@ -323,5 +328,30 @@ describe("HandOffDialog", () => {
 
     await act(async () => finishSend());
     await waitFor(() => expect(screen.getByRole("button", { name: "Return findings to Claude C" })).toBeEnabled());
+  });
+  describe("file ownership line", () => {
+    const claimWith = (files: string[]) => ({
+      claims: new Map([[SOURCE.id, { agentId: SOURCE.id, workspaceId: "ws", files }]]),
+      overlaps: [],
+      byAgent: new Map(),
+    });
+    const prepare = async () => {
+      client({});
+      dialog();
+      await userEvent.click(await screen.findByRole("button", { name: "Prepare handoff" }));
+      await screen.findByRole("heading", { name: "Review the handoff" });
+    };
+
+    it("says how many changed files the receiver takes over", async () => {
+      ownership.value = claimWith(["a.ts", "b.ts"]);
+      await prepare();
+      expect(screen.getByText("Review Dashboard takes over 2 files Implement Dashboard changed.")).toBeVisible();
+    });
+
+    it("says nothing when the source changed no files", async () => {
+      ownership.value = claimWith([]);
+      await prepare();
+      expect(screen.queryByText(/takes over/)).toBeNull();
+    });
   });
 });

@@ -1229,6 +1229,33 @@ pub fn record_file(
     Ok(())
 }
 
+/// Most paths [`touched_paths`] returns per thread.
+pub const MAX_TOUCHED_PATHS: usize = 200;
+
+/// The files a thread's provider reported editing, sorted, at most [`MAX_TOUCHED_PATHS`], and
+/// whether more exist. `None` for an unknown thread.
+pub fn touched_paths(conn: &Connection, thread_id: &str) -> Result<Option<(Vec<String>, bool)>> {
+    let known = conn
+        .query_row("SELECT 1 FROM threads WHERE id = ?1", [thread_id], |_| {
+            Ok(())
+        })
+        .optional()?;
+    if known.is_none() {
+        return Ok(None);
+    }
+    let mut stmt = conn.prepare_cached(
+        "SELECT path FROM thread_files WHERE thread_id = ?1 ORDER BY path LIMIT ?2",
+    )?;
+    let mut paths = stmt
+        .query_map(params![thread_id, MAX_TOUCHED_PATHS as i64 + 1], |row| {
+            row.get::<_, String>(0)
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let truncated = paths.len() > MAX_TOUCHED_PATHS;
+    paths.truncate(MAX_TOUCHED_PATHS);
+    Ok(Some((paths, truncated)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1358,6 +1385,11 @@ mod tests {
             "2026-09-24T10:00:04.000Z",
         )
         .expect("file again");
+        assert_eq!(
+            touched_paths(&conn, &id).expect("touched"),
+            Some((vec!["src/a.rs".to_owned()], false))
+        );
+        assert_eq!(touched_paths(&conn, &new_id()).expect("unknown"), None);
         let row = get(&conn, &id).expect("get");
         assert_eq!(row.unread_messages, 1);
         assert_eq!(row.files_changed, 1);

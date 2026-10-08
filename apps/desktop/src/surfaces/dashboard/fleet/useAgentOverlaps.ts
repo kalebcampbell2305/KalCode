@@ -1,42 +1,32 @@
-import type { ThreadSummary, ThreadWorktreeState } from "@kalcode/protocol";
 import { useMemo } from "react";
-import { useAgentWorktreeStates, useCodingAgents } from "../data/DashboardData.tsx";
-import { type AgentOverlap, agentOverlaps, type Overlap, overlapsByAgent } from "./overlap.ts";
+import type { AgentOverlap, OwnershipOverlap } from "../../../runtime/ownership/model.ts";
+import { useAgentWorktreeStates, useOwnership } from "../data/DashboardData.tsx";
 
 export interface AgentOverlaps {
-  /** Every overlapping pair (for an inbox: one item per pair). */
-  overlaps: Overlap[];
-  /** Each agent's overlaps (for its card). */
-  byAgent: Map<string, AgentOverlap[]>;
+  /** Every overlapping pair, most expensive first (for an inbox: one item per pair). */
+  overlaps: readonly OwnershipOverlap[];
+  /** Each agent's overlaps (for its card and pane). */
+  byAgent: ReadonlyMap<string, readonly AgentOverlap[]>;
   ready: boolean;
   failed: boolean;
   incomplete: boolean;
 }
 
 /**
- * Agents editing the same files in one project. With `source`, it uses worktree facts the caller
- * already reads (the Fleet board); without, it reads the coding agents and their worktree facts
- * itself (inside a Dashboard data boundary), on the same cadence as the Fleet.
+ * Agents whose work collides in one project, from the shared Agent File Ownership projection
+ * (`runtime/ownership`). Must render inside a Dashboard data boundary (the Shell mounts one).
  */
-export function useAgentOverlaps(source?: {
-  threads: readonly ThreadSummary[];
-  states: ReadonlyMap<string, ThreadWorktreeState>;
-}): AgentOverlaps {
-  const { state } = useCodingAgents();
-  const own = source ? null : state.status === "ready" ? state.data : null;
+export function useAgentOverlaps(): AgentOverlaps {
+  const ownership = useOwnership();
   const read = useAgentWorktreeStates();
-  const threads = source?.threads ?? own ?? NONE;
-  const states = source?.states ?? read.states;
-  return useMemo(() => {
-    const overlaps = agentOverlaps(threads, states);
-    return {
-      overlaps,
-      byAgent: overlapsByAgent(overlaps, threads),
+  return useMemo(
+    () => ({
+      overlaps: ownership.overlaps,
+      byAgent: ownership.byAgent,
       ready: read.ready,
       failed: read.failed,
       incomplete: read.incomplete,
-    };
-  }, [threads, states, read.ready, read.failed, read.incomplete]);
+    }),
+    [ownership, read.ready, read.failed, read.incomplete],
+  );
 }
-
-const NONE: ThreadSummary[] = [];

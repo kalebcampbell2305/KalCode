@@ -7,7 +7,8 @@ import type {
   ThreadSummary,
 } from "@kalcode/protocol";
 import { describe, expect, it } from "vitest";
-import { launchTruth, memberDisplay, memberTruth, ownershipCollisions } from "./model.ts";
+import type { AgentClaim } from "../../runtime/ownership/model.ts";
+import { launchTruth, liveClaimCollisions, memberDisplay, memberTruth, ownershipCollisions } from "./model.ts";
 
 function member(patch: Partial<SquadMemberDefinition> = {}): SquadMemberDefinition {
   return {
@@ -299,5 +300,46 @@ describe("declared Squad ownership", () => {
     ]);
     expect(ownershipCollisions([scoped, disjoint])).toEqual([]);
     expect(ownershipCollisions([unknown, isolated])).toEqual([]);
+  });
+});
+
+describe("live agent claims before launch", () => {
+  const claim = (patch: Partial<AgentClaim> = {}): AgentClaim => ({
+    agentId: "live-1",
+    name: "Updater Fix",
+    providerName: "Claude Code",
+    workspaceId: "w1",
+    worktreeId: null,
+    branch: null,
+    active: true,
+    files: [],
+    filesIncomplete: false,
+    areas: [],
+    received: null,
+    handedTo: null,
+    ...patch,
+  });
+
+  it("warns when an owned path enters files a running agent changed", () => {
+    const warnings = liveClaimCollisions(
+      [member({ key: "a", ownedPaths: ["src/billing/**"] })],
+      [claim({ files: ["src/billing/invoice.ts"] })],
+      "w1",
+    );
+    expect(warnings).toEqual([{ agentId: "live-1", paths: ["src/billing"], memberKeys: ["a"] }]);
+  });
+
+  it("warns on a declared area in either direction, but not on siblings", () => {
+    const members = [member({ key: "a", ownedPaths: ["src/billing"] })];
+    expect(liveClaimCollisions(members, [claim({ areas: ["src/billing/api/**"] })], "w1")).toHaveLength(1);
+    expect(liveClaimCollisions(members, [claim({ areas: ["src"] })], "w1")).toHaveLength(1);
+    expect(liveClaimCollisions(members, [claim({ areas: ["src/billing-old"] })], "w1")).toEqual([]);
+  });
+
+  it("ignores ended agents and other projects", () => {
+    const members = [member({ ownedPaths: ["src"] })];
+    const files = ["src/a.ts"];
+    expect(liveClaimCollisions(members, [claim({ files, active: false })], "w1")).toEqual([]);
+    expect(liveClaimCollisions(members, [claim({ files, workspaceId: "w2" })], "w1")).toEqual([]);
   });
 });

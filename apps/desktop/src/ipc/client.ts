@@ -1,5 +1,6 @@
 import type {
   AgentEvent,
+  AgentPairConflict,
   ApprovalDecision,
   ApprovalView,
   BootState,
@@ -68,6 +69,7 @@ import type {
   ThreadMessage,
   ThreadOptions,
   ThreadSummary,
+  ThreadTouchedPaths,
   ThreadWorktreeState,
   ToolCallRecord,
   UiCommandRequest,
@@ -695,6 +697,16 @@ export class KalCodeClient {
   /** Git facts for the agents that run in their own worktree (Agent Fleet); others are left out. */
   threadWorktreeStates(threadIds: readonly string[]): Promise<ThreadWorktreeState[]> {
     return this.call("thread_worktree_states", { args: { threadIds } });
+  }
+
+  /** Files each agent's provider reported editing, relative to its working folder; unknown threads are left out. */
+  threadTouchedPaths(threadIds: readonly string[]): Promise<ThreadTouchedPaths[]> {
+    return this.call("thread_touched_paths", { args: { threadIds } });
+  }
+
+  /** Whether each pair's committed worktree branches would conflict if both merged (`null`: unknown). */
+  agentPairConflicts(pairs: readonly { leftThreadId: string; rightThreadId: string }[]): Promise<AgentPairConflict[]> {
+    return this.call("agent_pair_conflicts", { args: { pairs } });
   }
 
   /**

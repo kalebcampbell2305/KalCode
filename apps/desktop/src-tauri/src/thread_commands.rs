@@ -4355,6 +4355,36 @@ mod tests {
     }
 
     #[test]
+    fn agent_pair_args_are_bounded_and_validated() {
+        use crate::git_commands::{AgentPairArg, MAX_AGENT_PAIR_CONFLICTS, agent_pairs_arg};
+        let pair = |left: &str, right: &str| AgentPairArg {
+            left_thread_id: left.to_owned(),
+            right_thread_id: right.to_owned(),
+        };
+        let (a, b) = (
+            kalcode_contracts::ids::new_id(),
+            kalcode_contracts::ids::new_id(),
+        );
+        assert!(agent_pairs_arg(Vec::new()).expect("empty").is_empty());
+        assert_eq!(agent_pairs_arg(vec![pair(&a, &b)]).expect("one").len(), 1);
+        for bad in [
+            vec![pair(&a, &a)],
+            vec![pair(&a, "../x")],
+            vec![pair("", &b)],
+            (0..=MAX_AGENT_PAIR_CONFLICTS)
+                .map(|_| pair(&a, &b))
+                .collect(),
+        ] {
+            assert_eq!(
+                agent_pairs_arg(bad).expect_err("invalid").code,
+                "invalid_thread_pairs"
+            );
+        }
+        assert!(crate::command_registry::COMMANDS.contains(&"thread_touched_paths"));
+        assert!(crate::command_registry::COMMANDS.contains(&"agent_pair_conflicts"));
+    }
+
+    #[test]
     fn committing_an_agents_worktree_validates_refuses_and_records_the_commit() {
         use crate::git_commands::commit_thread_worktree;
         let fixture = FleetFixture::new(true);

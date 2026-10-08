@@ -21,6 +21,7 @@ const seams = vi.hoisted(() => ({
   focusOperation: vi.fn(async () => true),
   navigate: vi.fn(),
   agents: [] as ThreadSummary[],
+  claims: new Map<string, unknown>(),
   tier: "max",
   accountStates: new Map<string, unknown>(),
   discoverModels: vi.fn(async () => undefined),
@@ -81,6 +82,7 @@ vi.mock("../providers/ProviderAccountSessions.tsx", () => ({
 }));
 vi.mock("../dashboard/data/DashboardData.tsx", () => ({
   useCodingAgents: () => ({ state: { status: "ready", data: seams.agents }, reload: vi.fn() }),
+  useOptionalOwnership: () => ({ claims: seams.claims, overlaps: [], byAgent: new Map() }),
 }));
 vi.mock("../dashboard/fleet/useAgentOverlaps.ts", () => ({
   useAgentOverlaps: () => ({ overlaps: [], byAgent: new Map() }),
@@ -1354,5 +1356,39 @@ describe("SquadsPanel", () => {
     expect(
       await screen.findByText("Shared checkout with undeclared ownership. KalCode will run those tasks sequentially."),
     ).toBeVisible();
+  });
+
+  it("warns, without blocking launch, when a member would own paths a running agent already holds", async () => {
+    const running = agent("running-1", "Updater Fix");
+    seams.agents = [running];
+    seams.claims = new Map([
+      [
+        "running-1",
+        {
+          agentId: "running-1",
+          workspaceId: "workspace",
+          worktreeId: null,
+          branch: null,
+          active: true,
+          files: ["apps/desktop/src/updater/feed.ts"],
+          filesIncomplete: false,
+          areas: [],
+          received: null,
+          handedTo: null,
+        },
+      ],
+    ]);
+    try {
+      view(squads(snapshot()), operations());
+      expect(
+        await screen.findByText(
+          "Updater Fix is already working in apps/desktop/src/updater. Launching still works; edits may overlap.",
+        ),
+      ).toBeVisible();
+      expect(screen.getAllByRole("button", { name: "Launch" })[0]).toBeEnabled();
+    } finally {
+      seams.claims = new Map();
+      seams.agents = [];
+    }
   });
 });

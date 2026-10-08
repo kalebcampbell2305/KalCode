@@ -26,7 +26,8 @@ import {
 
 const temps = [];
 after(() => {
-  for (const dir of temps) rmSync(dir, { recursive: true, force: true });
+  // Windows releases a just-exited process's file handles asynchronously; retry instead of failing on EPERM.
+  for (const dir of temps) rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
 });
 const tempDir = () => {
   const dir = mkdtempSync(join(tmpdir(), "kc-lookahead-"));
@@ -622,6 +623,20 @@ process.stdout.write(String(pid));
       ),
     );
     assert.equal(finishedBeforeStarterExit, false, "the starter returned at once and the stub outlived it");
+    // "finished" is written before the stub's PowerShell exits, and it still holds both logs open: wait for
+    // the process itself, or the temp folder cannot be removed (EPERM on the second PC, gate 37797680157).
+    const pid = Number(started.stdout);
+    const alive = () => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const exitDeadline = Date.now() + 60_000;
+    while (alive() && Date.now() < exitDeadline) await new Promise((r) => setTimeout(r, 100));
+    assert.equal(alive(), false, "the stub front half exited");
     assert.match(readFileSync(out, "utf8"), /\[stub\] step 1/);
     assert.match(readFileSync(err, "utf8"), /\[stub\] stderr line/);
   });

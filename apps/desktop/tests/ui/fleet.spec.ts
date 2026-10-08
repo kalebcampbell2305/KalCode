@@ -52,9 +52,9 @@ test("agents editing the same files in one project see each other early, and the
   await page.goto("/?scenario=busy");
   const checkout = card(page, "Fix flaky checkout test");
   const invoices = card(page, "Write invoices migration");
-  const toInvoices = checkout.getByRole("button", { name: /^Overlaps with Gemini CLI · Write invoices migration/ });
+  const toInvoices = checkout.getByRole("button", { name: /^Overlaps with Write invoices migration · 1 file/ });
   await expect(toInvoices).toContainText("1 file");
-  await expect(invoices.getByRole("button", { name: /^Overlaps with Codex · Fix flaky checkout test/ })).toBeVisible();
+  await expect(invoices.getByRole("button", { name: /^Overlaps with Fix flaky checkout test · 1 file/ })).toBeVisible();
   // Different projects and agents without shared files never overlap.
   await expect(card(page, "Refactor auth middleware").getByRole("list", { name: "Overlapping edits" })).toHaveCount(0);
 

@@ -2,6 +2,14 @@ import type { TerminalInfo, ThreadSummary } from "@kalcode/protocol";
 import { useToast } from "@kalcode/ui/components";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { toKalCodeError } from "../../../ipc/errors.ts";
+import { useAllowedOverlaps } from "../../../runtime/ownership/allowed.ts";
+import {
+  deriveOwnership,
+  EMPTY_OWNERSHIP,
+  type Ownership,
+  ownershipSignature,
+} from "../../../runtime/ownership/model.ts";
+import { useOwnershipSources } from "../../../runtime/ownership/useOwnershipSources.ts";
 import { useEvents, useRuntime } from "../../../runtime/RuntimeProvider.tsx";
 import { useWorktreeStates, type WorktreeStates } from "../fleet/useWorktreeStates.ts";
 import { ACTION_LABELS, type ThreadAction } from "./actions.ts";
@@ -56,6 +64,11 @@ export interface BulkResult {
 const BULK_CONCURRENCY = 8;
 
 const DashboardDataContext = createContext<DashboardDataValue | null>(null);
+/**
+ * Agent File Ownership, in its own context: its value changes only when a claim or an overlap
+ * does, so cards and Code panes reading it never re-render for unrelated agent activity.
+ */
+const OwnershipContext = createContext<Ownership | null>(null);
 
 function createSession() {
   return {
@@ -179,6 +192,21 @@ export function DashboardDataProvider({ children }: { children: ReactNode }) {
     [resourceOwner, lifetime, threads.state],
   );
   const worktrees = useWorktreeStates(worktreeThreads);
+  const ownershipSources = useOwnershipSources(worktreeThreads, worktrees.states);
+  const allowedOverlaps = useAllowedOverlaps();
+  const lastOwnership = useRef<{ signature: string; value: Ownership }>({ signature: "", value: EMPTY_OWNERSHIP });
+  const ownership = useMemo(() => {
+    const next = deriveOwnership({
+      agents: worktreeThreads ?? [],
+      worktrees: worktrees.states,
+      ...ownershipSources,
+      allowed: allowedOverlaps,
+    });
+    const signature = ownershipSignature(next);
+    if (signature === lastOwnership.current.signature) return lastOwnership.current.value;
+    lastOwnership.current = { signature, value: next };
+    return next;
+  }, [worktreeThreads, worktrees.states, ownershipSources, allowedOverlaps]);
   const terminals = useResource(
     useCallback(() => client.runningTerminals(), [client]),
     versions.terminals,
@@ -382,7 +410,11 @@ export function DashboardDataProvider({ children }: { children: ReactNode }) {
     [threads, archived, terminals, worktrees, pendingActions, runAction, runBulk, polite, resourceOwner, lifetime],
   );
 
-  return <DashboardDataContext.Provider value={value}>{children}</DashboardDataContext.Provider>;
+  return (
+    <DashboardDataContext.Provider value={value}>
+      <OwnershipContext.Provider value={ownership}>{children}</OwnershipContext.Provider>
+    </DashboardDataContext.Provider>
+  );
 }
 
 function useDashboardData(): DashboardDataValue {
@@ -423,6 +455,18 @@ export function useCodingAgents() {
 /** The one shared worktree/ownership feed used by every Dashboard and attention projection. */
 export function useAgentWorktreeStates(): WorktreeStates {
   return useDashboardData().worktrees;
+}
+
+/** Agent File Ownership (claims and overlaps), shared by Fleet, Code, file views and Needs You. */
+export function useOwnership(): Ownership {
+  const value = useContext(OwnershipContext);
+  if (!value) throw new Error("Dashboard data hooks must be used inside <DashboardDataProvider>");
+  return value;
+}
+
+/** The same, or null outside a Dashboard data boundary (isolated renders, tests). */
+export function useOptionalOwnership(): Ownership | null {
+  return useContext(OwnershipContext);
 }
 
 /**
