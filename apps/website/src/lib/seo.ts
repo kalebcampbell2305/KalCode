@@ -88,7 +88,8 @@ export function pageStructuredData(page: PageInfo, siteData?: Record<string, unk
     description: page.description,
     inLanguage: "en",
     isPartOf: { "@id": `${SITE_ORIGIN}/#website` },
-    about: { "@id": `${SITE_ORIGIN}/#software` },
+    // A page about something other than the KalCode app (a game) names its own subject.
+    about: { "@id": typeof siteData?.about === "string" ? siteData.about : `${SITE_ORIGIN}/#software` },
     ...(page.path === "/"
       ? { mainEntity: { "@id": `${SITE_ORIGIN}/#software` } }
       : { breadcrumb: { "@id": `${url}#breadcrumb` } }),

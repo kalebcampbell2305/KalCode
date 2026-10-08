@@ -185,6 +185,12 @@ export const PAGES = [
       "KalCode product updates: Windows releases, KalVoice progress, provider workspace improvements and meaningful product news without the engineering noise.",
   },
   {
+    path: "/games/campus-founder",
+    title: "Campus Founder — A KalCode Game",
+    description:
+      "Campus Founder is a single-player campus adventure and business game from KalCode, in development for Windows and macOS. Start with $200 and a dorm room at KAL University.",
+  },
+  {
     path: "/security",
     title: "Security — KalCode",
     description:
@@ -259,6 +265,8 @@ export const FOOTER_NAV = {
     { href: "/download", label: "Download" },
     { href: "/updates", label: "Updates" },
   ],
+  /** Games from KalCode: separate products, kept out of the KalCode header and pricing. */
+  games: [{ href: "/games/campus-founder", label: "Campus Founder" }],
   docs: [
     { href: "/docs", label: "Overview" },
     { href: "/docs/permissions", label: "Permissions" },

@@ -1,0 +1,1051 @@
+---
+/**
+ * /games/campus-founder: Campus Founder, a single-player game presented as "A KalCode Game".
+ *
+ * Truth rules for this page (docs/WEBSITE.md "Games"):
+ * - The game is in development. No build is downloadable or for sale, so the Windows and macOS
+ *   download controls are disabled "Coming soon" states, and no price is shown (the price is not set).
+ * - Every image is a real capture of the development build (components/games/Capture.astro).
+ * - The game is separate from KalCode: no KalCode plan, account, billing or early-access list is
+ *   involved, so this page has no form and links only to KalCode's existing X account for news.
+ */
+import Backdrop from "../../components/Backdrop.astro";
+import BrandMark from "../../components/BrandMark.astro";
+import Icon from "../../components/Icon.astro";
+import SectionHead from "../../components/SectionHead.astro";
+import XLink from "../../components/XLink.astro";
+import Capture from "../../components/games/Capture.astro";
+import Base from "../../layouts/Base.astro";
+import { SITE_ORIGIN, SOCIAL, getPage } from "../../lib/site";
+
+const page = getPage("/games/campus-founder");
+const pageUrl = new URL(page.path, SITE_ORIGIN).href;
+const gameId = `${pageUrl}#game`;
+
+const CAPTION = "In-game capture · development build";
+
+const arc = [
+  {
+    name: "Prologue",
+    title: "Arrival",
+    text: "Two hundred dollars, a dorm desk, one new friend and one problem worth solving.",
+    state: "In the development build",
+    kind: "dev",
+  },
+  {
+    name: "Act I",
+    title: "First sale",
+    text: "Find a customer, choose a price, launch on campus and learn from what happens.",
+    state: "In the development build",
+    kind: "dev",
+  },
+  {
+    name: "Act II",
+    title: "Reputation",
+    text: "Marketing, rivals, word of mouth and the people around you start to matter.",
+    state: "Planned",
+    kind: "planned",
+  },
+  {
+    name: "Act III",
+    title: "Scaling",
+    text: "Hiring, operations and harder tradeoffs as the business grows.",
+    state: "Planned",
+    kind: "planned",
+  },
+  {
+    name: "Act IV",
+    title: "Graduation",
+    text: "Several endings, each earned by your business, your choices and your relationships.",
+    state: "Planned",
+    kind: "planned",
+  },
+  {
+    name: "After",
+    title: "Keep building",
+    text: "Run the same company after graduation, with no forced restart.",
+    state: "Planned",
+    kind: "planned",
+  },
+] as const;
+
+const gallery = [
+  {
+    name: "creator",
+    title: "Make your student",
+    alt: "The character creator: a new student's name, skin tone, build, height and hair, with the quad behind.",
+  },
+  {
+    name: "cafe",
+    title: "Lantern Café",
+    alt: "Inside Lantern Café: a checkered floor, a long wooden counter and a menu board.",
+  },
+  {
+    name: "map",
+    title: "The campus map",
+    alt: "The KAL University map, marking Maple Hall, the quad, Lantern Café, the Innovation Lab and the main gate.",
+  },
+  {
+    name: "dashboard",
+    title: "Your company at a glance",
+    alt: "The StudySync Labs business dashboard: revenue, profit, customers, milestones and active tasks.",
+  },
+  {
+    name: "campaign",
+    title: "Plan a campaign",
+    alt: "The campaign planner: choosing an audience such as freshmen or STEM majors, with fit and budget for each.",
+  },
+  {
+    name: "first-sale",
+    title: "Your first sale",
+    alt: "A milestone card reading Someone paid for your idea, after StudySync Labs makes its first sale.",
+  },
+] as const;
+
+const platforms = [
+  {
+    id: "windows",
+    name: "Windows",
+    chip: "Coming soon",
+    text: "Planned for 64-bit Windows 10 and 11, with a signed installer. The download appears here once a build has passed testing on real Windows PCs.",
+    download: true,
+  },
+  {
+    id: "macos",
+    name: "macOS",
+    chip: "Coming soon",
+    text: "Planned for Apple silicon Macs, signed and notarized by Apple. Intel Macs are listed only once one has been tested.",
+    download: true,
+  },
+  {
+    id: "linux",
+    name: "Linux",
+    chip: "Being considered",
+    text: "Linux is listed only after a build passes testing on real hardware.",
+    download: false,
+  },
+] as const;
+
+const promises = [
+  {
+    label: "one-time purchase",
+    title: "Buy it once.",
+    text: "Planned as a single purchase with no subscription. The price will be announced before release.",
+  },
+  {
+    label: "separate from KalCode",
+    title: "Not part of a KalCode plan.",
+    text: "You don't need KalCode to play, and the game never touches your KalCode account or billing.",
+  },
+  {
+    label: "fair play",
+    title: "No microtransactions.",
+    text: "No loot boxes, no ads and no currency for sale. Money in the game is fictional and stays there.",
+  },
+  {
+    label: "offline",
+    title: "Yours, on your computer.",
+    text: "Single-player and designed to play fully offline, with your saves kept on your own computer.",
+  },
+] as const;
+
+const faq = [
+  {
+    q: "When can I play?",
+    a: "Not yet. Campus Founder is in development and has no release date. Windows and macOS downloads will appear on this page when a build has passed testing on real Windows PCs and Macs.",
+  },
+  {
+    q: "Does it need an internet connection or an account?",
+    a: "No. It's a single-player game designed to play fully offline. It has no online features, and your saves stay on your computer.",
+  },
+  {
+    q: "Are there microtransactions or loot boxes?",
+    a: "No. There are no microtransactions, loot boxes, ads or in-game currency for sale. The money you earn in the game is fictional, can't be bought and can't be cashed out.",
+  },
+  {
+    q: "Do I need a KalCode subscription?",
+    a: "No. Campus Founder is a separate game, sold on its own. It isn't included in any KalCode plan, no plan is needed to play it, and buying it has nothing to do with your KalCode account or billing.",
+  },
+  {
+    q: "What is KalCode Sim?",
+    a: "A fictional workstation inside the game, styled after KalCode. At your dorm desk you plan product sprints with in-game helpers. It doesn't run code, sign in to anything, use AI services or touch your files or your KalCode account. It's optional: a tech company is one of several ways to play.",
+  },
+  {
+    q: "Do I need to know how to code?",
+    a: "No. Success never depends on coding. You can build a campus service instead of a tech product, and KalCode Sim only asks you to make decisions.",
+  },
+  {
+    q: "How much will it cost?",
+    a: "The price isn't set yet. The plan is a one-time purchase with no subscription, announced here before release.",
+  },
+  {
+    q: "Which computers will it run on?",
+    a: "Windows and macOS are planned, starting with 64-bit Windows 10 and 11 and Apple silicon Macs. Linux is being considered and will only be listed once it has been tested on real hardware.",
+  },
+  {
+    q: "How do I hear when it's out?",
+    a: `Follow ${SOCIAL.official.handle} on X. Release news is posted there, and downloads will appear on this page.`,
+  },
+] as const;
+
+const jsonLd = {
+  about: gameId,
+  "@graph": [
+    {
+      "@type": "VideoGame",
+      "@id": gameId,
+      name: "Campus Founder",
+      alternateName: "Campus Founder: The KAL University World",
+      url: pageUrl,
+      description: page.description,
+      genre: ["Simulation", "Adventure"],
+      playMode: "SinglePlayer",
+      image: `${SITE_ORIGIN}/assets/games/campus-founder/title-1920.webp`,
+      publisher: { "@type": "Organization", "@id": `${SITE_ORIGIN}/#organization`, name: "KalCode" },
+    },
+  ],
+};
+---
+<Base title={page.title} description={page.description} path={page.path} world jsonLd={jsonLd}>
+  <section class="cf-hero" aria-labelledby="cf-title">
+    <Backdrop variant="nebula" />
+    <div class="container cf-hero__grid">
+      <div class="cf-hero__copy">
+        <div class="cf-hero__labels">
+          <p class="cf-lockup"><BrandMark size={32} /><span>A KalCode Game</span></p>
+          <p class="chip chip--dev" data-page-status>In development · Coming soon</p>
+        </div>
+        <h1 id="cf-title" class="cf-hero__title">Campus <span class="cf-hero__accent">Founder</span></h1>
+        <p class="cf-hero__hook">You have $200, a college dorm, and four years to build something extraordinary.</p>
+        <p class="cf-hero__line">
+          A single-player campus adventure and business game at KAL University, a fictional campus. Walk it,
+          meet its people, and build a company from your dorm desk.
+        </p>
+        <div class="cf-get" role="group" aria-labelledby="cf-get-label">
+          <p id="cf-get-label" class="visually-hidden">Downloads</p>
+          <button class="cf-soon" type="button" disabled aria-describedby="cf-get-note">
+            <Icon name="download" class="cf-soon__icon" />
+            <span class="cf-soon__text">
+              <span class="cf-soon__os">Windows</span>
+              <span class="cf-soon__state">Coming soon</span>
+            </span>
+          </button>
+          <button class="cf-soon" type="button" disabled aria-describedby="cf-get-note">
+            <Icon name="download" class="cf-soon__icon" />
+            <span class="cf-soon__text">
+              <span class="cf-soon__os">macOS</span>
+              <span class="cf-soon__state">Coming soon</span>
+            </span>
+          </button>
+        </div>
+        <p id="cf-get-note" class="cf-hero__note">
+          No build is available yet. Downloads appear here once a build passes testing on real PCs and Macs.
+        </p>
+        <div class="cf-hero__links">
+          <a class="text-link" href="#play">See what you do <Icon name="arrow-down" /></a>
+          <XLink account="official" withHandle class="cf-follow" />
+        </div>
+      </div>
+      <figure class="cf-hero__shot frame">
+        <Capture
+          name="title"
+          eager
+          sizes="(min-width: 64rem) 46rem, 92vw"
+          alt="The Campus Founder title screen: the KAL University quad and clock tower at sunset, with the New Game menu."
+        />
+        <figcaption class="cf-caption"><span class="chip chip--plain">{CAPTION}</span></figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="world-section" id="story" aria-labelledby="story-title">
+    <Backdrop variant="deep" />
+    <div class="container cf-story">
+      <div class="cf-story__copy">
+        <h2 id="story-title" class="h2">Arrive with $200. Leave with something you built.</h2>
+        <p class="body-lg">
+          You arrive at KAL University with $200, a simple dorm room and no business. Explore the campus,
+          find people and problems worth solving, and turn one idea into a company, one decision at a time.
+        </p>
+        <p class="body-lg">
+          Friends, mentors and rivals change your story. Every chapter is something you play, not a long
+          cutscene.
+        </p>
+      </div>
+      <ol class="cf-arc" role="list" aria-label="The story">
+        {
+          arc.map((step) => (
+            <li class="cf-arc__step" data-kind={step.kind}>
+              <span class="cf-arc__name">{step.name}</span>
+              <div class="cf-arc__body">
+                <p class="cf-arc__title">{step.title}</p>
+                <p class="cf-arc__text">{step.text}</p>
+              </div>
+              <span class:list={["chip", step.kind === "dev" ? "chip--dev" : undefined]}>{step.state}</span>
+            </li>
+          ))
+        }
+      </ol>
+    </div>
+  </section>
+
+  <section class="world-section" id="play" aria-labelledby="play-title">
+    <Backdrop variant="orbital" />
+    <div class="container">
+      <SectionHead
+        id="play-title"
+        title="What you actually do."
+        text="Short goals, real places and decisions you can see the results of. Every image here is from the game as it runs today."
+      />
+
+      <div class="cf-moments">
+        <article class="feature-split" aria-labelledby="walk-title">
+          <div class="feature-split__copy">
+            <h3 id="walk-title" class="h2">Walk the campus.</h3>
+            <p>
+              Explore KAL University on foot: the quad, the Maple Hall dorms, Lantern Café and the Innovation
+              Lab. The day moves on as you do, and the campus changes after dark.
+            </p>
+          </div>
+          <figure class="feature-split__visual cf-shot cf-shot--pair">
+            <div class="frame cf-shot__main">
+              <Capture
+                name="quad"
+                sizes="(min-width: 64rem) 44rem, 92vw"
+                alt="The player on the central quad during Welcome Week, beside the fountain, with the domed hall behind and the clock, wallet and objective on screen."
+              />
+            </div>
+            <div class="frame cf-shot__inset">
+              <Capture
+                name="night-quad"
+                sizes="(min-width: 64rem) 18rem, 46vw"
+                alt="The same quad at night under lamplight, the domed hall lit in the distance."
+              />
+            </div>
+            <figcaption class="cf-caption"><span class="chip chip--plain">{CAPTION}</span></figcaption>
+          </figure>
+        </article>
+
+        <article class="feature-split feature-split--reverse" aria-labelledby="people-title">
+          <div class="feature-split__copy">
+            <h3 id="people-title" class="h2">Meet people. Choose what to say.</h3>
+            <p>
+              Conversations come with real choices. Classmates bring problems worth solving, and the friends,
+              mentors and rivals you make shape where your story goes.
+            </p>
+          </div>
+          <figure class="feature-split__visual cf-shot">
+            <div class="frame cf-shot__main">
+              <Capture
+                name="dialogue"
+                sizes="(min-width: 64rem) 44rem, 92vw"
+                alt="A conversation with Sam in Lantern Café, with three reply choices on screen."
+              />
+            </div>
+            <figcaption class="cf-caption"><span class="chip chip--plain">{CAPTION}</span></figcaption>
+          </figure>
+        </article>
+
+        <article class="feature-split" aria-labelledby="business-title">
+          <div class="feature-split__copy">
+            <h3 id="business-title" class="h2">Build a business you understand.</h3>
+            <p>
+              Start a tech company or a campus service. Set a price, plan a campaign and reinvest what you
+              earn. When a campaign falls flat, the report shows why: targeting, price, quality or timing.
+            </p>
+          </div>
+          <figure class="feature-split__visual cf-shot cf-shot--pair">
+            <div class="frame cf-shot__main">
+              <Capture
+                name="campaign-report"
+                sizes="(min-width: 64rem) 44rem, 92vw"
+                alt="A campaign report: 604 impressions led to 27 visits and no customers, with targeting named as the biggest drag."
+              />
+            </div>
+            <div class="frame cf-shot__inset">
+              <Capture
+                name="pricing"
+                sizes="(min-width: 64rem) 18rem, 46vw"
+                alt="The pricing screen for StudySync: $8.00 a month, with estimated weekly demand and profit ranges."
+              />
+            </div>
+            <figcaption class="cf-caption"><span class="chip chip--plain">{CAPTION}</span></figcaption>
+          </figure>
+        </article>
+
+        <article class="feature-split feature-split--reverse" aria-labelledby="sim-title">
+          <div class="feature-split__copy">
+            <p class="chip chip--plain">Optional · fictional · in-game only</p>
+            <h3 id="sim-title" class="h2">KalCode Sim, at your dorm desk.</h3>
+            <p>
+              Plan a product sprint with fictional in-game helpers, then launch it into the game's economy. It
+              never runs real code, signs in to anything or touches your KalCode account, and you don't need to
+              code to use it.
+            </p>
+          </div>
+          <figure class="feature-split__visual cf-shot">
+            <div class="frame cf-shot__main">
+              <Capture
+                name="dorm"
+                sizes="(min-width: 64rem) 44rem, 92vw"
+                alt="The player in a Maple Hall dorm room at the desk, with the prompt Use Desk, where KalCode Sim opens."
+              />
+            </div>
+            <figcaption class="cf-caption"><span class="chip chip--plain">{CAPTION}</span></figcaption>
+          </figure>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="world-section" id="screens" aria-labelledby="screens-title">
+    <Backdrop variant="nebula" />
+    <div class="container">
+      <SectionHead
+        id="screens-title"
+        title="More from KAL University."
+        text="Captured from the development build. Work in progress: what you see will keep improving."
+      />
+      <ul class="cf-gallery" role="list">
+        {
+          gallery.map((shot) => (
+            <li>
+              <figure class="cf-gallery__item">
+                <div class="frame cf-gallery__frame">
+                  <Capture name={shot.name} sizes="(min-width: 64rem) 25rem, (min-width: 40rem) 46vw, 92vw" alt={shot.alt} />
+                </div>
+                <figcaption class="cf-gallery__title">{shot.title}</figcaption>
+              </figure>
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+  </section>
+
+  <section class="world-section" id="platforms" aria-labelledby="platforms-title">
+    <Backdrop variant="deep" />
+    <div class="container">
+      <SectionHead
+        id="platforms-title"
+        title="Coming to Windows and macOS."
+        text="No build is available yet. Each download appears here once it has passed testing on real hardware."
+      />
+      <ul class="platforms cf-platforms" role="list">
+        {
+          platforms.map((platform) => (
+            <li class="platform cf-platform" id={platform.id}>
+              <div class="platform__info">
+                <div class="platform__head">
+                  <h3 class="platform__name">{platform.name}</h3>
+                  <span class:list={["chip", platform.download ? "chip--dev" : undefined]}>{platform.chip}</span>
+                </div>
+                <p class="platform__state">{platform.text}</p>
+              </div>
+              {platform.download && (
+                <div class="cf-platform__action">
+                  <button class="cf-soon cf-soon--row" type="button" disabled>
+                    <Icon name="download" class="cf-soon__icon" />
+                    <span class="cf-soon__text">
+                      <span class="cf-soon__os">Download for {platform.name}</span>
+                      <span class="cf-soon__state">Coming soon</span>
+                    </span>
+                  </button>
+                </div>
+              )}
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+  </section>
+
+  <section class="world-section" id="promises" aria-labelledby="promises-title">
+    <Backdrop variant="gravity" />
+    <div class="container">
+      <SectionHead
+        id="promises-title"
+        title="A game you buy once and keep."
+        text="Campus Founder is its own product, separate from KalCode's apps and plans."
+      />
+      <ul class="facts cf-facts" role="list">
+        {
+          promises.map((fact) => (
+            <li class="fact">
+              <span class="fact__label">{fact.label}</span>
+              <p class="fact__title">{fact.title}</p>
+              <p>{fact.text}</p>
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+  </section>
+
+  <section class="world-section" id="faq" aria-labelledby="faq-title">
+    <Backdrop variant="deep" />
+    <div class="container cf-faq">
+      <div class="cf-faq__head">
+        <h2 id="faq-title" class="h2 h2--sm">Questions</h2>
+        <p class="body-lg">Straight answers about what Campus Founder is, and what it isn't.</p>
+      </div>
+      <div class="faq">
+        {
+          faq.map((item) => (
+            <details>
+              <summary>{item.q}</summary>
+              <p class="faq__answer">{item.a}</p>
+            </details>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <section class="world-section cf-closing" aria-labelledby="closing-title">
+    <Backdrop variant="deep" />
+    <div class="container cf-closing__inner">
+      <BrandMark size={72} lazy />
+      <p class="eyebrow">A KalCode Game</p>
+      <h2 id="closing-title" class="h2">Four years. $200. Your move.</h2>
+      <p class="body-lg">
+        Campus Founder is coming to Windows and macOS. Follow {SOCIAL.official.handle} for release news.
+      </p>
+      <div class="button-row cf-closing__actions">
+        <XLink account="official" withHandle class="cf-follow" />
+        <a class="text-link" href="/">Discover KalCode, the AI coding workspace <Icon name="arrow-right" /></a>
+      </div>
+    </div>
+  </section>
+</Base>
+
+<style>
+  /* ---------- Hero ---------- */
+
+  .cf-hero {
+    position: relative;
+    isolation: isolate;
+    overflow: clip;
+    padding-block: clamp(2.5rem, 1.5rem + 4vw, 6rem) clamp(3rem, 2rem + 4vw, 6rem);
+  }
+
+  .cf-hero__grid {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    gap: clamp(2.5rem, 1.5rem + 3vw, 4rem);
+    align-items: center;
+  }
+
+  .cf-hero__copy {
+    display: grid;
+    gap: var(--space-5);
+    justify-items: start;
+  }
+
+  .cf-hero__labels {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  /* "A KalCode Game": the KalCode mark (the mascot tile) beside the label. */
+  .cf-lockup {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-3);
+    color: var(--color-text);
+    font-family: var(--font-wider);
+    font-size: var(--type-label);
+    font-weight: var(--weight-medium);
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+  }
+
+  .cf-lockup :global(.brand-mark) {
+    border-radius: var(--radius-md);
+  }
+
+  .cf-closing__inner :global(.brand-mark) {
+    border-radius: var(--radius-xl);
+    filter: drop-shadow(0 0 2rem rgb(var(--world-blue) / 0.45));
+  }
+
+  .cf-hero__title {
+    margin: 0;
+    color: var(--color-text);
+    font-family: var(--font-display);
+    font-size: clamp(3rem, 1.6rem + 4.6vw, 5.25rem);
+    font-weight: 700;
+    letter-spacing: -0.045em;
+    line-height: 0.95;
+    text-wrap: balance;
+  }
+
+  /* The game's own title art sets FOUNDER in warm gold; the site echoes it with its gold token. */
+  .cf-hero__accent {
+    color: rgb(var(--world-gold));
+  }
+
+  .cf-hero__hook {
+    max-width: 24ch;
+    color: var(--color-text);
+    font-family: var(--font-display);
+    font-size: var(--site-hero-line);
+    font-weight: var(--weight-semibold);
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+    text-wrap: balance;
+  }
+
+  .cf-hero__line {
+    max-width: 46ch;
+    color: var(--color-text-secondary);
+    font-size: var(--site-text-lead);
+    line-height: 1.55;
+    text-wrap: pretty;
+  }
+
+  .cf-get {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    margin-top: var(--space-2);
+  }
+
+  .cf-hero__note {
+    max-width: 46ch;
+    color: var(--color-text-muted);
+    font-size: var(--site-text-small);
+  }
+
+  .cf-hero__links {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3) var(--space-8);
+  }
+
+  .cf-hero__shot {
+    margin: 0;
+    padding: clamp(0.5rem, 0.35rem + 0.6vw, 0.875rem);
+    box-shadow:
+      var(--world-panel-edge),
+      0 0 90px -30px rgb(var(--world-gold) / 0.35),
+      0 0 60px -30px rgb(var(--world-blue) / 0.4);
+  }
+
+  @media (min-width: 64rem) {
+    .cf-hero__grid {
+      grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+      gap: var(--space-12);
+    }
+  }
+
+  /* ---------- "Coming soon" download controls: disabled, honest, still clearly a download ---------- */
+
+  .cf-soon {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-height: 3.5rem;
+    padding: var(--space-2) var(--space-5) var(--space-2) var(--space-4);
+    border: 0;
+    border-radius: var(--btn-radius);
+    background: var(--world-glass);
+    box-shadow:
+      inset 0 0 0 1px var(--color-border-strong),
+      inset 0 1px 0 color-mix(in srgb, var(--color-text) 6%, transparent);
+    color: var(--color-text);
+    font: inherit;
+    text-align: left;
+    cursor: not-allowed;
+  }
+
+  .cf-soon :global(.cf-soon__icon) {
+    width: 1.25rem;
+    height: 1.25rem;
+    flex: none;
+    color: var(--color-text-muted);
+  }
+
+  .cf-soon__text {
+    display: grid;
+    gap: 0.125rem;
+  }
+
+  .cf-soon__os {
+    font-size: 1rem;
+    font-weight: var(--weight-semibold);
+    letter-spacing: -0.005em;
+    line-height: 1.2;
+  }
+
+  .cf-soon__state {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--color-text-secondary);
+    font-family: var(--font-mono);
+    font-size: var(--site-text-xs);
+    line-height: 1.2;
+  }
+
+  .cf-soon__state::before {
+    content: "";
+    width: 0.4375rem;
+    height: 0.4375rem;
+    border-radius: var(--radius-full);
+    background: var(--color-waiting);
+  }
+
+  @media (max-width: 30rem) {
+    .cf-get,
+    .cf-soon {
+      width: 100%;
+    }
+  }
+
+  /* The X link as a quiet text link with its glyph. */
+  .cf-hero__links :global(.cf-follow),
+  .cf-closing__actions :global(.cf-follow) {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: 2.75rem;
+    color: var(--color-text-secondary);
+    font-weight: var(--weight-medium);
+    text-decoration: none;
+  }
+
+  .cf-hero__links :global(.cf-follow:hover),
+  .cf-closing__actions :global(.cf-follow:hover) {
+    color: var(--color-text);
+  }
+
+  .cf-hero__links :global(.cf-follow svg),
+  .cf-closing__actions :global(.cf-follow svg) {
+    width: 1rem;
+    height: 1rem;
+  }
+
+  /* ---------- Captures ---------- */
+
+  :global(.capture),
+  :global(.capture img) {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+
+  :global(.capture img) {
+    aspect-ratio: 16 / 9;
+    border-radius: calc(var(--world-frame-radius) - 0.375rem);
+    background: var(--color-bg-sunken);
+  }
+
+  .cf-caption {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: var(--space-3);
+  }
+
+  /* The inset covers the right corner of a pair, so its truth label sits on the left. */
+  .cf-shot--pair .cf-caption {
+    justify-content: flex-start;
+  }
+
+  .cf-hero__shot .cf-caption {
+    margin-top: var(--space-2);
+  }
+
+  .cf-shot {
+    position: relative;
+    margin: 0;
+  }
+
+  .cf-shot__main {
+    padding: clamp(0.375rem, 0.25rem + 0.4vw, 0.625rem);
+  }
+
+  .cf-shot__inset {
+    display: none;
+  }
+
+  /* Wide screens: a second moment overlaps the corner of the first. */
+  @media (min-width: 48rem) {
+    .cf-shot--pair {
+      padding-bottom: 12%;
+    }
+
+    .cf-shot--pair .cf-shot__main {
+      width: 86%;
+    }
+
+    .cf-shot__inset {
+      position: absolute;
+      right: 0;
+      bottom: 2.25rem;
+      display: block;
+      width: 42%;
+      padding: 0.375rem;
+      box-shadow:
+        var(--world-panel-edge),
+        0 24px 60px -20px rgb(0 0 0 / 0.9);
+    }
+
+    .feature-split--reverse .cf-shot--pair .cf-shot__inset {
+      right: auto;
+      left: 0;
+    }
+  }
+
+  .cf-moments {
+    display: grid;
+    gap: clamp(4rem, 2.5rem + 5vw, 8rem);
+  }
+
+  .cf-moments .feature-split__copy > p:not(.chip) {
+    max-width: 40ch;
+  }
+
+  /* Section headlines on the marketing scale (the shared .h2 follows the app's type scale). */
+  section :global(.section-head > .h2),
+  .cf-faq__head .h2,
+  .cf-closing__inner .h2 {
+    font-size: clamp(2rem, 1.3rem + 2.2vw, 3.5rem);
+    line-height: 1.02;
+  }
+
+  /* ---------- Story ---------- */
+
+  .cf-story {
+    display: grid;
+    gap: clamp(2.5rem, 1.5rem + 3vw, 4rem);
+    padding-block: 0 clamp(2rem, 1rem + 3vw, 4rem);
+  }
+
+  .cf-story__copy {
+    display: grid;
+    gap: var(--space-5);
+    align-content: start;
+  }
+
+  .cf-story__copy .h2 {
+    font-size: clamp(2rem, 1.3rem + 2.2vw, 3.5rem);
+  }
+
+  .cf-arc {
+    display: grid;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+  }
+
+  .cf-arc__step {
+    display: grid;
+    grid-template-columns: 5.5rem minmax(0, 1fr);
+    gap: var(--space-2) var(--space-4);
+    align-items: start;
+    padding: var(--space-4) var(--space-5);
+    border-radius: var(--radius-lg);
+    background: var(--world-panel);
+    box-shadow: var(--world-panel-edge);
+  }
+
+  .cf-arc__step[data-kind="dev"] {
+    box-shadow:
+      var(--world-panel-edge),
+      inset 3px 0 0 var(--color-waiting);
+  }
+
+  .cf-arc__name {
+    padding-top: 0.2rem;
+    color: var(--color-accent-text);
+    font-family: var(--font-mono);
+    font-size: var(--site-text-xs);
+  }
+
+  .cf-arc__body {
+    display: grid;
+    gap: var(--space-1);
+  }
+
+  .cf-arc__title {
+    color: var(--color-text);
+    font-size: 1.125rem;
+    font-weight: var(--weight-semibold);
+    letter-spacing: -0.015em;
+    line-height: 1.3;
+  }
+
+  .cf-arc__text {
+    color: var(--color-text-secondary);
+    font-size: var(--site-text-small);
+    line-height: var(--leading-normal);
+  }
+
+  .cf-arc__step .chip {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  @media (min-width: 40rem) {
+    .cf-arc__step {
+      grid-template-columns: 5.5rem minmax(0, 1fr) auto;
+    }
+
+    .cf-arc__step .chip {
+      grid-column: 3;
+      align-self: center;
+    }
+  }
+
+  @media (min-width: 64rem) {
+    .cf-story {
+      grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+      gap: var(--space-16);
+    }
+
+    .cf-story__copy {
+      position: sticky;
+      top: calc(var(--site-header-h) + var(--space-8));
+    }
+  }
+
+  /* ---------- Gallery ---------- */
+
+  .cf-gallery {
+    display: grid;
+    gap: clamp(1.25rem, 1rem + 1vw, 2rem);
+    margin: 0;
+    padding: 0;
+  }
+
+  .cf-gallery__item {
+    display: grid;
+    gap: var(--space-3);
+    margin: 0;
+  }
+
+  .cf-gallery__frame {
+    padding: 0.375rem;
+    transition:
+      transform var(--dur-base) var(--ease-out),
+      box-shadow var(--dur-base) var(--ease-out);
+  }
+
+  .cf-gallery__item:hover .cf-gallery__frame {
+    transform: translateY(-2px);
+    box-shadow:
+      var(--world-panel-lit),
+      0 0 60px -30px rgb(var(--world-blue) / 0.5);
+  }
+
+  .cf-gallery__title {
+    color: var(--color-text);
+    font-weight: var(--weight-medium);
+    letter-spacing: -0.01em;
+  }
+
+  @media (min-width: 40rem) {
+    .cf-gallery {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (min-width: 64rem) {
+    .cf-gallery {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .cf-gallery__frame,
+    .cf-gallery__item:hover .cf-gallery__frame {
+      transform: none;
+      transition: none;
+    }
+  }
+
+  /* ---------- Platforms ---------- */
+
+  .cf-platform {
+    align-items: center;
+  }
+
+  .cf-platform__action {
+    display: flex;
+  }
+
+  @media (min-width: 52rem) {
+    .cf-platform {
+      grid-template-columns: minmax(0, 1fr) auto;
+      column-gap: var(--space-10);
+      padding: var(--space-6) var(--space-8);
+    }
+  }
+
+  /* ---------- Promises ---------- */
+
+  @media (min-width: 40rem) {
+    .cf-facts {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (min-width: 72rem) {
+    .cf-facts {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+  }
+
+  /* ---------- FAQ ---------- */
+
+  .cf-faq {
+    display: grid;
+    gap: clamp(2rem, 1.5rem + 2vw, 3rem);
+  }
+
+  .cf-faq__head {
+    display: grid;
+    gap: var(--space-4);
+    align-content: start;
+  }
+
+  @media (min-width: 64rem) {
+    .cf-faq {
+      grid-template-columns: minmax(0, 4fr) minmax(0, 8fr);
+      gap: var(--space-16);
+    }
+  }
+
+  /* ---------- Closing ---------- */
+
+  .cf-closing {
+    padding-block: clamp(4rem, 3rem + 5vw, 8rem);
+  }
+
+  .cf-closing__inner {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    justify-items: center;
+    gap: var(--space-5);
+    text-align: center;
+  }
+
+  .cf-closing__inner .eyebrow {
+    justify-self: center;
+  }
+
+  .cf-closing__inner .body-lg {
+    max-width: 44ch;
+  }
+
+  .cf-closing__actions {
+    justify-content: center;
+    gap: var(--space-3) var(--space-8);
+  }
+</style>

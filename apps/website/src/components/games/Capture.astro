@@ -1,0 +1,49 @@
+---
+/**
+ * One real in-game capture of Campus Founder (public/assets/games/campus-founder/): 1920×1080 frames
+ * from the development build's automated capture tour, served as AVIF with a WebP fallback at
+ * 960 and 1920 widths, with explicit dimensions. Never a mock-up: only captures of the real build
+ * go in that folder (docs/WEBSITE.md "Games").
+ */
+type CaptureName =
+  | "title"
+  | "quad"
+  | "night-quad"
+  | "creator"
+  | "dorm"
+  | "cafe"
+  | "dialogue"
+  | "map"
+  | "dashboard"
+  | "campaign"
+  | "pricing"
+  | "first-sale"
+  | "campaign-report";
+
+interface Props {
+  name: CaptureName;
+  alt: string;
+  sizes: string;
+  /** First viewport: eager, high fetch priority. */
+  eager?: boolean;
+  class?: string;
+}
+
+const { name, alt, sizes, eager = false, class: className } = Astro.props;
+const base = `/assets/games/campus-founder/${name}`;
+const widths = [960, 1920] as const;
+const srcset = (format: "avif" | "webp") => widths.map((width) => `${base}-${width}.${format} ${width}w`).join(", ");
+---
+<picture class:list={["capture", className]}>
+  <source type="image/avif" srcset={srcset("avif")} sizes={sizes} />
+  <source type="image/webp" srcset={srcset("webp")} sizes={sizes} />
+  <img
+    src={`${base}-1920.webp`}
+    width="1920"
+    height="1080"
+    alt={alt}
+    decoding="async"
+    loading={eager ? "eager" : "lazy"}
+    fetchpriority={eager ? "high" : "auto"}
+  />
+</picture>
