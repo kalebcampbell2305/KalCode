@@ -118,7 +118,7 @@ describe("buildEntitlement", () => {
       kalvoiceRequestsPerMonth: 25,
       openTerminals: null,
       parallelAgents: null,
-      workspaces: 2,
+      workspaces: null,
       providerAccounts: 2,
       brainstormsPerMonth: 3,
       launchRecipes: 1,

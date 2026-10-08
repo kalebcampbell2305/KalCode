@@ -93,8 +93,8 @@ as PowerShell 7 (a `pwsh.cmd` or `.bat` does not).
   an active verified plan the Free cap applies. Hitting the cap refuses the new tab with a
   plan-specific `validation/too_many_terminals` message that names the next plan's capacity;
   existing tabs are never closed, including after a downgrade.
-- **Other plan limits.** The same table caps, only when something new is added: workspaces (Free 2,
-  Pro 10; reopening one is never refused; `too_many_workspaces`), connected provider accounts
+- **Other plan limits.** Workspaces are unlimited on every plan. The same table caps, only when
+  something new is added: connected provider accounts
   across providers (2, 6, 8; `too_many_provider_accounts`), coding agents running at once (1, 4,
   10; checked before a thread is created or resumed; `too_many_agents`) and, on Free, 3 waiting
   Operations tasks (`too_many_queued_tasks`). MAX 2X and Owner have none of these caps.

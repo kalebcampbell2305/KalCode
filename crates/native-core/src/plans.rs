@@ -80,7 +80,7 @@ impl PlanTier {
                 kalvoice_requests_per_month: Some(25),
                 open_terminals: None,
                 parallel_agents: None,
-                workspaces: Some(2),
+                workspaces: None,
                 provider_accounts: Some(2),
                 queued_tasks: Some(3),
                 brainstorms_per_month: Some(3),
@@ -93,7 +93,7 @@ impl PlanTier {
                 kalvoice_requests_per_month: Some(150),
                 open_terminals: None,
                 parallel_agents: None,
-                workspaces: Some(10),
+                workspaces: None,
                 provider_accounts: Some(6),
                 launch_recipes: Some(10),
                 external_integrations: Some(5),
@@ -233,8 +233,12 @@ pub struct PlanLimit {
 impl PlanLimit {
     /// Refuses creating one more item when `current` items already exist.
     pub fn admit(&self, current: i64) -> Result<(), KalError> {
-        // Legacy callers and cached documents cannot restore obsolete local session caps.
-        if matches!(self.kind, Limited::OpenTerminals | Limited::ParallelAgents) {
+        // Legacy callers and cached documents cannot restore obsolete local session or
+        // workspace caps.
+        if matches!(
+            self.kind,
+            Limited::OpenTerminals | Limited::ParallelAgents | Limited::Workspaces
+        ) {
             return Ok(());
         }
         if current >= i64::from(self.max) {
@@ -409,20 +413,12 @@ mod tests {
     fn refusals_name_the_plan_and_the_next_capacity() {
         let message = |tier: PlanTier, kind| tier.limit(kind).expect("capped").refusal().message;
         assert_eq!(
-            message(PlanTier::Free, Limited::Workspaces),
-            "The Free plan allows 2 workspaces. Remove one to add another, or upgrade to Pro for 10."
-        );
-        assert_eq!(
             message(PlanTier::Free, Limited::ProviderAccounts),
             "The Free plan allows 2 connected provider accounts. Remove one to connect another, or upgrade to Pro for 6."
         );
         assert_eq!(
             message(PlanTier::Free, Limited::QueuedTasks),
             "The Free plan allows 3 queued tasks. Run or remove one to queue another, or upgrade to Pro for unlimited."
-        );
-        assert_eq!(
-            message(PlanTier::Pro, Limited::Workspaces),
-            "The Pro plan allows 10 workspaces. Remove one to add another, or upgrade to MAX for unlimited."
         );
         let refusal = PlanTier::Max
             .limit(Limited::ProviderAccounts)
@@ -434,10 +430,22 @@ mod tests {
 
     #[test]
     fn admit_refuses_only_at_the_cap() {
-        let limit = PlanTier::Free.limit(Limited::Workspaces).expect("capped");
+        let limit = PlanTier::Free
+            .limit(Limited::ProviderAccounts)
+            .expect("capped");
         assert!(limit.admit(1).is_ok());
-        assert_eq!(limit.admit(2).unwrap_err().code, "too_many_workspaces");
+        assert_eq!(
+            limit.admit(2).unwrap_err().code,
+            "too_many_provider_accounts"
+        );
         assert!(limit.admit(9).is_err());
+        // Workspaces are unlimited on every plan; a cap cached from an older build admits all.
+        let legacy = PlanLimit {
+            tier: PlanTier::Free,
+            kind: Limited::Workspaces,
+            max: 2,
+        };
+        assert!(legacy.admit(9).is_ok());
         for kind in [
             Limited::OpenTerminals,
             Limited::ParallelAgents,
@@ -448,7 +456,9 @@ mod tests {
             assert_eq!(PlanTier::Max2x.limit(kind), None, "{kind:?}");
             assert_eq!(PlanTier::Owner.limit(kind), None, "{kind:?}");
         }
-        assert_eq!(PlanTier::Max.limit(Limited::Workspaces), None);
+        for tier in [PlanTier::Free, PlanTier::Pro, PlanTier::Max] {
+            assert_eq!(tier.limit(Limited::Workspaces), None, "{tier:?}");
+        }
         assert_eq!(PlanTier::default(), PlanTier::Free);
     }
 }

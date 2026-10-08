@@ -920,8 +920,8 @@ This section REPLACES every older conflicting pricing/entitlement rule and is au
 
 | Plan | Positioning | Monthly | Yearly | Annual savings | Workspaces | Provider accounts | KalVoice cloud/month | Brainstorms/month | Recipes | Integrations | Operations history |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| Free | TRY -> Try KalCode. | $0 | $0 | $0 | 2 | 2 | 25 | 3 | 1 | 1 | Recent 10 Runs; 3 queued tasks; current Services/Environments; limited Activity |
-| Pro | BUILD -> Your everyday AI engineering workspace. | $10 | $100 | $20 | 10 | 6 | 150 | Unlimited | 10 | 5 | 30 days |
+| Free | TRY -> Try KalCode. | $0 | $0 | $0 | Unlimited | 2 | 25 | 3 | 1 | 1 | Recent 10 Runs; 3 queued tasks; current Services/Environments; limited Activity |
+| Pro | BUILD -> Your everyday AI engineering workspace. | $10 | $100 | $20 | Unlimited | 6 | 150 | Unlimited | 10 | 5 | 30 days |
 | MAX | ORCHESTRATE -> Run serious multi-agent engineering workflows. | $25 | $250 | $50 | Unlimited | 12 | 500 | Unlimited | Unlimited | 25 | 1 year |
 | MAX 2X | AUTOMATE -> Maximum KalCode. Maximum autonomy. | $50 | $500 | $100 | Unlimited | Unlimited | 1,000 | Unlimited | Unlimited | Unlimited | Maximum/longest |
 

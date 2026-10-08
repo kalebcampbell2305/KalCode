@@ -24,7 +24,7 @@ limit). Every entitlement document carries the canonical numeric limits for a re
 | `kalvoiceRequestsPerMonth` | 25 | 150 | 500 | 1,000 | unlimited |
 | `openTerminals` | unlimited | unlimited | unlimited | unlimited | unlimited |
 | `parallelAgents` | unlimited | unlimited | unlimited | unlimited | unlimited |
-| `workspaces` | 2 | 10 | unlimited | unlimited | unlimited |
+| `workspaces` | unlimited | unlimited | unlimited | unlimited | unlimited |
 | `providerAccounts` | 2 | 6 | 12 | unlimited | unlimited |
 | `brainstormsPerMonth` | 3 | unlimited | unlimited | unlimited | unlimited |
 | `launchRecipes` | 1 | 10 | unlimited | unlimited | unlimited |
