@@ -1191,7 +1191,7 @@ mod tests {
         }
         // Keep in step with the enum: the `type_name` match is exhaustive, so a new variant
         // compiles only once named there — and this count must be raised with a new sample.
-        assert_eq!(samples.len(), 83);
+        assert_eq!(samples.len(), 84);
     }
 
     #[test]
