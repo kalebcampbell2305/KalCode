@@ -2336,7 +2336,7 @@ mod tests {
             );
         }
         assert_eq!(
-            operation_effort(ProviderId::CODEX, Some("turbo"))
+            operation_effort(ProviderId::CODEX, Some("high' -c web_search='live"))
                 .expect_err("unknown effort")
                 .code,
             "invalid_effort"
