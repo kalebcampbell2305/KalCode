@@ -410,9 +410,10 @@ export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
       },
       {
         id: "adaptive-canvas",
-        label: "Adaptive Canvas: task layouts, snap and reversible Tidy",
+        label: "Adaptive Canvas: one-click Build, Debug, Review, Ship and Focus layouts",
         from: "pro",
-        status: "coming_soon",
+        status: "available",
+        verifiedIn: "0.1.9+1450",
       },
       {
         id: "provider-terminals",

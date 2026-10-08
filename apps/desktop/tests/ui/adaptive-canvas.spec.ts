@@ -3,8 +3,9 @@ import { expect, type Page, test } from "@playwright/test";
 type MemoryWindow = Window & { __kalcodeMemory: { runningProcessCount(): number } };
 
 const panes = (page: Page) => page.locator("[data-pane-id]:not([hidden])");
-async function openCode(page: Page) {
-  await page.goto("/?scenario=code");
+// Adaptive Canvas task layouts are on Pro and up (plans.ts "adaptive-canvas"): the MAX scenario has them.
+async function openCode(page: Page, scenario = "account-ready-max") {
+  await page.goto(`/?scenario=${scenario}`);
   await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Code", exact: true }).click();
   await expect(panes(page)).toHaveCount(1);
 }
@@ -135,4 +136,17 @@ test("magnetic edge preview shows the actual placement before drop", async ({ pa
   const placed = await page.locator("[data-pane-id][data-focused]").boundingBox();
   expect(placed?.width).toBeCloseTo(proposed?.width ?? 0, 0);
   expect(placed?.x).toBeCloseTo(proposed?.x ?? 0, 0);
+});
+
+test("on Free, the Layout menu offers task layouts as a Pro upgrade and Focus still maximizes", async ({ page }) => {
+  await openCode(page, "code");
+  await page.getByRole("button", { name: "Layout", exact: true }).click();
+  await expect(page.getByRole("menuitem", { name: /^Task layouts are included with Pro/ })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: /^Build / })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Control+Alt+D");
+  await expect(panes(page)).toHaveCount(2);
+  await panes(page).first().click();
+  await page.getByRole("button", { name: "Focus", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Focus", exact: true })).toHaveAttribute("aria-pressed", "true");
 });
