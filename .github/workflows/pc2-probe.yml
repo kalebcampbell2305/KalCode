@@ -46,7 +46,10 @@ jobs:
               ($_.ExecutablePath -and $_.ExecutablePath.StartsWith($dir + '\', [StringComparison]::OrdinalIgnoreCase)) -or
               ($_.Name -eq 'cmd.exe' -and $_.CommandLine -and $_.CommandLine.IndexOf($dir, [StringComparison]::OrdinalIgnoreCase) -ge 0)
             })
-            foreach ($p in $tree) { "stop $($p.ProcessId) $($p.Name)"; & taskkill.exe /T /F /PID $p.ProcessId 2>&1 | Out-Null }
+            foreach ($p in $tree) {
+              "stop $($p.ProcessId) $($p.Name)"
+              $ErrorActionPreference = 'Continue'; & taskkill.exe /T /F /PID $p.ProcessId *> $null; $ErrorActionPreference = 'Stop'
+            }
             Start-Sleep -Seconds 3
             $env:RUNNER_TRACKING_ID = '0'
             Start-Process -FilePath (Join-Path $dir 'run.cmd') -WorkingDirectory $dir -WindowStyle Hidden
