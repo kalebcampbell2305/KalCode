@@ -90,16 +90,23 @@
   }
 }
 
-/* Tablet: the brand keeps its own row so the four link columns (and the X handles) fit. */
+/* Tablet: the brand keeps its own row; the five link columns wrap to two rows of three. */
 @media (min-width: 48rem) {
   .site-footer__grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
+/* Laptop: the five link columns share one row under the brand, so the X handles still fit. */
 @media (min-width: 64rem) {
   .site-footer__grid {
-    grid-template-columns: 2fr repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 80rem) {
+  .site-footer__grid {
+    grid-template-columns: 2fr repeat(5, minmax(0, 1fr));
   }
 
   .site-footer__brand {
