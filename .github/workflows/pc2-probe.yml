@@ -66,7 +66,7 @@ jobs:
           # RUNNER_WORKSPACE = <runner>\_work\<repo>; the runner's own folder holds bin\, externals\ and config.cmd.
           $runnerRoot = Split-Path -Parent (Split-Path -Parent $env:RUNNER_WORKSPACE)
           "Host runner $env:RUNNER_NAME as $env:USERNAME; runner root $runnerRoot"
-          if (-not (Test-Path -LiteralPath (Join-Path $runnerRoot 'config.cmd'))) { throw "No runner install at $runnerRoot" }
+          if (-not (Test-Path -LiteralPath (Join-Path $runnerRoot 'bin\Runner.Listener.exe'))) { throw "No runner install at $runnerRoot" }
           # A child must not inherit this job's runner identity.
           Get-ChildItem Env: | Where-Object { $_.Name -match '^(RUNNER_|ACTIONS_|GITHUB_)' } | ForEach-Object { Remove-Item -LiteralPath ("Env:" + $_.Name) }
           $env:PATH = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
@@ -76,9 +76,19 @@ jobs:
             $listener = { @(Get-CimInstance Win32_Process -Filter "Name='Runner.Listener.exe'" | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($dir + '\', [StringComparison]::OrdinalIgnoreCase) }) }
             $running = & $listener
             if ($running.Count -gt 0) { "$name already running (pid $($running[0].ProcessId))"; continue }
+            # A partial copy from an earlier attempt (it copied this account's whole home): remove it first.
+            $base = Split-Path -Parent $dir
+            if (Test-Path -LiteralPath $base) { & cmd.exe /d /c rd /s /q "$base"; if (Test-Path -LiteralPath $base) { throw "could not clear $base" } }
             New-Item -ItemType Directory -Force -Path $dir | Out-Null
-            & robocopy.exe $runnerRoot $dir /E /NFL /NDL /NJH /NJS /NP /XD _work _diag /XF .runner .credentials .credentials_rsaparams .service | Out-Null
-            if ($LASTEXITCODE -ge 8) { throw "copy failed for $name ($LASTEXITCODE)" }
+            # Only the runner itself (this runner lives in the account's home folder): bin, externals, top-level scripts.
+            foreach ($sub in 'bin', 'externals') {
+              & robocopy.exe (Join-Path $runnerRoot $sub) (Join-Path $dir $sub) /E /R:1 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
+              if ($LASTEXITCODE -ge 8) { throw "copy of $sub failed for $name ($LASTEXITCODE)" }
+            }
+            & robocopy.exe $runnerRoot $dir *.cmd *.sh *.template .env .path /R:1 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
+            if ($LASTEXITCODE -ge 8) { throw "copy of runner scripts failed for $name ($LASTEXITCODE)" }
+            if (-not (Test-Path -LiteralPath (Join-Path $dir 'bin\Runner.Listener.exe'))) { throw "no Runner.Listener.exe in $dir\bin" }
+            "$name copy: " + ((Get-ChildItem -Force -LiteralPath $dir | ForEach-Object Name) -join ' ')
             foreach ($f in $files) { Remove-Item -Force -LiteralPath (Join-Path $dir $f) -ErrorAction SilentlyContinue }
             Push-Location $dir
             try {
