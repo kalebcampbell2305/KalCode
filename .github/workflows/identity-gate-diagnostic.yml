@@ -60,6 +60,69 @@ jobs:
             )
           }
 
+          $toolRoot = 'C:\ProgramData\KalCodeGatePool\tools\cargo\bin'
+          $toolPresence = @(
+            foreach ($tool in @(
+              @{ command = 'cargo-deny'; file = 'cargo-deny.exe' },
+              @{ command = 'cargo-audit'; file = 'cargo-audit.exe' }
+            )) {
+              $resolved = Get-Command $tool.command -ErrorAction SilentlyContinue | Select-Object -First 1
+              $canonical = Join-Path $toolRoot $tool.file
+              $canonicalExists = Test-Path -LiteralPath $canonical -PathType Leaf
+              $canonicalVersion = $null
+              if ($canonicalExists) {
+                $canonicalVersion = (& $canonical '--version' 2>&1 | Select-Object -First 1 | Out-String).Trim()
+              }
+              [pscustomobject]@{
+                command = $tool.command
+                resolvedOnPath = $null -ne $resolved
+                resolvedSource = if ($null -ne $resolved) { $resolved.Source } else { $null }
+                canonicalExists = $canonicalExists
+                canonicalVersion = $canonicalVersion
+              }
+            }
+          )
+
+          $lockAcl = @(
+            foreach ($path in @(
+              'C:\ProgramData\KalCodePC2\locks',
+              'C:\ProgramData\KalCodePC2\locks\browser.lock',
+              'C:\ProgramData\KalCodePC2\locks\rust.lock',
+              'C:\ProgramData\KalCodePC2\locks\gate.lock',
+              'C:\ProgramData\KalCodePC2\locks\qa-intent.lock'
+            )) {
+              if (-not (Test-Path -LiteralPath $path)) {
+                [pscustomobject]@{ path = $path; exists = $false; owner = $null; protected = $null; access = @() }
+                continue
+              }
+              try {
+                $acl = Get-Acl -LiteralPath $path
+                [pscustomobject]@{
+                  path = $path
+                  exists = $true
+                  owner = $acl.Owner
+                  protected = $acl.AreAccessRulesProtected
+                  access = @(
+                    $acl.Access | ForEach-Object {
+                      [pscustomobject]@{
+                        identity = $_.IdentityReference.Value
+                        rights = $_.FileSystemRights.ToString()
+                        type = $_.AccessControlType.ToString()
+                        inherited = $_.IsInherited
+                        inheritance = $_.InheritanceFlags.ToString()
+                        propagation = $_.PropagationFlags.ToString()
+                      }
+                    }
+                  )
+                }
+              } catch {
+                [pscustomobject]@{ path = $path; exists = $true; owner = $null; protected = $null; access = @(); readError = $_.Exception.Message }
+              }
+            }
+          )
+
+          $runnerService = Get-CimInstance Win32_Service -Filter "Name LIKE 'actions.runner.%$($env:RUNNER_NAME)'" -ErrorAction SilentlyContinue | Select-Object -First 1
+
           $payload = [pscustomobject]@{
             schema = 'kalcode-pc2-readonly-telemetry/v1'
             observedAtUtc = [DateTime]::UtcNow.ToString('o')
@@ -79,5 +142,8 @@ jobs:
             }
             trackedProcesses = $processGroups
             gateReportMetadata = $gateReports
+            runnerServiceAccount = if ($null -ne $runnerService) { $runnerService.StartName } else { $null }
+            toolPresence = $toolPresence
+            lockAcl = $lockAcl
           }
           $payload | ConvertTo-Json -Depth 6 -Compress
