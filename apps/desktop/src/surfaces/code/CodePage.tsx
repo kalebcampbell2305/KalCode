@@ -28,6 +28,7 @@ import {
   CircleX,
   Equal,
   LayoutGrid,
+  LayoutTemplate,
   ListChecks,
   Minimize2,
   PlugZap,
@@ -46,6 +47,8 @@ import { planTier } from "../../ipc/account.ts";
 import { toKalCodeError } from "../../ipc/errors.ts";
 import { formatShortcut } from "../../platform/keyboard.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
+import { useOptionalRecipeLibrary, useOptionalRecipeRequest } from "../../runtime/recipes/RecipeLaunchProvider.tsx";
+import { requestRecipeCapture } from "../../runtime/recipes/useRecipeCapture.ts";
 import { useWorkspaces, useWorkspaceVisible, WorkspaceScope } from "../../runtime/WorkspaceProvider.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
 import { TASK_DESCRIPTIONS, TASK_LABELS, TASK_LAYOUTS } from "../../shell/panes/adaptiveCanvas.ts";
@@ -333,6 +336,39 @@ function ToolbarPlaceholder() {
   );
 }
 
+/**
+ * Launch Recipes inside the Layout menu: a Recipe is a saved desk, and living here keeps the
+ * Code header exactly as wide as before (its controls are tuned never to overflow).
+ */
+function RecipeMenuItems() {
+  const library = useOptionalRecipeLibrary();
+  const request = useOptionalRecipeRequest();
+  if (!library || !request) return null;
+  const shown = library.recipes.slice(0, 5);
+  return (
+    <>
+      <DropdownMenuSeparator />
+      <DropdownMenuLabel>Recipes</DropdownMenuLabel>
+      {shown.map((recipe) => (
+        <DropdownMenuItem
+          key={recipe.id}
+          icon={<LayoutTemplate />}
+          description={recipe.pinned ? "Pinned" : undefined}
+          onSelect={() => void request({ recipeId: recipe.id })}
+        >
+          {`Launch ${recipe.name}`}
+        </DropdownMenuItem>
+      ))}
+      <DropdownMenuItem icon={<LayoutTemplate />} onSelect={() => requestRecipeCapture()}>
+        Save desk as Recipe
+      </DropdownMenuItem>
+      <DropdownMenuItem icon={<Settings2 />} onSelect={() => library.library.open()}>
+        Manage Recipes…
+      </DropdownMenuItem>
+    </>
+  );
+}
+
 const Toolbar = memo(function Toolbar({ api, available }: { api: CodeCanvasApi; available: boolean }) {
   const { client } = useRuntime();
   const { controller, shells, background, providerPanes } = api;
@@ -614,6 +650,7 @@ const Toolbar = memo(function Toolbar({ api, available }: { api: CodeCanvasApi; 
               </DropdownMenuRadioItem>
             ))}
           </DropdownMenuRadioGroup>
+          <RecipeMenuItems />
           {presets.length > 0 ? (
             <>
               <DropdownMenuSeparator />

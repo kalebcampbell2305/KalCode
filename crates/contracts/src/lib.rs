@@ -27,6 +27,7 @@ pub mod notifications;
 pub mod operations;
 pub mod permissions;
 pub mod provider_accounts;
+pub mod recipes;
 pub mod refs;
 pub mod resources;
 pub mod sessions;

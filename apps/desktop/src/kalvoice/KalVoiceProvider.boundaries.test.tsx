@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
       launchRecipe: vi.fn(),
     },
   },
+  recipeRequest: vi.fn(),
   workspaces: {
     active: { id: "workspace" },
     activate: vi.fn().mockResolvedValue(true),
@@ -33,6 +34,9 @@ vi.mock("../runtime/RuntimeProvider.tsx", () => {
   const client = { ...mocks.client, kalvoiceRequest: mocks.request, kalvoiceTalk: mocks.talk };
   return { useRuntime: () => ({ client }) };
 });
+vi.mock("../runtime/recipes/RecipeLaunchProvider.tsx", () => ({
+  useOptionalRecipeRequest: () => mocks.recipeRequest,
+}));
 vi.mock("../runtime/WorkspaceProvider.tsx", () => ({ useWorkspaces: () => mocks.workspaces }));
 vi.mock("../runtime/uiIntents.tsx", () => ({ useUiIntents: () => ({ focus: mocks.focus }) }));
 vi.mock("../shell/navigation.tsx", () => ({ useNavigation: () => ({ current: "code", navigate: mocks.navigate }) }));
@@ -66,6 +70,13 @@ function Probe() {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.signal = null;
+  // No Launch Recipe by that name unless a test says otherwise: Squad recipes keep working.
+  mocks.recipeRequest.mockResolvedValue({
+    ok: false,
+    message: "No saved Recipe matches that.",
+    launched: false,
+    missing: true,
+  });
   mocks.client.subscribeKalVoice.mockImplementation(async (signal) => {
     mocks.signal = signal;
     return () => undefined;
@@ -261,6 +272,64 @@ it.each([
   await waitFor(() => expect(view.getByTestId("kalvoice-state")).toHaveTextContent(`Launched ${name} with 1 agent.`));
   expect(mocks.workspaces.activate).toHaveBeenCalledWith("workspace");
   expect(mocks.navigate).toHaveBeenCalledWith("code");
+});
+
+const askRecipe = (query: string) =>
+  mocks.request.mockImplementation(async (request) => ({
+    requestId: request.requestId,
+    intent: "launch_recipe",
+    outcome: { kind: "completed", summary: "Launching." },
+    usage: { used: 0, allowance: null, periodStart: "", resetsAt: "" },
+    counted: false,
+    directive: { kind: "launch_recipe", query, workspaceId: "workspace" },
+  }));
+
+it("launches a matching Launch Recipe through the canonical action before any Squad recipe", async () => {
+  mocks.recipeRequest.mockResolvedValue({ ok: true, message: "Launched Morning desk: 3 started.", launched: true });
+  askRecipe("morning desk");
+  const view = await start();
+  fireEvent.click(view.getByRole("button", { name: "Ask native" }));
+  await waitFor(() =>
+    expect(view.getByTestId("kalvoice-state")).toHaveTextContent("Launched Morning desk: 3 started."),
+  );
+  expect(mocks.recipeRequest).toHaveBeenCalledWith({ query: "morning desk" }, { quiet: true });
+  expect(mocks.client.squads.launchRecipe).not.toHaveBeenCalled();
+});
+
+it("speaks the canonical ambiguity answer instead of guessing", async () => {
+  mocks.recipeRequest.mockResolvedValue({
+    ok: false,
+    message: "More than one Recipe matches: Release desk, Release review. Say the full name.",
+    launched: false,
+  });
+  askRecipe("release");
+  const view = await start();
+  fireEvent.click(view.getByRole("button", { name: "Ask native" }));
+  await waitFor(() =>
+    expect(view.getByTestId("kalvoice-state")).toHaveTextContent(
+      "More than one Recipe matches: Release desk, Release review. Say the full name.",
+    ),
+  );
+  expect(mocks.client.squads.launchRecipe).not.toHaveBeenCalled();
+});
+
+it("falls back to a Squad recipe when no Launch Recipe has that name", async () => {
+  mocks.recipeRequest.mockResolvedValue({
+    ok: false,
+    message: "No saved Recipe matches that.",
+    launched: false,
+    missing: true,
+  });
+  mocks.client.squads.launchRecipe.mockResolvedValue({
+    id: "l1",
+    name: "Release Train",
+    members: [{}, {}],
+    workspaceId: "workspace",
+  });
+  askRecipe("release train");
+  const view = await start();
+  fireEvent.click(view.getByRole("button", { name: "Ask native" }));
+  await waitFor(() => expect(mocks.client.squads.launchRecipe).toHaveBeenCalled());
 });
 
 it.each([

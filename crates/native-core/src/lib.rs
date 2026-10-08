@@ -15,6 +15,7 @@ pub mod logging;
 pub mod operations;
 pub mod plans;
 pub mod protected_file;
+pub mod recipes;
 pub mod redact;
 pub mod runtime;
 pub mod settings;
