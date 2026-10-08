@@ -7,6 +7,7 @@ import { after, describe, test } from "node:test";
 
 import {
   createGitHubProvider,
+  E2E_GATE_JOB,
   GATE_POOL_LABEL,
   gateStateFrom,
   isPoolJob,
@@ -983,6 +984,69 @@ describe("merge train pieces", () => {
     );
   });
 
+  test("a split native gate lands only when its native E2E job passed too; an older run keeps its evidence", () => {
+    // Owner, 2026-10-08: rust and the native E2E run as two parallel jobs; both are landing evidence.
+    const sha = "a".repeat(40);
+    const branch = "merge-train/aaaaaaaaaaaa-12345678";
+    const run = {
+      id: 1,
+      html_url: "u",
+      head_sha: sha,
+      head_branch: branch,
+      event: "push",
+      path: ".github/workflows/gate.yml",
+    };
+    const job = (name, runner_name, extra = {}) => ({
+      name,
+      runner_name,
+      status: "completed",
+      conclusion: "success",
+      head_sha: sha,
+      labels: ["self-hosted", "Windows", GATE_POOL_LABEL],
+      steps: [{ name: "Gate", status: "completed", conclusion: "success" }],
+      ...extra,
+    });
+    const main = job("Gate (Windows)", "kalcode-win-gate-w1");
+    const native = job(NATIVE_GATE_JOB, "kalcode-win-gate-w2");
+    const pc2 = job(PC2_GATE_JOB, "kalcode-win-gate-2");
+    const e2e = job(E2E_GATE_JOB, "kalcode-win-gate-2b");
+    const state = (...jobs) => gateStateFrom([run], jobs, sha, branch).state;
+    assert.equal(E2E_GATE_JOB, "Gate (Windows, native E2E)");
+    assert.equal(state(main, native, e2e, pc2), "success", "all four jobs green");
+    assert.equal(state(main, native, pc2), "success", "a run from before the native E2E job keeps its evidence");
+    assert.equal(state(main, e2e, pc2), "success", "the native E2E job beside a run without a Rust job");
+    assert.equal(state(main, native, { ...e2e, conclusion: "failure" }, pc2), "failure", "a red native E2E refuses");
+    assert.equal(state(main, native, { ...e2e, conclusion: "timed_out" }, pc2), "failure");
+    for (const status of ["queued", "in_progress"])
+      assert.equal(state(main, native, { ...e2e, status, conclusion: null }, pc2), "pending", `${status} waits`);
+    assert.equal(state(main, native, e2e, e2e, pc2), "stale", "two native E2E jobs are ambiguous");
+    assert.equal(state(main, native, { ...e2e, conclusion: "cancelled" }, pc2), "stale");
+    assert.equal(state(main, native, { ...e2e, head_sha: "b".repeat(40) }, pc2), "stale", "another commit");
+    assert.equal(state(main, native, { ...e2e, runner_name: "kalcode-win-gate-2e" }, pc2), "stale", "unnamed runner");
+    assert.equal(
+      state(main, native, { ...e2e, labels: ["self-hosted", "Windows"] }, pc2),
+      "stale",
+      "no pool or PC label",
+    );
+    assert.equal(
+      state(main, native, { ...e2e, steps: [{ name: "Gate", status: "completed", conclusion: "skipped" }] }, pc2),
+      "stale",
+      "its own Gate step must have run",
+    );
+    assert.equal(state(e2e, native, pc2), "pending", "the native E2E job never satisfies the main job");
+    assert.equal(state({ ...main, name: E2E_GATE_JOB }, native, pc2), "pending");
+    // A red job anywhere wins over one still running elsewhere.
+    assert.equal(
+      state(main, { ...native, status: "in_progress", conclusion: null }, { ...e2e, conclusion: "failure" }, pc2),
+      "failure",
+    );
+    assert.equal(
+      state(main, { ...native, conclusion: "failure" }, e2e, pc2),
+      "failure",
+      "a red Rust job still refuses",
+    );
+  });
+
   test("elastic pool jobs on any named runner of either PC are landing evidence; unnamed runners are not", () => {
     const sha = "a".repeat(40);
     const branch = "merge-train/aaaaaaaaaaaa-12345678";
@@ -1015,7 +1079,7 @@ describe("merge train pieces", () => {
     ];
     for (const runner of trusted) {
       assert.ok(isPoolJob(job("Gate (Windows)", runner), sha), `${runner} is a pool host`);
-      for (const name of ["Gate (Windows)", NATIVE_GATE_JOB, PC2_GATE_JOB])
+      for (const name of ["Gate (Windows)", NATIVE_GATE_JOB, E2E_GATE_JOB, PC2_GATE_JOB])
         assert.equal(part(name, runner), "success", `${name} on ${runner}`);
     }
     // Any mix of the two machines across the three jobs is green.
@@ -1031,7 +1095,7 @@ describe("merge train pieces", () => {
     // The pool label alone is never identity: the runner must be a registered gate runner.
     for (const runner of ["kalcode-win-gate-2e", "kalcode-win-gate-w0", "kalcode-win-gate-w6", "random-runner", ""]) {
       assert.equal(isPoolJob(job("Gate (Windows)", runner), sha), false, `${runner || "(none)"} is not a pool host`);
-      for (const name of ["Gate (Windows)", NATIVE_GATE_JOB, PC2_GATE_JOB])
+      for (const name of ["Gate (Windows)", NATIVE_GATE_JOB, E2E_GATE_JOB, PC2_GATE_JOB])
         assert.equal(part(name, runner), "stale", `${name} on ${runner || "(none)"} is not evidence`);
     }
     // Name and label are both required, on the exact commit, with the self-hosted Windows labels.
@@ -1167,9 +1231,14 @@ describe("merge train pieces", () => {
       workflow,
       /if: github\.event_name != 'pull_request' \|\| github\.event\.pull_request\.head\.repo\.full_name == github\.repository/,
     );
-    // Owner, 2026-10-08: every Windows gate job requests the elastic gate pool, never one machine's label.
+    // Owner, 2026-10-08: the desktop gate jobs request the elastic gate pool (build PC first, the second PC
+    // for overflow) and never the build PC's label alone; only the light JS/web job targets the second PC.
     assert.doesNotMatch(workflow, /kalcode-main-pc\]/);
-    assert.doesNotMatch(workflow, /runs-on: \[self-hosted, Windows, kalcode-gate-pc2\]/);
+    assert.equal(workflow.match(/runs-on: \[self-hosted, Windows, kalcode-gate-pc2\]/g)?.length, 1);
+    assert.match(
+      workflow,
+      /name: Gate \(Windows, PC2\)\n(?:.*\n)*?\s+runs-on: \[self-hosted, Windows, kalcode-gate-pc2\]/,
+    );
     assert.match(workflow, /name: Plan change-based gate/);
     assert.match(workflow, /gate-host\.ps1/);
     assert.match(
@@ -1178,9 +1247,10 @@ describe("merge train pieces", () => {
     );
     // The split: the JS/web job (its name is historical) gates the same exact candidate and recorded base.
     assert.match(workflow, /name: Gate \(Windows, PC2\)/);
-    assert.equal(workflow.match(/runs-on: \[self-hosted, Windows, kalcode-gate-pool\]\n/g)?.length, 2);
-    // The Windows gate runs as two matrix jobs (main, native), each gating its half of the split.
-    assert.match(workflow, /half: \[main, native\]/);
+    // The Windows matrix job (main, native, e2e) is the only one on the pool; the JS/web job targets the second PC.
+    assert.equal(workflow.match(/runs-on: \[self-hosted, Windows, kalcode-gate-pool\]\n/g)?.length, 1);
+    // The Windows gate runs as three matrix jobs (main, native, e2e), each gating its share of the split.
+    assert.match(workflow, /half: \[main, native, e2e\]/);
     assert.match(workflow, /gate-split\.mjs \$env:GATE_HALF/);
     assert.match(workflow, /gate-split\.mjs pc2/);
     assert.match(workflow, /github\.event\.pull_request\.base\.sha/);
