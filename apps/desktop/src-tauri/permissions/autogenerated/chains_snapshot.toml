@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-chains-snapshot"
+description = "Enables the chains_snapshot command without any pre-configured scope."
+commands.allow = ["chains_snapshot"]
+
+[[permission]]
+identifier = "deny-chains-snapshot"
+description = "Denies the chains_snapshot command without any pre-configured scope."
+commands.deny = ["chains_snapshot"]

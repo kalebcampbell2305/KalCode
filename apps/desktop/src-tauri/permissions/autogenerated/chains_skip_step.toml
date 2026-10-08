@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-chains-skip-step"
+description = "Enables the chains_skip_step command without any pre-configured scope."
+commands.allow = ["chains_skip_step"]
+
+[[permission]]
+identifier = "deny-chains-skip-step"
+description = "Denies the chains_skip_step command without any pre-configured scope."
+commands.deny = ["chains_skip_step"]

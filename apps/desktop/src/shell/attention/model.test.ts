@@ -1,4 +1,4 @@
-import type { Notification, OperationRecord, ThreadSummary } from "@kalcode/protocol";
+import type { Chain, ChainStep, Notification, OperationRecord, ThreadSummary } from "@kalcode/protocol";
 import { describe, expect, it } from "vitest";
 import { waitingAgents } from "../../runtime/actions.ts";
 import {
@@ -392,5 +392,149 @@ describe("copy and helpers", () => {
       agent({ id: "busy" }),
     ]);
     expect(list.map((a) => a.id)).toEqual(["new", "old"]);
+  });
+});
+
+function chainStep(patch: Partial<ChainStep> = {}): ChainStep {
+  return {
+    key: "review",
+    name: "Review",
+    intent: "review",
+    instructions: null,
+    dependsOn: [],
+    position: 0,
+    operationId: "step-op",
+    attempt: 1,
+    phase: "working",
+    waitingReason: null,
+    report: null,
+    ...patch,
+  };
+}
+
+function chain(steps: ChainStep[], patch: Partial<Chain> = {}): Chain {
+  return {
+    id: "c1",
+    name: "Billing fix",
+    goal: "Fix billing",
+    acceptance: [],
+    workspaceId: "w1",
+    worktree: "shared",
+    branch: null,
+    createdAt: ago(60_000),
+    paused: false,
+    cancelled: false,
+    supersededReason: null,
+    phase: "running",
+    nextAction: null,
+    steps,
+    ...patch,
+  };
+}
+
+describe("handoff chain items", () => {
+  it("asks for a report when a step finished without one", () => {
+    const [item, ...rest] = items({
+      chains: [chain([chainStep({ phase: "needs_report" })], { phase: "needs_you" })],
+      chainOperations: new Map([["step-op", operation({ id: "step-op", threadId: "step-op" })]]),
+    });
+    expect(rest).toEqual([]);
+    expect(item).toMatchObject({
+      kind: "question",
+      what: "Billing fix: Review finished without a report",
+      why: "KalCode can't tell whether this step passed. Open the agent to check, then record the outcome.",
+      agentId: "step-op",
+      dismissible: false,
+    });
+    expect(item?.actions).toEqual([
+      { id: "open-agent", label: "Open agent", agentId: "step-op", workspaceId: "w1" },
+      { id: "open-chain", label: "Record outcome", chainId: "c1" },
+    ]);
+  });
+
+  it("never offers Open agent for a step that never started an agent", () => {
+    const [item] = items({
+      chains: [chain([chainStep({ phase: "needs_report" })], { phase: "needs_you" })],
+    });
+    expect(item?.agentId).toBeNull();
+    expect(item?.actions).toEqual([{ id: "open-chain", label: "Record outcome", chainId: "c1" }]);
+  });
+
+  it("reports a failed step with the report's reason, and never its blocked dependents", () => {
+    const failed = chainStep({
+      phase: "failed",
+      report: {
+        result: "failed",
+        summary: "Two tests still fail.",
+        tests: [],
+        blockers: [],
+        source: "agent",
+        recordedAt: ago(1_000),
+      },
+    });
+    const list = items({
+      chains: [
+        chain(
+          [
+            failed,
+            chainStep({ key: "fix", name: "Fix", operationId: "fix-op", phase: "blocked", dependsOn: ["review"] }),
+            chainStep({ key: "test", name: "Test", operationId: "test-op", phase: "waiting" }),
+          ],
+          { phase: "blocked" },
+        ),
+      ],
+    });
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({ kind: "failed", what: "Billing fix: Review failed" });
+    expect(list[0]?.why).toContain("Two tests still fail.");
+  });
+
+  it("makes nothing of a step that is working, waiting, paused or done", () => {
+    const phases = ["working", "waiting", "paused", "passed", "skipped", "starting"] as const;
+    expect(items({ chains: [chain(phases.map((phase, i) => chainStep({ key: `s${i}`, phase })))] })).toEqual([]);
+  });
+
+  it("is silent for a cancelled chain and one item for a superseded chain", () => {
+    const step = chainStep({ phase: "needs_report" });
+    expect(items({ chains: [chain([step], { cancelled: true })] })).toEqual([]);
+    const list = items({
+      chains: [
+        chain([chainStep({ phase: "superseded" })], { supersededReason: "Newer work merged it.", phase: "superseded" }),
+      ],
+    });
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({ kind: "blocked", key: "chain:superseded:c1" });
+    expect(
+      items({ chains: [chain([chainStep()], { supersededReason: "x" })], dismissed: new Set(["chain:superseded:c1"]) }),
+    ).toEqual([]);
+  });
+
+  it("replaces the generic item for the same agent, but keeps a permission prompt", () => {
+    const needsReport = chain([chainStep({ phase: "needs_report", operationId: "a1" })], { phase: "needs_you" });
+    const asked = items({ agents: [agent({ id: "a1", status: "waiting_for_user" })], chains: [needsReport] });
+    expect(asked.map((item) => item.key)).toEqual(["chain:report:c1:review:1"]);
+    const approval = items({
+      agents: [agent({ id: "a1", status: "waiting_for_permission", pendingApprovals: 1 })],
+      chains: [needsReport],
+    });
+    expect(approval.map((item) => item.kind).toSorted()).toEqual(["approval", "question"]);
+  });
+
+  it("resolves the agent through the chains store's operation thread", () => {
+    const [item] = items({
+      chains: [chain([chainStep({ phase: "needs_report" })])],
+      chainOperations: new Map([["step-op", operation({ id: "step-op", threadId: "thread-9" })]]),
+    });
+    expect(item?.agentId).toBe("thread-9");
+    expect(item?.actions[0]).toMatchObject({ id: "open-agent", agentId: "thread-9" });
+  });
+
+  it("a new attempt is a new occurrence", () => {
+    const first = items({ chains: [chain([chainStep({ phase: "failed", attempt: 1 })])] })[0];
+    const second = items({ chains: [chain([chainStep({ phase: "failed", attempt: 2 })])] })[0];
+    expect(first?.key).not.toBe(second?.key);
+    expect(
+      items({ chains: [chain([chainStep({ phase: "failed" })])], dismissed: new Set([first?.key ?? ""]) }),
+    ).toEqual([]);
   });
 });

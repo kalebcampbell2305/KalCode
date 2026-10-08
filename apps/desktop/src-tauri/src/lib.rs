@@ -16,6 +16,8 @@ mod browser_commands;
 mod browser_live;
 mod browser_policy;
 mod browser_profile;
+mod chain_commands;
+mod chain_package;
 mod code_commands;
 mod commands;
 mod context_commands;
@@ -915,6 +917,15 @@ pub fn run(removed_overrides: Vec<String>) {
                 doctor_commands::doctor_ignore,
                 doctor_commands::doctor_ignored,
                 doctor_commands::doctor_fix_log,
+                chain_commands::chains_snapshot,
+                chain_commands::chains_start,
+                chain_commands::chains_pause,
+                chain_commands::chains_resume,
+                chain_commands::chains_cancel,
+                chain_commands::chains_retry_step,
+                chain_commands::chains_skip_step,
+                chain_commands::chains_reroute_step,
+                chain_commands::chains_record_step,
                 squad_commands::squads_snapshot,
                 squad_commands::squads_save,
                 squad_commands::squads_delete,

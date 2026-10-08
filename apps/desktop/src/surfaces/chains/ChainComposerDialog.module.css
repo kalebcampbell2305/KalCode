@@ -1,0 +1,133 @@
+/* The standalone composer: the same frame as Hand off, a little wider for step rows. */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-dialog);
+  background: var(--color-scrim);
+  backdrop-filter: blur(2px);
+  animation: fade var(--dur-fast) var(--ease-out);
+}
+
+.dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: var(--z-dialog);
+  display: flex;
+  width: min(46rem, calc(100vw - 2 * var(--space-6)));
+  max-height: calc(100vh - 2 * var(--space-6));
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-6);
+  overflow-y: auto;
+  border: 1px solid var(--color-border-lit-soft);
+  border-radius: var(--radius-xl);
+  background:
+    radial-gradient(36rem 16rem at 0% 0%, var(--color-accent-soft), transparent 70%), var(--panel-sheen),
+    var(--color-surface-3);
+  box-shadow:
+    var(--shadow-xl),
+    0 0 48px -20px var(--color-glow);
+  transform: translate(-50%, -50%);
+  animation: rise var(--dur-base) var(--ease-emphasized);
+  scrollbar-gutter: stable;
+}
+
+.dialog:focus-visible {
+  outline: none;
+}
+
+.head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+}
+
+.headIcon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border: 1px solid var(--color-border-lit-soft);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, var(--color-accent-soft), transparent), var(--color-surface-2);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.06),
+    0 0 24px -10px var(--color-glow);
+  color: var(--color-accent-text);
+}
+
+.headIcon svg {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.headCopy {
+  flex: 1;
+  min-width: 0;
+  padding-top: var(--space-0-5);
+}
+
+.title {
+  margin: 0;
+  color: var(--color-text);
+  font-size: var(--type-headline);
+  font-weight: var(--type-headline-weight);
+  letter-spacing: var(--type-headline-tracking);
+  line-height: var(--leading-tight);
+}
+
+.description {
+  margin: var(--space-1-5) 0 0;
+  color: var(--color-text-secondary);
+  font-size: var(--type-ui);
+  line-height: var(--leading-normal);
+}
+
+.description strong {
+  color: var(--color-text);
+  font-weight: var(--weight-semibold);
+}
+
+.planGate {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border-lit-soft);
+  border-radius: var(--radius-lg);
+  background: var(--color-accent-soft);
+  color: var(--color-accent-text);
+  font-size: var(--type-ui);
+  line-height: var(--leading-normal);
+}
+
+.planGate > span {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% + 6px)) scale(0.985);
+  }
+}
+
+@media (max-width: 42rem) {
+  .dialog {
+    width: calc(100vw - 2 * var(--space-3));
+    max-height: calc(100vh - 2 * var(--space-3));
+    padding: var(--space-4);
+  }
+}

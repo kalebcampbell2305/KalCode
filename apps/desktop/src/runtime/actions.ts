@@ -21,6 +21,7 @@ import { type Destination, useNavigation } from "../shell/navigation.tsx";
 import { useOptionalNotifications } from "../shell/notifications/NotificationsProvider.tsx";
 import { useStartAgents } from "../surfaces/code/useLaunchAgent.ts";
 import { useAgentWorktreeStates, useCodingAgents } from "../surfaces/dashboard/data/DashboardData.tsx";
+import { focusChain } from "./chains/focus.ts";
 import { useRuntime } from "./RuntimeProvider.tsx";
 import { useUiIntents } from "./uiIntents.tsx";
 
@@ -47,6 +48,8 @@ export interface KalActions {
   newAgent: (options?: { providerId?: string; count?: number }) => ActionResult;
   openApprovals: () => Promise<ActionResult>;
   signIn: (providerId: string) => Promise<ActionResult>;
+  /** Open Activity and bring one handoff chain into view (its Chains section reads the focus). */
+  openChain: (chainId: string) => ActionResult;
   /** Open the Needs You inbox. */
   openInbox: () => ActionResult;
   open: (destination: Destination) => ActionResult;
@@ -179,6 +182,15 @@ export function useKalActions(): KalActions {
     [navigate],
   );
 
+  const openChain = useCallback(
+    (chainId: string) => {
+      navigate("dashboard");
+      focusChain(chainId);
+      return done("Opened the chain.");
+    },
+    [navigate],
+  );
+
   const openOperation = useCallback(
     async (action: OperationAttentionAction) => {
       const result = await focusAttentionOperation(action, navigate);
@@ -201,6 +213,9 @@ export function useKalActions(): KalActions {
         case "open-operation":
           closeInbox();
           return openOperation(action);
+        case "open-chain":
+          closeInbox();
+          return openChain(action.chainId);
         case "open-operations":
           closeInbox();
           return open("operations");
@@ -221,11 +236,33 @@ export function useKalActions(): KalActions {
           return done("Dismissed.");
       }
     },
-    [closeInbox, openAgent, retryAgent, openOperation, reloadAgents, reloadOwnership, openApprovals, signIn, open],
+    [
+      closeInbox,
+      openAgent,
+      retryAgent,
+      openOperation,
+      openChain,
+      reloadAgents,
+      reloadOwnership,
+      openApprovals,
+      signIn,
+      open,
+    ],
   );
 
   return useMemo(
-    () => ({ openAgent, retryAgent, showWaiting, newAgent, openApprovals, signIn, openInbox, open, runAttention }),
-    [openAgent, retryAgent, showWaiting, newAgent, openApprovals, signIn, openInbox, open, runAttention],
+    () => ({
+      openAgent,
+      retryAgent,
+      showWaiting,
+      newAgent,
+      openApprovals,
+      signIn,
+      openChain,
+      openInbox,
+      open,
+      runAttention,
+    }),
+    [openAgent, retryAgent, showWaiting, newAgent, openApprovals, signIn, openChain, openInbox, open, runAttention],
   );
 }
