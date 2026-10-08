@@ -84,6 +84,14 @@ test("main reuses only an exact successful candidate on a trusted gate host", {
       labels: ["self-hosted", "Windows", "kalcode-gate", "kalcode-main-pc"],
       steps: [{ name: "Gate", conclusion: "success" }],
     },
+    e2e: {
+      name: "Gate (Windows, native E2E)",
+      conclusion: "success",
+      head_sha: sha,
+      runner_name: "kalcode-win-gate-2b",
+      labels: ["self-hosted", "Windows", "kalcode-gate-pool"],
+      steps: [{ name: "Gate", conclusion: "success" }],
+    },
   };
   const cases = [
     ["exact", {}, true],
@@ -110,6 +118,15 @@ test("main reuses only an exact successful candidate on a trusted gate host", {
     ["native-missing-host-label", { pc2: {}, native: { labels: ["self-hosted", "Windows", "kalcode-gate"] } }, false],
     ["native-other-sha", { pc2: {}, native: { head_sha: "b".repeat(40) } }, false],
     ["native-skipped-check", { pc2: {}, native: { steps: [{ name: "Gate", conclusion: "skipped" }] } }, false],
+    // The native E2E job runs beside the Rust job; a run that has it needs it green on a trusted host too.
+    ["e2e-all-green", { pc2: {}, native: {}, e2e: {} }, true],
+    ["e2e-red", { pc2: {}, native: {}, e2e: { conclusion: "failure" } }, false],
+    ["e2e-cancelled", { pc2: {}, native: {}, e2e: { conclusion: "cancelled" } }, false],
+    ["e2e-unknown-runner", { pc2: {}, native: {}, e2e: { runner_name: "kalcode-win-gate-2e" } }, false],
+    ["e2e-no-pool-label", { pc2: {}, native: {}, e2e: { labels: ["self-hosted", "Windows"] } }, false],
+    ["e2e-other-sha", { pc2: {}, native: {}, e2e: { head_sha: "b".repeat(40) } }, false],
+    ["e2e-skipped-check", { pc2: {}, native: {}, e2e: { steps: [{ name: "Gate", conclusion: "skipped" }] } }, false],
+    ["e2e-green-native-red", { pc2: {}, native: { conclusion: "failure" }, e2e: {} }, false],
     // Owner, 2026-10-07: every gate job runs on the second PC's runners; those are trusted hosts too.
     [
       "pc2-hosted",
@@ -157,6 +174,7 @@ test("main reuses only an exact successful candidate on a trusted gate host", {
       job: { ...baseline.job, ...patch.job },
       pc2: patch.pc2 === undefined ? null : { ...baseline.pc2, ...patch.pc2 },
       native: patch.native === undefined ? null : { ...baseline.native, ...patch.native },
+      e2e: patch.e2e === undefined ? null : { ...baseline.e2e, ...patch.e2e },
     };
     const output = join(root, `${name}.out`);
     const path = join(root, `${name}.ps1`);
@@ -166,7 +184,7 @@ test("main reuses only an exact successful candidate on a trusted gate host", {
       `$fixture = '${JSON.stringify(fixture).replaceAll("'", "''")}' | ConvertFrom-Json
 function Invoke-RestMethod {
   param($Headers, $Uri)
-  if ($Uri -match '/jobs\\?filter=latest&per_page=100$') { return @{ jobs = @(@($fixture.job) + @($fixture.pc2 | Where-Object { $_ }) + @($fixture.native | Where-Object { $_ })) } }
+  if ($Uri -match '/jobs\\?filter=latest&per_page=100$') { return @{ jobs = @(@($fixture.job) + @($fixture.pc2 | Where-Object { $_ }) + @($fixture.native | Where-Object { $_ }) + @($fixture.e2e | Where-Object { $_ })) } }
   if ($Uri -match '/runs\\?head_sha=') { return @{ workflow_runs = @($fixture.run) } }
   throw 'Unexpected evidence API request'
 }
@@ -267,6 +285,8 @@ test("selected-check outputs use Actions-compatible bytes on Windows PowerShell"
   const root = mkdtempSync(join(tmpdir(), "kalcode-gate-output-"));
   for (const [name, ids, expected] of [
     ["native", ["desktop-native-e2e"], "machine=pc2\npython=true\nnative=true\nbrowsers=true"],
+    // The Rust half needs none of the native E2E's Python, CMake/libclang or browsers.
+    ["rust", ["rust", "cargo-deny", "cargo-audit"], "machine=pc2\npython=false\nnative=false\nbrowsers=false"],
     ["tooling", ["tooling-unit"], "machine=pc2\npython=true\nnative=false\nbrowsers=false"],
     ["ui", ["desktop-ui"], "machine=pc2\npython=false\nnative=false\nbrowsers=true"],
   ]) {
@@ -504,21 +524,22 @@ test("the second PC's plan outputs pick Python and browsers for its own checks",
   }
 });
 
-test("the gate split runs every selected check exactly once across the three jobs", async () => {
-  const { NATIVE_GATES, PC2_GATES, splitGateIds } = await import("./release/lifecycle/gate-split.mjs");
+test("the gate split runs every selected check exactly once across the four jobs", async () => {
+  const { E2E_GATES, NATIVE_GATES, PC2_GATES, splitGateIds } = await import("./release/lifecycle/gate-split.mjs");
   const policy = JSON.parse(readFileSync(new URL("./release/lifecycle/policy.json", import.meta.url), "utf8"));
   const all = policy.gates.map((gate) => gate.id);
-  for (const id of [...PC2_GATES, ...NATIVE_GATES]) assert.ok(all.includes(id), `${id} is a real gate`);
-  const { main, native, pc2 } = splitGateIds(all);
-  assert.deepEqual([...main, ...native, ...pc2].sort(), [...all].sort());
-  assert.equal(new Set([...main, ...native, ...pc2]).size, all.length);
-  // Checkout writers and the Cargo tools run in the native job.
-  for (const id of ["rust", "desktop-native-e2e", "cargo-deny", "cargo-audit"])
-    assert.ok(native.includes(id), `${id} runs in the native job`);
-  // The desktop readers run in the main job, in parallel with the native chain.
+  for (const id of [...PC2_GATES, ...NATIVE_GATES, ...E2E_GATES]) assert.ok(all.includes(id), `${id} is a real gate`);
+  const { main, native, e2e, pc2 } = splitGateIds(all);
+  assert.deepEqual([...main, ...native, ...e2e, ...pc2].sort(), [...all].sort());
+  assert.equal(new Set([...main, ...native, ...e2e, ...pc2]).size, all.length);
+  // The Rust checks and the Cargo tools run in the native job, the native E2E alone in its own job, in
+  // parallel (rust then native E2E in one job was the gate's critical path).
+  assert.deepEqual([...native].sort(), ["cargo-audit", "cargo-deny", "rust"]);
+  assert.deepEqual(e2e, ["desktop-native-e2e"]);
+  // The desktop readers run in the main job, in parallel with both native chains.
   for (const id of ["desktop-frontend", "desktop-ui"]) assert.ok(main.includes(id), `${id} stays in the main job`);
   assert.deepEqual(splitGateIds(["a-check-added-later"]).main, ["a-check-added-later"], "new checks default to main");
-  assert.deepEqual(splitGateIds([]), { main: [], native: [], pc2: [] });
+  assert.deepEqual(splitGateIds([]), { main: [], native: [], e2e: [], pc2: [] });
   const cli = (machine, ids) =>
     spawnSync(
       process.execPath,
@@ -530,32 +551,84 @@ test("the gate split runs every selected check exactly once across the three job
   assert.equal(cli("main", "biome,rust,desktop-ui,website-e2e").stdout, "desktop-ui");
   assert.equal(cli("native", "biome,rust,desktop-ui,website-e2e").stdout, "rust");
   assert.equal(cli("pc2", "biome,rust,desktop-ui,website-e2e").stdout, "biome,website-e2e");
+  const mixed = "rust,desktop-native-e2e,cargo-deny,desktop-ui,biome";
+  assert.equal(cli("main", mixed).stdout, "desktop-ui");
+  assert.equal(cli("native", mixed).stdout, "rust,cargo-deny");
+  assert.equal(cli("e2e", mixed).stdout, "desktop-native-e2e");
+  assert.equal(cli("pc2", mixed).stdout, "biome");
+  assert.equal(cli("e2e", "rust,cargo-audit").stdout, "", "a plan without the native E2E leaves its job empty");
   assert.equal(cli("pc2", "").stdout, "");
   assert.equal(cli("elsewhere", "rust").status, 2);
 });
 
-test("the Windows gate runs as two matrix jobs that never cancel each other", () => {
+test("the Windows gate runs as three matrix jobs that never cancel each other", async () => {
+  const { E2E_GATE_JOB, NATIVE_GATE_JOB } = await import("./merge-train/github.mjs");
+  const { GATE_JOB } = await import("./merge-train/train.mjs");
   const header = windows.split(/\n {4}steps:/)[0];
-  assert.match(
-    header,
-    /name: \$\{\{ matrix\.half == 'native' && 'Gate \(Windows, native\)' \|\| 'Gate \(Windows\)' \}\}/,
-  );
   assert.match(header, /fail-fast: false/);
-  assert.match(header, /half: \[main, native\]/);
-  const plan = script(steps.find((step) => step.startsWith("name: Plan change-based gate")));
+  assert.match(header, /^ {8}half: \[main, native, e2e\]$/m);
+  assert.match(header, /^ {4}runs-on: \[self-hosted, Windows, kalcode-gate-pool\]$/m, "every half on the pool");
+  // Evaluate the job-name and artifact-prefix expressions per half (&& and || read the same on strings in JS).
+  const expression = (text) => {
+    const body = text.match(/\$\{\{ (matrix\.half == .+?) \}\}/)[1];
+    return (half) => Function("matrix", `return ${body.replaceAll("==", "===")};`)({ half });
+  };
+  const name = expression(header.match(/^ {4}name: (.+)$/m)[1]);
+  // Exactly the names the merge train judges (merge-train/train.mjs and github.mjs).
+  assert.equal(name("main"), "Gate (Windows)");
+  assert.equal(name("main"), GATE_JOB);
+  assert.equal(name("native"), "Gate (Windows, native)");
+  assert.equal(name("native"), NATIVE_GATE_JOB);
+  assert.equal(name("e2e"), "Gate (Windows, native E2E)");
+  assert.equal(name("e2e"), E2E_GATE_JOB);
+  const names = steps.map((step) => step.match(/^name: (.+)$/m)?.[1] ?? "");
+  for (const artifact of ["Preserve exact candidate evidence", "Preserve Playwright failure evidence"]) {
+    const prefix = expression(steps[names.indexOf(artifact)]);
+    assert.deepEqual(["main", "native", "e2e"].map(prefix), ["", "native-", "e2e-"], `${artifact}: one per job`);
+  }
+  const plan = script(steps[names.indexOf("Plan change-based gate")]);
   assert.match(plan, /gate-split\.mjs \$env:GATE_HALF/);
-  assert.match(plan, /Unknown Windows gate half/);
-  const evidence = steps.find((step) => step.startsWith("name: Preserve exact candidate evidence"));
+  assert.match(plan, /if \(\$env:GATE_HALF -notin @\('main', 'native', 'e2e'\)\) \{ throw "Unknown Windows gate half/);
   assert.match(
-    evidence,
-    /gate-evidence-\$\{\{ matrix\.half == 'native' && 'native-' \|\| '' \}\}/,
-    "distinct artifact per job",
+    plan,
+    /"KALCODE_GATE_HEAVY=\$\(\$ids -contains 'rust' -or \$ids -contains 'desktop-native-e2e'\)"/,
+    "both Rust-compiling halves are heavy",
   );
+});
+
+test("the native and native E2E halves both take the heavy Rust slot; the main half does not", {
+  skip: process.platform !== "win32",
+}, async () => {
+  const { splitGateIds } = await import("./release/lifecycle/gate-split.mjs");
+  const policy = JSON.parse(readFileSync(new URL("./release/lifecycle/policy.json", import.meta.url), "utf8"));
+  const split = splitGateIds(policy.gates.map((gate) => gate.id));
+  const names = steps.map((step) => step.match(/^name: (.+)$/m)?.[1] ?? "");
+  const heavyLine = script(steps[names.indexOf("Plan change-based gate")])
+    .split("\n")
+    .find((line) => line.includes("KALCODE_GATE_HEAVY="))
+    .trim();
+  const heavy = (ids) => {
+    const list = ids.map((id) => `'${id}'`).join(",");
+    const result = spawnSync(
+      "powershell.exe",
+      ["-NoProfile", "-Command", `$base = 'b'; $only = 'o'; $ids = @(${list})\n${heavyLine}`],
+      { encoding: "utf8", windowsHide: true },
+    );
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    return result.stdout.match(/KALCODE_GATE_HEAVY=(\w+)/)[1];
+  };
+  assert.equal(heavy(split.native), "True", "the Rust half");
+  assert.equal(heavy(split.e2e), "True", "the native E2E half compiles build:e2e");
+  assert.equal(heavy(split.main), "False", "the desktop readers");
+  // The Gate step turns a heavy half into a Rust slot: a build-PC heavy token or the second PC's rust.lock.
+  const gate = script(steps[names.indexOf("Gate")]);
+  assert.match(gate, /if \(\$env:KALCODE_GATE_HEAVY -eq 'True' -and \$env:KALCODE_GATE_MACHINE -eq 'main-pc'\)/);
+  assert.match(gate, /elseif \(\$env:KALCODE_GATE_HEAVY -eq 'True'\)/);
 });
 
 test("every gate job keeps bounded Playwright failure evidence, on failure only", () => {
   for (const [job, jobSteps, prefix] of [
-    ["windows", steps, "$" + "{{ matrix.half == 'native' && 'native-' || '' }}"],
+    ["windows", steps, "$" + "{{ matrix.half == 'native' && 'native-' || matrix.half == 'e2e' && 'e2e-' || '' }}"],
     ["pc2", pc2Steps, "pc2-"],
   ]) {
     const names = jobSteps.map((step) => step.match(/^name: (.+)$/m)?.[1] ?? "");
