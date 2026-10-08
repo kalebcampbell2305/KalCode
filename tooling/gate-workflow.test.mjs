@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const workflow = readFileSync(new URL("../.github/workflows/gate.yml", import.meta.url), "utf8");
-// The Windows jobs test the same SHA, all on the second PC's gate runners (owner, 2026-10-07): the
-// two-job "windows" matrix and the JS/web "pc2" job.
+// The Windows jobs test the same SHA, all on the elastic gate pool (owner, 2026-10-08): the two-job
+// "windows" matrix and the JS/web "pc2" job (its name is historical). Either PC's named runners may take any.
 const windows = workflow.split("\n  pc2:")[0];
 const pc2Job = workflow.split("\n  pc2:")[1].split("\n  macos:")[0];
 const steps = windows.split(/\n {6}- /).slice(1);
@@ -261,18 +261,24 @@ test("selected-check outputs use Actions-compatible bytes on Windows PowerShell"
 }, () => {
   const plan = script(steps.find((step) => step.startsWith("name: Plan change-based gate")));
   const outputs = plan.split("\n").filter((line) => line.includes("$env:GITHUB_OUTPUT"));
-  assert.equal(outputs.length, 3);
+  // machine, python, native, browsers.
+  assert.equal(outputs.length, 4);
+  assert.match(outputs[0], /^"machine=\$\(\$gateHost\.Machine\)"/);
   const root = mkdtempSync(join(tmpdir(), "kalcode-gate-output-"));
   for (const [name, ids, expected] of [
-    ["native", ["desktop-native-e2e"], "python=true\nnative=true\nbrowsers=true"],
-    ["tooling", ["tooling-unit"], "python=true\nnative=false\nbrowsers=false"],
-    ["ui", ["desktop-ui"], "python=false\nnative=false\nbrowsers=true"],
+    ["native", ["desktop-native-e2e"], "machine=pc2\npython=true\nnative=true\nbrowsers=true"],
+    ["tooling", ["tooling-unit"], "machine=pc2\npython=true\nnative=false\nbrowsers=false"],
+    ["ui", ["desktop-ui"], "machine=pc2\npython=false\nnative=false\nbrowsers=true"],
   ]) {
     const output = join(root, name);
     writeFileSync(output, "");
     const result = spawnSync(
       "powershell.exe",
-      ["-NoProfile", "-Command", `$ids = @('${ids.join("','")}')\n${outputs.join("\n")}`],
+      [
+        "-NoProfile",
+        "-Command",
+        `$gateHost = [pscustomobject]@{ Machine = 'pc2' }\n$ids = @('${ids.join("','")}')\n${outputs.join("\n")}`,
+      ],
       {
         encoding: "utf8",
         windowsHide: true,
@@ -340,27 +346,30 @@ test("both halves reuse with the identical evidence rule", () => {
   assert.equal(reuse(pc2Steps), reuse(steps));
 });
 
-test("the second PC's half is self-contained and gates the same exact candidate", () => {
+test("the JS/web job is self-contained, runs on the pool and gates the same exact candidate", () => {
   const names = pc2Steps.map((step) => step.match(/^name: (.+)$/m)?.[1] ?? step.split("\n")[0]);
   assert.match(pc2Job, /^ {4}name: Gate \(Windows, PC2\)$/m);
-  assert.match(pc2Job, /^ {4}runs-on: \[self-hosted, Windows, kalcode-gate-pc2\]$/m);
+  assert.match(pc2Job, /^ {4}runs-on: \[self-hosted, Windows, kalcode-gate-pool\]$/m);
   assert.match(pc2Job, /head\.repo\.full_name == github\.repository/, "fork guard");
   assert.match(pc2Job, /persist-credentials: false/);
   assert.match(pc2Job, /clean: false/);
+  // It runs on either PC, but needs none of the build PC's admission hooks or slots in its own steps: the
+  // machine-specific choices all come from gate-host.ps1.
   assert.doesNotMatch(pc2Job, /KalCodeGatePool|Assert-GateWorkerHost|gate-worker-hook|kalcode-main-pc\]/);
+  assert.ok(!names.includes("Admit optional gate work") && !names.includes("Release optional gate slot"));
   const plan = script(pc2Steps[names.indexOf("Plan change-based gate")]);
-  assert.match(
-    plan,
-    /'kalcode-win-gate-2' \{ 0 \} 'kalcode-win-gate-2b' \{ 1 \} 'kalcode-win-gate-2c' \{ 2 \} 'kalcode-win-gate-2d' \{ 3 \} default \{ throw 'Unknown second-PC gate worker' \}/,
-  );
+  assert.match(plan, /\. \.github\/scripts\/gate-host\.ps1/);
+  assert.match(plan, /\$gateHost = Get-GateHost\b/);
+  assert.match(plan, /Get-GateHostEnv \$gateHost/);
   assert.match(plan, /trailers:key=Merge-Train-Base,valueonly/);
   assert.match(plan, /Checkout does not match the immutable event SHA/);
   assert.match(plan, /gate-split\.mjs pc2/);
-  for (const port of ["4691", "4692", "9701", "1791", "39333"]) assert.ok(plan.includes(port), `fixed port ${port}`);
   const gate = script(pc2Steps[names.indexOf("Gate")]);
   assert.match(gate, /BelowNormal/);
+  // The second PC's machine lock, taken on every run (a no-op on the build PC, which has no lock folder).
+  assert.match(gate, /^\s*\. \.github\/scripts\/pc2-machine-lock\.ps1$/m);
   assert.match(gate, /--only \$env:KALCODE_GATE_ONLY/);
-  assert.match(gate, /nothing selected for the second PC/);
+  assert.match(gate, /nothing selected for the JS\/web job/);
   assert.equal(names.indexOf("Stop this worker's orphaned processes"), 1);
   assert.equal(names.at(-1), "Stop processes this job left behind");
   assert.ok(
@@ -368,45 +377,102 @@ test("the second PC's half is self-contained and gates the same exact candidate"
   );
 });
 
-test("each second-PC runner gets its own port block, and no other runner is accepted", {
+const gateHostPath = fileURLToPath(new URL("../.github/scripts/gate-host.ps1", import.meta.url));
+const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+// Dot-source gate-host.ps1 as a job does, from the repo root, and report what Get-GateHost picks.
+function gateHostFor(runner, expression = "Get-GateHost | ConvertTo-Json -Compress", extraEnv = {}) {
+  return spawnSync(
+    "powershell.exe",
+    ["-NoProfile", "-Command", `$ErrorActionPreference = 'Stop'\n. '${gateHostPath}'\n${expression}`],
+    { encoding: "utf8", windowsHide: true, cwd: repoRoot, env: { ...process.env, RUNNER_NAME: runner, ...extraEnv } },
+  );
+}
+
+test("gate-host.ps1 gives each second-PC runner its own port block and lock dir, and accepts no other name", {
   skip: process.platform !== "win32",
 }, () => {
-  const names = pc2Steps.map((step) => step.match(/^name: (.+)$/m)?.[1] ?? "");
-  const plan = script(pc2Steps[names.indexOf("Plan change-based gate")]);
-  const slot = plan.split("\n").filter((line) => /\$pc2Slot =|\$portOffset =/.test(line));
-  const ports = plan.split("\n").filter((line) => /"KALCODE_E2E_[A-Z_]*PORT=|"KALCODE_UI_TEST_PORT=/.test(line));
-  assert.equal(slot.length, 2);
-  const run = (runner) =>
-    spawnSync(
-      "powershell.exe",
-      [
-        "-NoProfile",
-        "-Command",
-        `$ErrorActionPreference = 'Stop'\n${slot.join("\n")}\n@(\n${ports.join("\n").replace(/,\s*$/, "")}\n) -join ' '`,
-      ],
-      { encoding: "utf8", windowsHide: true, env: { ...process.env, RUNNER_NAME: runner } },
-    );
-  const first = run("kalcode-win-gate-2");
-  assert.equal(first.status, 0, first.stderr);
-  assert.match(first.stdout, /KALCODE_E2E_PORT=4691 .*KALCODE_E2E_CDP_PORT=39333/);
-  const second = run("kalcode-win-gate-2b");
-  assert.equal(second.status, 0, second.stderr);
-  assert.match(
-    second.stdout,
-    /KALCODE_E2E_PORT=4711 KALCODE_E2E_MAIL_PORT=4712 KALCODE_E2E_INSPECTOR_PORT=9721 KALCODE_UI_TEST_PORT=1811 KALCODE_E2E_CDP_PORT=39353/,
-  );
-  const third = run("kalcode-win-gate-2c");
-  assert.equal(third.status, 0, third.stderr);
-  assert.match(
-    third.stdout,
-    /KALCODE_E2E_PORT=4731 KALCODE_E2E_MAIL_PORT=4732 KALCODE_E2E_INSPECTOR_PORT=9741 KALCODE_UI_TEST_PORT=1831 KALCODE_E2E_CDP_PORT=39373/,
-  );
-  const fourth = run("kalcode-win-gate-2d");
-  assert.equal(fourth.status, 0, fourth.stderr);
-  assert.match(fourth.stdout, /KALCODE_E2E_PORT=4751 .*KALCODE_E2E_CDP_PORT=39393/);
-  const unknown = run("kalcode-win-gate-w1");
-  assert.notEqual(unknown.status, 0);
-  assert.match(unknown.stderr + unknown.stdout, /Unknown second-PC gate worker/);
+  const host = (runner) => {
+    const result = gateHostFor(runner);
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+    return JSON.parse(result.stdout);
+  };
+  for (const [runner, slot, ports] of [
+    ["kalcode-win-gate-2", 0, [4691, 4692, 9701, 1791, 39333]],
+    ["kalcode-win-gate-2b", 1, [4711, 4712, 9721, 1811, 39353]],
+    ["kalcode-win-gate-2c", 2, [4731, 4732, 9741, 1831, 39373]],
+    ["kalcode-win-gate-2d", 3, [4751, 4752, 9761, 1851, 39393]],
+  ]) {
+    const got = host(runner);
+    assert.equal(got.Machine, "pc2", runner);
+    assert.equal(got.Slot, slot, runner);
+    assert.deepEqual([got.E2ePort, got.MailPort, got.InspectorPort, got.UiPort, got.CdpPort], ports, runner);
+    assert.equal(got.LockDir, "C:\\ProgramData\\KalCodePC2\\locks", runner);
+    assert.deepEqual([got.Env].flat().filter(Boolean), [], "PC2 has no pool slot env");
+  }
+  // The GITHUB_ENV lines for a PC2 job.
+  const env = gateHostFor("kalcode-win-gate-2b", "Get-GateHostEnv (Get-GateHost)");
+  assert.equal(env.status, 0, env.stderr);
+  assert.deepEqual(env.stdout.trim().split(/\r?\n/), [
+    "KALCODE_GATE_MACHINE=pc2",
+    "KALCODE_E2E_PORT=4711",
+    "KALCODE_E2E_MAIL_PORT=4712",
+    "KALCODE_E2E_INSPECTOR_PORT=9721",
+    "KALCODE_UI_TEST_PORT=1811",
+    "KALCODE_E2E_CDP_PORT=39353",
+    "KALCODE_GATE_LOCK_DIR=C:\\ProgramData\\KalCodePC2\\locks",
+  ]);
+  // No other runner name is accepted, whatever label it carries.
+  for (const runner of ["kalcode-win-gate-2e", "kalcode-win-gate-w6", "kalcode-win-gate-w0", "random-runner", ""]) {
+    const unknown = gateHostFor(runner);
+    assert.notEqual(unknown.status, 0, `${runner || "(none)"} must be refused`);
+    assert.match(unknown.stderr + unknown.stdout, /Unknown gate runner/);
+  }
+});
+
+test("gate-host.ps1 maps build-PC workers to main-pc, the pool's ports and the heavy-token lock dir", () => {
+  const source = readFileSync(gateHostPath, "utf8");
+  assert.match(source, /\^kalcode-win-gate\(-w\[1-5\]\)\?\$/, "the original worker and w1..w5 only");
+  assert.match(source, /Machine = 'main-pc'/);
+  assert.match(source, /Assert-GateWorkerHost/, "build-PC resources only on the build PC");
+  assert.match(source, /Get-GateWorkerPlan -Slot \$slot/);
+  assert.match(source, /LockDir = 'C:\\ProgramData\\KalCodeGatePool\\heavy'/);
+  assert.match(source, /LockDir = 'C:\\ProgramData\\KalCodePC2\\locks'/);
+  assert.match(source, /KALCODE_GATE_SLOT=\$slot/);
+  assert.match(source, /KALCODE_GATE_REPORT_DIR=C:\\ProgramData\\KalCodeGatePool\\reports/);
+  assert.match(source, /KALCODE_GATE_EVIDENCE_DIR=C:\\ProgramData\\KalCodeGatePool\\evidence/);
+  assert.match(source, /throw "Unknown gate runner: \$RunnerName"/);
+});
+
+// Runs on every Windows gate machine (a skipped test is outside test-suites' reviewed bounds): on the build PC
+// the pool workers resolve; anywhere else a build-PC worker name is refused by the pool's host check.
+test("gate-host.ps1 resolves build-PC workers only on the build PC", {
+  skip: process.platform !== "win32",
+}, () => {
+  if (hostname() !== "DESKTOP-KOOB7VV") {
+    const elsewhere = gateHostFor("kalcode-win-gate-w1");
+    assert.notEqual(elsewhere.status, 0);
+    assert.match(elsewhere.stderr + elsewhere.stdout, /Gate workers belong only on the main 64 GB Windows PC/);
+    return;
+  }
+  for (const [runner, slot] of [
+    ["kalcode-win-gate", 0],
+    ["kalcode-win-gate-w1", 1],
+    ["kalcode-win-gate-w2", 2],
+    ["kalcode-win-gate-w5", 5],
+  ]) {
+    const result = gateHostFor(runner);
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+    const got = JSON.parse(result.stdout);
+    assert.equal(got.Machine, "main-pc", runner);
+    assert.equal(got.Slot, slot, runner);
+    assert.equal(got.E2ePort, 4491 + slot * 20, runner);
+    assert.equal(got.LockDir, "C:\\ProgramData\\KalCodeGatePool\\heavy", runner);
+    assert.ok([got.Env].flat().includes(`KALCODE_GATE_SLOT=${slot}`), runner);
+  }
+  // A slot mismatch between the runner name and its configured slot is refused.
+  const mismatch = gateHostFor("kalcode-win-gate-w2", "Get-GateHost", { KALCODE_GATE_SLOT: "3" });
+  assert.notEqual(mismatch.status, 0);
+  assert.match(mismatch.stderr + mismatch.stdout, /does not match its configured slot/);
 });
 
 test("the second PC's plan outputs pick Python and browsers for its own checks", {
@@ -505,46 +571,62 @@ test("every gate job keeps bounded Playwright failure evidence, on failure only"
   }
 });
 
-test("every Windows gate job runs on the second PC, without the build PC's pool hooks", () => {
-  // Owner, 2026-10-07: "all gates on PC 2 ... We use this computer to build ... the other one to pass the
-  // gates and ship to users."
+test("every Windows gate job requests the elastic pool; build-PC hooks run only when the runner is the build PC", () => {
+  // Owner, 2026-10-08: an elastic gate pool. The second PC is always in it, the build PC joins while idle.
   const header = windows.split(/\n {4}steps:/)[0];
-  assert.match(header, /^ {4}runs-on: \[self-hosted, Windows, kalcode-gate-pc2\]$/m);
-  assert.match(pc2Job, /^ {4}runs-on: \[self-hosted, Windows, kalcode-gate-pc2\]$/m);
-  assert.doesNotMatch(workflow, /kalcode-main-pc\]/, "no job targets the build PC's pool");
-  const jobBody = windows.split(/\n {4}steps:/)[1];
-  assert.doesNotMatch(
-    jobBody,
-    /KalCodeGatePool|Assert-GateWorkerHost|gate-worker-hook|Get-GateWorkerPlan|KALCODE_GATE_SLOT/,
-  );
+  assert.match(header, /^ {4}runs-on: \[self-hosted, Windows, kalcode-gate-pool\]$/m);
+  assert.match(pc2Job, /^ {4}runs-on: \[self-hosted, Windows, kalcode-gate-pool\]$/m);
+  assert.doesNotMatch(workflow, /runs-on: \[self-hosted, Windows, kalcode-(?:main-pc|gate-pc2)\]/);
+  assert.doesNotMatch(workflow, /kalcode-main-pc\]/, "no job targets the build PC's pool label alone");
   const names = steps.map((step) => step.match(/^name: (.+)$/m)?.[1] ?? "");
   const plan = script(steps[names.indexOf("Plan change-based gate")]);
-  assert.match(
-    plan,
-    /'kalcode-win-gate-2' \{ 0 \} 'kalcode-win-gate-2b' \{ 1 \} 'kalcode-win-gate-2c' \{ 2 \} 'kalcode-win-gate-2d' \{ 3 \} default \{ throw 'Unknown second-PC gate worker' \}/,
-  );
-  assert.match(plan, /KALCODE_GATE_LOCK_DIR=C:\\ProgramData\\KalCodePC2\\locks/);
-  for (const port of ["4691", "4692", "9701", "1791", "39333"]) assert.ok(plan.includes(port), `fixed port ${port}`);
+  assert.match(plan, /\. \.github\/scripts\/gate-host\.ps1/);
+  assert.match(plan, /\$gateHost = Get-GateHost\b/);
+  assert.match(plan, /\(Get-GateHostEnv \$gateHost\) \| Add-Content -Path \$env:GITHUB_ENV/);
+  assert.match(plan, /"machine=\$\(\$gateHost\.Machine\)" \| Add-Content -Path \$env:GITHUB_OUTPUT/);
+  // The pool's admission and its release are the build PC's alone.
+  const admit = steps[names.indexOf("Admit optional gate work")];
+  assert.ok(admit, "admission exists in the Windows job");
+  assert.match(admit, /^ {8}if: .*steps\.plan\.outputs\.machine == 'main-pc'$/m, "admission only on main-pc");
+  assert.match(script(admit), /gate-worker-hook\.ps1' -Phase Before/);
+  // Release runs only for a job that was admitted, which only the build PC ever is.
+  const release = steps[names.indexOf("Release optional gate slot")];
+  assert.ok(release, "release exists in the Windows job");
+  assert.match(release, /^ {8}if: .*steps\.admission\.outcome == 'success'/m, "release only after an admission");
+  assert.match(script(release), /gate-worker-hook\.ps1' -Phase After/);
+  assert.ok(names.indexOf("Admit optional gate work") < names.indexOf("Install"), "admission precedes the build");
+  // The Gate step: three heavy tokens on the build PC, the second PC's rust.lock there, and the machine lock
+  // on every run (a no-op where its folder is absent).
   const gate = script(steps[names.indexOf("Gate")]);
   assert.match(gate, /BelowNormal/);
-  // One Rust gate at a time on that PC, and never alongside its Windows update proof.
-  assert.match(gate, /KalCodePC2\\locks\\rust\.lock/);
+  assert.match(gate, /\$env:KALCODE_GATE_HEAVY -eq 'True' -and \$env:KALCODE_GATE_MACHINE -eq 'main-pc'/);
+  assert.match(gate, /KalCodeGatePool\\heavy/);
+  assert.match(gate, /heavy-\$index\.lock/);
+  assert.match(gate, /elseif \(\$env:KALCODE_GATE_HEAVY -eq 'True'\)[\s\S]*KalCodePC2\\locks\\rust\.lock/);
+  assert.match(gate, /^\s*\. \.github\/scripts\/pc2-machine-lock\.ps1$/m);
   assert.match(gate, /Enter-Pc2MachineLock -Mode Shared/);
   assert.match(gate, /Exit-Pc2MachineLock \$lock/);
   const pc2Names = pc2Steps.map((step) => step.match(/^name: (.+)$/m)?.[1] ?? "");
-  assert.match(script(pc2Steps[pc2Names.indexOf("Gate")]), /Enter-Pc2MachineLock -Mode Shared/);
+  const pc2Gate = script(pc2Steps[pc2Names.indexOf("Gate")]);
+  assert.match(pc2Gate, /^\s*\. \.github\/scripts\/pc2-machine-lock\.ps1$/m);
+  assert.match(pc2Gate, /Enter-Pc2MachineLock -Mode Shared/);
+  // The JS/web job takes no build-PC admission, whichever PC it lands on.
+  assert.ok(!pc2Names.includes("Admit optional gate work") && !pc2Names.includes("Release optional gate slot"));
 });
 
-test("the Windows jobs' plan and gate scripts take the same port block per runner as the PC2 job", {
-  skip: process.platform !== "win32",
-}, () => {
-  const lines = (list) => {
+test("both Windows jobs take their machine and ports from the same gate-host.ps1", () => {
+  const planOf = (list) => {
     const names = list.map((step) => step.match(/^name: (.+)$/m)?.[1] ?? "");
-    const plan = script(list[names.indexOf("Plan change-based gate")]);
-    return plan
-      .split("\n")
-      .filter((line) => /\$pc2Slot =|\$portOffset =|_PORT=\$\(/.test(line))
-      .map((l) => l.trim().replace(/,$/, ""));
+    return script(list[names.indexOf("Plan change-based gate")]);
   };
-  assert.deepEqual(lines(steps), lines(pc2Steps));
+  const lines = (plan) =>
+    plan
+      .split("\n")
+      .filter((line) => /gate-host\.ps1|Get-GateHost\b/.test(line))
+      .map((l) => l.trim());
+  const main = lines(planOf(steps));
+  assert.ok(main.length >= 2, "dot-source and Get-GateHost");
+  assert.deepEqual(main, lines(planOf(pc2Steps)));
+  for (const plan of [planOf(steps), planOf(pc2Steps)])
+    assert.doesNotMatch(plan, /\$pc2Slot|\$portOffset|KALCODE_E2E_PORT=/, "no per-job port tables");
 });

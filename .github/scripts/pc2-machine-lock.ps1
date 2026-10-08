@@ -28,7 +28,10 @@ function Enter-Pc2MachineLock {
         [int]$PollMilliseconds = 2000
     )
     if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
-        Write-Host "::warning::The second PC's machine lock folder ($Directory) is missing; running without the lock."
+        # A build-PC gate worker (elastic pool, 2026-10-08) has no lock folder by design; anywhere else say so.
+        if ($env:KALCODE_GATE_MACHINE -ne 'main-pc') {
+            Write-Host "::warning::The second PC's machine lock folder ($Directory) is missing; running without the lock."
+        }
         return $null
     }
     $gate = Join-Path $Directory 'gate.lock'

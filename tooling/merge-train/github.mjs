@@ -99,13 +99,32 @@ export function isPc2Job(job, sha) {
 /** The second job of the two-job Windows gate: rust, native E2E and the Cargo tools. */
 export const NATIVE_GATE_JOB = "Gate (Windows, native)";
 
+/** The elastic gate pool's label (owner, 2026-10-08): every Windows gate job requests it. */
+export const GATE_POOL_LABEL = "kalcode-gate-pool";
+
 /**
- * A trusted host for the "Gate (Windows)" and native jobs: one of the second PC's gate runners (owner,
- * 2026-10-07: every gate runs there; the build PC only builds and ships), or a build-PC pool worker for a
- * candidate gated before that move.
+ * A gate job taken from the elastic pool by one of the named gate runners of either Windows PC: the second
+ * PC's (always in the pool) or a build-PC pool worker (only while gate-pool-governor.ps1 finds that PC idle).
+ * The name is the identity; the pool label alone never is.
+ */
+export function isPoolJob(job, sha) {
+  const labels = job.labels ?? [];
+  const name = job.runner_name ?? "";
+  return (
+    job.head_sha === sha &&
+    (PC2_GATE_RUNNERS.includes(name) || MAIN_PC_GATE_RUNNER.test(name)) &&
+    labels.includes("self-hosted") &&
+    labels.includes("Windows") &&
+    labels.includes(GATE_POOL_LABEL)
+  );
+}
+
+/**
+ * A trusted host for every Windows gate job: a named runner of either PC that took it from the elastic pool,
+ * or, for a candidate gated before the pool, the second PC's runners (2026-10-07) or a build-PC pool worker.
  */
 export function isGateHostJob(job, sha) {
-  return isPc2Job(job, sha) || isMainPcJob(job, sha);
+  return isPoolJob(job, sha) || isPc2Job(job, sha) || isMainPcJob(job, sha);
 }
 
 /** One job's verdict: its own completed, trusted, executed Gate step decides it. */
@@ -143,7 +162,7 @@ export function gateStateFrom(runs, jobs, sha, branch) {
   const nativeJobs = jobs.filter((j) => j.name === NATIVE_GATE_JOB);
   if (nativeJobs.length) parts.push(jobState(nativeJobs, run, sha, isGateHostJob));
   const pc2Jobs = jobs.filter((j) => j.name === PC2_GATE_JOB);
-  if (pc2Jobs.length) parts.push(jobState(pc2Jobs, run, sha, isPc2Job));
+  if (pc2Jobs.length) parts.push(jobState(pc2Jobs, run, sha, isGateHostJob));
   for (const state of ["failure", "pending", "stale"]) {
     const part = parts.find((p) => p.state === state);
     if (part) return part;
