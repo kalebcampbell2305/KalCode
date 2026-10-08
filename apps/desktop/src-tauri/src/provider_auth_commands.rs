@@ -2430,10 +2430,12 @@ mod tests {
 
     #[cfg(any(windows, target_os = "macos"))]
     struct Fixture {
-        _temp: tempfile::TempDir,
         core: Arc<Core>,
         runtime: ProviderRuntimeAuthority,
         account: ProviderAccount,
+        // Last: fields drop in declaration order, so Core closes kalcode.lock and the db first.
+        // Dropped earlier, the TempDir silently survives on Windows.
+        _temp: tempfile::TempDir,
     }
 
     #[cfg(any(windows, target_os = "macos"))]

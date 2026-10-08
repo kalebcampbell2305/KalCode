@@ -8,7 +8,19 @@ import {
   type HandoffTask,
   type ThreadSummary,
 } from "@kalcode/protocol";
-import { Badge, Button, Field, ProviderGlyph, SegmentedControl, Skeleton, TextArea } from "@kalcode/ui/components";
+import {
+  Badge,
+  Button,
+  Field,
+  ProviderGlyph,
+  SegmentedControl,
+  Skeleton,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+  TextArea,
+} from "@kalcode/ui/components";
 import {
   ArrowLeft,
   ArrowRight,
@@ -16,6 +28,7 @@ import {
   Check,
   ExternalLink,
   Handshake,
+  Link2,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -26,10 +39,12 @@ import { type FormEvent, useCallback, useEffect, useId, useMemo, useRef, useStat
 import { useOptionalAccount } from "../../account/AccountProvider.tsx";
 import { planTier, tierName } from "../../ipc/account.ts";
 import { toKalCodeError } from "../../ipc/errors.ts";
+import { focusChain } from "../../runtime/chains/focus.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useOptionalUiIntents } from "../../runtime/uiIntents.tsx";
 import { HUB_SECTIONS } from "../../shell/AccountHub.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
+import { ChainComposer } from "../chains/ChainComposer.tsx";
 import { useCodingAgents } from "../dashboard/data/DashboardData.tsx";
 import { STATUS_META } from "../dashboard/data/status.ts";
 import { focusSection } from "../dashboard/useNow.ts";
@@ -121,6 +136,8 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
   const id = useId();
   const [targetId, setTargetId] = useState("");
   const [task, setTask] = useState<HandoffTask>("review");
+  // One agent (the single handoff) or a chain of agents; a chain starts by reviewing this work.
+  const [mode, setMode] = useState<"single" | "chain">("single");
   const [instructions, setInstructions] = useState("");
   const [preview, setPreview] = useState<HandoffPreview | null>(null);
   const [previewDraft, setPreviewDraft] = useState<PreviewDraft | null>(null);
@@ -349,7 +366,15 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
             <div className={styles.headCopy}>
               <Dialog.Title className={styles.title}>Hand off</Dialog.Title>
               <Dialog.Description id={`${id}-description`} className={styles.description}>
-                Pass focused work from <strong>{source.name}</strong> to another coding agent.
+                {mode === "chain" ? (
+                  <>
+                    Pass the work from <strong>{source.name}</strong> through a chain of coding agents.
+                  </>
+                ) : (
+                  <>
+                    Pass focused work from <strong>{source.name}</strong> to another coding agent.
+                  </>
+                )}
               </Dialog.Description>
               <span className={styles.sourceIdentity} title={sourceIdentity.detail} data-handoff-source-identity>
                 {sourceIdentity.compact}
@@ -382,292 +407,326 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
             </div>
           ) : null}
 
-          {preview ? (
-            <section className={styles.preview} aria-labelledby={`${id}-preview-title`}>
-              <div className={styles.sectionHead}>
-                <div>
-                  <h2 id={`${id}-preview-title`}>Review the handoff</h2>
-                  <p>
-                    {preview.task[0]?.toUpperCase() + preview.task.slice(1)} for{" "}
-                    <strong>{selectedTarget?.name ?? "the receiving agent"}</strong>. Nothing is delivered until you
-                    send it.
-                  </p>
-                  {selectedTargetIdentity ? (
-                    <span className={styles.previewIdentity} title={selectedTargetIdentity.detail}>
-                      {selectedTargetIdentity.compact}
-                    </span>
-                  ) : null}
-                </div>
-                <Button size="sm" variant="ghost" icon={<ArrowLeft />} onClick={resetPreview} disabled={busy !== null}>
-                  Back
-                </Button>
-              </div>
-
-              <Field
-                htmlFor={`${id}-preview-text`}
-                label="Prepared context"
-                hint="Review exactly what will be sent. Sensitive text is checked before delivery."
-              >
-                <TextArea
-                  id={`${id}-preview-text`}
-                  className={styles.contextText}
-                  value={previewText}
-                  disabled={busy !== null}
-                  onChange={(event) => setPreviewText(event.target.value)}
-                  aria-describedby={`${id}-preview-text-hint`}
-                />
-              </Field>
-
-              <fieldset className={styles.gitFacts}>
-                <legend className="visually-hidden">Source state</legend>
-                <span>{preview.sourceBranch ? `Branch ${preview.sourceBranch}` : "Branch not reported"}</span>
-                <span>{preview.sourceCommit ? preview.sourceCommit.slice(0, 12) : "Commit not reported"}</span>
-                <Badge tone={preview.sourceDirty ? "waiting" : "outline"}>
-                  {preview.sourceDirty
-                    ? "Uncommitted changes"
-                    : preview.sourceCommit
-                      ? "Clean source"
-                      : "Source state not reported"}
-                </Badge>
-              </fieldset>
-
-              {preview.warnings.length > 0 ? (
-                <div className={styles.warnings} role="status">
-                  {preview.warnings.map((warning) => (
-                    <p key={warning}>{warning}</p>
-                  ))}
-                </div>
-              ) : null}
-
-              <div className={styles.actions}>
-                {previewChanged ? (
-                  <Button
-                    variant="primary"
-                    icon={<RefreshCw />}
-                    busy={busy === "preview"}
-                    disabled={!previewDraft || previewText.trim().length === 0 || busy !== null}
-                    onClick={() => previewDraft && void prepare(previewDraft, previewText, preview.id)}
-                  >
-                    Update preview
-                  </Button>
-                ) : (
-                  <Button
-                    variant="primary"
-                    icon={<Send />}
-                    busy={busy === "send"}
-                    disabled={previewText.trim().length === 0 || busy !== null}
-                    onClick={() => void send()}
-                  >
-                    Send handoff
-                  </Button>
-                )}
-              </div>
-            </section>
-          ) : (
-            <section className={styles.compose} aria-labelledby={`${id}-compose-title`}>
-              <div className={styles.sectionHead}>
-                <div>
-                  <h2 id={`${id}-compose-title`}>Choose a recipient</h2>
-                  <p>Only real coding-agent terminals are shown.</p>
-                </div>
-                <Button size="sm" variant="ghost" icon={<Plus />} onClick={onNewAgent} disabled={busy !== null}>
-                  New agent…
-                </Button>
-              </div>
-
-              {codingAgents.state.status === "loading" ? (
-                <div className={styles.agentLoading} role="status" aria-label="Loading coding agents">
-                  <Skeleton height="3.25rem" />
-                  <Skeleton height="3.25rem" />
-                  <Skeleton height="3.25rem" />
-                </div>
-              ) : codingAgents.state.status === "error" ? (
-                <div className={styles.inlineError} role="alert">
-                  <span>{codingAgents.state.error.message}</span>
-                  <Button size="sm" variant="secondary" icon={<RefreshCw />} onClick={codingAgents.reload}>
-                    Try again
-                  </Button>
-                </div>
-              ) : recipients.length === 0 ? (
-                <div className={styles.emptyRecipients}>
-                  <Bot aria-hidden="true" />
-                  <span>Launch another coding agent to receive this handoff.</span>
-                </div>
-              ) : (
-                <fieldset className={styles.recipientList}>
-                  <legend className="visually-hidden">Handoff recipient</legend>
-                  {recipients.map((agent) => {
-                    const selected = agent.id === targetId;
-                    const status = STATUS_META[agent.status];
-                    const identity = sessionIdentity(agent, accountSessions?.accounts);
-                    return (
-                      <label key={agent.id} className={styles.recipient} data-selected={selected || undefined}>
-                        <input
-                          className="visually-hidden"
-                          type="radio"
-                          name={`${id}-recipient`}
-                          value={agent.id}
-                          checked={selected}
-                          onChange={() => {
-                            setTargetId(agent.id);
-                            setError(null);
-                          }}
-                        />
-                        <ProviderGlyph provider={agent.providerId} size="sm" />
-                        <span className={styles.recipientCopy}>
-                          <span className={styles.recipientName}>
-                            <span className={styles.recipientTitle}>{agent.name}</span>
-                          </span>
-                          <span
-                            className={styles.recipientIdentity}
-                            title={identity.detail}
-                            data-handoff-recipient-identity
-                          >
-                            {identity.compact}
-                          </span>
-                          <span className={styles.recipientMeta}>
-                            {agent.workspaceName} · {status.label}
-                          </span>
+          <Tabs value={mode} onValueChange={(next) => setMode(next === "chain" ? "chain" : "single")}>
+            <TabsList variant="pill" aria-label="Hand off to" className={styles.modes}>
+              <TabsTrigger value="single" disabled={busy !== null}>
+                <Handshake aria-hidden="true" />
+                One agent
+              </TabsTrigger>
+              <TabsTrigger value="chain" disabled={busy !== null}>
+                <Link2 aria-hidden="true" />
+                Chain
+              </TabsTrigger>
+            </TabsList>
+            <TabsContent value="single" className={styles.modeBody}>
+              {preview ? (
+                <section className={styles.preview} aria-labelledby={`${id}-preview-title`}>
+                  <div className={styles.sectionHead}>
+                    <div>
+                      <h2 id={`${id}-preview-title`}>Review the handoff</h2>
+                      <p>
+                        {preview.task[0]?.toUpperCase() + preview.task.slice(1)} for{" "}
+                        <strong>{selectedTarget?.name ?? "the receiving agent"}</strong>. Nothing is delivered until you
+                        send it.
+                      </p>
+                      {selectedTargetIdentity ? (
+                        <span className={styles.previewIdentity} title={selectedTargetIdentity.detail}>
+                          {selectedTargetIdentity.compact}
                         </span>
-                        <span className={styles.selectMark} aria-hidden="true">
-                          {selected ? <Check /> : null}
-                        </span>
-                      </label>
-                    );
-                  })}
-                </fieldset>
-              )}
-
-              {staleTarget ? (
-                <p className={styles.inlineError} role="alert">
-                  That agent is no longer available. Choose another recipient.
-                </p>
-              ) : null}
-
-              <div className={styles.taskSection}>
-                <span className={styles.fieldLabel} id={`${id}-task-label`}>
-                  Task
-                </span>
-                <SegmentedControl
-                  value={task}
-                  options={TASK_OPTIONS}
-                  onValueChange={setTask}
-                  aria-labelledby={`${id}-task-label`}
-                  disabled={busy !== null}
-                />
-                <p className={styles.taskHelp}>{TASK_HELP[task]}</p>
-              </div>
-
-              <Field htmlFor={`${id}-instructions`} label="Instructions" optional>
-                <TextArea
-                  id={`${id}-instructions`}
-                  className={styles.instructions}
-                  value={instructions}
-                  maxLength={2_000}
-                  placeholder="What should the receiving agent focus on?"
-                  disabled={busy !== null}
-                  onChange={(event) => setInstructions(event.target.value)}
-                />
-              </Field>
-
-              <div className={styles.actions}>
-                <Button
-                  variant="primary"
-                  icon={<ArrowRight />}
-                  busy={busy === "preview"}
-                  disabled={!featureAvailable || !selectedTarget || busy !== null}
-                  onClick={prepareCurrent}
-                >
-                  Prepare handoff
-                </Button>
-              </div>
-            </section>
-          )}
-
-          {error ? (
-            <div className={styles.error} role="alert">
-              <p>{error.message}</p>
-              {error.retry || (error.chooseAnother && preview) ? (
-                <div className={styles.errorActions}>
-                  {error.chooseAnother && preview ? (
+                      ) : null}
+                    </div>
                     <Button
                       size="sm"
                       variant="ghost"
                       icon={<ArrowLeft />}
-                      disabled={busy !== null}
                       onClick={resetPreview}
-                    >
-                      Choose another agent
-                    </Button>
-                  ) : null}
-                  {error.retry ? (
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      icon={<RotateCcw />}
                       disabled={busy !== null}
-                      onClick={error.retry.run}
                     >
-                      {error.retry.label}
+                      Back
                     </Button>
+                  </div>
+
+                  <Field
+                    htmlFor={`${id}-preview-text`}
+                    label="Prepared context"
+                    hint="Review exactly what will be sent. Sensitive text is checked before delivery."
+                  >
+                    <TextArea
+                      id={`${id}-preview-text`}
+                      className={styles.contextText}
+                      value={previewText}
+                      disabled={busy !== null}
+                      onChange={(event) => setPreviewText(event.target.value)}
+                      aria-describedby={`${id}-preview-text-hint`}
+                    />
+                  </Field>
+
+                  <fieldset className={styles.gitFacts}>
+                    <legend className="visually-hidden">Source state</legend>
+                    <span>{preview.sourceBranch ? `Branch ${preview.sourceBranch}` : "Branch not reported"}</span>
+                    <span>{preview.sourceCommit ? preview.sourceCommit.slice(0, 12) : "Commit not reported"}</span>
+                    <Badge tone={preview.sourceDirty ? "waiting" : "outline"}>
+                      {preview.sourceDirty
+                        ? "Uncommitted changes"
+                        : preview.sourceCommit
+                          ? "Clean source"
+                          : "Source state not reported"}
+                    </Badge>
+                  </fieldset>
+
+                  {preview.warnings.length > 0 ? (
+                    <div className={styles.warnings} role="status">
+                      {preview.warnings.map((warning) => (
+                        <p key={warning}>{warning}</p>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  <div className={styles.actions}>
+                    {previewChanged ? (
+                      <Button
+                        variant="primary"
+                        icon={<RefreshCw />}
+                        busy={busy === "preview"}
+                        disabled={!previewDraft || previewText.trim().length === 0 || busy !== null}
+                        onClick={() => previewDraft && void prepare(previewDraft, previewText, preview.id)}
+                      >
+                        Update preview
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="primary"
+                        icon={<Send />}
+                        busy={busy === "send"}
+                        disabled={previewText.trim().length === 0 || busy !== null}
+                        onClick={() => void send()}
+                      >
+                        Send handoff
+                      </Button>
+                    )}
+                  </div>
+                </section>
+              ) : (
+                <section className={styles.compose} aria-labelledby={`${id}-compose-title`}>
+                  <div className={styles.sectionHead}>
+                    <div>
+                      <h2 id={`${id}-compose-title`}>Choose a recipient</h2>
+                      <p>Only real coding-agent terminals are shown.</p>
+                    </div>
+                    <Button size="sm" variant="ghost" icon={<Plus />} onClick={onNewAgent} disabled={busy !== null}>
+                      New agent…
+                    </Button>
+                  </div>
+
+                  {codingAgents.state.status === "loading" ? (
+                    <div className={styles.agentLoading} role="status" aria-label="Loading coding agents">
+                      <Skeleton height="3.25rem" />
+                      <Skeleton height="3.25rem" />
+                      <Skeleton height="3.25rem" />
+                    </div>
+                  ) : codingAgents.state.status === "error" ? (
+                    <div className={styles.inlineError} role="alert">
+                      <span>{codingAgents.state.error.message}</span>
+                      <Button size="sm" variant="secondary" icon={<RefreshCw />} onClick={codingAgents.reload}>
+                        Try again
+                      </Button>
+                    </div>
+                  ) : recipients.length === 0 ? (
+                    <div className={styles.emptyRecipients}>
+                      <Bot aria-hidden="true" />
+                      <span>Launch another coding agent to receive this handoff.</span>
+                    </div>
+                  ) : (
+                    <fieldset className={styles.recipientList}>
+                      <legend className="visually-hidden">Handoff recipient</legend>
+                      {recipients.map((agent) => {
+                        const selected = agent.id === targetId;
+                        const status = STATUS_META[agent.status];
+                        const identity = sessionIdentity(agent, accountSessions?.accounts);
+                        return (
+                          <label key={agent.id} className={styles.recipient} data-selected={selected || undefined}>
+                            <input
+                              className="visually-hidden"
+                              type="radio"
+                              name={`${id}-recipient`}
+                              value={agent.id}
+                              checked={selected}
+                              onChange={() => {
+                                setTargetId(agent.id);
+                                setError(null);
+                              }}
+                            />
+                            <ProviderGlyph provider={agent.providerId} size="sm" />
+                            <span className={styles.recipientCopy}>
+                              <span className={styles.recipientName}>
+                                <span className={styles.recipientTitle}>{agent.name}</span>
+                              </span>
+                              <span
+                                className={styles.recipientIdentity}
+                                title={identity.detail}
+                                data-handoff-recipient-identity
+                              >
+                                {identity.compact}
+                              </span>
+                              <span className={styles.recipientMeta}>
+                                {agent.workspaceName} · {status.label}
+                              </span>
+                            </span>
+                            <span className={styles.selectMark} aria-hidden="true">
+                              {selected ? <Check /> : null}
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </fieldset>
+                  )}
+
+                  {staleTarget ? (
+                    <p className={styles.inlineError} role="alert">
+                      That agent is no longer available. Choose another recipient.
+                    </p>
+                  ) : null}
+
+                  <div className={styles.taskSection}>
+                    <span className={styles.fieldLabel} id={`${id}-task-label`}>
+                      Task
+                    </span>
+                    <SegmentedControl
+                      value={task}
+                      options={TASK_OPTIONS}
+                      onValueChange={setTask}
+                      aria-labelledby={`${id}-task-label`}
+                      disabled={busy !== null}
+                    />
+                    <p className={styles.taskHelp}>{TASK_HELP[task]}</p>
+                  </div>
+
+                  <Field htmlFor={`${id}-instructions`} label="Instructions" optional>
+                    <TextArea
+                      id={`${id}-instructions`}
+                      className={styles.instructions}
+                      value={instructions}
+                      maxLength={2_000}
+                      placeholder="What should the receiving agent focus on?"
+                      disabled={busy !== null}
+                      onChange={(event) => setInstructions(event.target.value)}
+                    />
+                  </Field>
+
+                  <div className={styles.actions}>
+                    <Button
+                      variant="primary"
+                      icon={<ArrowRight />}
+                      busy={busy === "preview"}
+                      disabled={!featureAvailable || !selectedTarget || busy !== null}
+                      onClick={prepareCurrent}
+                    >
+                      Prepare handoff
+                    </Button>
+                  </div>
+                </section>
+              )}
+
+              {error ? (
+                <div className={styles.error} role="alert">
+                  <p>{error.message}</p>
+                  {error.retry || (error.chooseAnother && preview) ? (
+                    <div className={styles.errorActions}>
+                      {error.chooseAnother && preview ? (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          icon={<ArrowLeft />}
+                          disabled={busy !== null}
+                          onClick={resetPreview}
+                        >
+                          Choose another agent
+                        </Button>
+                      ) : null}
+                      {error.retry ? (
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          icon={<RotateCcw />}
+                          disabled={busy !== null}
+                          onClick={error.retry.run}
+                        >
+                          {error.retry.label}
+                        </Button>
+                      ) : null}
+                    </div>
                   ) : null}
                 </div>
               ) : null}
-            </div>
-          ) : null}
-          {notice ? (
-            <p className={styles.notice} role="status">
-              {notice}
-            </p>
-          ) : null}
+              {notice ? (
+                <p className={styles.notice} role="status">
+                  {notice}
+                </p>
+              ) : null}
 
-          <section className={styles.activity} aria-labelledby={`${id}-activity-title`}>
-            <div className={styles.sectionHead}>
-              <div>
-                <h2 id={`${id}-activity-title`}>Handoff activity</h2>
-                <p>Track delivery and record findings.</p>
-              </div>
-              <Button
-                size="sm"
-                variant="ghost"
-                icon={<RefreshCw />}
-                onClick={() => void loadRecords()}
-                disabled={recordsState === "loading"}
-              >
-                Refresh
-              </Button>
-            </div>
-            {recordsState === "loading" ? (
-              <div className={styles.recordList} role="status" aria-label="Loading handoffs">
-                <Skeleton height="4.5rem" />
-              </div>
-            ) : recordsState === "error" ? (
-              <div className={styles.inlineError} role="alert">
-                <span>{recordsError ?? "Handoff activity is unavailable."}</span>
-                <Button size="sm" variant="secondary" icon={<RefreshCw />} onClick={() => void loadRecords()}>
-                  Try again
-                </Button>
-              </div>
-            ) : records.length === 0 ? (
-              <p className={styles.activityEmpty}>No handoffs for this agent yet.</p>
-            ) : (
-              <div className={styles.recordList}>
-                {visibleRecords.map((record) => (
-                  <HandoffRecordRow
-                    key={record.id}
-                    record={record}
-                    returned={returnedIds.has(record.id)}
-                    currentThreadId={source.id}
-                    onRefresh={() => loadRecords(true)}
-                    onOpenAgent={openAgent}
-                    onReturn={beginReturn}
-                    returning={busy === "return"}
-                    returnLocked={busy !== null}
-                  />
-                ))}
-              </div>
-            )}
-          </section>
+              <section className={styles.activity} aria-labelledby={`${id}-activity-title`}>
+                <div className={styles.sectionHead}>
+                  <div>
+                    <h2 id={`${id}-activity-title`}>Handoff activity</h2>
+                    <p>Track delivery and record findings.</p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    icon={<RefreshCw />}
+                    onClick={() => void loadRecords()}
+                    disabled={recordsState === "loading"}
+                  >
+                    Refresh
+                  </Button>
+                </div>
+                {recordsState === "loading" ? (
+                  <div className={styles.recordList} role="status" aria-label="Loading handoffs">
+                    <Skeleton height="4.5rem" />
+                  </div>
+                ) : recordsState === "error" ? (
+                  <div className={styles.inlineError} role="alert">
+                    <span>{recordsError ?? "Handoff activity is unavailable."}</span>
+                    <Button size="sm" variant="secondary" icon={<RefreshCw />} onClick={() => void loadRecords()}>
+                      Try again
+                    </Button>
+                  </div>
+                ) : records.length === 0 ? (
+                  <p className={styles.activityEmpty}>No handoffs for this agent yet.</p>
+                ) : (
+                  <div className={styles.recordList}>
+                    {visibleRecords.map((record) => (
+                      <HandoffRecordRow
+                        key={record.id}
+                        record={record}
+                        returned={returnedIds.has(record.id)}
+                        currentThreadId={source.id}
+                        onRefresh={() => loadRecords(true)}
+                        onOpenAgent={openAgent}
+                        onReturn={beginReturn}
+                        returning={busy === "return"}
+                        returnLocked={busy !== null}
+                      />
+                    ))}
+                  </div>
+                )}
+              </section>
+            </TabsContent>
+            <TabsContent value="chain" className={styles.modeBody}>
+              <ChainComposer
+                embedded
+                workspaceId={source.workspaceId}
+                source={source}
+                featureAvailable={featureAvailable}
+                onCancel={() => setMode("single")}
+                onStarted={(chain) => {
+                  onClose();
+                  navigate("dashboard");
+                  focusChain(chain.id);
+                }}
+              />
+            </TabsContent>
+          </Tabs>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

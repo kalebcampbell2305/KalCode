@@ -1,4 +1,5 @@
 import type { AgentEvent, EventEnvelope, KalVoiceSignal } from "@kalcode/protocol";
+import type { ChainsCommandName } from "./chains";
 import type { DoctorInvoke } from "./doctor";
 import type { HandoffsCommandName } from "./handoffs";
 import type { OperationsCommandName } from "./operations";
@@ -16,6 +17,7 @@ export type CommandName =
   | "unified_memory_set_preferences"
   | "unified_memory_retrieve"
   | "integration_dispatch"
+  | ChainsCommandName
   | HandoffsCommandName
   | OperationsCommandName
   | SquadsCommandName

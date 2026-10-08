@@ -7,6 +7,7 @@ import { attentionSummary } from "../../shell/attention/model.ts";
 import { useAttention } from "../../shell/attention/useAttention.ts";
 import { Page } from "../../shell/Page.tsx";
 import { WidgetDock } from "../../shell/widgets/WidgetDock.tsx";
+import { ChainsSection } from "../chains/ChainsSection.tsx";
 import { Announcer } from "./Announcer.tsx";
 import styles from "./Dashboard.module.css";
 import { DashboardBoard } from "./DashboardBoard.tsx";
@@ -51,6 +52,7 @@ function DashboardPage() {
     >
       <div className={styles.surface}>
         <NeedsYouSection />
+        <ChainsSection />
         <div
           className={styles.layout}
           style={dockWidth !== null ? ({ "--dock-w": `${dockWidth}px` } as CSSProperties) : undefined}

@@ -542,7 +542,16 @@ test("a saved mixed-provider Squad gives every available member a real pane whil
       if (launched.key === "failure") {
         expect(info.running).toBe(false);
       } else {
-        expect(info.running).toBe(true);
+        if (!info.running) {
+          const detail = {
+            key: launched.key,
+            info,
+            thread: await invoke<ThreadSummary>(page, "thread_get", { threadId: launched.operationId }),
+            operation: operation(await invoke<SquadsSnapshot>(page, "squads_snapshot"), launched.operationId),
+            terminal: await pane.locator("[data-pane-terminal] .xterm-rows").innerText(),
+          };
+          throw new Error(`Squad member pane is not running: ${JSON.stringify(detail, null, 2)}`);
+        }
         expect(info.instanceId).not.toBeNull();
         if (info.instanceId) liveInstanceIds.push(info.instanceId);
       }

@@ -77,7 +77,7 @@ impl Grants {
                 (limits::KALVOICE_REQUESTS_PER_MONTH.to_owned(), Some(25)),
                 (limits::OPEN_TERMINALS.to_owned(), None),
                 (limits::PARALLEL_AGENTS.to_owned(), None),
-                (limits::WORKSPACES.to_owned(), Some(2)),
+                (limits::WORKSPACES.to_owned(), None),
                 (limits::PROVIDER_ACCOUNTS.to_owned(), Some(2)),
                 ("brainstormsPerMonth".to_owned(), Some(3)),
                 ("launchRecipes".to_owned(), Some(1)),
@@ -129,8 +129,13 @@ fn evaluate_limit(
     limits: &BTreeMap<String, Option<u64>>,
     limit: &str,
 ) -> Limit {
-    // Local sessions are unlimited on every plan, including old signed grants.
-    if unrestricted || matches!(limit, limits::OPEN_TERMINALS | limits::PARALLEL_AGENTS) {
+    // Local sessions and workspaces are unlimited on every plan, including old signed grants.
+    if unrestricted
+        || matches!(
+            limit,
+            limits::OPEN_TERMINALS | limits::PARALLEL_AGENTS | limits::WORKSPACES
+        )
+    {
         return Limit::Unlimited;
     }
     match limits.get(limit) {
@@ -285,7 +290,7 @@ mod tests {
         assert!(!free.has_feature(features::PERSISTENT_AGENTS));
         assert_eq!(free.limit(limits::PARALLEL_AGENTS), Limit::Unlimited);
         assert_eq!(free.limit(limits::OPEN_TERMINALS), Limit::Unlimited);
-        assert_eq!(free.limit(limits::WORKSPACES), Limit::AtMost(2));
+        assert_eq!(free.limit(limits::WORKSPACES), Limit::Unlimited);
         assert_eq!(free.limit(limits::PROVIDER_ACCOUNTS), Limit::AtMost(2));
         assert_eq!(
             free.limit(limits::KALVOICE_REQUESTS_PER_MONTH),

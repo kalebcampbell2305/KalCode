@@ -123,6 +123,16 @@ pub(crate) struct OperationPaneRequest<'a> {
     pub(crate) origin: LaunchOrigin,
     pub(crate) isolate: bool,
     pub(crate) start_revision: Option<&'a str>,
+    /// An Agent Handoff Chain step joins its chain's one shared worktree instead of its own.
+    pub(crate) shared_worktree: Option<SharedWorktree<'a>>,
+}
+
+/// A KalCode-managed worktree owned by a relation (a chain), not by any single thread, so no
+/// pane's archive or release can remove it while later steps still use it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SharedWorktree<'a> {
+    pub(crate) owner_ref: &'a str,
+    pub(crate) branch: &'a str,
 }
 
 /// The native adapter for a provider (Claude Code, Codex, Gemini CLI), observed by Provider
@@ -607,6 +617,7 @@ impl ThreadsState {
             origin,
             isolate,
             start_revision,
+            shared_worktree,
         } = launch;
         let request = self.reviewed_operation_request(core, spec)?;
         let runtime = self.operation_runtime()?;
@@ -625,6 +636,7 @@ impl ThreadsState {
                         spec.prompt.is_some(),
                         origin,
                         start_revision,
+                        shared_worktree,
                     )
                 });
         }
@@ -665,6 +677,7 @@ impl ThreadsState {
             origin,
             isolate,
             start_revision,
+            shared_worktree,
         } = launch;
         let request = self.reviewed_operation_request(core, spec)?;
         let runtime = self.operation_runtime()?;
@@ -717,6 +730,7 @@ impl ThreadsState {
                         false,
                         origin,
                         start_revision,
+                        shared_worktree,
                     )?;
                     runtime.wait_for_dependency(id, "Waiting for dependencies")
                 });
@@ -1484,6 +1498,7 @@ pub(crate) fn create_operation_in_worktree(
     has_prompt: bool,
     origin: LaunchOrigin,
     start_revision: Option<&str>,
+    shared: Option<SharedWorktree<'_>>,
 ) -> kalcode_core::Result<ThreadSummary> {
     use kalcode_git::store as git_store;
     use kalcode_git::types::WorktreePurpose;
@@ -1491,20 +1506,30 @@ pub(crate) fn create_operation_in_worktree(
 
     let exe = git.git()?;
     let repo = git.repo(root)?.ok_or_else(worktree_unavailable)?;
-    let branch = thread_branch_name(request.name.as_deref(), operation_id);
+    let owner = shared.map_or(operation_id, |shared| shared.owner_ref);
+    let branch = shared.map_or_else(
+        || thread_branch_name(request.name.as_deref(), operation_id),
+        |shared| shared.branch.to_owned(),
+    );
+    // A shared tree was created at the first step's revision; later steps join it as it is.
+    let reuse_revision = if shared.is_some() {
+        None
+    } else {
+        start_revision
+    };
     let made = std::cell::RefCell::new(None);
     let recorded = std::cell::RefCell::new(None);
     let prepare = || {
         use kalcode_git::types::WorktreeStatus;
 
         if let Some((row, old_path)) =
-            core.read(|conn| git_store::latest_thread_worktree(conn, operation_id))?
+            core.read(|conn| git_store::latest_thread_worktree(conn, owner))?
         {
             if row.workspace_id != root.id()
                 || row.branch != branch
                 || row.purpose != WorktreePurpose::Thread
-                || row.owner_ref.as_deref() != Some(operation_id)
-                || start_revision.is_some_and(|revision| row.base_commit != revision)
+                || row.owner_ref.as_deref() != Some(owner)
+                || reuse_revision.is_some_and(|revision| row.base_commit != revision)
             {
                 return Err(KalError::internal(
                     "operation_worktree_identity_mismatch",
@@ -1527,7 +1552,7 @@ pub(crate) fn create_operation_in_worktree(
                 git.worktrees_root(),
                 &branch,
                 WorktreePurpose::Thread,
-                Some(operation_id.to_owned()),
+                Some(owner.to_owned()),
             )?;
             let (new_row, _) = core.write_with_events(|tx| {
                 if row.status == WorktreeStatus::Active {
@@ -1602,7 +1627,7 @@ pub(crate) fn create_operation_in_worktree(
                 branch: branch.clone(),
                 base_commit: head,
                 purpose: WorktreePurpose::Thread,
-                owner_ref: Some(operation_id.to_owned()),
+                owner_ref: Some(owner.to_owned()),
             }
         } else {
             match worktree::attach_managed(
@@ -1611,7 +1636,7 @@ pub(crate) fn create_operation_in_worktree(
                 git.worktrees_root(),
                 &branch,
                 WorktreePurpose::Thread,
-                Some(operation_id.to_owned()),
+                Some(owner.to_owned()),
             ) {
                 Ok(attached) => {
                     if start_revision.is_some_and(|revision| revision != attached.base_commit) {
@@ -1635,7 +1660,7 @@ pub(crate) fn create_operation_in_worktree(
                     &branch,
                     start_revision,
                     WorktreePurpose::Thread,
-                    Some(operation_id.to_owned()),
+                    Some(owner.to_owned()),
                 )?,
                 Err(error) => return Err(error),
             }
@@ -2482,11 +2507,13 @@ mod tests {
     }
 
     struct AccountFixture {
-        _temp: tempfile::TempDir,
         core: Arc<Core>,
         store: AccountStore,
         profiles: ManagedProfiles,
         workspace_id: String,
+        // Last: fields drop in declaration order, so Core closes kalcode.lock and the db first.
+        // Dropped earlier, the TempDir silently survives on Windows.
+        _temp: tempfile::TempDir,
     }
 
     impl AccountFixture {
@@ -4058,6 +4085,7 @@ mod tests {
             false,
             LaunchOrigin::User,
             Some(&head),
+            None,
         )
         .expect("resume prepared operation");
 

@@ -1,0 +1,502 @@
+/*
+ * The chain progress rail. Columns are dependency depth; parallel steps stack in one column with
+ * equal row heights, so the elbow connectors meet at the gap's midpoint on the first row.
+ * State colour: blue = running (one energy trace that settles), amber = waiting / needs report,
+ * red = failed / blocked, green = passed, muted = skipped / cancelled / superseded.
+ */
+@property --chain-trace-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+.rail {
+  --rail-gap: var(--space-6);
+  --rail-row-gap: var(--space-2);
+  --node-min: 9.5rem;
+  --node-max: 16rem;
+  --line: 1.5px;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-2-5);
+}
+
+.rail[data-variant="compact"] {
+  --rail-gap: var(--space-3);
+  --rail-row-gap: var(--space-1-5);
+  --node-min: 5.5rem;
+  --node-max: 1fr;
+  gap: var(--space-2);
+}
+
+.track {
+  display: grid;
+  grid-template-columns: repeat(var(--rail-columns), minmax(var(--node-min), var(--node-max)));
+  grid-auto-rows: 1fr;
+  column-gap: var(--rail-gap);
+  row-gap: var(--rail-row-gap);
+  margin: 0;
+  padding: var(--space-1) var(--space-0-5) var(--space-1-5);
+  overflow-x: auto;
+  list-style: none;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+}
+
+.cell {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  grid-column: calc(var(--col) + 1);
+  grid-row: calc(var(--row) + 1);
+  scroll-snap-align: start;
+}
+
+/* ---------------- Connectors ---------------- */
+
+.connectorIn,
+.connectorOut {
+  position: absolute;
+  bottom: calc(50% - var(--line) / 2);
+  width: calc(var(--rail-gap) / 2);
+  height: calc(var(--row) * (100% + var(--rail-row-gap)));
+  border: 0 solid var(--color-border-strong);
+  border-bottom-width: var(--line);
+  border-bottom-style: dashed;
+  pointer-events: none;
+  transition: border-color var(--dur-base) var(--ease-out);
+}
+
+.connectorIn {
+  right: 100%;
+  border-left-width: var(--line);
+  border-left-style: dashed;
+  border-bottom-left-radius: var(--radius-md);
+}
+
+.connectorOut {
+  left: 100%;
+  border-right-width: var(--line);
+  border-right-style: dashed;
+  border-bottom-right-radius: var(--radius-md);
+}
+
+.cell[data-row="0"] > .connectorIn,
+.cell[data-row="0"] > .connectorOut {
+  border-radius: 0;
+}
+
+.connectorIn[data-state="lit"],
+.connectorOut[data-state="lit"],
+.connectorIn[data-state="active"] {
+  border-style: solid;
+  border-color: var(--color-border-lit);
+}
+
+.connectorIn[data-state="active"] {
+  border-color: var(--color-accent);
+  animation: connector-energy var(--dur-trace) var(--ease-out) both;
+}
+
+.connectorIn[data-state="blocked"] {
+  border-color: var(--status-failed-line);
+}
+
+@keyframes connector-energy {
+  0% {
+    border-color: var(--color-border-strong);
+  }
+  45% {
+    border-color: var(--trace-color);
+  }
+  100% {
+    border-color: var(--color-accent);
+  }
+}
+
+/* ---------------- Nodes ---------------- */
+
+.node {
+  position: relative;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-1);
+  padding: var(--space-2-5) var(--space-3) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--panel-sheen), var(--color-surface-2);
+  box-shadow: var(--shadow-sm);
+  color: var(--color-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color var(--dur-base) var(--ease-out),
+    box-shadow var(--dur-base) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.node:hover {
+  border-color: var(--color-border-strong);
+  background: var(--panel-sheen), var(--color-surface-3);
+}
+
+.node:active {
+  transform: translateY(1px);
+}
+
+.node:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.rail[data-variant="compact"] .node {
+  gap: var(--space-0-5);
+  padding: var(--space-2) var(--space-2-5);
+  border-radius: var(--radius-md);
+}
+
+.nodeHead {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+
+.badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-bg-sunken);
+  color: var(--color-text-muted);
+  transition:
+    background-color var(--dur-base) var(--ease-out),
+    border-color var(--dur-base) var(--ease-out),
+    color var(--dur-base) var(--ease-out);
+}
+
+.badge svg {
+  width: 0.6875rem;
+  height: 0.6875rem;
+  stroke-width: 2.5;
+}
+
+.rail[data-variant="compact"] .badge {
+  width: 1.125rem;
+  height: 1.125rem;
+}
+
+.eyebrow {
+  display: inline-flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: var(--space-1);
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-label);
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.rail[data-variant="compact"] .eyebrow {
+  color: var(--color-text);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-normal);
+  text-transform: none;
+}
+
+.rail[data-variant="compact"] .eyebrow svg {
+  display: none;
+}
+
+.eyebrow svg {
+  flex: none;
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+.attempt {
+  flex: none;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-xs);
+  background: var(--status-muted-soft);
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+
+.name {
+  overflow: hidden;
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.route {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-1-5);
+  color: var(--color-text-secondary);
+}
+
+.model {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.phase {
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+}
+
+.detail {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.tooltipText {
+  display: block;
+  max-width: 22rem;
+  white-space: normal;
+}
+
+/* ---------------- Tones ---------------- */
+
+.node[data-tone="active"] {
+  border-color: var(--color-border-lit);
+  box-shadow: var(--glow-subtle), var(--lift-active);
+}
+.node[data-tone="active"] .badge {
+  border-color: var(--color-border-lit);
+  background: var(--color-accent-soft);
+  color: var(--color-accent-text);
+}
+.node[data-tone="active"] .phase {
+  color: var(--color-accent-text);
+}
+
+.node[data-tone="waiting"] .badge {
+  border-style: dashed;
+  border-color: var(--status-waiting-line);
+  color: var(--status-waiting-text);
+}
+.node[data-tone="waiting"] .phase {
+  color: var(--status-waiting-text);
+}
+
+.node[data-tone="attention"] {
+  border-color: var(--status-waiting-line);
+  box-shadow: var(--glow-waiting);
+}
+.node[data-tone="attention"] .badge {
+  border-color: var(--status-waiting-line);
+  background: var(--status-waiting-soft);
+  color: var(--status-waiting-text);
+}
+.node[data-tone="attention"] .phase {
+  color: var(--status-waiting-text);
+}
+
+.node[data-tone="failed"] {
+  border-color: var(--status-failed-line);
+  box-shadow: var(--glow-failed);
+}
+.node[data-tone="failed"] .badge,
+.node[data-tone="blocked"] .badge {
+  border-color: var(--status-failed-line);
+  background: var(--status-failed-soft);
+  color: var(--status-failed-text);
+}
+.node[data-tone="failed"] .phase,
+.node[data-tone="blocked"] .phase {
+  color: var(--status-failed-text);
+}
+.node[data-tone="blocked"] {
+  border-style: dashed;
+  border-color: var(--status-failed-line);
+}
+
+.node[data-tone="passed"] {
+  border-color: var(--status-working-line);
+}
+.node[data-tone="passed"] .badge {
+  border-color: var(--status-working-line);
+  background: var(--status-working-soft);
+  color: var(--status-working-text);
+}
+.node[data-tone="passed"] .phase {
+  color: var(--status-working-text);
+}
+
+.node[data-tone="muted"] {
+  border-style: dashed;
+  background: var(--color-surface-1);
+  box-shadow: none;
+}
+.node[data-tone="muted"] .name,
+.node[data-tone="muted"] .route {
+  color: var(--color-text-muted);
+}
+.node[data-tone="muted"] .badge {
+  background: var(--status-muted-soft);
+}
+.node[data-tone="muted"] .phase {
+  color: var(--status-muted-text);
+}
+
+/* Selected (its details show below the rail): a thin accent ring that never competes with state. */
+.node[data-selected] {
+  border-color: var(--node-edge, var(--color-border-lit));
+  background: var(--panel-sheen), var(--color-surface-3);
+  box-shadow:
+    0 0 0 1px var(--node-edge, var(--color-border-lit)),
+    var(--lift-active);
+}
+
+.node[data-tone="active"] {
+  --node-edge: var(--color-accent);
+}
+.node[data-tone="attention"],
+.node[data-tone="waiting"] {
+  --node-edge: var(--status-waiting-line);
+}
+.node[data-tone="failed"],
+.node[data-tone="blocked"] {
+  --node-edge: var(--status-failed-line);
+}
+.node[data-tone="passed"] {
+  --node-edge: var(--status-working-line);
+}
+.node[data-tone="muted"] {
+  --node-edge: var(--color-border-strong);
+}
+.node[data-selected]:focus-visible {
+  box-shadow: var(--shadow-focus);
+}
+
+/*
+ * The running step's energy trace: an inert element (not ::before, see PaneCanvas.module.css) that
+ * sweeps the edge once and ends transparent; the static lit edge above remains. Reduced motion
+ * (--dur-trace: 0ms) skips it.
+ */
+.trace {
+  position: absolute;
+  inset: -1px;
+  padding: 1.5px;
+  border-radius: var(--radius-lg);
+  background: conic-gradient(
+    from var(--chain-trace-angle),
+    transparent 0deg,
+    var(--trace-color) 60deg,
+    var(--color-accent-icy) 74deg,
+    transparent 110deg,
+    transparent 360deg
+  );
+  opacity: 0;
+  pointer-events: none;
+  mask:
+    linear-gradient(rgb(0 0 0) 0 0) content-box exclude,
+    linear-gradient(rgb(0 0 0) 0 0);
+  animation: chain-energy var(--dur-trace) var(--ease-out) both;
+}
+
+.rail[data-variant="compact"] .trace {
+  border-radius: var(--radius-md);
+}
+
+@keyframes chain-energy {
+  0% {
+    --chain-trace-angle: -40deg;
+    opacity: 1;
+  }
+  75% {
+    opacity: 1;
+  }
+  100% {
+    --chain-trace-angle: 320deg;
+    opacity: 0;
+  }
+}
+
+/* ---------------- Next action ---------------- */
+
+.next {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+}
+
+.nextLabel {
+  flex: none;
+  color: var(--color-accent-text);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.nextText {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion="full"]) .trace,
+  :root:not([data-motion="full"]) .connectorIn {
+    animation: none;
+  }
+}
+
+:global([data-motion="reduced"]) .trace,
+:global([data-motion="reduced"]) .connectorIn {
+  animation: none;
+}
+
+@media (forced-colors: active) {
+  .node {
+    border: 1px solid CanvasText;
+  }
+  .node[data-selected] {
+    outline: 2px solid Highlight;
+  }
+  .trace {
+    display: none;
+  }
+}

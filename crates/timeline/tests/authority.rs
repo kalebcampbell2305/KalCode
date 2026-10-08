@@ -18,12 +18,14 @@ const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 const OTHER_DIGEST: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
 struct Harness {
-    _temp: tempfile::TempDir,
     core: Arc<Core>,
     store: TimelineStore,
     workspace_id: String,
     checkpoint_id: String,
     safety_checkpoint_id: String,
+    // Last: fields drop in declaration order, so Core closes kalcode.lock and the db first.
+    // Dropped earlier, the TempDir silently survives on Windows.
+    _temp: tempfile::TempDir,
 }
 
 fn config(path: &Path) -> CoreConfig {

@@ -1,0 +1,30 @@
+{
+  "$comment": "Disk hygiene policy for KalCode build machines. See tooling/disk-hygiene.mjs.",
+  "warnGb": 150,
+  "criticalGb": 25,
+  "idleHours": 24,
+  "mainIdleHours": 48,
+  "incrementalDays": 7,
+  "tempDays": 2,
+  "protect": [
+    "kc-release-*-notes-*",
+    "kc-release-unified-*",
+    "kc-release-smart-*",
+    "kc-release-cursor-*",
+    "kc-code-primary",
+    "kc-proof-*",
+    "kc-website-policy-*",
+    "kc-handoff",
+    "kc-gate-records",
+    "kc-gate-rust-targets",
+    "kc-runner",
+    "kc-gates-pc2"
+  ],
+  "retain": [
+    {
+      "$comment": "Release seeds: the kit copies the newest; older ones are SAFE once idle and unreferenced.",
+      "match": "kc-release-code-primary-*",
+      "keepNewest": 4
+    }
+  ]
+}

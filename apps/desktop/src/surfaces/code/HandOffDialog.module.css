@@ -132,6 +132,30 @@
   font-weight: var(--weight-semibold);
 }
 
+/* ---------------- Modes: one agent or a chain ---------------- */
+
+.modes {
+  align-self: flex-start;
+  margin-bottom: var(--space-4);
+}
+
+.modes svg {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.modeBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.modeBody:focus-visible {
+  border-radius: var(--radius-lg);
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
 /* ---------------- Sections ---------------- */
 
 .compose,

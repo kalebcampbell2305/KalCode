@@ -193,7 +193,7 @@ fn plan_limits_follow_the_verified_plan() {
     let free = active(AccountTier::Free);
     assert_eq!(free.terminal_limit().map(|limit| limit.max), None);
     assert_eq!(max(&free, Limited::ParallelAgents), None);
-    assert_eq!(max(&free, Limited::Workspaces), Some(2));
+    assert_eq!(max(&free, Limited::Workspaces), None);
     assert_eq!(max(&free, Limited::ProviderAccounts), Some(2));
     assert_eq!(max(&free, Limited::QueuedTasks), Some(3));
     let pro = active(AccountTier::Pro);

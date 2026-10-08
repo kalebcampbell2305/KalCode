@@ -144,7 +144,8 @@ export function hasFeature(entitlement: TierGrants, feature: EntitlementFeatureI
  * A limit a restricted document does not mention is `0` (fail closed).
  */
 export function limitFor(entitlement: TierGrants, limit: LimitId | (string & {})): number | null {
-  if (entitlement.unrestricted || limit === "openTerminals" || limit === "parallelAgents") {
+  // Local sessions and workspaces are unlimited on every plan, including old signed grants.
+  if (entitlement.unrestricted || limit === "openTerminals" || limit === "parallelAgents" || limit === "workspaces") {
     return null;
   }
   if (!Object.hasOwn(entitlement.limits, limit)) {

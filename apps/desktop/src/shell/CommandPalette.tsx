@@ -24,6 +24,7 @@ import {
   KeyRound,
   LayoutGrid,
   LayoutTemplate,
+  Link2,
   ListChecks,
   Maximize2,
   MessageSquare,
@@ -55,6 +56,7 @@ import { useOptionalRecipeLibrary, useOptionalRecipeRequest } from "../runtime/r
 import { requestRecipeCapture } from "../runtime/recipes/useRecipeCapture.ts";
 import { useOptionalUiIntents } from "../runtime/uiIntents.tsx";
 import { useWorkspaces } from "../runtime/WorkspaceProvider.tsx";
+import { requestChainComposer } from "../surfaces/chains/composerIntent.ts";
 import { useKalTidy } from "../surfaces/code/kaltidy/kalTidyContext.ts";
 import { CODE_SHORTCUT_LABELS } from "../surfaces/code/shortcuts.ts";
 import { useLaunchAgent, useStartAgents } from "../surfaces/code/useLaunchAgent.ts";
@@ -464,6 +466,25 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
               keywords={["agent", "launch", "provider", "account", "model", "effort", "count", "several", "options"]}
             >
               New agent with options…
+            </Item>
+            <Item
+              icon={<Link2 />}
+              onSelect={run(() => {
+                navigate("dashboard");
+                requestChainComposer();
+              })}
+              commandId="agent:new-chain"
+              keywords={[
+                "chain",
+                "handoff",
+                "hand off",
+                "pipeline",
+                "implement review fix test",
+                "review fix",
+                "steps",
+              ]}
+            >
+              New handoff chain
             </Item>
             {uiIntents ? <AttentionCommands run={run} /> : null}
           </Command.Group>

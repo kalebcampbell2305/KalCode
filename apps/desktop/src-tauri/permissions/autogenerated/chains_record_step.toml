@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-chains-record-step"
+description = "Enables the chains_record_step command without any pre-configured scope."
+commands.allow = ["chains_record_step"]
+
+[[permission]]
+identifier = "deny-chains-record-step"
+description = "Denies the chains_record_step command without any pre-configured scope."
+commands.deny = ["chains_record_step"]

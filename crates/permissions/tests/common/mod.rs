@@ -68,7 +68,6 @@ impl Clock for TestClock {
 }
 
 pub struct Harness {
-    pub dir: tempfile::TempDir,
     pub core: Arc<Core>,
     pub service: Arc<PermissionService>,
     pub threads: Arc<FakeThreads>,
@@ -78,6 +77,9 @@ pub struct Harness {
     pub workspace_id: String,
     pub thread_id: String,
     pub root: PathBuf,
+    // Last: fields drop in declaration order, so Core closes kalcode.lock and the db first.
+    // Dropped earlier, the TempDir silently survives on Windows.
+    pub dir: tempfile::TempDir,
 }
 
 pub fn thread_summary(id: &str, workspace_id: &str, mode: PermissionMode) -> ThreadSummary {

@@ -3,6 +3,7 @@
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
+import { guardHeavyWork } from "../../../tooling/disk-hygiene.mjs";
 import { lowerLocalPriority } from "../../../tooling/local-priority.mjs";
 
 export function laneArguments(args) {
@@ -15,6 +16,7 @@ export function laneArguments(args) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   // A build yields to the gate; `tauri dev` is the owner's interactive app.
   if (process.argv[2] === "build") lowerLocalPriority();
+  guardHeavyWork(`tauri ${process.argv[2] ?? ""}`.trim());
   const require = createRequire(import.meta.url);
   const result = spawnSync(
     process.execPath,

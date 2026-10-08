@@ -2731,6 +2731,32 @@ fn auto_order(conn: &Connection) -> Result<()> {
 
 /// Re-evaluates durable failure propagation. Held tasks keep their held presentation until the
 /// owner resumes them, at which point the failed dependency becomes explicit.
+/// Re-derives dependency blockers, queue order and the revision after a relation (for example
+/// an Agent Handoff Chain) rewires pending dependencies inside its own transaction.
+pub(crate) fn refresh_pending(conn: &Connection) -> Result<()> {
+    refresh_blocked(conn)?;
+    auto_order(conn)?;
+    bump_revision(conn)
+}
+
+/// Replaces a pending task's dependencies. Execution identity and consent are untouched; the
+/// caller re-authorizes the task through the canonical path afterwards.
+pub(crate) fn replace_pending_dependencies(
+    conn: &Connection,
+    id: &str,
+    dependencies: &[String],
+    moment: &str,
+) -> Result<()> {
+    if !is_pending(operation_status(conn, id)?) {
+        return Ok(());
+    }
+    conn.execute(
+        "UPDATE operations SET dependencies = ?2 WHERE id = ?1",
+        params![id, serde_json::to_string(dependencies)?],
+    )?;
+    append_moment(conn, id, "updated", moment)
+}
+
 fn refresh_blocked(conn: &Connection) -> Result<bool> {
     let mut changed_any = false;
     loop {

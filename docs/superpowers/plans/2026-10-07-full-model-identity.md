@@ -36,8 +36,8 @@ The complete thread runtime file passes 75 tests after updating two assertions t
 
 ## Integration follow-up
 
-Integration with Launch Recipes preserves its migration 0027 and moves runtime
-identity to 0028. The combined migration proves backup, reopen, recovery and
+Integration with Launch Recipes (0027) and Agent Handoff Chains (0028) preserves their
+migrations and moves runtime identity to 0029. The combined migration proves backup, reopen, recovery and
 contiguous registration. Recipes resolves implicit accounts in its target project
 and uses the shared discovered effort metadata. A review regression distinguishes
 missing effort metadata from explicit empty support in Code, Operations, Squads
@@ -57,4 +57,4 @@ discovery for that unavailable selection, and requires an explicit replacement
 
 ## Rollback
 
-Use a forward corrective release through the shared train, retaining migration 0028 and its schema registration. An older schema reader cannot open an upgraded profile. Preserve subsequent work; never reset shared main or rewrite another worker's history. The pre-change source reference is `rollback/full-model-identity-20261007`; it is not a database downgrade instruction. See `docs/providers/full-model-identity.md` for the rollback and recovery contract.
+Use a forward corrective release through the shared train, retaining migration 0029 and its schema registration. An older schema reader cannot open an upgraded profile. Preserve subsequent work; never reset shared main or rewrite another worker's history. The pre-change source reference is `rollback/full-model-identity-20261007`; it is not a database downgrade instruction. See `docs/providers/full-model-identity.md` for the rollback and recovery contract.

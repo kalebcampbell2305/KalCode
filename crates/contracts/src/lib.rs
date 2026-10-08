@@ -15,6 +15,7 @@
 pub mod agent;
 pub mod agent_state;
 pub mod app;
+pub mod chains;
 pub mod context;
 pub mod events;
 pub mod git;

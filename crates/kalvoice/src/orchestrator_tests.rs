@@ -489,10 +489,12 @@ impl LocalInterpreter for BlockingLocalInterpreter {
 }
 
 struct Harness {
-    _dir: tempfile::TempDir,
     core: Arc<Core>,
     executor: Arc<FakeExecutor>,
     orchestrator: Orchestrator,
+    // Last: fields drop in declaration order, so Core closes kalcode.lock and the db first.
+    // Dropped earlier, the TempDir silently survives on Windows.
+    _dir: tempfile::TempDir,
 }
 
 fn harness_with(

@@ -48,6 +48,7 @@ import type {
 } from "@kalcode/protocol";
 import { PRODUCT_FEATURES } from "@kalcode/protocol";
 import { type AccountMemoryScenario, createAccountMemory } from "./accountMemory.ts";
+import { type ChainsControls, createChainsMemory } from "./memory/chains.ts";
 import { createContextMemory } from "./memory/context.ts";
 import {
   createDashboardFixtures,
@@ -243,6 +244,8 @@ export interface MemoryTransport extends Transport {
   operations: OperationsControls;
   /** Test hooks for KalVoice (what the fake recognizer hears next). */
   kalvoice: { setTranscript(text: string): void };
+  /** Test hooks for Handoff Chains (settle a step, supersede, pause the demo timer). */
+  chains: ChainsControls;
 }
 
 export function createMemoryTransport(
@@ -604,6 +607,37 @@ export function createMemoryTransport(
       }
     },
   });
+  // Handoff Chains: each step is a real fake coding agent bound to its Operation, like Squads.
+  // Steps advance on a timer unless a test turns that off (`?chains=manual` or the hook).
+  const chains = createChainsMemory({
+    requireCore,
+    operations: operations.agents,
+    autoAdvanceMs:
+      typeof window !== "undefined" && new URLSearchParams(window.location.search).get("chains") === "manual"
+        ? null
+        : 1500,
+    createPane: async (step, workspaceId, isolate) =>
+      (await panes.handlers.provider_pane_create({
+        providerId: step.providerId,
+        providerAccountId: step.providerAccountId,
+        workspaceId,
+        model: step.providerId === "codex" ? null : step.model,
+        effort: step.effort,
+        permissionMode: "bypass",
+        isolate,
+        name: step.name,
+      })) as ThreadSummary,
+    sendTask: async (threadId, task) => {
+      await panes.handlers.provider_pane_write({
+        threadId,
+        data: `${task}
+`,
+      });
+    },
+    setPaneStatus: (threadId, status, activity) => {
+      threads.setPaneStatus(threadId, status, activity, 0);
+    },
+  });
   answer = (view) => {
     threads.resolveApproval(view.id, view.status === "approved");
     panes.resolveApproval(view);
@@ -619,6 +653,7 @@ export function createMemoryTransport(
     ...handoffs,
     ...squads.handlers,
     ...recipes.handlers,
+    ...chains.handlers,
     ...rail.handlers,
     ...layouts.handlers,
     ...notificationsMemory.handlers,
@@ -933,6 +968,7 @@ export function createMemoryTransport(
     layouts: layouts.controls,
     operations: operations.controls,
     kalvoice: kalvoice.controls,
+    chains: chains.controls,
   };
   // UI tests drive the fake folder picker and filesystem, live Dashboard changes and agents
   // asking for approval through this hook (ui-test builds only).
@@ -946,6 +982,9 @@ export function createMemoryTransport(
       layouts: transport.layouts,
       operations: transport.operations,
       kalvoice: transport.kalvoice,
+      chainsAdvance: transport.chains.advance,
+      chainsSupersede: transport.chains.supersede,
+      chainsAutoAdvance: transport.chains.setAutoAdvance,
       // Z7-W3: records an event as the runtime would (e.g. `provider.disconnected`), so tests can
       // drive notifications from any event the native runtime emits.
       simulate: (event: EventPayload, options: EmitOptions = {}) => emit(event, options),

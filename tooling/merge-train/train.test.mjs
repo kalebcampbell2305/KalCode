@@ -7,7 +7,9 @@ import { after, describe, test } from "node:test";
 
 import {
   createGitHubProvider,
+  GATE_POOL_LABEL,
   gateStateFrom,
+  isPoolJob,
   isQueuedPrGateRun,
   MAIN_PC_GATE_RUNNER,
   NATIVE_GATE_JOB,
@@ -981,6 +983,75 @@ describe("merge train pieces", () => {
     );
   });
 
+  test("elastic pool jobs on any named runner of either PC are landing evidence; unnamed runners are not", () => {
+    const sha = "a".repeat(40);
+    const branch = "merge-train/aaaaaaaaaaaa-12345678";
+    const run = { id: 1, head_sha: sha, head_branch: branch, event: "push", path: ".github/workflows/gate.yml" };
+    assert.equal(GATE_POOL_LABEL, "kalcode-gate-pool");
+    const job = (name, runner_name, extra = {}) => ({
+      name,
+      runner_name,
+      status: "completed",
+      conclusion: "success",
+      head_sha: sha,
+      labels: ["self-hosted", "Windows", "X64", GATE_POOL_LABEL],
+      steps: [{ name: "Gate", status: "completed", conclusion: "success" }],
+      ...extra,
+    });
+    const state = (...jobs) => gateStateFrom([run], jobs, sha, branch).state;
+    // Every other part of a gate is judged beside a good "Gate (Windows)" job, which alone would be green.
+    const anchor = job("Gate (Windows)", "kalcode-win-gate-2");
+    const part = (name, runner) =>
+      name === "Gate (Windows)" ? state(job(name, runner)) : state(anchor, job(name, runner));
+    const trusted = [
+      "kalcode-win-gate",
+      "kalcode-win-gate-w1",
+      "kalcode-win-gate-w2",
+      "kalcode-win-gate-w5",
+      "kalcode-win-gate-2",
+      "kalcode-win-gate-2b",
+      "kalcode-win-gate-2c",
+      "kalcode-win-gate-2d",
+    ];
+    for (const runner of trusted) {
+      assert.ok(isPoolJob(job("Gate (Windows)", runner), sha), `${runner} is a pool host`);
+      for (const name of ["Gate (Windows)", NATIVE_GATE_JOB, PC2_GATE_JOB])
+        assert.equal(part(name, runner), "success", `${name} on ${runner}`);
+    }
+    // Any mix of the two machines across the three jobs is green.
+    assert.equal(
+      state(
+        job("Gate (Windows)", "kalcode-win-gate-2c"),
+        job(NATIVE_GATE_JOB, "kalcode-win-gate-w2"),
+        job(PC2_GATE_JOB, "kalcode-win-gate-w2"),
+      ),
+      "success",
+      "the JS/web job is trusted on a build-PC worker carrying the pool label",
+    );
+    // The pool label alone is never identity: the runner must be a registered gate runner.
+    for (const runner of ["kalcode-win-gate-2e", "kalcode-win-gate-w0", "kalcode-win-gate-w6", "random-runner", ""]) {
+      assert.equal(isPoolJob(job("Gate (Windows)", runner), sha), false, `${runner || "(none)"} is not a pool host`);
+      for (const name of ["Gate (Windows)", NATIVE_GATE_JOB, PC2_GATE_JOB])
+        assert.equal(part(name, runner), "stale", `${name} on ${runner || "(none)"} is not evidence`);
+    }
+    // Name and label are both required, on the exact commit, with the self-hosted Windows labels.
+    const pool2 = (extra) => isPoolJob(job("Gate (Windows)", "kalcode-win-gate-2", extra), sha);
+    assert.equal(pool2({ labels: ["self-hosted", "Windows"] }), false);
+    assert.equal(pool2({ labels: ["self-hosted", GATE_POOL_LABEL] }), false);
+    assert.equal(pool2({ labels: ["Windows", GATE_POOL_LABEL] }), false);
+    assert.equal(pool2({ head_sha: "b".repeat(40) }), false);
+    assert.equal(isPoolJob({ runner_name: "kalcode-win-gate-2", head_sha: sha }, sha), false, "no labels");
+    // A pool job still needs its own executed, passing Gate step.
+    const skipped = [{ name: "Gate", status: "completed", conclusion: "skipped" }];
+    assert.equal(state(job("Gate (Windows)", "kalcode-win-gate-w2", { steps: skipped })), "stale");
+    assert.equal(state(job("Gate (Windows)", "kalcode-win-gate-w2", { conclusion: "failure" })), "failure");
+    assert.equal(
+      state(job("Gate (Windows)", "kalcode-win-gate-w2"), job(PC2_GATE_JOB, "kalcode-win-gate-2e")),
+      "stale",
+      "an unnamed runner on the JS/web job refuses the whole candidate",
+    );
+  });
+
   test("the canonical registry includes exactly the original worker and five additional slots", () => {
     for (const name of ["kalcode-win-gate", ...[1, 2, 3, 4, 5].map((slot) => `kalcode-win-gate-w${slot}`)])
       assert.ok(MAIN_PC_GATE_RUNNER.test(name), name);
@@ -1096,17 +1167,18 @@ describe("merge train pieces", () => {
       workflow,
       /if: github\.event_name != 'pull_request' \|\| github\.event\.pull_request\.head\.repo\.full_name == github\.repository/,
     );
-    // Owner, 2026-10-07: every Windows gate job runs on the second PC's gate runners.
+    // Owner, 2026-10-08: every Windows gate job requests the elastic gate pool, never one machine's label.
     assert.doesNotMatch(workflow, /kalcode-main-pc\]/);
+    assert.doesNotMatch(workflow, /runs-on: \[self-hosted, Windows, kalcode-gate-pc2\]/);
     assert.match(workflow, /name: Plan change-based gate/);
-    assert.match(workflow, /Unknown second-PC gate worker/);
+    assert.match(workflow, /gate-host\.ps1/);
     assert.match(
       workflow,
       /--base \$env:KALCODE_GATE_BASE --only \$env:KALCODE_GATE_ONLY --jobs \$env:KALCODE_GATE_JOBS --keep-going/,
     );
-    // The split: the second PC's half gates the same exact candidate and recorded base.
+    // The split: the JS/web job (its name is historical) gates the same exact candidate and recorded base.
     assert.match(workflow, /name: Gate \(Windows, PC2\)/);
-    assert.match(workflow, /runs-on: \[self-hosted, Windows, kalcode-gate-pc2\]\n/);
+    assert.equal(workflow.match(/runs-on: \[self-hosted, Windows, kalcode-gate-pool\]\n/g)?.length, 2);
     // The Windows gate runs as two matrix jobs (main, native), each gating its half of the split.
     assert.match(workflow, /half: \[main, native\]/);
     assert.match(workflow, /gate-split\.mjs \$env:GATE_HALF/);
@@ -1144,19 +1216,21 @@ test("PR-specific landing is refused even with a valid queued PR", async () => {
 });
 test("bootstrap refuses pushing a candidate with no usable main-PC push workflow", async () => {
   const workflow = readFileSync(new URL("../../.github/workflows/gate.yml", import.meta.url), "utf8");
+  const POOL_RUNS_ON = "runs-on: [self-hosted, Windows, kalcode-gate-pool]";
   assert.doesNotThrow(() => assertCandidateWorkflow(workflow));
+  // A candidate gated before the pool (the second PC's label on both jobs) is still accepted.
+  assert.doesNotThrow(() =>
+    assertCandidateWorkflow(workflow.replaceAll(POOL_RUNS_ON, "runs-on: [self-hosted, Windows, kalcode-gate-pc2]")),
+  );
   for (const invalid of [
     "",
     workflow.replace('"merge-train/**"', '"unrelated/**"'),
-    // The two-job Windows gate on an unknown runner label, then the PC2 job.
-    workflow.replace(
-      "runs-on: [self-hosted, Windows, kalcode-gate-pc2]",
-      "runs-on: [self-hosted, Windows, kalcode-gate-2]",
-    ),
+    // The two-job Windows gate on an unknown runner label, then the JS/web job.
+    workflow.replace(POOL_RUNS_ON, "runs-on: [self-hosted, Windows, kalcode-gate-2]"),
     workflow.replace("trailers:key=Merge-Train-Base,valueonly", "wrong-base"),
     (() => {
-      const at = workflow.lastIndexOf("runs-on: [self-hosted, Windows, kalcode-gate-pc2]");
-      return `${workflow.slice(0, at)}runs-on: [self-hosted, Windows, kalcode-gate-2]${workflow.slice(at + 49)}`;
+      const at = workflow.lastIndexOf(POOL_RUNS_ON);
+      return `${workflow.slice(0, at)}runs-on: [self-hosted, Windows, kalcode-gate-2]${workflow.slice(at + POOL_RUNS_ON.length)}`;
     })(),
   ]) {
     const env = setup();

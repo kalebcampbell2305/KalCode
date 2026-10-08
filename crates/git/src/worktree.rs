@@ -605,6 +605,32 @@ pub fn head_commit(git: &Git, repo: &Repo) -> Result<Option<String>> {
     resolve_commit(git, repo, "HEAD")
 }
 
+/// Whether `branch` has commits of its own beyond `base_commit` and every one of them is already
+/// in the main folder's HEAD: its work landed through newer merged work. A branch with no commits
+/// of its own never counts, so a freshly created branch is never reported as landed. Read-only.
+pub fn branch_landed(git: &Git, repo: &Repo, branch: &str, base_commit: &str) -> Result<bool> {
+    let Some(tip) = resolve_commit(git, repo, &format!("refs/heads/{branch}"))? else {
+        return Ok(false);
+    };
+    if tip == base_commit {
+        return Ok(false);
+    }
+    let Some(head) = head_commit(git, repo)? else {
+        return Ok(false);
+    };
+    if head == tip {
+        return Ok(true);
+    }
+    let out = repo
+        .cmd(git)
+        .args(["merge-base", "--is-ancestor", "--end-of-options"])
+        .arg(&tip)
+        .arg(&head)
+        .read_only()
+        .run()?;
+    Ok(out.status.success())
+}
+
 /// Removes what a failed `git worktree add` left: the new folder (KalCode's own, under its data
 /// folder, holding nothing of the user's) and its registration.
 fn undo_partial_add(git: &Git, repo: &Repo, path: &Path) {

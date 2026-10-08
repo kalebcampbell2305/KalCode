@@ -63,8 +63,8 @@ describe("plans", () => {
       plan.limits.providerAccounts,
     ]);
     expect(table).toEqual([
-      ["free", 25, null, null, 2, 2],
-      ["pro", 150, null, null, 10, 6],
+      ["free", 25, null, null, null, 2],
+      ["pro", 150, null, null, null, 6],
       ["max", 500, null, null, null, 12],
       ["max2x", 1000, null, null, null, null],
     ]);
@@ -124,7 +124,7 @@ describe("plans", () => {
     expect(CORE_LIMITS.map((limit) => formatCoreLimit(getPlan("free").limits, limit))).toEqual([
       "Unlimited local agents",
       "Unlimited local terminals",
-      "2 workspaces",
+      "Unlimited workspaces",
       "2 accounts",
       "25 KalVoice",
     ]);

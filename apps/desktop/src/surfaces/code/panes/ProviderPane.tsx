@@ -27,6 +27,7 @@ import {
 import { type KeyboardEvent, memo, type RefObject, useEffect, useId, useRef, useState } from "react";
 import { toKalCodeError } from "../../../ipc/errors.ts";
 import { useRuntime } from "../../../runtime/RuntimeProvider.tsx";
+import { ChainPaneChip } from "../../chains/ChainPaneChip.tsx";
 import { AgentOutcome } from "../../dashboard/outcome/AgentOutcome.tsx";
 import { ApprovalPrompt } from "../../permissions/ApprovalPrompt.tsx";
 import { MODE_LABELS } from "../../permissions/labels.ts";
@@ -663,6 +664,7 @@ function PaneHeader({
           </span>
           <PaneToolChip status={thread.status} activity={thread.currentActivity} />
           <PaneStatusChip thread={thread} qualifier={waitingReason(thread)} />
+          <ChainPaneChip threadId={thread.id} />
           {onHandOff ? (
             <Button
               size="sm"

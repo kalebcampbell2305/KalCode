@@ -54,18 +54,18 @@ expired states instead of presenting unverified accounts as healthy.
 
 ## Compatibility and rollback
 
-Migration 0028 adds nullable runtime identity columns. Existing launch columns and
+Migration 0029 adds nullable runtime identity columns. Existing launch columns and
 legacy preference storage remain readable. New protocol fields are additive and
 optional. Tests and release update proof use isolated databases and profiles.
 
 Rollback is a forward corrective release through the shared merge train. Preserve
-migration 0028 and its schema registration when reverting behavior: do not ship an
+migration 0029 and its schema registration when reverting behavior: do not ship an
 older schema reader against a database that has already advanced, remove user data,
 or reset shared main. Keep subsequent commits and signed update ordering intact.
 An older binary fails closed with `schema_too_new`; the updater rollback floor must
-prevent installing it over schema 28. A pre-migration backup is for explicit disaster
+prevent installing it over schema 29. A pre-migration backup is for explicit disaster
 recovery, with acknowledged loss of later local changes, and must be reopened with a
-schema-28-or-newer build. Never edit migration checksums or overwrite the active profile
+schema-29-or-newer build. Never edit migration checksums or overwrite the active profile
 as routine rollback.
 
 ## Validation scope

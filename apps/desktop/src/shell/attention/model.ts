@@ -6,7 +6,14 @@
  * provider sign-outs); the inbox keeps no copy of its own. Ordinary progress (an agent working, a
  * turn finishing without changes or a queued dependency wait) never lands here.
  */
-import { agentStateOf, type Notification, type OperationRecord, type ThreadSummary } from "@kalcode/protocol";
+import {
+  agentStateOf,
+  type Chain,
+  type ChainStep,
+  type Notification,
+  type OperationRecord,
+  type ThreadSummary,
+} from "@kalcode/protocol";
 
 export type AttentionKind = "question" | "approval" | "blocked" | "failed" | "auth" | "stalled" | "review";
 
@@ -23,6 +30,7 @@ export type AttentionAction =
       tab: "runs" | "queue";
     }
   | { id: "open-operations"; label: string }
+  | { id: "open-chain"; label: string; chainId: string }
   | { id: "retry-agents"; label: string }
   | { id: "retry-ownership"; label: string }
   | { id: "open-approvals"; label: string }
@@ -81,6 +89,13 @@ export interface AttentionInput {
   notifications: readonly Notification[];
   /** Canonical Operations records. Squad members reference these records; this is not a copy. */
   operations?: readonly AttentionOperation[];
+  /**
+   * Handoff chains (the canonical chains store). A step that finished without a report, or failed,
+   * is one item for the person and replaces the generic item for that step's agent.
+   */
+  chains?: readonly Chain[];
+  /** The chains store's own Operations, preferred over `operations` to find a step's agent. */
+  chainOperations?: ReadonlyMap<string, AttentionOperation>;
   /** The latest Operations read failed. Last-good records may still be supplied above. */
   operationsFailed?: boolean;
   /** The shared coding-agent read failed (last-known agents, when any, remain above). */
@@ -210,6 +225,101 @@ function operationItem(operation: AttentionOperation, now: number): Omit<Attenti
   };
 }
 
+function chainSource(chain: Chain): string {
+  return `Chain · ${chain.name}`;
+}
+
+/**
+ * The step's agent id: its Operation's provider thread (the Operation id natively), or null when
+ * the step never started an agent, so no action ever points at a pane that does not exist.
+ */
+function chainAgentId(step: ChainStep, operations: ReadonlyMap<string, AttentionOperation>): string | null {
+  return operations.get(step.operationId)?.threadId ?? null;
+}
+
+/**
+ * A chain step that needs the person: finished without a report, or failed. A step that only
+ * waits for its predecessor (or is blocked by it) is expected workflow and never an item; the
+ * failed predecessor is the actionable one. Cancelled chains need nothing.
+ */
+function chainStepItem(
+  chain: Chain,
+  step: ChainStep,
+  operations: ReadonlyMap<string, AttentionOperation>,
+  workspaceName: string | null,
+): Omit<AttentionItem, "rank"> | null {
+  if (chain.cancelled) return null;
+  const agentId = chainAgentId(step, operations);
+  const operation = operations.get(step.operationId);
+  const base = {
+    source: chainSource(chain),
+    workspaceName,
+    at: operation?.endedAt ?? operation?.startedAt ?? chain.createdAt,
+    agentId,
+  };
+  const openStep: AttentionAction[] = agentId
+    ? [{ id: "open-agent", label: "Open agent", agentId, workspaceId: chain.workspaceId }]
+    : [];
+  if (step.phase === "needs_report") {
+    return {
+      ...base,
+      key: `chain:report:${chain.id}:${step.key}:${step.attempt}`,
+      kind: "question",
+      what: `${chain.name}: ${step.name} finished without a report`,
+      why: "KalCode can't tell whether this step passed. Open the agent to check, then record the outcome.",
+      actions: [...openStep, { id: "open-chain", label: "Record outcome", chainId: chain.id }],
+      dismissible: false,
+    };
+  }
+  if (step.phase === "failed" || step.phase === "cancelled") {
+    const reason = step.report?.summary.trim() || step.report?.blockers[0]?.trim() || step.waitingReason?.trim();
+    const verb = step.phase === "failed" ? "failed" : "was cancelled";
+    return {
+      ...base,
+      key: `chain:failed:${chain.id}:${step.key}:${step.attempt}`,
+      kind: "failed",
+      what: `${chain.name}: ${step.name} ${verb}`,
+      why: reason
+        ? `${reason} Later steps are waiting; retry or skip it.`
+        : `The step ${verb}, so the steps after it can't run. Retry or skip it.`,
+      actions: [...openStep, { id: "open-chain", label: "Open chain", chainId: chain.id }],
+      dismissible: true,
+    };
+  }
+  // Held for its own reason (for example a signed-out account), not by an earlier step.
+  if (step.phase === "blocked" && step.waitingReason && !step.waitingReason.startsWith("Blocked until")) {
+    return {
+      ...base,
+      key: `chain:held:${chain.id}:${step.key}:${step.attempt}`,
+      kind: "blocked",
+      what: `${chain.name}: ${step.name} can't start`,
+      why: `${step.waitingReason} Reconnect the account, or move this step to another agent.`,
+      actions: [{ id: "open-chain", label: "Change agent", chainId: chain.id }],
+      dismissible: false,
+    };
+  }
+  return null;
+}
+
+function chainSupersededItem(chain: Chain): Omit<AttentionItem, "rank"> | null {
+  if (chain.cancelled || chain.supersededReason === null) return null;
+  return {
+    key: `chain:superseded:${chain.id}`,
+    kind: "blocked",
+    source: chainSource(chain),
+    workspaceName: null,
+    what: `${chain.name} was replaced by newer work`,
+    why: `${chain.supersededReason} Its remaining steps did not run.`,
+    actions: [
+      { id: "open-chain", label: "Open chain", chainId: chain.id },
+      { id: "dismiss", label: "Dismiss" },
+    ],
+    at: chain.createdAt,
+    agentId: null,
+    dismissible: true,
+  };
+}
+
 function overlapItem(
   overlap: AttentionOverlap,
   agents: ReadonlyMap<string, ThreadSummary>,
@@ -327,6 +437,8 @@ export function attentionItems({
   approvals,
   notifications,
   operations = [],
+  chains = [],
+  chainOperations,
   operationsFailed = false,
   agentReadFailed = false,
   overlaps = [],
@@ -339,12 +451,33 @@ export function attentionItems({
   const agentIds = new Set<string>();
   const agentsById = new Map<string, ThreadSummary>();
   const representedAgentIds = new Set<string>();
+  const operationsById = new Map<string, AttentionOperation>(
+    operations.map((operation) => [operation.id, operation] as const),
+  );
+  for (const [id, operation] of chainOperations ?? []) operationsById.set(id, operation);
+  // A chain step that needs you replaces the generic item for its agent (one item, not two).
+  // Approvals stay separate: a permission prompt is a different decision.
+  const chainOwned = new Set<string>();
+  for (const chain of chains) {
+    const workspaceName = operationsById.get(chain.steps[0]?.operationId ?? "")?.workspaceName || null;
+    for (const step of chain.steps) {
+      const item = chainStepItem(chain, step, operationsById, workspaceName);
+      if (!item) continue;
+      if (item.agentId) chainOwned.add(item.agentId);
+      chainOwned.add(step.operationId);
+      if (!(item.dismissible && dismissed.has(item.key))) items.push({ ...item, rank: RANK[item.kind] });
+    }
+    const superseded = chainSupersededItem(chain);
+    if (superseded && !dismissed.has(superseded.key)) items.push({ ...superseded, rank: RANK[superseded.kind] });
+  }
   for (const agent of agents) {
     if (agent.archivedAt !== null) continue;
     agentIds.add(agent.id);
     agentsById.set(agent.id, agent);
     const item = agentItem(agent, now);
-    if (item) {
+    if (item && chainOwned.has(agent.id) && item.kind !== "approval") {
+      representedAgentIds.add(agent.id);
+    } else if (item) {
       representedAgentIds.add(agent.id);
       if (!(item.dismissible && dismissed.has(item.key))) items.push({ ...item, rank: RANK[item.kind] });
     }
@@ -352,6 +485,8 @@ export function attentionItems({
   for (const operation of operations) {
     // A real coding-agent session already represented above remains one Needs You item.
     if (operation.threadId && representedAgentIds.has(operation.threadId)) continue;
+    // A chain step already has its own item above.
+    if (chainOwned.has(operation.id) || (operation.threadId && chainOwned.has(operation.threadId))) continue;
     const item = operationItem(operation, now);
     if (item && !(item.dismissible && dismissed.has(item.key))) items.push({ ...item, rank: RANK[item.kind] });
   }

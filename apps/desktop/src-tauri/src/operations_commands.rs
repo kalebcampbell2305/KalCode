@@ -15,6 +15,7 @@ use kalcode_contracts::events::{
 };
 use kalcode_contracts::operations::*;
 use kalcode_contracts::threads::{ThreadStatus, ThreadSummary};
+use kalcode_core::chains::ChainsStore;
 use kalcode_core::confirm::{NativeConfirmation, NativeConfirmer, confirm};
 use kalcode_core::operations::{
     ACTIVITY_MOMENT_LIMIT, OPERATION_CANCELLING_ACTION, OperationsStore,
@@ -33,7 +34,7 @@ use crate::account::runtime::AccountRuntime;
 use crate::kalvoice_callbacks::{OperationAnnouncer, OperationCallback};
 use crate::native_confirm::TauriConfirmer;
 use crate::runtime_coordinator::{RuntimeAccess, RuntimeState};
-use crate::thread_commands::{OperationPaneRequest, ThreadsState};
+use crate::thread_commands::{OperationPaneRequest, SharedWorktree, ThreadsState};
 
 const OBSERVATION_TTL: Duration = Duration::from_secs(5);
 const HISTORY_PAGE_SIZE: usize = 100;
@@ -536,6 +537,8 @@ pub struct OperationsState {
     commits: Mutex<Option<(Instant, Vec<OperationActivity>)>>,
     /// Final artifact handoffs are checked once per process; transient collector errors retry.
     artifact_checked: Mutex<HashSet<String>>,
+    /// When shared chain branches were last checked for newer merged work (throttled git reads).
+    chains_checked: Mutex<Option<Instant>>,
     /// Live-only optional speech sink. Operations remains the durable source of completion
     /// metadata; this is invoked only after its final write commits.
     voice_callback: Option<OperationAnnouncer>,
@@ -569,6 +572,7 @@ impl OperationsState {
             observations: Mutex::new(None),
             commits: Mutex::new(None),
             artifact_checked: Mutex::new(HashSet::new()),
+            chains_checked: Mutex::new(None),
             voice_callback,
         });
         // Each tick and dispatch borrows the same account authority as an IPC command. No
@@ -865,6 +869,47 @@ impl OperationsState {
         Ok(())
     }
 
+    /// Renews consent for chain steps whose dependencies a chain action rewired (retry, skip,
+    /// the Fix rule) or that it released (resume, reroute). Consent is exact-spec, so a changed
+    /// dependency list would otherwise leave an authorized step waiting forever. A step whose
+    /// execution identity and task are unchanged keeps its consent with the new spec; any other
+    /// step goes through the same authorization job a chain launch uses. Only pending chain
+    /// steps are touched; a started step never is.
+    pub(crate) fn renew_chain_consent(&self, operation_ids: &[String]) -> Result<()> {
+        let _gate = self.gate.lock().map_err(|_| poisoned())?;
+        self.renew_chain_consent_locked(operation_ids)
+    }
+
+    fn renew_chain_consent_locked(&self, operation_ids: &[String]) -> Result<()> {
+        let chains = ChainsStore::new(self.core.clone());
+        for id in operation_ids {
+            if !chains.binding(id)?.is_some_and(|binding| binding.current) {
+                continue;
+            }
+            let row = self.store.detail(id)?.run;
+            if row.status != OperationStatus::Queued || row.thread_id.is_some() {
+                continue;
+            }
+            {
+                let mut authorized = self.authorized.lock().map_err(|_| poisoned())?;
+                if let Some(consent) = authorized.get_mut(id)
+                    && consent.origin == LaunchOrigin::User
+                    && same_execution_identity(&consent.spec, &row.spec)
+                    && consent.spec.prompt == row.spec.prompt
+                {
+                    consent.spec = row.spec.clone();
+                    continue;
+                }
+                authorized.remove(id);
+            }
+            let _ = self.store.mark_squad_authorized(id)?;
+            self.squad_dispatch
+                .enqueue(id, SquadDispatchKind::Authorize)?;
+        }
+        self.stop.1.notify_all();
+        Ok(())
+    }
+
     fn execute_squad_dispatch(
         &self,
         job: &SquadDispatchJob,
@@ -1090,7 +1135,7 @@ impl OperationsState {
             }
             if !row.blockers.is_empty()
                 && row.thread_id.is_none()
-                && defers_pane_until_ready(&row.spec)
+                && self.defers_pane_until_ready(&row)
             {
                 // Waits without a pane; it starts fresh with its task once nothing blocks it.
                 return Ok(false);
@@ -1190,6 +1235,203 @@ impl OperationsState {
         let prepared = row.thread_id.as_deref() == Some(row.id.as_str());
         self.launch_with_cancellation(row, lease, Some(canceled), None)?;
         Ok(!prepared)
+    }
+
+    /// Why a provider cannot run a chain step, or `None` when it can. A step needs a structured
+    /// status channel (hooks or notify) so its turn end is observed rather than guessed.
+    pub(crate) fn chain_capability_problem(&self, provider_id: &str) -> Option<String> {
+        chain_capability_problem(provider_id)
+    }
+
+    /// Codex waits without a pane (its first turn proves readiness). A handoff chain step also
+    /// waits without one: its package is built from earlier steps' outcomes when it starts, and
+    /// a shared worktree only exists once the first step created it.
+    fn defers_pane_until_ready(&self, row: &OperationRecord) -> bool {
+        defers_pane_until_ready(&row.spec)
+            || ChainsStore::new(self.core.clone())
+                .binding(&row.id)
+                .is_ok_and(|binding| binding.is_some())
+    }
+
+    /// The step's Operation spec with its task replaced by the delivery-time handoff package.
+    /// Execution identity is unchanged; only the first task text differs.
+    fn chain_delivery_spec(&self, row: &OperationRecord) -> Result<Option<OperationSpec>> {
+        let chains = ChainsStore::new(self.core.clone());
+        let Some(ctx) = chains.delivery_context(&row.id)? else {
+            return Ok(None);
+        };
+        let root = crate::chain_package::step_root(&self.core, &ctx)?;
+        if root.pending_worktree && chains.earlier_work_started(&row.id)? {
+            // Recreating the tree from its branch would silently drop uncommitted work earlier
+            // steps made, and the next agent would review or test something else.
+            return Err(KalError::validation(
+                "chain_worktree_missing",
+                "This chain's shared worktree is gone, so earlier steps' uncommitted work isn't available. Restore the worktree folder, or start a new chain from the branch.",
+            ));
+        }
+        let query = format!("{} {}", ctx.chain.goal, ctx.step.intent.label());
+        let memory = self
+            .threads
+            .memory()
+            .and_then(|memory| memory.retrieve(&ctx.chain.workspace_id, &query).ok());
+        let package = crate::chain_package::compose(crate::chain_package::PackageInput {
+            core: &self.core,
+            git: &self.git,
+            ctx: &ctx,
+            root: &root,
+            memory,
+            provider_id: row.spec.provider_id.as_deref().unwrap_or_default(),
+            operation_id: &row.id,
+        })?;
+        let mut spec = row.spec.clone();
+        spec.prompt = Some(package);
+        Ok(Some(spec))
+    }
+
+    /// Records the exact report path inside the step's working folder and keeps the report
+    /// folder out of every change list.
+    fn record_chain_report_path(&self, id: &str) -> Result<()> {
+        let chains = ChainsStore::new(self.core.clone());
+        let Some(ctx) = chains.delivery_context(id)? else {
+            return Ok(());
+        };
+        let root = crate::chain_package::step_root(&self.core, &ctx)?;
+        let folder = crate::chain_package::working_folder(&self.git, &root.root)?;
+        crate::chain_package::prepare_report_folder(&self.git, &root.root, &folder)?;
+        chains.set_report_path(id, &crate::chain_package::report_absolute(&folder, id))
+    }
+
+    /// Settles a chain step from its structured report after its provider turn ended. Returns
+    /// true when the step was handled here: settled by its report, or (a successful turn with no
+    /// report) left running as Needs report, because a finished turn is not a finished step.
+    /// An unsuccessful turn with no report settles through the ordinary failure path.
+    fn settle_chain_step(&self, row: &OperationRecord, ok: bool) -> Result<bool> {
+        let chains = ChainsStore::new(self.core.clone());
+        if !chains
+            .binding(&row.id)?
+            .is_some_and(|binding| binding.current)
+        {
+            return Ok(false);
+        }
+        if self.settle_chain_report(row)? {
+            return Ok(true);
+        }
+        if !ok {
+            return Ok(false);
+        }
+        // The agent may still answer a question and report later, but only while its pane
+        // exists; a closed pane without a report ends this attempt truthfully.
+        let pane_open = self
+            .threads
+            .runtime_handle()
+            .is_some_and(|runtime| runtime.get(&row.id).is_ok());
+        if !pane_open {
+            self.finish_run(
+                &row.id,
+                OperationStatus::Interrupted,
+                "The agent closed before writing its step report.",
+            )?;
+            return Ok(true);
+        }
+        if chains.mark_awaiting_report(&row.id)? {
+            tracing::info!(event = "chain.step_needs_report", operation_id = row.id);
+        }
+        Ok(true)
+    }
+
+    fn settle_chain_report(&self, row: &OperationRecord) -> Result<bool> {
+        let chains = ChainsStore::new(self.core.clone());
+        let Some(binding) = chains.binding(&row.id)?.filter(|binding| binding.current) else {
+            return Ok(false);
+        };
+        if binding.report_path.is_none()
+            && let Err(error) = self.record_chain_report_path(&row.id)
+        {
+            tracing::warn!(
+                event = "chain.report_path_unavailable",
+                operation_id = row.id,
+                code = error.code
+            );
+        }
+        // A report stored by an earlier settlement that did not finish still decides the step.
+        let report = match chains.collect_report(&row.id)? {
+            Some(report) => report,
+            None => match chains.stored_report(&row.id)? {
+                Some(report) => report,
+                None => return Ok(false),
+            },
+        };
+        self.finish_run(
+            &row.id,
+            kalcode_core::chains::settlement_status(report.result),
+            kalcode_core::chains::settlement_outcome(&report).as_str(),
+        )?;
+        if let Some(memory) = self.threads.memory() {
+            memory.capture(
+                &row.spec.workspace_id,
+                kalcode_contracts::unified_memory::MemorySourceKind::Handoff,
+                &row.id,
+                &report.summary,
+            );
+        }
+        Ok(true)
+    }
+
+    /// Chain rules that must run before dispatch, under the gate. Failures are logged and never
+    /// stall the rest of the queue.
+    fn chain_tick(&self) {
+        let chains = ChainsStore::new(self.core.clone());
+        match chains.apply_rules() {
+            Ok(ids) if !ids.is_empty() => {
+                if let Err(error) = self.renew_chain_consent_locked(&ids) {
+                    tracing::warn!(event = "chain.rules_authorize_failed", code = error.code);
+                }
+            }
+            Ok(_) => {}
+            Err(error) => tracing::warn!(event = "chain.rules_failed", code = error.code),
+        }
+        let due = self.chains_checked.lock().is_ok_and(|mut last| {
+            let due = last.is_none_or(|at| at.elapsed() >= CHAIN_SUPERSEDE_INTERVAL);
+            if due {
+                *last = Some(Instant::now());
+            }
+            due
+        });
+        if due && let Err(error) = self.supersede_landed_chains(&chains) {
+            tracing::warn!(event = "chain.supersede_check_failed", code = error.code);
+        }
+    }
+
+    /// A shared chain whose branch already landed in the project's HEAD through newer merged
+    /// work never runs its remaining steps: they are cancelled as superseded, with the reason.
+    fn supersede_landed_chains(&self, chains: &ChainsStore) -> Result<()> {
+        for (chain_id, workspace_id, branch, owner) in chains.open_shared_chains()? {
+            let Some((row, _)) = self
+                .core
+                .read(|conn| kalcode_git::store::latest_thread_worktree(conn, &owner))?
+            else {
+                continue;
+            };
+            let root = crate::git_commands::workspace_root_in(&self.core, &workspace_id)?;
+            let Some(repo) = self.git.repo(&root)? else {
+                continue;
+            };
+            if kalcode_git::worktree::branch_landed(
+                self.git.git()?,
+                &repo,
+                &branch,
+                &row.base_commit,
+            )? {
+                chains.supersede(
+                    &chain_id,
+                    &format!(
+                        "Superseded: {branch} is already merged into the project's current branch."
+                    ),
+                )?;
+                tracing::info!(event = "chain.superseded", chain_id);
+            }
+        }
+        Ok(())
     }
 
     /// The member's canonical pane exists, matches it, and is waiting for its dependencies.
@@ -1300,6 +1542,7 @@ impl OperationsState {
         };
         let dispatching = self.squad_dispatch.reserved_ids();
         self.reconcile_excluding(&dispatching)?;
+        self.chain_tick();
         let (_, paused, rows) = self.store.snapshot()?;
         self.prune_finished_terminals(&rows)?;
         let authorized = self.authorized.lock().map_err(|_| poisoned())?.clone();
@@ -1318,7 +1561,7 @@ impl OperationsState {
                     OperationStatus::Queued | OperationStatus::Blocked
                 )
                 || (row.thread_id.is_none() && row.blockers.is_empty())
-                || (row.thread_id.is_none() && defers_pane_until_ready(&row.spec))
+                || (row.thread_id.is_none() && self.defers_pane_until_ready(row))
                 || !consent.matches(&row.spec)
             {
                 continue;
@@ -1485,6 +1728,7 @@ impl OperationsState {
                 origin: consent.origin,
                 isolate: member.worktree,
                 start_revision: revision.1.as_deref(),
+                shared_worktree: None,
             },
         ) {
             Ok(thread) if operation_thread_matches(&thread, &row.spec, &row.id) => Ok(()),
@@ -1682,6 +1926,9 @@ impl OperationsState {
                         ok, interrupted, ..
                     } = event.event
                 {
+                    if !interrupted && self.settle_chain_step(&row, ok)? {
+                        continue;
+                    }
                     let (status, outcome) = if interrupted {
                         (
                             OperationStatus::Interrupted,
@@ -1727,6 +1974,23 @@ impl OperationsState {
                         | OperationStatus::Failed
                         | OperationStatus::Interrupted
                 ) {
+                    // A report the step wrote before its session ended still decides it, and a
+                    // chain step whose session ended cleanly without one is never a pass.
+                    if self.settle_chain_report(&row)? {
+                        continue;
+                    }
+                    if status == OperationStatus::Succeeded
+                        && ChainsStore::new(self.core.clone())
+                            .binding(&row.id)?
+                            .is_some_and(|binding| binding.current)
+                    {
+                        self.finish_run(
+                            &row.id,
+                            OperationStatus::Interrupted,
+                            "The agent's session ended before it wrote its step report.",
+                        )?;
+                        continue;
+                    }
                     self.finish_run(
                         &row.id,
                         status,
@@ -1853,7 +2117,22 @@ impl OperationsState {
                 let is_squad_member = squad_member.is_some();
                 let isolate = squad_member.as_ref().is_some_and(|member| member.worktree);
                 let prepared = row.thread_id.as_deref() == Some(row.id.as_str());
-                let (execution_branch, execution_version) = if isolate {
+                let chain_step = ChainsStore::new(self.core.clone())
+                    .binding(&row.id)?
+                    .filter(|binding| binding.current);
+                let chain_delivery = match &chain_step {
+                    Some(_) if !prepared => self.chain_delivery_spec(&row)?,
+                    _ => None,
+                };
+                let shared_branch = chain_step
+                    .as_ref()
+                    .and_then(|binding| binding.shared_branch.clone());
+                let (execution_branch, execution_version) = if let Some(branch) = &shared_branch {
+                    (
+                        Some(branch.clone()),
+                        row.version.clone().or(version.clone()),
+                    )
+                } else if isolate {
                     (
                         row.branch.clone().or_else(|| {
                             Some(crate::thread_commands::operation_branch_name(
@@ -1892,13 +2171,33 @@ impl OperationsState {
                             core: &self.core,
                             git: &self.git,
                             operation_id: &row.id,
-                            spec: &row.spec,
+                            spec: chain_delivery.as_ref().unwrap_or(&row.spec),
                             origin: pane_origin.unwrap_or(consent.origin),
                             isolate,
                             start_revision: execution_version.as_deref(),
+                            shared_worktree: match (&chain_step, &shared_branch) {
+                                (Some(binding), Some(branch)) => Some(SharedWorktree {
+                                    owner_ref: binding
+                                        .worktree_owner
+                                        .as_deref()
+                                        .unwrap_or(&binding.chain_id),
+                                    branch,
+                                }),
+                                _ => None,
+                            },
                         },
                     )
                 };
+                if chain_step.is_some() && chain_delivery.is_some() && started.is_ok() {
+                    // The working folder exists now (the first shared step just created it).
+                    if let Err(error) = self.record_chain_report_path(&row.id) {
+                        tracing::warn!(
+                            event = "chain.report_path_unavailable",
+                            operation_id = row.id,
+                            code = error.code
+                        );
+                    }
+                }
                 let thread = if prepared {
                     started?
                 } else {
@@ -3100,6 +3399,23 @@ fn unavailable() -> KalError {
 /// could land in a startup dialog. A Codex member that waits on dependencies therefore waits
 /// without a pane and starts fresh with its task, through the normal launch, once nothing blocks
 /// it. Claude Code and Cursor report their native prompt and keep a waiting pane.
+fn chain_capability_problem(provider_id: &str) -> Option<String> {
+    use kalcode_contracts::agent::StatusChannel;
+    let structured = kalcode_providers::catalog::capabilities(provider_id)
+        .and_then(|capabilities| capabilities.interactive)
+        .is_some_and(|interactive| {
+            interactive
+                .status_channels
+                .iter()
+                .any(|channel| matches!(channel, StatusChannel::Hooks | StatusChannel::Notify))
+        });
+    (!structured).then(|| {
+        "this provider can't yet report when its turn ends inside KalCode, so it can't run a chain step. Choose another provider for this step.".to_owned()
+    })
+}
+
+const CHAIN_SUPERSEDE_INTERVAL: Duration = Duration::from_secs(60);
+
 fn defers_pane_until_ready(spec: &OperationSpec) -> bool {
     spec.provider_id.as_deref() == Some("codex")
 }
@@ -4127,6 +4443,8 @@ mod tests {
         rearmed: Mutex<Vec<String>>,
         /// Simulates a provider default that changed after a pane started.
         canonical_model: Mutex<Option<String>>,
+        /// The first task each started pane received (a chain step's delivery-time package).
+        started_prompts: Mutex<HashMap<String, Option<String>>>,
     }
 
     impl FakePanes {
@@ -4139,6 +4457,7 @@ mod tests {
                 panic_on: Mutex::new(HashSet::new()),
                 rearmed: Mutex::new(Vec::new()),
                 canonical_model: Mutex::new(None),
+                started_prompts: Mutex::new(HashMap::new()),
             }
         }
 
@@ -4258,6 +4577,10 @@ mod tests {
             threads: &ThreadsState,
             request: OperationPaneRequest<'_>,
         ) -> Result<ThreadSummary> {
+            self.started_prompts
+                .lock()
+                .expect("prompts")
+                .insert(request.operation_id.to_owned(), request.spec.prompt.clone());
             self.create(threads, &request, ThreadStatus::Active)
         }
 
@@ -4953,6 +5276,239 @@ mod tests {
         squad.shutdown();
     }
 
+    /// Runs every queued Squad/chain dispatch job, the way the bounded workers would.
+    fn drain_dispatch(state: &OperationsState) {
+        loop {
+            let queued = !state
+                .squad_dispatch
+                .state
+                .lock()
+                .expect("dispatch state")
+                .queued
+                .is_empty();
+            if !queued {
+                break;
+            }
+            let (job, canceled) = state.squad_dispatch.take().expect("job");
+            let reservation = reservation_for(state, &job, &canceled);
+            state.run_dispatch_job(&job, &reservation, &test_leases());
+        }
+    }
+
+    #[test]
+    fn a_chain_runs_through_the_real_dispatcher_with_reports_packages_and_retry() {
+        use kalcode_contracts::chains::{
+            ChainStartRequest, ChainStepDefinition, ChainStepIntent, ChainStepPhase,
+            ChainStepResult, ChainWorktree,
+        };
+
+        let squad = SquadHarness::new_with(&[], true);
+        let account: String = squad
+            .core
+            .read(|conn| {
+                Ok(
+                    conn.query_row("SELECT id FROM provider_accounts LIMIT 1", [], |row| {
+                        row.get(0)
+                    })?,
+                )
+            })
+            .expect("account");
+        let step = |key: &str, intent, depends_on: &[&str]| ChainStepDefinition {
+            key: key.into(),
+            name: String::new(),
+            intent,
+            provider_id: "claude-code".into(),
+            provider_account_id: account.clone(),
+            model: "gpt-test".into(),
+            effort: "high".into(),
+            instructions: None,
+            depends_on: depends_on.iter().map(|key| (*key).into()).collect(),
+        };
+        let chains = ChainsStore::new(squad.core.clone());
+        let chain = chains
+            .start(
+                ChainStartRequest {
+                    request_id: "chain-e2e".into(),
+                    workspace_id: squad.workspace_id.clone(),
+                    name: "Login fix".into(),
+                    goal: "Fix the login redirect loop.".into(),
+                    acceptance: vec!["Signed-in users land on Code".into()],
+                    worktree: ChainWorktree::Project,
+                    steps: vec![
+                        step("implement", ChainStepIntent::Implement, &[]),
+                        step("review", ChainStepIntent::Review, &["implement"]),
+                        step("test", ChainStepIntent::Test, &["review"]),
+                    ],
+                    source_thread_id: None,
+                },
+                None,
+            )
+            .expect("start chain");
+        let op = |key: &str| {
+            chains
+                .get(&chain.id)
+                .expect("chain")
+                .steps
+                .into_iter()
+                .find(|step| step.key == key)
+                .expect("step")
+                .operation_id
+        };
+        let phase = |key: &str| {
+            chains
+                .get(&chain.id)
+                .expect("chain")
+                .steps
+                .into_iter()
+                .find(|step| step.key == key)
+                .expect("step")
+                .phase
+        };
+        let prompt = |id: &str| {
+            squad
+                .panes
+                .started_prompts
+                .lock()
+                .expect("prompts")
+                .get(id)
+                .cloned()
+                .flatten()
+        };
+        let turn_completed = |id: &str| {
+            squad
+                .core
+                .emit(kalcode_contracts::events::NewEvent {
+                    source: kalcode_contracts::events::EventSource::Provider,
+                    correlation: kalcode_contracts::events::Correlation {
+                        workspace_id: Some(squad.workspace_id.clone()),
+                        thread_id: Some(id.to_owned()),
+                        provider_id: Some("claude-code".into()),
+                        ..Default::default()
+                    },
+                    event: EventPayload::AgentTurnCompleted {
+                        thread_id: id.to_owned(),
+                        ok: true,
+                        interrupted: false,
+                    },
+                })
+                .expect("emit turn completed");
+        };
+        let write_report = |id: &str, json: &str| {
+            let path = chains
+                .binding(id)
+                .expect("binding")
+                .and_then(|binding| binding.report_path)
+                .expect("report path recorded at start");
+            std::fs::write(path, json).expect("write report");
+        };
+
+        let ids = chain
+            .steps
+            .iter()
+            .map(|step| step.operation_id.clone())
+            .collect::<Vec<_>>();
+        squad
+            .state
+            .queue_squad_authorizations(&ids)
+            .expect("authorize");
+        drain_dispatch(&squad.state);
+
+        // Step 1 started with its package; later steps wait without a pane.
+        let implement = op("implement");
+        let package = prompt(&implement).expect("implement package");
+        assert!(package.contains("step 1 of 3"), "{package}");
+        assert!(package.contains("Fix the login redirect loop."));
+        assert!(package.contains(&format!(".kalcode/chain-reports/{implement}.json")));
+        assert!(prompt(&op("review")).is_none());
+        assert_eq!(phase("review"), ChainStepPhase::Waiting);
+        let exclude = std::fs::read_to_string(squad._project.path().join(".git/info/exclude"))
+            .expect("exclude");
+        assert!(exclude.contains(".kalcode/chain-reports/"));
+
+        // A real change plus the agent's structured report settles step 1.
+        std::fs::write(squad._project.path().join("login.rs"), "fn fixed() {}\n").expect("change");
+        write_report(
+            &implement,
+            r#"{"version":1,"result":"passed","summary":"Redirect fixed","tests":[{"command":"cargo test","passed":true}]}"#,
+        );
+        turn_completed(&implement);
+        squad.state.tick(&TestLease).expect("tick");
+        assert_eq!(
+            squad.state.store.get(&implement).expect("op").status,
+            OperationStatus::Succeeded
+        );
+        drain_dispatch(&squad.state);
+
+        // Step 2 receives the earlier outcome and the changed file, never terminal history.
+        let review = op("review");
+        let package = prompt(&review).expect("review package");
+        assert!(package.contains("step 2 of 3"), "{package}");
+        assert!(package.contains("Redirect fixed"));
+        assert!(package.contains("cargo test"));
+        assert!(package.contains("login.rs"));
+
+        // A finished turn without a report is not a finished step.
+        turn_completed(&review);
+        squad.state.tick(&TestLease).expect("tick");
+        assert_eq!(phase("review"), ChainStepPhase::NeedsReport);
+        assert_eq!(
+            squad.state.store.get(&review).expect("op").status,
+            OperationStatus::Running
+        );
+
+        // The person records a failure: only the dependent test step is blocked.
+        chains
+            .record_step(
+                &chain.id,
+                "review",
+                ChainStepResult::Failed,
+                "Missing null check",
+            )
+            .expect("record");
+        squad.state.tick(&TestLease).expect("tick");
+        assert_eq!(phase("test"), ChainStepPhase::Blocked);
+
+        // Retry starts a new attempt; the dependent waits for it with renewed consent.
+        let renew = chains.retry_step(&chain.id, "review", None).expect("retry");
+        squad.state.renew_chain_consent(&renew).expect("renew");
+        drain_dispatch(&squad.state);
+        let retried = op("review");
+        assert_ne!(retried, review);
+        assert!(prompt(&retried).is_some_and(|text| text.contains("step 2 of 3")));
+        assert_eq!(phase("test"), ChainStepPhase::Waiting);
+        let test_op = op("test");
+        assert_eq!(
+            squad
+                .state
+                .store
+                .get(&test_op)
+                .expect("test")
+                .spec
+                .dependencies,
+            vec![retried.clone()]
+        );
+
+        // Its report passes; the test step then starts with the consent it was renewed with.
+        write_report(
+            &retried,
+            r#"{"version":1,"result":"passed","summary":"Looks right"}"#,
+        );
+        turn_completed(&retried);
+        squad.state.tick(&TestLease).expect("tick");
+        drain_dispatch(&squad.state);
+        assert!(prompt(&test_op).is_some_and(|text| text.contains("step 3 of 3")));
+        squad.shutdown();
+    }
+
+    #[test]
+    fn chain_steps_need_a_structured_turn_signal() {
+        assert_eq!(chain_capability_problem("claude-code"), None);
+        assert_eq!(chain_capability_problem("codex"), None);
+        assert_eq!(chain_capability_problem("cursor"), None);
+        assert!(chain_capability_problem("gemini-cli").is_some());
+        assert!(chain_capability_problem("unknown-provider").is_some());
+    }
+
     #[test]
     fn settlement_survives_a_panic_that_poisoned_the_gate() {
         let squad = SquadHarness::new(&[("one", &[])]);
@@ -5587,6 +6143,7 @@ mod tests {
                 observations: Mutex::new(None),
                 commits: Mutex::new(None),
                 artifact_checked: Mutex::new(HashSet::new()),
+                chains_checked: Mutex::new(None),
                 voice_callback: None,
             },
             resources,
@@ -5641,6 +6198,7 @@ mod tests {
                 observations: Mutex::new(None),
                 commits: Mutex::new(None),
                 artifact_checked: Mutex::new(HashSet::new()),
+                chains_checked: Mutex::new(None),
                 voice_callback: None,
             },
             resources,

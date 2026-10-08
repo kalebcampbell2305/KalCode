@@ -5,6 +5,7 @@ import { KalVoicePage } from "../kalvoice/KalVoicePage.tsx";
 import { KalVoiceProvider } from "../kalvoice/KalVoiceProvider.tsx";
 import { PushToTalkActivity } from "../kalvoice/PushToTalkActivity.tsx";
 import { SessionChoicePanel } from "../kalvoice/SessionChoicePanel.tsx";
+import { ChainsProvider } from "../runtime/chains/useChains.tsx";
 import { NavigationBridge } from "../runtime/NavigationBridge.tsx";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { RecipesProvider } from "../runtime/recipes/RecipeLaunchProvider.tsx";
@@ -54,7 +55,16 @@ import { useShortcuts } from "./shortcuts.ts";
 import { spaceLevelOf } from "./spaceLevel.ts";
 import { UpdateReadyNotice } from "./UpdateReadyNotice.tsx";
 
+/** The one chains store wraps the whole shell, so panes, the Fleet and Needs You share it. */
 export function Shell() {
+  return (
+    <ChainsProvider>
+      <ShellProviders />
+    </ChainsProvider>
+  );
+}
+
+function ShellProviders() {
   const { info, settings, client } = useRuntime();
   useAppearance(settings, client);
   // KalVoice (Z12) runs when its surface is enabled for this build channel.

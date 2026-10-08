@@ -76,6 +76,7 @@ import type {
   WorkspaceLayout,
   WorkspaceRailEntry,
 } from "@kalcode/protocol";
+import { ChainsClient } from "./chains.ts";
 import type { ContextFileChoice, ContextInput, ContextSendResult, PromptReview } from "./context.ts";
 import { toKalCodeError } from "./errors.ts";
 import { HandoffsClient } from "./handoffs.ts";
@@ -162,6 +163,7 @@ const SHARED_READS: ReadonlySet<CommandName> = new Set<CommandName>([
   "kalvoice_status",
   "notification_list",
   "operations_snapshot",
+  "chains_snapshot",
   "squads_snapshot",
   "launch_recipes_snapshot",
   "permission_profiles_list",
@@ -187,6 +189,7 @@ const SHARED_READS: ReadonlySet<CommandName> = new Set<CommandName>([
 
 /** The only module that talks to the native runtime. Every failure becomes a KalCodeError. */
 export class KalCodeClient {
+  readonly chains: ChainsClient;
   readonly handoffs: HandoffsClient;
   readonly squads: SquadsClient;
   readonly recipes: LaunchRecipesClient;
@@ -197,6 +200,7 @@ export class KalCodeClient {
   private readonly reads = new Map<string, Promise<unknown>>();
 
   constructor(readonly transport: Transport) {
+    this.chains = new ChainsClient((command, args) => this.call(command, args));
     this.handoffs = new HandoffsClient((command, args) => this.call(command, args));
     this.squads = new SquadsClient((command, args) => this.call(command, args));
     this.recipes = new LaunchRecipesClient((command, args) => this.call(command, args));
