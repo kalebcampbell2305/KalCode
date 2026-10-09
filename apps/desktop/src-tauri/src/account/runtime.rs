@@ -1031,21 +1031,22 @@ impl AccountRuntime {
         self.fetch_authority(generation)
     }
 
-    /// True when the active signed plan document expires within
-    /// [`ENTITLEMENT_RENEW_BEFORE_SECONDS`] (or already has), so a background [`Self::refresh`]
-    /// should fetch a new one before workspace authority lapses. Signed-out, pending and
+    /// True when background renewal should refresh active account authority. Offline grace is
+    /// always due so a transient launch failure heals as soon as the service is reachable again;
+    /// a ready account keeps the normal pre-expiry renewal window. Signed-out, pending and
     /// unactivated accounts never renew.
     pub fn entitlement_renewal_due(&self) -> bool {
         let state = self.lock_state();
         state.snapshot.authority() == AccountAuthority::Active
             && state.cached.is_some()
-            && state
-                .snapshot
-                .entitlement_expires_at
-                .is_some_and(|expires_at| {
-                    expires_at.saturating_sub(self.clock.now_unix())
-                        <= ENTITLEMENT_RENEW_BEFORE_SECONDS
-                })
+            && (state.snapshot.phase == AccountPhase::OfflineGrace
+                || state
+                    .snapshot
+                    .entitlement_expires_at
+                    .is_some_and(|expires_at| {
+                        expires_at.saturating_sub(self.clock.now_unix())
+                            <= ENTITLEMENT_RENEW_BEFORE_SECONDS
+                    }))
     }
 
     /// Whether long-lived work started under `lease` may continue: the same account is still

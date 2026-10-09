@@ -1085,16 +1085,28 @@ pub fn tool_call_history(
         .map(|id| tool_call_cursor(conn, workspace_id, thread_id, id))
         .transpose()?;
     let fetch = i64::from(limit) + 1;
+    // Limit the page before projecting event-derived identity. Without this materialization,
+    // SQLite resolves the correlated history for every archived tool before sorting/LIMIT,
+    // which can monopolize the core connection and prevent the desktop from starting.
     let mut stmt = conn.prepare(
-        "SELECT c.id, c.thread_id, c.tool, c.summary, c.status, c.result_summary,
-                c.requested_at, c.started_at, c.completed_at, t.workspace_id,
+        "WITH selected AS MATERIALIZED (
+           SELECT c.id, c.thread_id, c.tool, c.summary, c.status, c.result_summary,
+                  c.requested_at, c.started_at, c.completed_at, t.workspace_id
+           FROM tool_calls c
+           JOIN threads t ON t.id = c.thread_id
+           WHERE (?1 IS NULL OR t.workspace_id = ?1)
+             AND (?2 IS NULL OR c.thread_id = ?2)
+             AND (?3 IS NULL OR c.requested_at < ?3 OR (c.requested_at = ?3 AND c.id < ?4))
+           ORDER BY c.requested_at DESC, c.id DESC LIMIT ?5
+         )
+         SELECT c.id, c.thread_id, c.tool, c.summary, c.status, c.result_summary,
+                c.requested_at, c.started_at, c.completed_at, c.workspace_id,
                 json_extract(identity.payload, '$.providerId'),
                 json_extract(identity.payload, '$.providerAccountId'),
                 json_extract(identity.payload, '$.accountLabel'),
                 json_extract(identity.payload, '$.activeModel'),
                 json_extract(identity.payload, '$.activeEffort')
-         FROM tool_calls c
-         JOIN threads t ON t.id = c.thread_id
+         FROM selected c
          LEFT JOIN events identity ON identity.seq = (
            SELECT MAX(observed.seq) FROM events observed
            WHERE observed.type = 'thread.runtime_identity_changed'
@@ -1108,10 +1120,7 @@ pub fn tool_call_history(
                  AND json_extract(requested.payload, '$.toolCallId') = c.id
              )
          )
-         WHERE (?1 IS NULL OR t.workspace_id = ?1)
-           AND (?2 IS NULL OR c.thread_id = ?2)
-           AND (?3 IS NULL OR c.requested_at < ?3 OR (c.requested_at = ?3 AND c.id < ?4))
-         ORDER BY c.requested_at DESC, c.id DESC LIMIT ?5",
+         ORDER BY c.requested_at DESC, c.id DESC",
     )?;
     let rows = stmt
         .query_map(
@@ -1550,6 +1559,76 @@ mod tests {
         assert!(
             !unarchive(&conn, &new_id()).expect("unknown"),
             "an unknown id changes nothing"
+        );
+    }
+
+    #[test]
+    fn tool_history_bounds_identity_work_to_the_requested_page() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let conn = conn();
+        let workspace_id = new_id();
+        workspace(&conn, &workspace_id);
+        let thread_id = new_id();
+        thread_in(&conn, &thread_id, &workspace_id, "2026-10-09T00:00:00.000Z");
+        event(
+            &conn,
+            "thread.runtime_identity_changed",
+            Some(&workspace_id),
+            Some(&thread_id),
+            serde_json::json!({"threadId": thread_id, "providerId": "fake", "activeModel": "observed-model"}),
+            "2026-10-09T00:00:00.000Z",
+        );
+        let mut newest = String::new();
+        for index in 0..4000 {
+            let now = format!(
+                "2026-10-09T{:02}:{:02}:{:02}.000Z",
+                index / 3600,
+                (index / 60) % 60,
+                index % 60
+            );
+            let call = insert_tool_call(
+                &conn,
+                &thread_id,
+                &format!("p{index}"),
+                "Read",
+                "Read fixture",
+                &now,
+            )
+            .expect("tool");
+            event(
+                &conn,
+                "tool.requested",
+                Some(&workspace_id),
+                Some(&thread_id),
+                serde_json::json!({"threadId": thread_id, "toolCallId": call}),
+                &now,
+            );
+            newest = call;
+        }
+        // A deterministic SQLite VM budget, independent of CPU speed. Resolving identity
+        // for the entire archive before LIMIT exceeds this by orders of magnitude.
+        let steps = Arc::new(AtomicUsize::new(0));
+        let observed = steps.clone();
+        conn.progress_handler(
+            1000,
+            Some(move || observed.fetch_add(1000, Ordering::Relaxed) >= 4_000_000),
+        )
+        .expect("set VM budget");
+        let result = tool_call_history(&conn, None, None, None, 20);
+        conn.progress_handler(0, None::<fn() -> bool>)
+            .expect("clear VM budget");
+        let (page, cursor) =
+            result.expect("a history page must not project the entire tool archive");
+        assert_eq!(page.len(), 20);
+        assert_eq!(page[0].call.id, newest);
+        assert_eq!(cursor.as_deref(), Some(page[19].call.id.as_str()));
+        assert!(
+            page.iter()
+                .all(|row| row.observed_model.as_deref() == Some("observed-model"))
         );
     }
 

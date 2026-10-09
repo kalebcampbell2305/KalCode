@@ -64,6 +64,31 @@ fn started(h: &Harness, prompt: &str) -> String {
 }
 
 #[test]
+fn background_history_does_not_hold_up_the_core_writer() {
+    let h = Harness::new();
+    let (done, result) = sync_channel(1);
+    // The background history connection must remain usable independently of state writes.
+    std::thread::scope(|scope| {
+        let (completed, worker) = h
+            .core
+            .read(|_| {
+                let worker = scope.spawn(|| {
+                    let tools = h.runtime.tool_call_history(None, None, None, 20);
+                    let turns = h.runtime.agent_turn_history(None, None, 20);
+                    done.send((tools.is_ok(), turns.is_ok())).expect("result");
+                });
+                Ok((result.recv_timeout(Duration::from_secs(2)), worker))
+            })
+            .expect("hold writer");
+        worker.join().expect("reader joined");
+        assert_eq!(
+            completed.expect("history must use the background reader"),
+            (true, true)
+        );
+    });
+}
+
+#[test]
 fn create_starts_a_session_and_records_the_lifecycle() {
     let h = Harness::new();
     let thread = h

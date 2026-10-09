@@ -1056,9 +1056,14 @@ impl ThreadRuntime {
         before_message_id: Option<&str>,
         limit: u32,
     ) -> Result<(Vec<AgentTurnRecord>, Option<String>)> {
-        self.inner
-            .core
-            .read(|conn| store::agent_turn_history(conn, workspace_id, before_message_id, limit))
+        // Historical projections belong on the read-only WAL connection, so optional Runs
+        // refreshes cannot hold the core writer needed by startup, sessions and settings.
+        store::agent_turn_history(
+            &self.inner.core.reader(),
+            workspace_id,
+            before_message_id,
+            limit,
+        )
     }
 
     /// Exact durable user turn in the requested workspace scope.
@@ -1087,9 +1092,13 @@ impl ThreadRuntime {
         before_tool_id: Option<&str>,
         limit: u32,
     ) -> Result<(Vec<ToolCallHistoryRecord>, Option<String>)> {
-        self.inner.core.read(|conn| {
-            store::tool_call_history(conn, workspace_id, thread_id, before_tool_id, limit)
-        })
+        store::tool_call_history(
+            &self.inner.core.reader(),
+            workspace_id,
+            thread_id,
+            before_tool_id,
+            limit,
+        )
     }
 
     /// Exact durable tool call in the requested workspace scope.
