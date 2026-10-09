@@ -203,6 +203,12 @@ export const PAGES = [
       "Read KalCode's privacy notice for the website, accounts and desktop app, including data storage, email removal and on-device voice processing.",
   },
   {
+    path: "/games/kal-university/terms",
+    title: "KAL University terms — KalCode",
+    description:
+      "Terms of purchase, licence and refunds for KAL University, a KalCode game. Coming soon and not on sale yet.",
+  },
+  {
     path: "/terms",
     title: "Terms — KalCode",
     description: "Terms of use for kalcoded.com, the KalCode early-access list and the KalCode preview app.",
@@ -278,6 +284,7 @@ export const FOOTER_NAV = {
     { href: "/security", label: "Security" },
     { href: "/privacy", label: "Privacy" },
     { href: "/terms", label: "Terms" },
+    { href: "/games/kal-university/terms", label: "KAL University terms" },
   ],
 } as const;
 

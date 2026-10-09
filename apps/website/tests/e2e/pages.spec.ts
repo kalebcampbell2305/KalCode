@@ -63,7 +63,14 @@ test.describe("every page", () => {
         const crumbs = data["@graph"].find((entry: Record<string, unknown>) => entry["@type"] === "BreadcrumbList");
         expect(crumbs.itemListElement.at(-1).item).toBe(canonical);
         expect(crumbs.itemListElement[0].item).toBe(`${SITE_ORIGIN}/`);
-        expect(crumbs.itemListElement).toHaveLength(page.path.startsWith("/docs/") ? 3 : 2);
+        const hasParent = page.path.startsWith("/docs/") || page.path === "/games/kal-university/terms";
+        expect(crumbs.itemListElement).toHaveLength(hasParent ? 3 : 2);
+        if (page.path === "/games/kal-university/terms") {
+          expect(crumbs.itemListElement[1]).toMatchObject({
+            name: "KAL University",
+            item: `${SITE_ORIGIN}/games/kal-university`,
+          });
+        }
       }
       await expect(head.locator('meta[name="theme-color"]').first()).toHaveAttribute("content", /#/);
       await expect(tab.locator("h1")).toHaveCount(1);
