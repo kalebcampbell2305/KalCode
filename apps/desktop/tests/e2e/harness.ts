@@ -1,5 +1,14 @@
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { type Browser, chromium, type Page, test as playwrightTest, type TestInfo } from "@playwright/test";
@@ -630,7 +639,24 @@ export function processesMatching(needle: string): number[] {
  * runtime snapshot KalCode made of the fake Codex distribution (see `installFakeCodex`).
  */
 export function fakeProviderProcesses(bin: string, dataDir: string): number[] {
-  return [...new Set([...processesMatching(bin), ...processesMatching(join(dataDir, "provider-runtimes"))])];
+  const needles = [...pathSpellings(bin), ...pathSpellings(dataDir).map((dir) => join(dir, "provider-runtimes"))];
+  return [...new Set(needles.flatMap(processesMatching))];
+}
+
+/**
+ * Every spelling of an existing path a command line may carry. A gate runner account whose name has an
+ * 8.3 short form gets a temp folder like `C:\Users\KALCOD~2\...`, while KalCode resolves its data folder to
+ * the long name before it starts the managed Codex snapshot, so a short-form needle missed those
+ * processes on the second PC (gate 37812036278: 5 of 8 found).
+ */
+function pathSpellings(path: string): string[] {
+  const spellings = new Set([path]);
+  try {
+    spellings.add(realpathSync.native(path));
+  } catch {
+    // Not created yet: only the given spelling can appear.
+  }
+  return [...spellings];
 }
 
 /**
