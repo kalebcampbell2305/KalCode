@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
   "latest": {
-    "version": "0.1.10+2188",
+    "version": "0.1.10+2310",
     "channel": "stable",
-    "publishedAt": "2026-10-07T17:06:29.729Z",
-    "commit": "d63b5aac930a8c3608b9c179774e3bef23050165",
+    "publishedAt": "2026-10-08T20:48:54.100Z",
+    "commit": "23ed9d14a568c415103c73b500ed25f3db5fe83e",
     "notesUrl": "/updates#release-0-1-10",
     "platforms": [
       {
@@ -12,11 +12,11 @@
         "arch": "x64",
         "label": "Windows 10 (1809) or later, 64-bit",
         "kind": "nsis",
-        "file": "KalCode_0.1.10_build2188_x64-setup.exe",
+        "file": "KalCode_0.1.10_build2310_x64-setup.exe",
         "url": "/download/windows-x64",
-        "pinnedUrl": "/download/0.1.10+2188/KalCode_0.1.10_build2188_x64-setup.exe",
-        "size": 9349752,
-        "sha256": "170a2e7a5c9d4c8fce85a2d5747afa70b85ed0579d87259027c9fbad463b6853",
+        "pinnedUrl": "/download/0.1.10+2310/KalCode_0.1.10_build2310_x64-setup.exe",
+        "size": 9684784,
+        "sha256": "e3bb2d142894478ec68672333a9748097f9141a411b7abbfe980c299c89b769b",
         "signed": true
       },
       {
@@ -24,11 +24,11 @@
         "arch": "arm64",
         "label": "macOS 14 or later, Apple silicon",
         "kind": "dmg",
-        "file": "KalCode_0.1.10_build2188_arm64.dmg",
+        "file": "KalCode_0.1.10_build2310_arm64.dmg",
         "url": "/download/macos-arm64",
-        "pinnedUrl": "/download/0.1.10+2188/KalCode_0.1.10_build2188_arm64.dmg",
-        "size": 13430455,
-        "sha256": "1eda539f492c8eee3c54b2eb6f98544a5da9c5781114deea1cfd7521e8628c28",
+        "pinnedUrl": "/download/0.1.10+2310/KalCode_0.1.10_build2310_arm64.dmg",
+        "size": 13867274,
+        "sha256": "91f443b07eba6c0b1b79c26989ad621e53392cf90a55f7f6aaa736993ef045ba",
         "signed": true
       }
     ]
