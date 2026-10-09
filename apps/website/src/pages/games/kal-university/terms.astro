@@ -1,0 +1,91 @@
+---
+import PageHead from "../../../components/PageHead.astro";
+import Base from "../../../layouts/Base.astro";
+import { CONTACT_EMAIL, getPage } from "../../../lib/site";
+
+const page = getPage("/games/kal-university/terms");
+// Owner-approved KAL_UNIVERSITY_TERMS.md, 2026-10-08. Publishing does not open sales.
+const updated = "October 8, 2026";
+---
+<Base title={page.title} description={page.description} path={page.path}>
+  <PageHead title="KAL University terms" status="Coming soon · Not on sale yet" statusKind="plain">
+    <p class="muted small">Last updated {updated}</p>
+    <a class="text-link" href="/games/kal-university">Back to KAL University</a>
+  </PageHead>
+  <section class="section">
+    <div class="container prose" data-game-terms>
+      <p>These terms cover buying, downloading and playing KAL University (the "game"), a single-player university-life and business game made by KalCode. They add to the KalCode terms of use, which still apply to your KalCode account and to kalcoded.com. If the two disagree about the game, these terms win.</p>
+
+      <h2>1. Getting the game</h2>
+
+      <ul>
+        <li><strong>Buy it once.</strong> The game costs <strong>$9.99 USD, paid once</strong>. There is no subscription for the game itself, and nothing inside the game can be bought with real money.</li>
+        <li><strong>Included with KalCode Pro, MAX and MAX 2X.</strong> Your first successful payment for one of these plans, monthly or yearly, gives you the game for life. Free trials and 100% discounts don't count. Cancelling, downgrading or letting the plan lapse later does not take the game away.</li>
+        <li><strong>One account, yours for life.</strong> Ownership belongs to your KalCode account. You can't own it twice: if your account already owns the game, the store won't sell it to you again.</li>
+        <li><strong>Where it's sold.</strong> For now the $9.99 purchase is available to customers with a United States billing address. A payment made from outside the United States is refunded in full automatically and does not give you the game.</li>
+        <li><strong>Payments.</strong> Stripe processes payments on its own hosted pages; KalCode never receives your card details. Prices are in US dollars.</li>
+      </ul>
+
+      <h2>2. Your licence</h2>
+
+      <ul>
+        <li>We give you a personal, non-exclusive, non-transferable licence to download, install and play the game on computers you control, for your own enjoyment. There is no limit on how many of your own computers you install it on.</li>
+        <li>Don't sell, rent, share your account, redistribute or publicly host the game or its installers, remove its notices, or reverse engineer it except where the law allows this despite these terms.</li>
+        <li>The game, its characters, story, music and art, and the KAL University and KalCode names and marks are ours or our licensors'. All rights not granted here are reserved. Third-party components and their licences are listed in the game's credits.</li>
+      </ul>
+
+      <h2>3. Playing offline and signing in</h2>
+
+      <ul>
+        <li>The game is single-player and plays fully offline.</li>
+        <li>You sign in with your KalCode account once on each computer. The game then keeps a licence that lasts 30 days and renews itself quietly whenever you're online. If it expires, the game asks you to reconnect before you start a new session. <strong>Your saves are never deleted, changed or locked because of a licence check.</strong></li>
+        <li>If we ever stop running the licence service, we will first release an update that lets owners keep playing without it.</li>
+      </ul>
+
+      <h2>4. Private worlds with friends (optional)</h2>
+
+      <ul>
+        <li>When available, you may invite up to three friends to a private world you host. Each player needs their own copy of the game.</li>
+        <li>Private worlds connect through Epic Online Services. Using them is optional and is also subject to Epic's terms and privacy policy. Nothing is matched with strangers; only people with your invite code can join.</li>
+        <li>Be kind. Don't use private worlds to harass people or to cheat other players out of their progress.</li>
+      </ul>
+
+      <h2>5. In-game money and perks</h2>
+
+      <ul>
+        <li>Money, companies, shares, items and every other in-game asset are fictional. They have no real value, can't be bought with real money, and can't be exchanged, sold or cashed out.</li>
+        <li>KalCode plan perks are cosmetic items plus a small amount of extra starting money in the game. Every perk item can also be earned by playing. Perks you've claimed stay with your account.</li>
+      </ul>
+
+      <h2>6. Refunds</h2>
+
+      <ul>
+        <li><strong>Changed your mind?</strong> You can ask for a full refund of the $9.99 purchase within <strong>14 days</strong> of paying, for any reason. Write to <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a> from the email address on your KalCode account.</li>
+        <li><strong>After 14 days</strong> we may still refund a purchase at our discretion, for example if the game doesn't run on a supported computer, and always where the law requires it.</li>
+        <li><strong>KalCode plans.</strong> Refunds of plan payments follow the KalCode terms of use.</li>
+        <li><strong>What a refund does to your copy.</strong> A full refund within 30 days of a payment removes that payment. If no other qualifying payment remains on your account, ownership of the game ends and you should uninstall it; the game will ask you to sign in again. Your saves stay on your computer. A partial refund doesn't remove ownership. Buying again, or a new qualifying plan payment, restores it.</li>
+        <li><strong>Chargebacks and fraud.</strong> If a payment is reversed through a chargeback that we lose, or is refunded because it was fraudulent, ownership based on that payment ends.</li>
+        <li>Nothing in these terms takes away rights you have under consumer law where you live.</li>
+      </ul>
+
+      <h2>7. Updates and requirements</h2>
+
+      <ul>
+        <li>We may update the game to fix problems, improve it or add content. Updates are free for owners.</li>
+        <li>The game supports recent versions of Windows (64-bit) and macOS (Apple silicon). Minimum requirements are listed on the game's page. Other systems may work but aren't supported.</li>
+      </ul>
+
+      <h2>8. A game, not advice</h2>
+
+      <p>KAL University is fiction. Its university, companies, people, markets and products are invented. Nothing in the game — including its stock market, investing, startup or business systems — is financial, investment, legal or career advice.</p>
+
+      <h2>9. No warranty and limitation of liability</h2>
+
+      <p>The game is provided "as is" and "as available". To the extent the law allows, we make no warranties about it, express or implied, and we are not liable for any indirect, incidental or consequential loss, or for loss of data or profits, arising from your use of the game. Nothing in these terms limits liability that cannot be limited by law. Sections 8 and 9 of the KalCode terms of use also apply.</p>
+
+      <h2>10. Changes and contact</h2>
+
+      <p>We may update these terms. When we do, we will change the date at the top. Changes never take away a copy you already own. Questions, refund requests and legal requests: <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>.</p>
+    </div>
+  </section>
+</Base>

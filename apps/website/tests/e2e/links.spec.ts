@@ -90,8 +90,14 @@ test("header navigation and footer links resolve", async ({ page }) => {
   const footerLinks = await footer.locator("a[href]").count();
   expect(footerLinks).toBeGreaterThanOrEqual(12);
   for (const label of ["Security", "Privacy", "Terms"]) {
-    await footer.getByRole("link", { name: label }).click();
+    await footer.getByRole("link", { name: label, exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/${label.toLowerCase()}$`));
     await page.goto("/");
   }
+  await footer.getByRole("link", { name: "KAL University terms", exact: true }).click();
+  await expect(page).toHaveURL(/\/games\/kal-university\/terms$/);
+  await expect(page.getByRole("heading", { name: "KAL University terms", exact: true })).toBeVisible();
+  await page.goto("/games/kal-university");
+  await page.locator("main").getByRole("link", { name: "KAL University terms" }).click();
+  await expect(page).toHaveURL(/\/games\/kal-university\/terms$/);
 });

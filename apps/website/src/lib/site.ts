@@ -185,6 +185,12 @@ export const PAGES = [
       "KalCode product updates: Windows releases, KalVoice progress, provider workspace improvements and meaningful product news without the engineering noise.",
   },
   {
+    path: "/games/kal-university",
+    title: "KAL University — A KalCode Game",
+    description:
+      "KAL University is a single-player campus adventure and business game from KalCode, in development for Windows and macOS. Start in your dorm with $200 and build your future: $9.99, or included with KalCode Pro, MAX and MAX 2X.",
+  },
+  {
     path: "/security",
     title: "Security — KalCode",
     description:
@@ -195,6 +201,12 @@ export const PAGES = [
     title: "Privacy — KalCode",
     description:
       "Read KalCode's privacy notice for the website, accounts and desktop app, including data storage, email removal and on-device voice processing.",
+  },
+  {
+    path: "/games/kal-university/terms",
+    title: "KAL University terms — KalCode",
+    description:
+      "Terms of purchase, licence and refunds for KAL University, a KalCode game. Coming soon and not on sale yet.",
   },
   {
     path: "/terms",
@@ -259,6 +271,8 @@ export const FOOTER_NAV = {
     { href: "/download", label: "Download" },
     { href: "/updates", label: "Updates" },
   ],
+  /** Games from KalCode: separate products, kept out of the KalCode header and pricing. */
+  games: [{ href: "/games/kal-university", label: "KAL University" }],
   docs: [
     { href: "/docs", label: "Overview" },
     { href: "/docs/permissions", label: "Permissions" },
@@ -270,6 +284,7 @@ export const FOOTER_NAV = {
     { href: "/security", label: "Security" },
     { href: "/privacy", label: "Privacy" },
     { href: "/terms", label: "Terms" },
+    { href: "/games/kal-university/terms", label: "KAL University terms" },
   ],
 } as const;
 
