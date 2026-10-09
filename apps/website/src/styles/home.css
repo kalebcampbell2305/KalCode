@@ -141,6 +141,63 @@
 
 /* ── Providers band ─────────────────────────────────────────────────────────────────────── */
 
+/* KAL University discovery */
+.home-game {
+  padding-block: clamp(3rem, 2rem + 4vw, 6rem);
+  border-block: 1px solid var(--color-border);
+  background: var(--color-surface-1);
+}
+.home-game__grid {
+  display: grid;
+  align-items: center;
+  gap: var(--space-8);
+}
+.home-game__copy {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-4);
+}
+.home-game__copy .body-lg {
+  max-width: 40ch;
+  color: var(--color-text-secondary);
+}
+.home-game__copy .h2 {
+  font-size: clamp(2rem, 1rem + 2.3vw, 3rem);
+  letter-spacing: -0.03em;
+}
+.home-game__tagline {
+  color: var(--color-accent-text);
+  font-size: var(--site-text-lead);
+  font-weight: var(--weight-medium);
+}
+.home-game__preview {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+}
+.home-game__preview > a {
+  display: block;
+  overflow: hidden;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-panel);
+  transition: border-color var(--dur-base) var(--ease-out);
+}
+.home-game__preview > a:hover {
+  border-color: var(--color-border-lit);
+}
+.home-game__preview img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+@media (min-width: 64rem) {
+  .home-game__grid {
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    gap: var(--space-12);
+  }
+}
+
 .works {
   padding-block: clamp(1.75rem, 1.25rem + 1.6vw, 2.75rem);
 }
