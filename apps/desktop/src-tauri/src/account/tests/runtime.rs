@@ -973,11 +973,106 @@ fn first_launch_offline_stays_gated_but_matching_signed_cache_gets_bounded_grace
     assert_eq!(offline.phase, AccountPhase::OfflineGrace);
     assert_eq!(offline.tier, Some(AccountTier::Free));
     assert_eq!(offline.offline_grace_until, Some(1_790_604_800));
+    assert!(cached_runtime.entitlement_renewal_due());
     let quota = cached_runtime
         .kalvoice_authority(ACCOUNT_ID)
         .expect("verified offline quota");
     assert!(quota.offline);
     assert_eq!(quota.entitlement.tier, kalcode_entitlements::Tier::Free);
+}
+
+#[test]
+fn offline_grace_recovers_online_before_expiry_and_still_enforces_revocation() {
+    let store = Arc::new(TestStore::default());
+    let session = SessionSecret::new(signed_in().token, 1_900_000_000).expect("session");
+    let cached = CachedAccountSecret::new(
+        vector_token("cases", "free"),
+        PublicAccount {
+            id: ACCOUNT_ID.into(),
+            email: "owner@example.com".into(),
+            activated_at: Some("2026-09-25T12:00:00.000Z".into()),
+            display_name: None,
+        },
+    )
+    .expect("cache");
+    AccountSessionStore::new(store.as_ref())
+        .expect("store")
+        .save_full(Some(&session), None, Some(&cached), None)
+        .expect("seed");
+    let api = Arc::new(FakeApi::default());
+    api.accounts
+        .lock()
+        .expect("queue")
+        .push_back(Err(ApiError::Transport));
+    let runtime = runtime(api.clone(), store.clone());
+
+    let offline = runtime.bootstrap().expect("offline bootstrap");
+    assert_eq!(offline.phase, AccountPhase::OfflineGrace);
+    assert!(
+        offline.entitlement_expires_at.expect("expiry") - NOW
+            > account::runtime::ENTITLEMENT_RENEW_BEFORE_SECONDS
+    );
+    assert!(runtime.entitlement_renewal_due());
+    let offline_generation = runtime.current_authority_update().generation;
+    let offline_lease = runtime.acquire_active_lease().expect("offline authority");
+
+    api.refreshes
+        .lock()
+        .expect("queue")
+        .push_back(Ok(signed_in()));
+    api.accounts
+        .lock()
+        .expect("queue")
+        .push_back(Ok(api_account(true)));
+    api.entitlements
+        .lock()
+        .expect("queue")
+        .push_back(Ok(EntitlementResponse {
+            token: vector_token("cases", "free"),
+        }));
+    let recovered = runtime.refresh().expect("online recovery");
+    assert_eq!(recovered.phase, AccountPhase::Ready);
+    assert_eq!(recovered.degraded_reason, None);
+    assert_eq!(
+        runtime.current_authority_update().generation,
+        offline_generation
+    );
+    assert!(runtime.validate_active_account(&offline_lease, ACCOUNT_ID));
+    let persisted = AccountSessionStore::new(store.as_ref())
+        .expect("store")
+        .load()
+        .expect("load")
+        .expect("persisted account");
+    assert!(persisted.session().is_some());
+    assert_eq!(
+        persisted.cached().expect("cached authority").account().id,
+        ACCOUNT_ID
+    );
+
+    api.refreshes
+        .lock()
+        .expect("queue")
+        .push_back(Err(ApiError::Http {
+            status: 401,
+            code: "invalid_session".into(),
+            retry_after_seconds: None,
+        }));
+    let revoked = runtime
+        .refresh()
+        .expect("revocation becomes signed-out state");
+    assert_eq!(revoked.phase, AccountPhase::SignedOut);
+    assert_eq!(
+        revoked.degraded_reason.as_deref(),
+        Some(SESSION_EXPIRED_REASON)
+    );
+    assert_eq!(runtime.authority(), AccountAuthority::SignedOut);
+    assert!(
+        AccountSessionStore::new(store.as_ref())
+            .expect("store")
+            .load()
+            .expect("load")
+            .is_none()
+    );
 }
 
 #[test]

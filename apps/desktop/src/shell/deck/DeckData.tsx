@@ -39,8 +39,10 @@ const sameOperations = (a: OperationsSnapshot | null, b: OperationsSnapshot | nu
 
 /**
  * Calls `load` now, every `intervalMs` while the document is visible, when the window regains
- * focus and whenever `trigger` changes. Results from a superseded call are dropped, and a result
- * `same` as the one shown keeps the current feed object (no re-render for an unchanged answer).
+ * focus and whenever `trigger` changes. Only one call per loader can be in flight; refreshes that
+ * arrive meanwhile coalesce into one follow-up read. Results from a superseded loader are dropped,
+ * and a result `same` as the one shown keeps the current feed object (no re-render for an unchanged
+ * answer).
  */
 function usePolled<T>(
   load: (() => Promise<T>) | null,
@@ -49,34 +51,65 @@ function usePolled<T>(
   same: (a: T | null, b: T | null) => boolean = sameJson,
 ): Feed<T> & { at: number } {
   const [feed, setFeed] = useState<Feed<T> & { at: number }>({ data: null, failed: false, at: 0 });
-  const generation = useRef(0);
   const lastLoad = useRef(load);
+  const latestSame = useRef(same);
+  const request = useRef<(() => void) | null>(null);
+  const lastTrigger = useRef(trigger);
+  latestSame.current = same;
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `trigger` is a refresh signal.
   useEffect(() => {
-    const mine = ++generation.current;
     // A different source (another workspace) never shows the previous source's value.
     if (lastLoad.current !== load) {
       lastLoad.current = load;
       setFeed({ data: null, failed: false, at: 0 });
     }
-    if (!load) return;
+    if (!load) {
+      request.current = null;
+      return;
+    }
     let disposed = false;
+    let inFlight = false;
+    let again = false;
     const read = () => {
-      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-      load().then(
-        (data) => {
-          if (disposed || mine !== generation.current) return;
-          setFeed((prev) =>
-            prev.at > 0 && !prev.failed && same(prev.data, data) ? prev : { data, failed: false, at: Date.now() },
-          );
-        },
-        () => {
-          if (disposed || mine !== generation.current) return;
-          setFeed((prev) => (prev.at > 0 && prev.failed ? prev : { ...prev, failed: true, at: Date.now() }));
-        },
-      );
+      if (disposed || (typeof document !== "undefined" && document.visibilityState === "hidden")) return;
+      if (inFlight) {
+        again = true;
+        return;
+      }
+      inFlight = true;
+      const settled = () => {
+        inFlight = false;
+        if (again && !disposed) {
+          again = false;
+          read();
+        }
+      };
+      let pending: Promise<T>;
+      try {
+        pending = load();
+      } catch {
+        setFeed((prev) => (prev.at > 0 && prev.failed ? prev : { ...prev, failed: true, at: Date.now() }));
+        settled();
+        return;
+      }
+      void pending
+        .then(
+          (data) => {
+            if (disposed) return;
+            setFeed((prev) =>
+              prev.at > 0 && !prev.failed && latestSame.current(prev.data, data)
+                ? prev
+                : { data, failed: false, at: Date.now() },
+            );
+          },
+          () => {
+            if (disposed) return;
+            setFeed((prev) => (prev.at > 0 && prev.failed ? prev : { ...prev, failed: true, at: Date.now() }));
+          },
+        )
+        .then(settled, settled);
     };
+    request.current = read;
     read();
     const timer = setInterval(read, intervalMs);
     const onVisible = () => {
@@ -86,11 +119,20 @@ function usePolled<T>(
     window.addEventListener("focus", read);
     return () => {
       disposed = true;
+      if (request.current === read) request.current = null;
       clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("focus", read);
     };
-  }, [load, intervalMs, trigger, same]);
+  }, [load, intervalMs]);
+
+  // `trigger` is only an invalidation signal; restarting the loader effect here would lose its
+  // in-flight guard and allow an expensive old read to overlap the replacement.
+  useEffect(() => {
+    if (Object.is(lastTrigger.current, trigger)) return;
+    lastTrigger.current = trigger;
+    request.current?.();
+  }, [trigger]);
 
   return feed;
 }

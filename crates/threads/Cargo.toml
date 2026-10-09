@@ -22,6 +22,7 @@ ts-rs = { version = "12", features = ["serde-json-impl", "uuid-impl"] }
 
 [dev-dependencies]
 tempfile.workspace = true
+rusqlite = { workspace = true, features = ["hooks"] }
 
 [lints]
 workspace = true

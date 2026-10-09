@@ -7,6 +7,7 @@ use tauri::async_runtime::{Sender, channel};
 use tauri_plugin_deep_link::DeepLinkExt;
 use url::Url;
 
+use crate::account::model::AccountPhase;
 use crate::account::runtime::AccountRuntime;
 use crate::runtime_coordinator::{AccountMutation, RuntimeCoordinator};
 
@@ -39,11 +40,24 @@ fn enqueue_warm(
     }
 }
 
-/// How often the renewal thread looks at the signed plan document's expiry (a cheap local check).
-const RENEWAL_CHECK_INTERVAL: Duration = Duration::from_secs(60);
+/// How often the renewal thread checks local account state. This is deliberately cheap and lets
+/// a launch that entered verified offline grace recover promptly when connectivity returns.
+const RENEWAL_CHECK_INTERVAL: Duration = Duration::from_secs(15);
 /// The fewest seconds between two renewal requests, so an offline device or a document that is
 /// already short-lived (a lapsing subscription) never hammers the account service.
 const RENEWAL_RETRY_INTERVAL: Duration = Duration::from_secs(30 * 60);
+const OFFLINE_RETRY_INITIAL_INTERVAL: Duration = Duration::from_secs(30);
+const OFFLINE_RETRY_MAX_INTERVAL: Duration = Duration::from_secs(5 * 60);
+
+fn renewal_retry_interval(phase: AccountPhase, consecutive_failures: u32) -> Duration {
+    if phase != AccountPhase::OfflineGrace {
+        return RENEWAL_RETRY_INTERVAL;
+    }
+    let exponent = consecutive_failures.saturating_sub(1).min(5);
+    OFFLINE_RETRY_INITIAL_INTERVAL
+        .saturating_mul(1_u32 << exponent)
+        .min(OFFLINE_RETRY_MAX_INTERVAL)
+}
 
 /// Keeps a long-running KalCode's signed plan document fresh. Without this, the document
 /// fetched at launch expires after at most 7 days (sooner near a subscription renewal) and the
@@ -55,6 +69,7 @@ fn start_entitlement_renewal(account: &Arc<AccountRuntime>, coordinator: &Arc<Ru
         .name("kalcode-entitlement-renewal".into())
         .spawn(move || {
             let mut last_attempt: Option<Instant> = None;
+            let mut consecutive_failures = 0_u32;
             loop {
                 std::thread::sleep(RENEWAL_CHECK_INTERVAL);
                 let (Some(account), Some(coordinator)) = (account.upgrade(), coordinator.upgrade())
@@ -64,9 +79,14 @@ fn start_entitlement_renewal(account: &Arc<AccountRuntime>, coordinator: &Arc<Ru
                 if coordinator.lifecycle.phase() == crate::runtime_lifecycle::Phase::AppExiting {
                     return;
                 }
-                if !account.entitlement_renewal_due()
-                    || last_attempt.is_some_and(|at| at.elapsed() < RENEWAL_RETRY_INTERVAL)
-                {
+                if !account.entitlement_renewal_due() {
+                    last_attempt = None;
+                    consecutive_failures = 0;
+                    continue;
+                }
+                let retry_interval =
+                    renewal_retry_interval(account.snapshot().phase, consecutive_failures);
+                if last_attempt.is_some_and(|at| at.elapsed() < retry_interval) {
                     continue;
                 }
                 // The same admission as the Account Center's Refresh, so renewal never races a
@@ -75,8 +95,16 @@ fn start_entitlement_renewal(account: &Arc<AccountRuntime>, coordinator: &Arc<Ru
                     continue;
                 };
                 last_attempt = Some(Instant::now());
-                if account.refresh().is_err() {
-                    tracing::warn!(event = "account.entitlement_renewal_failed");
+                match account.refresh() {
+                    Ok(snapshot) if snapshot.phase == AccountPhase::OfflineGrace => {
+                        consecutive_failures = consecutive_failures.saturating_add(1);
+                        tracing::warn!(event = "account.entitlement_renewal_failed");
+                    }
+                    Ok(_) => consecutive_failures = 0,
+                    Err(_) => {
+                        consecutive_failures = consecutive_failures.saturating_add(1);
+                        tracing::warn!(event = "account.entitlement_renewal_failed");
+                    }
                 }
                 drop(admission);
             }
@@ -218,5 +246,29 @@ mod tests {
             receiver.try_recv().expect("warm callback")
         );
         assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn offline_reconnect_backoff_is_prompt_and_bounded_without_changing_ready_renewal() {
+        assert_eq!(
+            renewal_retry_interval(AccountPhase::OfflineGrace, 0),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            renewal_retry_interval(AccountPhase::OfflineGrace, 1),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            renewal_retry_interval(AccountPhase::OfflineGrace, 2),
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            renewal_retry_interval(AccountPhase::OfflineGrace, 100),
+            Duration::from_secs(5 * 60)
+        );
+        assert_eq!(
+            renewal_retry_interval(AccountPhase::Ready, 100),
+            RENEWAL_RETRY_INTERVAL
+        );
     }
 }
