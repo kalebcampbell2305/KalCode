@@ -8,7 +8,7 @@
   half in ~16 min against ~50-77 min on the second PC (a laptop), so this governor:
 
   - BUILD PC FIRST. While the build PC has headroom it lends up to N idle build-PC workers (kalcode-win-gate,
-    -w1..-w5). Headroom means, over the last two minutes: average CPU below 70%, more than 12 GB free RAM and
+    -w1..-w5). Headroom means, over the last two minutes: average CPU below 70%, more than 20 GB free RAM (the build PC admits a gate job only with 16 GB + 2 GB per running gate job free) and
     more than 60 GB free on C:. A release build (build-windows / release-front-half, `cargo ... --release`,
     `tauri build` outside the gate workers' own checkouts) no longer blocks lending, since the release is
     built during every gate by design; it caps N at 2. Gates run below normal priority there, so release
@@ -44,7 +44,7 @@ $Workers = @('kalcode-win-gate', 'kalcode-win-gate-w1', 'kalcode-win-gate-w2', '
 $Pc2Runners = @('kalcode-win-gate-2', 'kalcode-win-gate-2b', 'kalcode-win-gate-2c')
 # The gate workers' own checkouts: their builds are gate work, not release builds.
 $GateRoots = @('C:\kalcode-ci\', 'C:\kalcode-ci-pool\')
-$Limits = @{ CpuPercent = 70; FreeRamGb = 12; FreeDiskGb = 60; RaiseBelow = 50; LowerAbove = 80 }
+$Limits = @{ CpuPercent = 70; FreeRamGb = 20; FreeDiskGb = 60; RaiseBelow = 50; LowerAbove = 80 }
 
 New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
 $heartbeat = Join-Path $StateDir 'heartbeat.json'
