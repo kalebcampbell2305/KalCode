@@ -16,6 +16,7 @@ import PageStyles from "../components/PageStyles.astro";
 import PlanStrip from "../components/PlanStrip.astro";
 import ProviderGlyph from "../components/ProviderGlyph.astro";
 import StageSlot from "../components/StageSlot.astro";
+import Capture from "../components/games/Capture.astro";
 import LiveKalCode from "../components/live/LiveKalCode.astro";
 import Base from "../layouts/Base.astro";
 import { HERO_POSTER_PRELOADS } from "../lib/hero";
@@ -175,6 +176,10 @@ const qnas = [
         </a>
         <DownloadButton variant="secondary" />
       </div>
+      <p class="hero__status">
+        <a href="/games/kal-university">Discover KAL University</a>
+        <span>A KalCode game · Coming soon</span>
+      </p>
       {
         cta.kind === "download" ? (
           <p class="hero__status">
@@ -222,6 +227,34 @@ const qnas = [
       <div class="try__stage" data-testid="live-demo">
         <LiveKalCode />
       </div>
+    </div>
+  </section>
+
+  <section class="home-game" id="kal-university" aria-labelledby="home-game-title">
+    <div class="container home-game__grid">
+      <div class="home-game__copy">
+        <p class="eyebrow">A KalCode game</p>
+        <h2 class="h2" id="home-game-title">KAL University</h2>
+        <p class="home-game__tagline">Build your future.</p>
+        <p class="body-lg">
+          Start with $200, a college dorm and four years to build something extraordinary.
+          Explore a fictional campus, meet its people and build a business, one decision at a time.
+        </p>
+        <p class="chip chip--dev">Coming soon · Not on sale yet</p>
+        <a class="button button--secondary" href="/games/kal-university">
+          Explore KAL University <Icon name="arrow-right" />
+        </a>
+      </div>
+      <figure class="home-game__preview">
+        <a href="/games/kal-university" aria-label="See KAL University">
+          <Capture
+            name="title"
+            alt="KAL University title screen overlooking the campus at sunset"
+            sizes="(min-width: 64rem) 55vw, 100vw"
+          />
+        </a>
+        <figcaption class="muted small">KAL University in development · in-game capture</figcaption>
+      </figure>
     </div>
   </section>
 
